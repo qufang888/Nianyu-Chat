@@ -1,0 +1,530 @@
+/* ===== 主题变量系统 ===== */
+/* 所有 UI 组件只引用以下变量，不出现硬编码颜色 */
+
+:root {
+  --radius: 10px;
+  --radius-sm: 6px;
+  --bubble-radius: 10px;
+  --blur: 0px;
+  --font-size: 14px;
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
+    sans-serif;
+  --line-height: 1.6;
+  --transition: 0.3s ease;
+  --sidebar-width: 64px;
+  --list-width: 280px;
+  /* 窗口圆角与根容器背景（无边框窗口用） */
+  --window-radius: 10px;
+  --window-bg-blur: 0px;
+  --app-bg: var(--color-bg);
+  /* 自定义标题栏变量（各主题在下方覆盖） */
+  --titlebar-height: 44px;
+  --titlebar-bg: #ededed;
+  --titlebar-text: #1a1a1a;
+  --titlebar-icon: #555555;
+  --titlebar-btn-hover: #dcdcdc;
+  --titlebar-close-hover-bg: #e64340;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: #e3e3e3;
+  --titlebar-blur: 0px;
+}
+
+/* 经典微信风格 */
+[data-theme='wechat'] {
+  --color-primary: #07c160;
+  --color-primary-text: #ffffff;
+  --color-bg: #ededed;
+  --color-panel: #ffffff;
+  --color-panel-alt: #f7f7f7;
+  --color-chat-bg: #f5f5f5;
+  --color-nav-bg: #2e2e2e;
+  --color-nav-icon: #9a9a9a;
+  --color-nav-active: #07c160;
+  --color-text: #1a1a1a;
+  --color-text-secondary: #888888;
+  --color-border: #e3e3e3;
+  --color-bubble-user: #95ec69;
+  --color-bubble-user-text: #1a1a1a;
+  --color-bubble-ai: #ffffff;
+  --color-bubble-ai-text: #1a1a1a;
+  --color-input-bg: #ffffff;
+  --color-hover: #ececec;
+  --shadow-panel: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --color-system-msg: #999999;
+  --color-select-bg: #ffffff;
+  --color-select-text: #1a1a1a;
+  /* 经典微信：标题栏浅色，关闭悬停微信红 */
+  --app-bg: #ededed;
+  --titlebar-bg: #ededed;
+  --titlebar-text: #1a1a1a;
+  --titlebar-icon: #555555;
+  --titlebar-btn-hover: #dcdcdc;
+  --titlebar-close-hover-bg: #e64340;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: #e3e3e3;
+  --titlebar-blur: 0px;
+}
+
+/* 毛玻璃风格 */
+[data-theme='glass'] {
+  --color-primary: #7c83ff;
+  --color-primary-text: #ffffff;
+  --color-bg: linear-gradient(135deg, #1e2a78 0%, #6a3aa8 55%, #a1429c 100%);
+  --color-panel: rgba(255, 255, 255, 0.15);
+  --color-panel-alt: rgba(255, 255, 255, 0.10);
+  --color-chat-bg: rgba(255, 255, 255, 0.08);
+  --color-nav-bg: rgba(20, 20, 40, 0.35);
+  --color-nav-icon: rgba(255, 255, 255, 0.7);
+  --color-nav-active: #ffffff;
+  --color-text: #f4f4ff;
+  --color-text-secondary: rgba(255, 255, 255, 0.65);
+  --color-border: rgba(255, 255, 255, 0.2);
+  --color-bubble-user: linear-gradient(135deg, #6ec6ff, #4a9eff);
+  --color-bubble-user-text: #ffffff;
+  --color-bubble-ai: rgba(255, 255, 255, 0.22);
+  --color-bubble-ai-text: #f4f4ff;
+  --color-input-bg: rgba(255, 255, 255, 0.18);
+  --color-hover: rgba(255, 255, 255, 0.12);
+  --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.25);
+  --blur: 20px;
+  --color-system-msg: rgba(255, 255, 255, 0.6);
+  --color-select-bg: #241b45;
+  --color-select-text: #f4f4ff;
+  /* 毛玻璃：标题栏半透明 + 磨砂；根容器半透明可透出桌面 */
+  --app-bg: linear-gradient(135deg, rgba(30,42,120,0.45) 0%, rgba(106,58,168,0.45) 55%, rgba(161,66,156,0.45) 100%);
+  --window-bg-blur: 22px;
+  --titlebar-bg: rgba(255, 255, 255, 0.12);
+  --titlebar-text: #ffffff;
+  --titlebar-icon: rgba(255, 255, 255, 0.85);
+  --titlebar-btn-hover: rgba(255, 255, 255, 0.18);
+  --titlebar-close-hover-bg: #ff5c5c;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: rgba(255, 255, 255, 0.1);
+  --titlebar-blur: 20px;
+}
+
+/* 极简暗色模式 */
+[data-theme='dark'] {
+  --color-primary: #4a9eff;
+  --color-primary-text: #ffffff;
+  --color-bg: #0d0d0d;
+  --color-panel: #1a1a1a;
+  --color-panel-alt: #141414;
+  --color-chat-bg: #0f0f0f;
+  --color-nav-bg: #161616;
+  --color-nav-icon: #777777;
+  --color-nav-active: #4a9eff;
+  --color-text: #e6e6e6;
+  --color-text-secondary: #8a8a8a;
+  --color-border: #2e2e2e;
+  --color-bubble-user: #4a9eff;
+  --color-bubble-user-text: #ffffff;
+  --color-bubble-ai: #2d2d2d;
+  --color-bubble-ai-text: #e0e0e0;
+  --color-input-bg: #232323;
+  --color-hover: #262626;
+  --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.5);
+  --color-system-msg: #666666;
+  --color-select-bg: #1f1f1f;
+  --color-select-text: #e6e6e6;
+  /* 极简暗色：标题栏深色，关闭悬停红，按钮悬停亮 */
+  --app-bg: #0d0d0d;
+  --titlebar-bg: #1a1a1a;
+  --titlebar-text: #e6e6e6;
+  --titlebar-icon: #b0b0b0;
+  --titlebar-btn-hover: #2f2f2f;
+  --titlebar-close-hover-bg: #e74848;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: #2e2e2e;
+  --titlebar-blur: 0px;
+}
+
+/* 活力多彩 */
+[data-theme='vibrant'] {
+  --color-primary: #ff6fa5;
+  --color-primary-text: #ffffff;
+  --color-bg: linear-gradient(135deg, #ffd1e8 0%, #d6e4ff 100%);
+  --color-panel: #ffffff;
+  --color-panel-alt: #fff4fa;
+  --color-chat-bg: #fff8fc;
+  --color-nav-bg: linear-gradient(160deg, #ff8fb1, #ffb86c);
+  --color-nav-icon: rgba(255, 255, 255, 0.85);
+  --color-nav-active: #ffffff;
+  --color-text: #3a2b34;
+  --color-text-secondary: #9a7f8c;
+  --color-border: #ffd9e8;
+  --color-bubble-user: #ff9aa2;
+  --color-bubble-user-text: #ffffff;
+  --color-bubble-ai: #c7ceea;
+  --color-bubble-ai-text: #2e2a3a;
+  --color-input-bg: #ffffff;
+  --color-hover: #ffe9f3;
+  --shadow-panel: 0 6px 18px rgba(255, 143, 177, 0.25);
+  --radius: 18px;
+  --radius-sm: 12px;
+  --color-system-msg: #b08aa0;
+  --color-select-bg: #ffffff;
+  --color-select-text: #3a2b34;
+  /* 活力多彩：标题栏粉橙渐变，关闭悬停白底红字 */
+  --app-bg: linear-gradient(135deg, #ffd1e8 0%, #d6e4ff 100%);
+  --titlebar-bg: linear-gradient(135deg, #ff8fb1, #ffb86c);
+  --titlebar-text: #ffffff;
+  --titlebar-icon: #ffffff;
+  --titlebar-btn-hover: rgba(255, 255, 255, 0.25);
+  --titlebar-close-hover-bg: #ffffff;
+  --titlebar-close-hover-icon: #e64340;
+  --titlebar-border: rgba(255, 255, 255, 0.3);
+  --titlebar-blur: 0px;
+}
+
+/* ===== 新增主题（10 套） ===== */
+
+/* 1 静谧青蓝（深色・工程开发默认首选） */
+[data-theme='azure'] {
+  --color-primary: #3688d8;
+  --color-primary-text: #ffffff;
+  --color-bg: #151923;
+  --color-panel: #242a38;
+  --color-panel-alt: #1c212e;
+  --color-chat-bg: #151923;
+  --color-nav-bg: #1c212e;
+  --color-nav-icon: #a3adbf;
+  --color-nav-active: #3688d8;
+  --color-text: #f0f2f7;
+  --color-text-secondary: #a3adbf;
+  --color-border: #333a4a;
+  --color-bubble-user: #3688d8;
+  --color-bubble-user-text: #ffffff;
+  --color-bubble-ai: #242a38;
+  --color-bubble-ai-text: #f0f2f7;
+  --color-input-bg: #1c212e;
+  --color-hover: #2c3344;
+  --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --color-system-msg: #a3adbf;
+  --color-select-bg: #1c212e;
+  --color-select-text: #f0f2f7;
+  --app-bg: #151923;
+  --titlebar-bg: #1c212e;
+  --titlebar-text: #f0f2f7;
+  --titlebar-icon: #a3adbf;
+  --titlebar-btn-hover: #2c3344;
+  --titlebar-close-hover-bg: #e5484d;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: #333a4a;
+  --titlebar-blur: 0px;
+}
+
+/* 2 雾紫银河（柔和氛围感） */
+[data-theme='galaxy'] {
+  --color-primary: #9376e0;
+  --color-primary-text: #ffffff;
+  --color-bg: #191724;
+  --color-panel: #2a273b;
+  --color-panel-alt: #211f2e;
+  --color-chat-bg: #191724;
+  --color-nav-bg: #211f2e;
+  --color-nav-icon: #a8a1bc;
+  --color-nav-active: #9376e0;
+  --color-text: #eae6f0;
+  --color-text-secondary: #a8a1bc;
+  --color-border: #39344a;
+  --color-bubble-user: #9376e0;
+  --color-bubble-user-text: #ffffff;
+  --color-bubble-ai: #2a273b;
+  --color-bubble-ai-text: #eae6f0;
+  --color-input-bg: #211f2e;
+  --color-hover: #322e45;
+  --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --color-system-msg: #a8a1bc;
+  --color-select-bg: #211f2e;
+  --color-select-text: #eae6f0;
+  --app-bg: #191724;
+  --titlebar-bg: #211f2e;
+  --titlebar-text: #eae6f0;
+  --titlebar-icon: #a8a1bc;
+  --titlebar-btn-hover: #322e45;
+  --titlebar-close-hover-bg: #e5484d;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: #39344a;
+  --titlebar-blur: 0px;
+}
+
+/* 3 松绿墨屿（低饱和商务稳重） */
+[data-theme='pine'] {
+  --color-primary: #2a9d8f;
+  --color-primary-text: #ffffff;
+  --color-bg: #141c1b;
+  --color-panel: #232f2d;
+  --color-panel-alt: #1a2422;
+  --color-chat-bg: #141c1b;
+  --color-nav-bg: #1a2422;
+  --color-nav-icon: #9bb3af;
+  --color-nav-active: #2a9d8f;
+  --color-text: #e6edeb;
+  --color-text-secondary: #9bb3af;
+  --color-border: #303f3c;
+  --color-bubble-user: #2a9d8f;
+  --color-bubble-user-text: #ffffff;
+  --color-bubble-ai: #232f2d;
+  --color-bubble-ai-text: #e6edeb;
+  --color-input-bg: #1a2422;
+  --color-hover: #2a3836;
+  --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --color-system-msg: #9bb3af;
+  --color-select-bg: #1a2422;
+  --color-select-text: #e6edeb;
+  --app-bg: #141c1b;
+  --titlebar-bg: #1a2422;
+  --titlebar-text: #e6edeb;
+  --titlebar-icon: #9bb3af;
+  --titlebar-btn-hover: #2a3836;
+  --titlebar-close-hover-bg: #e5484d;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: #303f3c;
+  --titlebar-blur: 0px;
+}
+
+/* 4 熔橙炭灰（高识别・操作按钮醒目） */
+[data-theme='ember'] {
+  --color-primary: #f27127;
+  --color-primary-text: #ffffff;
+  --color-bg: #1a1817;
+  --color-panel: #2e2a27;
+  --color-panel-alt: #23201e;
+  --color-chat-bg: #1a1817;
+  --color-nav-bg: #23201e;
+  --color-nav-icon: #b4a99f;
+  --color-nav-active: #f27127;
+  --color-text: #f3efeb;
+  --color-text-secondary: #b4a99f;
+  --color-border: #3f3934;
+  --color-bubble-user: #f27127;
+  --color-bubble-user-text: #ffffff;
+  --color-bubble-ai: #2e2a27;
+  --color-bubble-ai-text: #f3efeb;
+  --color-input-bg: #23201e;
+  --color-hover: #383330;
+  --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --color-system-msg: #b4a99f;
+  --color-select-bg: #23201e;
+  --color-select-text: #f3efeb;
+  --app-bg: #1a1817;
+  --titlebar-bg: #23201e;
+  --titlebar-text: #f3efeb;
+  --titlebar-icon: #b4a99f;
+  --titlebar-btn-hover: #383330;
+  --titlebar-close-hover-bg: #e5484d;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: #3f3934;
+  --titlebar-blur: 0px;
+}
+
+/* 5 冰川素白（浅色模式・清爽办公） */
+[data-theme='frost'] {
+  --color-primary: #2478d0;
+  --color-primary-text: #ffffff;
+  --color-bg: #f7f8fa;
+  --color-panel: #ffffff;
+  --color-panel-alt: #f1f3f7;
+  --color-chat-bg: #ffffff;
+  --color-nav-bg: #edeff3;
+  --color-nav-icon: #64748b;
+  --color-nav-active: #2478d0;
+  --color-text: #1e293b;
+  --color-text-secondary: #64748b;
+  --color-border: #d1d9e3;
+  --color-bubble-user: #2478d0;
+  --color-bubble-user-text: #ffffff;
+  --color-bubble-ai: #ffffff;
+  --color-bubble-ai-text: #1e293b;
+  --color-input-bg: #ffffff;
+  --color-hover: #eef1f6;
+  --shadow-panel: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --color-system-msg: #64748b;
+  --color-select-bg: #ffffff;
+  --color-select-text: #1e293b;
+  --app-bg: #f7f8fa;
+  --titlebar-bg: #edeff3;
+  --titlebar-text: #1e293b;
+  --titlebar-icon: #64748b;
+  --titlebar-btn-hover: #e2e8f0;
+  --titlebar-close-hover-bg: #e5484d;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: #d1d9e3;
+  --titlebar-blur: 0px;
+}
+
+/* 6 豆沙玫瑰（柔和深色、低刺激） */
+[data-theme='rose'] {
+  --color-primary: #c97386;
+  --color-primary-text: #ffffff;
+  --color-bg: #20191c;
+  --color-panel: #34282d;
+  --color-panel-alt: #291f23;
+  --color-chat-bg: #20191c;
+  --color-nav-bg: #291f23;
+  --color-nav-icon: #bca4ab;
+  --color-nav-active: #c97386;
+  --color-text: #f3e9ec;
+  --color-text-secondary: #bca4ab;
+  --color-border: #443339;
+  --color-bubble-user: #c97386;
+  --color-bubble-user-text: #ffffff;
+  --color-bubble-ai: #34282d;
+  --color-bubble-ai-text: #f3e9ec;
+  --color-input-bg: #291f23;
+  --color-hover: #3d3035;
+  --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --color-system-msg: #bca4ab;
+  --color-select-bg: #291f23;
+  --color-select-text: #f3e9ec;
+  --app-bg: #20191c;
+  --titlebar-bg: #291f23;
+  --titlebar-text: #f3e9ec;
+  --titlebar-icon: #bca4ab;
+  --titlebar-btn-hover: #3d3035;
+  --titlebar-close-hover-bg: #e5484d;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: #443339;
+  --titlebar-blur: 0px;
+}
+
+/* 7 赛博青柠（高对比度・极客风） */
+[data-theme='cyber'] {
+  --color-primary: #39ff99;
+  --color-primary-text: #0f1412;
+  --color-bg: #0f1412;
+  --color-panel: #1f2b25;
+  --color-panel-alt: #171f1b;
+  --color-chat-bg: #0f1412;
+  --color-nav-bg: #171f1b;
+  --color-nav-icon: #88b8a3;
+  --color-nav-active: #39ff99;
+  --color-text: #e4fff2;
+  --color-text-secondary: #88b8a3;
+  --color-border: #2c3c34;
+  --color-bubble-user: #39ff99;
+  --color-bubble-user-text: #0f1412;
+  --color-bubble-ai: #1f2b25;
+  --color-bubble-ai-text: #e4fff2;
+  --color-input-bg: #171f1b;
+  --color-hover: #27352e;
+  --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --color-system-msg: #88b8a3;
+  --color-select-bg: #171f1b;
+  --color-select-text: #e4fff2;
+  --app-bg: #0f1412;
+  --titlebar-bg: #171f1b;
+  --titlebar-text: #e4fff2;
+  --titlebar-icon: #88b8a3;
+  --titlebar-btn-hover: #27352e;
+  --titlebar-close-hover-bg: #e5484d;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: #2c3c34;
+  --titlebar-blur: 0px;
+}
+
+/* 8 石墨极简灰（无彩色・专注工作） */
+[data-theme='graphite'] {
+  --color-primary: #7a869a;
+  --color-primary-text: #ffffff;
+  --color-bg: #17181a;
+  --color-panel: #27292d;
+  --color-panel-alt: #1e2023;
+  --color-chat-bg: #17181a;
+  --color-nav-bg: #1e2023;
+  --color-nav-icon: #9ca3af;
+  --color-nav-active: #7a869a;
+  --color-text: #e5e7eb;
+  --color-text-secondary: #9ca3af;
+  --color-border: #373a40;
+  --color-bubble-user: #7a869a;
+  --color-bubble-user-text: #ffffff;
+  --color-bubble-ai: #27292d;
+  --color-bubble-ai-text: #e5e7eb;
+  --color-input-bg: #1e2023;
+  --color-hover: #2f3237;
+  --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --color-system-msg: #9ca3af;
+  --color-select-bg: #1e2023;
+  --color-select-text: #e5e7eb;
+  --app-bg: #17181a;
+  --titlebar-bg: #1e2023;
+  --titlebar-text: #e5e7eb;
+  --titlebar-icon: #9ca3af;
+  --titlebar-btn-hover: #2f3237;
+  --titlebar-close-hover-bg: #e5484d;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: #373a40;
+  --titlebar-blur: 0px;
+}
+
+/* 9 深海靛蓝（偏暗、护眼） */
+[data-theme='indigo'] {
+  --color-primary: #255b9c;
+  --color-primary-text: #ffffff;
+  --color-bg: #101620;
+  --color-panel: #1d283a;
+  --color-panel-alt: #161e2d;
+  --color-chat-bg: #101620;
+  --color-nav-bg: #161e2d;
+  --color-nav-icon: #8fa3c2;
+  --color-nav-active: #255b9c;
+  --color-text: #e6edf7;
+  --color-text-secondary: #8fa3c2;
+  --color-border: #2a3952;
+  --color-bubble-user: #255b9c;
+  --color-bubble-user-text: #ffffff;
+  --color-bubble-ai: #1d283a;
+  --color-bubble-ai-text: #e6edf7;
+  --color-input-bg: #161e2d;
+  --color-hover: #243247;
+  --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --color-system-msg: #8fa3c2;
+  --color-select-bg: #161e2d;
+  --color-select-text: #e6edf7;
+  --app-bg: #101620;
+  --titlebar-bg: #161e2d;
+  --titlebar-text: #e6edf7;
+  --titlebar-icon: #8fa3c2;
+  --titlebar-btn-hover: #243247;
+  --titlebar-close-hover-bg: #e5484d;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: #2a3952;
+  --titlebar-blur: 0px;
+}
+
+/* 10 暖米浅棕（浅色护眼复古） */
+[data-theme='sand'] {
+  --color-primary: #a16f49;
+  --color-primary-text: #ffffff;
+  --color-bg: #f6f1e9;
+  --color-panel: #fffcf7;
+  --color-panel-alt: #f4eee3;
+  --color-chat-bg: #fffcf7;
+  --color-nav-bg: #ebe3d6;
+  --color-nav-icon: #8a7866;
+  --color-nav-active: #a16f49;
+  --color-text: #3e3228;
+  --color-text-secondary: #8a7866;
+  --color-border: #d9cfc0;
+  --color-bubble-user: #a16f49;
+  --color-bubble-user-text: #ffffff;
+  --color-bubble-ai: #fffcf7;
+  --color-bubble-ai-text: #3e3228;
+  --color-input-bg: #ffffff;
+  --color-hover: #f1e9dc;
+  --shadow-panel: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --color-system-msg: #8a7866;
+  --color-select-bg: #ffffff;
+  --color-select-text: #3e3228;
+  --app-bg: #f6f1e9;
+  --titlebar-bg: #ebe3d6;
+  --titlebar-text: #3e3228;
+  --titlebar-icon: #8a7866;
+  --titlebar-btn-hover: #e3d8c8;
+  --titlebar-close-hover-bg: #e5484d;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: #d9cfc0;
+  --titlebar-blur: 0px;
+}
