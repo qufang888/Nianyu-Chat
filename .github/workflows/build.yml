@@ -27,7 +27,7 @@ jobs:
       - name: Build and package (unsigned)
         run: |
           npm run build
-          CSC_LINK="" CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist
+          CSC_LINK="" CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist -- --publish never
         shell: bash
 
       - name: Create GitHub Release
