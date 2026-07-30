@@ -696,6 +696,14 @@ export const MiniChat: React.FC = () => {
     return off;
   }, [current]);
 
+  // 清空发送失败状态（由 forceStopAutoChat / 新 driver claim 触发）
+  useEffect(() => {
+    if (!current) return;
+    const off = api.onClearFailed((data) => {
+      if (data.chatId === current.chat_id) setFailed(null);
+    });
+    return off;
+  }, [current]);
 
   const maybeAutoMemory = () => {
     if (!autoMemoryRef.current || !current) return;

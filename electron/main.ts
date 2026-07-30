@@ -290,9 +290,12 @@ function createWindow(): void {
   mainWindow.on('unmaximize', pushWindowState);
   mainWindow.on('resize', scheduleSaveBounds);
   mainWindow.on('move', scheduleSaveBounds);
+  // 注意:'closed' 事件触发时 BrowserWindow 已被销毁,访问 webContents 会抛 "Object has been destroyed"。
+  // 必须在窗口创建时即缓存 webContents.id,closed 处理中只用该缓存值。
+  const mainWindowWcId = mainWindow.webContents.id;
   mainWindow.on('closed', () => {
-    clearAutoChatDriverByWindow(mainWindow?.webContents.id ?? -1, 'closed');
-    clearGroupEditorLockByWindow(mainWindow?.webContents.id ?? -1);
+    clearAutoChatDriverByWindow(mainWindowWcId, 'closed');
+    clearGroupEditorLockByWindow(mainWindowWcId);
   });
 
   // 还原最大化状态
@@ -354,9 +357,9 @@ function createMiniWindow(): void {
       miniWindow.hide();
     }
   });
-  miniWindow.on('closed', () => {
-    miniWindow = null;
-  });
+  // 注意:'closed' 事件触发时 BrowserWindow 已被销毁,访问 webContents 会抛 "Object has been destroyed"。
+  // 必须在窗口创建时即缓存 webContents.id,closed 处理中只用该缓存值。
+  const miniWindowWcId = miniWindow.webContents.id;
 
   // 边缘吸附：靠近屏幕边缘 12px 内自动贴边
   miniWindow.on('moved', () => {
@@ -374,9 +377,11 @@ function createMiniWindow(): void {
 
   // 有交互时恢复不透明
   miniWindow.on('focus', () => miniWindow?.setOpacity(1));
+
   miniWindow.on('closed', () => {
-    clearAutoChatDriverByWindow(miniWindow?.webContents.id ?? -1, 'closed');
-    clearGroupEditorLockByWindow(miniWindow?.webContents.id ?? -1);
+    miniWindow = null;
+    clearAutoChatDriverByWindow(miniWindowWcId, 'closed');
+    clearGroupEditorLockByWindow(miniWindowWcId);
   });
 }
 
@@ -2467,7 +2472,10 @@ function registerIPC(): void {
     const existing = autoChatDrivers.get(chatId);
     if (existing === undefined) {
       autoChatDrivers.set(chatId, senderId);
+      // 中止上一轮可能仍在运行的流（防止前一轮被 forceStop 后残留的流到新 driver 时异常触发 failed）
+      abortStreamsForChat(chatId);
       broadcast('chat:autoChat:driver', { chatId, action: 'start', driverId: senderId });
+      broadcast('chat:clearFailed', { chatId });
       return { isDriver: true, ownerId: senderId };
     }
     if (existing === senderId) return { isDriver: true, ownerId: senderId };
@@ -2477,7 +2485,7 @@ function registerIPC(): void {
     const senderId = e.sender.id;
     const owner = autoChatDrivers.get(chatId);
     if (owner === undefined) return { released: true };
-    if (owner !== senderId) return { released: false }; // 仅 driver 可主动释放
+    if (owner !== senderId) return { released: false };
     autoChatDrivers.delete(chatId);
     broadcast('chat:autoChat:driver', { chatId, action: 'stop', driverId: senderId });
     return { released: true };
@@ -2486,7 +2494,10 @@ function registerIPC(): void {
   ipcMain.handle('chat:autoChat:forceStop', (_e, chatId: string): { ok: boolean } => {
     if (!autoChatDrivers.has(chatId)) return { ok: true };
     autoChatDrivers.delete(chatId);
+    // 中止正在运行的流 + 清掉各窗口的 failed 态,避免下一轮续接时遗留红框+透明气泡
+    abortStreamsForChat(chatId);
     broadcast('chat:autoChat:driver', { chatId, action: 'stop', reason: 'forced' });
+    broadcast('chat:clearFailed', { chatId });
     return { ok: true };
   });
   ipcMain.handle('chat:autoChat:round', (_e, chatId: string, round: number): void => {
@@ -3101,8 +3112,10 @@ app.whenReady().then(() => {
   }
   protocol.registerFileProtocol('nysound', (request, callback) => {
     try {
-      const u = new URL(request.url);
-      const file = path.basename(decodeURIComponent(u.pathname));
+      // request.url 格式为 nysound://<filename>,用 path.basename 提取纯文件名。
+      // 直接用 request.url 手动解析而非 new URL(),避免标准 URL 解析对 pathname 的干扰。
+      const raw = request.url.replace(/^nysound:\/*/, '');
+      const file = path.basename(decodeURIComponent(raw));
       callback({ path: path.join(customSoundsDir, file) });
     } catch {
       callback({ path: '' });

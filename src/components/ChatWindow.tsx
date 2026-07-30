@@ -903,6 +903,14 @@ export const ChatWindow: React.FC<{
     return off;
   }, [chatId]);
 
+  // 清空发送失败状态（由 forceStopAutoChat / 新 driver claim 触发）
+  useEffect(() => {
+    const off = api.onClearFailed((data) => {
+      if (data.chatId === chatId) setFailed(null);
+    });
+    return off;
+  }, [chatId]);
+
   // 窗口间同步：消息变更（清空/撤回/回滚后其他窗口重载）
   useEffect(() => {
     const off = api.onMessagesSync((data) => {
@@ -1082,18 +1090,26 @@ export const ChatWindow: React.FC<{
     api.getSettings().then((s) => setChatSoundPath(s.chatSoundPaths?.[chatKey] || null));
   }, [chatKey]);
   const setChatSound = async () => {
-    const fname = await api.pickAudioFile();
-    if (!fname) return;
+    const srcPath = await api.pickAudioFile();
+    if (!srcPath) return;
+    // 通过 setCustomSound 复制到 custom-sounds 目录,获取可被 nysound:// 协议解析的文件名
+    const fname = await api.setCustomSound({ key: `chat:${chatKey}`, srcPath });
+    if (!fname) { showToast(t('common.failed'), true); return; }
     const cur = (await api.getSettings()).chatSoundPaths || {};
     await api.saveSettings({ chatSoundPaths: { ...cur, [chatKey]: fname } });
     setChatSoundPath(fname);
+    showToast(t('chat.soundSetDone', { name: fname }));
     void previewSound('notification', fname);
+  };
+  const previewChatSound = () => {
+    if (chatSoundPath) void previewSound('notification', chatSoundPath);
   };
   const clearChatSound = async () => {
     const cur = { ...((await api.getSettings()).chatSoundPaths || {}) };
     delete cur[chatKey];
     await api.saveSettings({ chatSoundPaths: cur });
     setChatSoundPath(null);
+    showToast(t('chat.soundCleared'));
   };
 
   // 切换当前对话使用的「自我身份」：写入按会话覆盖 chatSelfRoles[bgKey]
@@ -1689,7 +1705,15 @@ export const ChatWindow: React.FC<{
                   className="tool-btn" style={{ width: '100%', justifyContent: 'flex-start', padding: '6px 10px', fontSize: 13 }}
                   onClick={() => { setChatSound(); setMoreOpen(false); }}
                   onContextMenu={(e) => { e.preventDefault(); if (chatSoundPath) { clearChatSound(); setMoreOpen(false); } }}
-                >🕐 {chatSoundPath ? t('chat.customSound') : t('chat.chatSound')}</button>
+                >
+                  🕐 {chatSoundPath ? t('chat.customSoundWithName', { name: chatSoundPath.replace(/^snd-/, '').replace(/\.[^.]+$/, '') }) : t('chat.chatSound')}
+                </button>
+                {chatSoundPath && (
+                  <button
+                    className="tool-btn" style={{ width: '100%', justifyContent: 'flex-start', padding: '6px 10px', fontSize: 13 }}
+                    onClick={() => { previewChatSound(); setMoreOpen(false); }}
+                  >▶ {t('chat.previewSound')}</button>
+                )}
                 <div style={{ padding: '4px 0' }}>
                   <SelectMenu
                     value={chatWorldBookId}

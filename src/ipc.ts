@@ -132,6 +132,7 @@ export interface NianyuAPI {
   onAutoChatSync: (cb: (data: { chatId: string; action: 'start' | 'stop' }) => void) => () => void;
   onMessagesSync: (cb: (data: { chatType: string; chatId: string; action: string }) => void) => () => void;
   onStreamRoundDone: (cb: (data: { chatId: string; chatType: string }) => void) => () => void;
+  onClearFailed: (cb: (data: { chatId: string }) => void) => () => void;
   // 自动接话：单驱动器模式
   claimAutoChat: (chatId: string) => Promise<{ isDriver: boolean; ownerId?: number }>;
   releaseAutoChat: (chatId: string) => Promise<{ released: boolean }>;

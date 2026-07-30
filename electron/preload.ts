@@ -134,6 +134,7 @@ export interface NianyuAPI {
   forceStopAutoChat: (chatId: string) => Promise<{ ok: boolean }>;
   updateAutoChatRound: (chatId: string, round: number) => Promise<void>;
   onAutoChatDriver: (cb: (data: { chatId: string; action: 'start' | 'stop' | 'round'; driverId?: number; round?: number; reason?: string }) => void) => () => void;
+  onClearFailed: (cb: (data: { chatId: string }) => void) => () => void;
   // 群成员编辑：单窗口锁
   openGroupEditor: (groupId: string) => Promise<{ ok: boolean; ownerId?: number }>;
   closeGroupEditor: (groupId: string) => Promise<{ ok: boolean }>;
@@ -371,6 +372,11 @@ const api: NianyuAPI = {
     const listener = (_e: any, data: any) => cb(data);
     ipcRenderer.on('chat:autoChat:driver', listener);
     return () => ipcRenderer.removeListener('chat:autoChat:driver', listener);
+  },
+  onClearFailed: (cb) => {
+    const listener = (_e: any, data: any) => cb(data);
+    ipcRenderer.on('chat:clearFailed', listener);
+    return () => ipcRenderer.removeListener('chat:clearFailed', listener);
   },
   // 群成员编辑：单窗口锁
   openGroupEditor: (groupId) => ipcRenderer.invoke('chat:groupEditor:open', groupId),

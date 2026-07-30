@@ -49,7 +49,9 @@ BrandingText "念语 Nianyu AI Chat"
   Var chkDeleteData
 
   ; 自定义卸载页：勾选框，默认不勾选
-  UninstPage custom un.DataChoicePage
+  ; 同时注册 leave 回调,在用户点击下一步时强制读取复选框最新状态,
+  ; 避免某些 NSIS 版本下 OnClick 不触发导致 $deleteAppDataChecked 未赋值。
+  UninstPage custom un.DataChoicePage un.LeaveDataChoice
 
   Function un.DataChoicePage
     StrCpy $deleteAppDataChecked 0
@@ -70,6 +72,11 @@ BrandingText "念语 Nianyu AI Chat"
   Function un.OnChkDeleteData
     ${NSD_GetState} $chkDeleteData $R2
     StrCpy $deleteAppDataChecked $R2
+  FunctionEnd
+
+  ; 离开页面时强制读取复选框最新状态（兜底）
+  Function un.LeaveDataChoice
+    ${NSD_GetState} $chkDeleteData $deleteAppDataChecked
   FunctionEnd
 
   ; 卸载区段末尾：先杀进程，勾选才删除数据目录
