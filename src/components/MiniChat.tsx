@@ -138,6 +138,7 @@ export const MiniChat: React.FC = () => {
   const [members, setMembers] = useState<Role[]>([]);
   // 观察者私密小窗标记：以 obs:<groupId>:<roleId> 打开时为 true，强制显示思维链
   const [observerPrivate, setObserverPrivate] = useState(false);
+  const [chatBg, setChatBg] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const recentlySentRef = useRef(false);
   const lastSentRef = useRef<{ content: string; imagePaths: string[] }>({
@@ -145,6 +146,7 @@ export const MiniChat: React.FC = () => {
     imagePaths: [],
   });
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const miniPrevChatIdRef = useRef<string | undefined>(undefined);
   // 群聊连续对话（与主界面 ChatWindow 一致）
   const [continuing, setContinuing] = useState(false);
   const [autoChat, setAutoChat] = useState(false);
@@ -198,6 +200,16 @@ export const MiniChat: React.FC = () => {
     idleSecondsRef.current = settings.idleInterval || 600;
     idleSwitchActionRef.current = settings.idleSwitchAction || 'pause';
     setGroupAutoChain(settings.groupAutoChain !== false);
+    // 加载聊天背景
+    if (current) {
+      const key = `${current.chat_type}:${current.chat_id}`;
+      const bgPath = (settings.chatBackgrounds || {})[key];
+      if (bgPath) {
+        api.getImage(bgPath).then((src) => setChatBg(src));
+      } else {
+        setChatBg(null);
+      }
+    }
     api.listWorldBooks().then(setWorldBooks).catch(() => {});
   };
 
@@ -501,11 +513,7 @@ export const MiniChat: React.FC = () => {
       }
       // 流式全部完成 → 自动提炼记忆（若开启）
       if (remaining === 0) maybeAutoMemory();
-      // 首轮流式全部完成 → 若开启「AI 主动续聊」则自动进入多轮接话
-      if (pendingAutoChain.current && remaining === 0) {
-        pendingAutoChain.current = false;
-        setTimeout(() => maybeChain(), 250);
-      }
+      // 注意：AI 主动续聊（maybeChain）由主进程 roundDone 广播触发，避免群聊串行时首个成员 done 即触发。
       // 一轮对话完成 → 按设置自动触发随机事件（仅发送消息的窗口触发）
       if (remaining === 0) {
         if (recentlySentRef.current) {
@@ -517,6 +525,14 @@ export const MiniChat: React.FC = () => {
     const offChunk = api.onStreamChunk(onChunk);
     const offStart = api.onStreamStart(onStart);
     const offDone = api.onStreamDone(onDone);
+    // 整轮结束后由主进程广播 stream:roundDone 触发 AI 主动续聊,避免群聊串行时首个 done 即误触发
+    const offRoundDone = api.onStreamRoundDone((data) => {
+      if (!data || !current || data.chatId !== current.chat_id) return;
+      if (pendingAutoChain.current) {
+        pendingAutoChain.current = false;
+        setTimeout(() => maybeChain(), 250);
+      }
+    });
     const offUser = api.onStreamUser((_e, data) => {
       if (!data || !current || data.chat_id !== current.chat_id) return;
       setMessages((prev) => {
@@ -552,6 +568,7 @@ export const MiniChat: React.FC = () => {
       offChunk();
       offStart();
       offDone();
+      offRoundDone();
       offUser();
       offEvent();
       offIdle();
@@ -634,8 +651,52 @@ export const MiniChat: React.FC = () => {
     return off;
   }, [current]);
 
+  // 窗口间同步：自动接话 driver 事件
+  useEffect(() => {
+    const off = api.onAutoChatDriver((data) => {
+      if (!current || data.chatId !== current.chat_id) return;
+      if (data.action === 'start') {
+        setAutoChat(true);
+      } else if (data.action === 'round') {
+        if (typeof data.round === 'number') setAutoRound(data.round);
+      } else if (data.action === 'stop') {
+        setAutoChat(false);
+        setAutoRound(0);
+        setContinuing(false);
+        if (data.reason === 'forced') autoRef.current = false;
+      }
+    });
+    return off;
+  }, [current]);
 
-  // AI 自动提炼记忆（仅在开启时触发，静默执行）
+  // 窗口间同步：消息变更（清空/撤回/回滚后重载）
+  useEffect(() => {
+    const off = api.onMessagesSync((data) => {
+      if (!current || data.chatType !== current.chat_type || data.chatId !== current.chat_id) return;
+      reloadMessages();
+    });
+    return off;
+  }, [current]);
+
+  // 窗口间同步：背景变更
+  useEffect(() => {
+    const off = api.onSettingsChanged(async (_e: any, patch: Record<string, any>) => {
+      if (!patch || !current) return;
+      if (patch.chatBackgrounds) {
+        const settings = await api.getSettings();
+        const key = `${current.chat_type}:${current.chat_id}`;
+        const bgPath = (settings.chatBackgrounds || {})[key];
+        if (bgPath) {
+          api.getImage(bgPath).then((src) => setChatBg(src));
+        } else {
+          setChatBg(null);
+        }
+      }
+    });
+    return off;
+  }, [current]);
+
+
   const maybeAutoMemory = () => {
     if (!autoMemoryRef.current || !current) return;
     api.extractMemories(current.chat_type, current.chat_id).catch(() => {});
@@ -983,6 +1044,7 @@ export const MiniChat: React.FC = () => {
     showToast(res.deletedMems > 0 ? t('msg.recallDone', { n: res.deletedMems }) : t('msg.recallDoneNone'));
     setRoleMissing(false);
     reloadMessages();
+    if (current) api.syncMessages({ chatType: current.chat_type, chatId: current.chat_id, action: 'recalled' });
   };
 
   // 清空当前聊天消息（可选是否连同自动记忆一起删除）
@@ -996,6 +1058,7 @@ export const MiniChat: React.FC = () => {
         : t('chat.clearMessagesDone', { n: res.deletedMsgs })
     );
     reloadMessages();
+    api.syncMessages({ chatType: current.chat_type, chatId: current.chat_id, action: 'cleared' });
   };
   const handleRollback = async (chatType: string, chatId: string, msgId: number) => {
     if (!(await api.showConfirm!(t('msg.rollbackConfirm')))) return;
@@ -1003,6 +1066,7 @@ export const MiniChat: React.FC = () => {
     showToast(t('msg.rollbackDone', { n: res.deletedMsgs, m: res.deletedMems }));
     setRoleMissing(false);
     reloadMessages();
+    api.syncMessages({ chatType, chatId, action: 'rolledBack' });
   };
 
   const reloadMessages = () => {
@@ -1039,11 +1103,18 @@ export const MiniChat: React.FC = () => {
   const stopAuto = () => {
     autoRef.current = false;
     setAutoChat(false);
+    if (current) api.forceStopAutoChat(current.chat_id);
   };
 
   const startAuto = async () => {
     if (!current || autoRef.current || sending) return;
     const chatId = current.chat_id;
+    // 先争抢 driver 角色
+    const claim = await api.claimAutoChat(chatId);
+    if (!claim.isDriver) {
+      showToast(t('chat.autoAlreadyRunning'), true);
+      return;
+    }
     autoRef.current = true;
     setAutoChat(true);
     setAutoRound(0);
@@ -1058,20 +1129,24 @@ export const MiniChat: React.FC = () => {
       try {
         const res = await api.groupContinue({ chatId });
         ok = !!res.ok;
+        if (!ok) break;
       } catch {
         ok = false;
+        break;
       } finally {
         setContinuing(false);
       }
-      if (!ok || !autoRef.current) break;
+      if (!autoRef.current) break;
       n += 1;
       setAutoRound(n);
+      api.updateAutoChatRound(chatId, n);
       if (limit !== 0 && n >= limit) break;
       // 轮间间隔：给用户插话/停止的窗口
       await new Promise((r) => setTimeout(r, 1500));
     }
     autoRef.current = false;
     setAutoChat(false);
+    api.releaseAutoChat(chatId);
     showToast(t('chat.toastAutoStop'));
   };
 
@@ -1088,6 +1163,16 @@ export const MiniChat: React.FC = () => {
     };
   }, []);
 
+  // 切换会话时,如旧的会话正持有群成员编辑锁,主动释放
+  useEffect(() => {
+    const prev = miniPrevChatIdRef.current;
+    if (prev && prev !== current?.chat_id && showGroupEditor) {
+      api.closeGroupEditor(prev).catch(() => {});
+      setShowGroupEditor(false);
+    }
+    miniPrevChatIdRef.current = current?.chat_id;
+  }, [current?.chat_id, showGroupEditor]);
+
   // 群聊仅剩 1 人 → 转为该成员的单聊
   const handleConvertToSingle = async () => {
     if (!current || current.chat_type !== 'group') return;
@@ -1101,6 +1186,40 @@ export const MiniChat: React.FC = () => {
     const next = list.find((c) => c.chat_type === 'single' && c.chat_id === only.id);
     if (next) setCurrent(next);
   };
+
+  // ===== 群成员编辑：单窗口锁 =====
+  const openGroupEditorLocked = async () => {
+    if (!current) return;
+    const res = await api.openGroupEditor(current.chat_id);
+    if (!res.ok) {
+      showToast(t('group.editLockedTip'), true);
+      return;
+    }
+    setShowGroupEditor(true);
+  };
+  const closeGroupEditorLocked = () => {
+    setShowGroupEditor(false);
+    if (current) api.closeGroupEditor(current.chat_id);
+  };
+  const onGroupEditorUpdatedLocked = () => {
+    setShowGroupEditor(false);
+    if (current) api.closeGroupEditor(current.chat_id);
+    if (current) loadMembers(current);
+    if (current) api.notifyGroupEditorSaved(current.chat_id);
+  };
+
+  // 监听其他窗口编辑群成员事件：saved 时刷新成员列表
+  useEffect(() => {
+    if (!current || current.chat_type !== 'group') return;
+    const off = api.onGroupEditorState((data) => {
+      if (data.groupId !== current.chat_id) return;
+      if (data.action === 'saved') {
+        loadMembers(current);
+        showToast(t('group.editSavedSync'));
+      }
+    });
+    return off;
+  }, [current]);
 
   const handleKeepGroup = async () => {
     if (!current || current.chat_type !== 'group') return;
@@ -1365,7 +1484,12 @@ export const MiniChat: React.FC = () => {
       )}
 
       {/* 消息列表（最近 10 条） */}
-      <CustomScrollArea className="mini-messages" scrollRef={scrollRef} style={{ flex: 1 }}>
+      <CustomScrollArea className="mini-messages" scrollRef={scrollRef} style={chatBg ? {
+        flex: 1,
+        backgroundImage: `url(${chatBg})`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center'
+      } : { flex: 1 }}>
         {allMessages.length === 0 && (
           <div className="empty-state" style={{ fontSize: 12 }}>
             {current ? t('chat.empty', { name: current.name }) : t('mini.empty')}
@@ -1453,7 +1577,7 @@ export const MiniChat: React.FC = () => {
             🎲
           </button>
           {current?.chat_type === 'group' && (
-            <button className="mini-btn" title={t('group.edit')} onClick={() => setShowGroupEditor(true)}>
+            <button className="mini-btn" title={t('group.edit')} onClick={openGroupEditorLocked}>
               👥✎
             </button>
           )}
@@ -1549,11 +1673,8 @@ export const MiniChat: React.FC = () => {
             member_ids: members.map((m) => m.id).join(','),
             created_at: '',
           }}
-          onClose={() => setShowGroupEditor(false)}
-          onUpdated={() => {
-            setShowGroupEditor(false);
-            if (current) loadMembers(current);
-          }}
+          onClose={closeGroupEditorLocked}
+          onUpdated={onGroupEditorUpdatedLocked}
         />
       )}
       <ToastView toast={toast} />

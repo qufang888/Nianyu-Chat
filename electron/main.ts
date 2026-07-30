@@ -290,6 +290,10 @@ function createWindow(): void {
   mainWindow.on('unmaximize', pushWindowState);
   mainWindow.on('resize', scheduleSaveBounds);
   mainWindow.on('move', scheduleSaveBounds);
+  mainWindow.on('closed', () => {
+    clearAutoChatDriverByWindow(mainWindow?.webContents.id ?? -1, 'closed');
+    clearGroupEditorLockByWindow(mainWindow?.webContents.id ?? -1);
+  });
 
   // 还原最大化状态
   mainWindow.once('ready-to-show', () => {
@@ -370,6 +374,10 @@ function createMiniWindow(): void {
 
   // 有交互时恢复不透明
   miniWindow.on('focus', () => miniWindow?.setOpacity(1));
+  miniWindow.on('closed', () => {
+    clearAutoChatDriverByWindow(miniWindow?.webContents.id ?? -1, 'closed');
+    clearGroupEditorLockByWindow(miniWindow?.webContents.id ?? -1);
+  });
 }
 
 function showMiniWindow(): void {
@@ -1477,6 +1485,9 @@ async function handleStream(p: {
     } finally {
       clearTimeout(timer);
       unregisterStream(p.chatId, controller);
+      // 整轮流式结束（无论群聊串行几轮、单聊并行几批，最终统一发一次）。
+      // 前端以此判断"用户消息之后所有 AI 回复都已完成",触发 AI 主动续聊。
+      broadcast('stream:roundDone', { chatId: p.chatId, chatType: p.chatType });
     }
   })();
 
@@ -1551,9 +1562,18 @@ function countConsecutiveByRole(history: ChatMessage[], roleName: string): numbe
 
 // 继续对话：不插入用户消息，调度一位成员接话；等流式完整结束后才 resolve，
 // 便于前端自动模式「一轮结束→隔一会儿→下一轮」串行驱动。
-async function handleGroupContinue(p: {
-  chatId: string;
-}): Promise<{ ok: boolean; roleId?: string; roleName?: string; error?: string }> {
+async function handleGroupContinue(
+  e: Electron.IpcMainInvokeEvent | null,
+  p: { chatId: string }
+): Promise<{ ok: boolean; roleId?: string; roleName?: string; error?: string }> {
+  // 若该聊天已被另一个窗口认领为自动接话 driver,拒绝非 driver 窗口的调用,避免并发群聊生成冲突
+  if (e) {
+    const senderId = e.sender.id;
+    const driverId = autoChatDrivers.get(p.chatId);
+    if (driverId !== undefined && driverId !== senderId) {
+      return { ok: false, error: '该聊天已在另一窗口运行自动接话' };
+    }
+  }
   const settings = dm.getSettings();
   const g = dm.getGroup(p.chatId);
   if (!g) return { ok: false, error: '群组不存在' };
@@ -2353,6 +2373,33 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
+// ===== 自动接话：单驱动器 =====
+// 同一聊天同一时刻只允许一个窗口驱动 groupContinue 循环。
+// 其余窗口收到 driver 广播后仅同步显示状态（按钮/轮数），不驱动循环。
+const autoChatDrivers = new Map<string, number>(); // chatId -> webContents.id
+
+// ===== 群成员编辑：单窗口锁 =====
+// 同一群组同一时刻只允许一个窗口打开编辑器，其余窗口尝试时会被拒绝并提示。
+const groupEditorLocks = new Map<string, number>(); // groupId -> webContents.id
+
+function clearAutoChatDriverByWindow(windowId: number, reason: 'closed' | 'lost'): void {
+  for (const [chatId, driverId] of autoChatDrivers.entries()) {
+    if (driverId === windowId) {
+      autoChatDrivers.delete(chatId);
+      broadcast('chat:autoChat:driver', { chatId, action: 'stop', reason });
+    }
+  }
+}
+
+function clearGroupEditorLockByWindow(windowId: number): void {
+  for (const [groupId, ownerId] of groupEditorLocks.entries()) {
+    if (ownerId === windowId) {
+      groupEditorLocks.delete(groupId);
+      broadcast('chat:groupEditor:state', { groupId, action: 'closed', ownerId: windowId });
+    }
+  }
+}
+
 function sendStreamChunk(
   streamId: string,
   chunk: { content: string; done: boolean; error: string; reasoning?: string; seq?: number }
@@ -2389,7 +2436,7 @@ function registerIPC(): void {
   ipcMain.handle('chats:sendUser', async (_e, p) => handleSendUser(p));
   ipcMain.handle('chats:sendAI', async (_e, p) => handleSendAI(p));
   ipcMain.handle('chats:stream', async (_e, p) => handleStream(p));
-  ipcMain.handle('chats:groupContinue', async (_e, p) => handleGroupContinue(p));
+  ipcMain.handle('chats:groupContinue', (e, p) => handleGroupContinue(e, p));
   ipcMain.handle('chats:proactive', async (_e, p) => handleProactive(p));
   ipcMain.handle('chats:randomEvent', async (_e, p) => handleRandomEvent(p));
   ipcMain.handle('chats:chooseEvent', async (_e, p) => handleChooseEvent(p));
@@ -2406,6 +2453,69 @@ function registerIPC(): void {
   ipcMain.handle('chats:clearMessages', (_e, chatType: string, chatId: string, withMemories: boolean) =>
     dm.clearChatMessages(chatType, chatId, withMemories)
   );
+  // 窗口间同步：自动接话状态广播
+  ipcMain.handle('chat:syncAutoChat', (_e, payload: { chatId: string; action: 'start' | 'stop' }) => {
+    broadcast('chat:autoChatSync', payload);
+  });
+  // 窗口间同步：消息变更广播（清空/撤回/回滚后通知其他窗口刷新）
+  ipcMain.handle('chat:syncMessages', (_e, payload: { chatType: string; chatId: string; action: 'cleared' | 'recalled' | 'rolledBack' }) => {
+    broadcast('chat:messagesSync', payload);
+  });
+  // ===== 自动接话：单驱动器 =====
+  ipcMain.handle('chat:autoChat:claim', (e, chatId: string): { isDriver: boolean; ownerId?: number } => {
+    const senderId = e.sender.id;
+    const existing = autoChatDrivers.get(chatId);
+    if (existing === undefined) {
+      autoChatDrivers.set(chatId, senderId);
+      broadcast('chat:autoChat:driver', { chatId, action: 'start', driverId: senderId });
+      return { isDriver: true, ownerId: senderId };
+    }
+    if (existing === senderId) return { isDriver: true, ownerId: senderId };
+    return { isDriver: false, ownerId: existing };
+  });
+  ipcMain.handle('chat:autoChat:release', (e, chatId: string): { released: boolean } => {
+    const senderId = e.sender.id;
+    const owner = autoChatDrivers.get(chatId);
+    if (owner === undefined) return { released: true };
+    if (owner !== senderId) return { released: false }; // 仅 driver 可主动释放
+    autoChatDrivers.delete(chatId);
+    broadcast('chat:autoChat:driver', { chatId, action: 'stop', driverId: senderId });
+    return { released: true };
+  });
+  // 任一窗口可强制停止（让另一窗口的循环也退出）
+  ipcMain.handle('chat:autoChat:forceStop', (_e, chatId: string): { ok: boolean } => {
+    if (!autoChatDrivers.has(chatId)) return { ok: true };
+    autoChatDrivers.delete(chatId);
+    broadcast('chat:autoChat:driver', { chatId, action: 'stop', reason: 'forced' });
+    return { ok: true };
+  });
+  ipcMain.handle('chat:autoChat:round', (_e, chatId: string, round: number): void => {
+    broadcast('chat:autoChat:driver', { chatId, action: 'round', round });
+  });
+  // ===== 群成员编辑：单窗口锁 =====
+  ipcMain.handle('chat:groupEditor:open', (e, groupId: string): { ok: boolean; ownerId?: number } => {
+    const senderId = e.sender.id;
+    const existing = groupEditorLocks.get(groupId);
+    if (existing === undefined) {
+      groupEditorLocks.set(groupId, senderId);
+      broadcast('chat:groupEditor:state', { groupId, action: 'opened', ownerId: senderId });
+      return { ok: true, ownerId: senderId };
+    }
+    if (existing === senderId) return { ok: true, ownerId: senderId };
+    return { ok: false, ownerId: existing };
+  });
+  ipcMain.handle('chat:groupEditor:close', (e, groupId: string): { ok: boolean } => {
+    const senderId = e.sender.id;
+    const owner = groupEditorLocks.get(groupId);
+    if (owner !== undefined && owner !== senderId) return { ok: false };
+    groupEditorLocks.delete(groupId);
+    broadcast('chat:groupEditor:state', { groupId, action: 'closed', ownerId: senderId });
+    return { ok: true };
+  });
+  ipcMain.handle('chat:groupEditor:saved', (e, groupId: string): void => {
+    const senderId = e.sender.id;
+    broadcast('chat:groupEditor:state', { groupId, action: 'saved', ownerId: senderId });
+  });
 
   ipcMain.handle('groups:list', () => dm.listGroups());
   ipcMain.handle('groups:get', (_e, id) => dm.getGroup(id));

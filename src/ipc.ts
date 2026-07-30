@@ -127,6 +127,22 @@ export interface NianyuAPI {
   eventClosed: (p: { chatType: string; chatId: string }) => Promise<void>;
   deleteChat: (type: string, id: string) => Promise<void>;
   clearChatMessages: (chatType: string, chatId: string, withMemories: boolean) => Promise<{ deletedMsgs: number; deletedMems: number }>;
+  syncAutoChat: (p: { chatId: string; action: 'start' | 'stop' }) => Promise<void>;
+  syncMessages: (p: { chatType: string; chatId: string; action: 'cleared' | 'recalled' | 'rolledBack' }) => Promise<void>;
+  onAutoChatSync: (cb: (data: { chatId: string; action: 'start' | 'stop' }) => void) => () => void;
+  onMessagesSync: (cb: (data: { chatType: string; chatId: string; action: string }) => void) => () => void;
+  onStreamRoundDone: (cb: (data: { chatId: string; chatType: string }) => void) => () => void;
+  // 自动接话：单驱动器模式
+  claimAutoChat: (chatId: string) => Promise<{ isDriver: boolean; ownerId?: number }>;
+  releaseAutoChat: (chatId: string) => Promise<{ released: boolean }>;
+  forceStopAutoChat: (chatId: string) => Promise<{ ok: boolean }>;
+  updateAutoChatRound: (chatId: string, round: number) => Promise<void>;
+  onAutoChatDriver: (cb: (data: { chatId: string; action: 'start' | 'stop' | 'round'; driverId?: number; round?: number; reason?: string }) => void) => () => void;
+  // 群成员编辑：单窗口锁
+  openGroupEditor: (groupId: string) => Promise<{ ok: boolean; ownerId?: number }>;
+  closeGroupEditor: (groupId: string) => Promise<{ ok: boolean }>;
+  notifyGroupEditorSaved: (groupId: string) => Promise<void>;
+  onGroupEditorState: (cb: (data: { groupId: string; action: 'opened' | 'closed' | 'saved'; ownerId: number }) => void) => () => void;
 
   getGroups: () => Promise<Group[]>;
   getGroup: (id: string) => Promise<Group | undefined>;

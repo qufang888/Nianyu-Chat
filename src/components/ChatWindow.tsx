@@ -144,6 +144,40 @@ export const ChatWindow: React.FC<{
       showToast(t('chat.miniOpenFail'));
     }
   };
+
+  // ===== 群成员编辑：单窗口锁 =====
+  // 点击 👥✎ 先向主进程申请锁,获得才能打开编辑器,被另一窗口占用则提示并拒绝
+  const openGroupEditorLocked = async () => {
+    const res = await api.openGroupEditor(chatId);
+    if (!res.ok) {
+      showToast(t('group.editLockedTip'), true);
+      return;
+    }
+    setShowGroupEditor(true);
+  };
+  const closeGroupEditorLocked = () => {
+    setShowGroupEditor(false);
+    api.closeGroupEditor(chatId);
+  };
+  const onGroupEditorUpdatedLocked = () => {
+    setShowGroupEditor(false);
+    api.closeGroupEditor(chatId);
+    onGroupUpdated?.();
+    api.notifyGroupEditorSaved(chatId);
+  };
+
+  // 监听其他窗口编辑群成员事件：saved 时刷新成员列表
+  useEffect(() => {
+    if (chatType !== 'group') return;
+    const off = api.onGroupEditorState((data) => {
+      if (data.groupId !== chatId) return;
+      if (data.action === 'saved') {
+        reload();
+        showToast(t('group.editSavedSync'));
+      }
+    });
+    return off;
+  }, [chatType, chatId]);
   // ===== 随机事件 =====
   const triggerEvent = async (theme?: string) => {
     if (eventLoading || eventState) return;
@@ -672,11 +706,7 @@ export const ChatWindow: React.FC<{
       }
       // 流式全部完成 → 自动提炼记忆（若开启）
       if (remaining === 0) maybeAutoMemory();
-      // 首轮流式全部完成 → 若开启「AI 主动续聊」则自动进入多轮接话
-      if (pendingAutoChain.current && remaining === 0) {
-        pendingAutoChain.current = false;
-        setTimeout(() => maybeChain(), 250);
-      }
+      // 注意：AI 主动续聊（maybeChain）由主进程 roundDone 广播触发，避免群聊串行时首个成员 done 即触发。
       // 一轮对话完成 → 按设置自动触发随机事件（仅发送消息的窗口触发）
       if (remaining === 0) {
         if (recentlySentRef.current) {
@@ -736,6 +766,15 @@ export const ChatWindow: React.FC<{
     const offChunk = api.onStreamChunk(onChunk);
     const offDone = api.onStreamDone(onDone);
     const offStart = api.onStreamStart(onStart);
+    // 整轮（用户消息 → 所有 AI 回复）结束后由主进程广播 stream:roundDone 触发 AI 主动续聊，
+    // 避免群聊串行时首个成员 done 即误触发可能链。
+    const offRoundDone = api.onStreamRoundDone((data) => {
+      if (!data || data.chatId !== chatId) return;
+      if (pendingAutoChain.current) {
+        pendingAutoChain.current = false;
+        setTimeout(() => maybeChain(), 250);
+      }
+    });
     // 空闲活动同步：另一窗口发送消息后重置本窗口的 idle 计时
     const offIdle = api.onIdleActivity((_e, data) => {
       if (data && data.chatKey === chatKey) {
@@ -753,6 +792,7 @@ export const ChatWindow: React.FC<{
       offChunk();
       offDone();
       offStart();
+      offRoundDone();
       offIdle();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -839,6 +879,39 @@ export const ChatWindow: React.FC<{
     return off;
   }, [bgKey]);
 
+  // 窗口间同步：自动接话 driver 事件
+  // - start: 同聊天时其他窗口的 driver 已启动 → 本窗口同步显示状态（不驱动循环）
+  // - round: 同步轮数显示
+  // - stop: 本窗口退出显示（若本地也在驱动，autoRef 由 forceStopAutoChat 的本地调用清掉）
+  useEffect(() => {
+    const off = api.onAutoChatDriver((data) => {
+      if (data.chatId !== chatId) return;
+      if (data.action === 'start') {
+        // 另一窗口的 driver 已启动（或本地刚启动 claim 成功），同步显示
+        setAutoChat(true);
+        // 轮数交给 round 事件更新，此处保留 0
+      } else if (data.action === 'round') {
+        if (typeof data.round === 'number') setAutoRound(data.round);
+      } else if (data.action === 'stop') {
+        setAutoChat(false);
+        setAutoRound(0);
+        setContinuing(false);
+        // driver 已被主进程释放，若本窗口误以为自己在驱动，让循环下一次检查时退出
+        if (data.reason === 'forced') autoRef.current = false;
+      }
+    });
+    return off;
+  }, [chatId]);
+
+  // 窗口间同步：消息变更（清空/撤回/回滚后其他窗口重载）
+  useEffect(() => {
+    const off = api.onMessagesSync((data) => {
+      if (data.chatType !== chatType || data.chatId !== chatId) return;
+      reload();
+    });
+    return off;
+  }, [chatType, chatId]);
+
   // ===== 观察者模式操作 =====
   const enterObserver = async () => {
     const res = await api.observerSetMode({ groupId: chatId, on: true, applyPreset: true });
@@ -918,6 +991,7 @@ export const ChatWindow: React.FC<{
     const res = await api.rollbackMessages({ chatType, chatId, fromMsgId: msgId });
     showToast(t('msg.rollbackDone', { n: res.deletedMsgs, m: res.deletedMems }));
     reload();
+    api.syncMessages({ chatType, chatId, action: 'rolledBack' });
   };
 
   const handleRecall = async (msgId: number) => {
@@ -925,6 +999,7 @@ export const ChatWindow: React.FC<{
     const res = await api.recallMessage(msgId);
     showToast(res.deletedMems > 0 ? t('msg.recallDone', { n: res.deletedMems }) : t('msg.recallDoneNone'));
     reload();
+    api.syncMessages({ chatType, chatId, action: 'recalled' });
   };
 
   // 清空当前聊天消息（可选是否连同自动记忆一起删除）
@@ -937,6 +1012,7 @@ export const ChatWindow: React.FC<{
         : t('chat.clearMessagesDone', { n: res.deletedMsgs })
     );
     reload();
+    api.syncMessages({ chatType, chatId, action: 'cleared' });
   };
 
   const handleForward = async (targetChatType: string, targetChatId: string, targetName: string) => {
@@ -1239,13 +1315,23 @@ export const ChatWindow: React.FC<{
     }
   };
 
+  // 单驱动器模式：只有"争抢到 driver 角色"的窗口才真正驱动循环，其余窗口仅同步显示。
+  // 强行 stop 走 forceStopAutoChat，让主进程广播 stop，所有窗口的本地 autoRef/autoChat 都置 false。
   const stopAuto = () => {
     autoRef.current = false;
     setAutoChat(false);
+    api.forceStopAutoChat(chatId);
   };
 
   const startAuto = async () => {
     if (autoRef.current || sending) return;
+    // 先争抢 driver 角色
+    const claim = await api.claimAutoChat(chatId);
+    if (!claim.isDriver) {
+      showToast(t('chat.autoAlreadyRunning'), true);
+      // 仍同步显示：等广播把本地状态更新为运行中（即使 driver 是另一窗口）
+      return;
+    }
     autoRef.current = true;
     setAutoChat(true);
     setAutoRound(0);
@@ -1260,20 +1346,25 @@ export const ChatWindow: React.FC<{
       try {
         const res = await api.groupContinue({ chatId });
         ok = !!res.ok;
+        if (!ok) break;
       } catch {
         ok = false;
+        break;
       } finally {
         setContinuing(false);
       }
-      if (!ok || !autoRef.current) break;
+      if (!autoRef.current) break;
       n += 1;
       setAutoRound(n);
+      api.updateAutoChatRound(chatId, n); // 同步轮数到其他窗口
       if (limit !== 0 && n >= limit) break;
       // 轮间间隔：给用户插话/停止的窗口
       await new Promise((r) => setTimeout(r, 1500));
     }
+    // 退出循环：清掉本地状态并释放 driver（主进程广播 stop 给所有窗口）
     autoRef.current = false;
     setAutoChat(false);
+    api.releaseAutoChat(chatId);
     showToast(t('chat.toastAutoStop'));
   };
 
@@ -1533,7 +1624,7 @@ export const ChatWindow: React.FC<{
             <button
               className="tool-btn"
               title={t('group.edit')}
-              onClick={() => setShowGroupEditor(true)}
+              onClick={openGroupEditorLocked}
             >
               👥✎
             </button>
@@ -1838,11 +1929,8 @@ export const ChatWindow: React.FC<{
             member_ids: members.map((m) => m.id).join(','),
             created_at: '',
           }}
-          onClose={() => setShowGroupEditor(false)}
-          onUpdated={() => {
-            setShowGroupEditor(false);
-            onGroupUpdated?.();
-          }}
+          onClose={closeGroupEditorLocked}
+          onUpdated={onGroupEditorUpdatedLocked}
         />
       )}
       {showObserverPanel && (
