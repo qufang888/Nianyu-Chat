@@ -20,6 +20,7 @@ import ImageGrid from './ImageGrid';
 import { EVENT_COOLDOWN_MS, EVENT_TRIGGER_THRESHOLD } from '../eventThemes';
 import { getEventStore, setEventStore } from '../utils/eventStore';
 import { getIdleActivity, setIdleActivity } from '../utils/idleTimerStore';
+import { ClearChatModal } from './ClearChatModal';
 
 // 快捷聊天小窗（独立无边框窗口，#mini 路由渲染）
 // 交互逻辑与 ChatWindow 主界面保持一致：图片发送/预览、语音输入、TTS、回到底部、重发、@提及、群聊转单聊提示等。
@@ -38,6 +39,7 @@ export const MiniChat: React.FC = () => {
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [clearOpen, setClearOpen] = useState(false);
   // 已结束的 streamId 集合，防止同一 AI 消息被重复追加（与 ChatWindow 一致）
   const doneStreamIds = useRef<Set<string>>(new Set());
   const seenSeqRef = useRef<Record<string, number>>({});
@@ -977,9 +979,22 @@ export const MiniChat: React.FC = () => {
   };
   const handleRecall = async (msgId: number) => {
     if (!(await api.showConfirm!(t('msg.recallConfirm')))) return;
-    await api.recallMessage(msgId);
-    showToast(t('msg.recallDone', { n: 0 }));
+    const res = await api.recallMessage(msgId);
+    showToast(res.deletedMems > 0 ? t('msg.recallDone', { n: res.deletedMems }) : t('msg.recallDoneNone'));
     setRoleMissing(false);
+    reloadMessages();
+  };
+
+  // 清空当前聊天消息（可选是否连同自动记忆一起删除）
+  const handleClearChat = async (withMemories: boolean) => {
+    if (!current) return;
+    setClearOpen(false);
+    const res = await api.clearChatMessages(current.chat_type, current.chat_id, withMemories);
+    showToast(
+      withMemories
+        ? t('chat.clearMessagesDoneWithMem', { n: res.deletedMsgs, m: res.deletedMems })
+        : t('chat.clearMessagesDone', { n: res.deletedMsgs })
+    );
     reloadMessages();
   };
   const handleRollback = async (chatType: string, chatId: string, msgId: number) => {
@@ -1464,6 +1479,9 @@ export const MiniChat: React.FC = () => {
             </>
           )}
           <div style={{ flex: 1 }} />
+          <button className="mini-btn" title={t('chat.clearMessages')} onClick={() => setClearOpen(true)}>
+            🧹
+          </button>
           <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
             {t('chat.tokenBar', { total: totalTokens, global: globalTokens })}
           </span>
@@ -1540,6 +1558,11 @@ export const MiniChat: React.FC = () => {
       )}
       <ToastView toast={toast} />
       <CustomCursor />
+      <ClearChatModal
+        open={clearOpen}
+        onCancel={() => setClearOpen(false)}
+        onConfirm={handleClearChat}
+      />
     </div>
   );
 };

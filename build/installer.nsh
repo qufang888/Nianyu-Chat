@@ -32,3 +32,46 @@ BrandingText "念语 Nianyu AI Chat"
 !ifndef MUI_ABORTWARNING_TEXT
   !define MUI_ABORTWARNING_TEXT "确定要取消安装吗？"
 !endif
+
+; =====================================================================
+; 卸载时询问是否删除使用数据（默认不删）
+; 仅卸载器编译（BUILD_UNINSTALLER）时生效；安装器编译自动跳过。
+; 注意：Electron 的 userData 目录取自 package.json 的 name（nianyu-client），
+;       并非 productName（念语），故此处按真实目录名删除。
+; =====================================================================
+!ifdef BUILD_UNINSTALLER
+  !include "nsDialogs.nsh"
+  Var /GLOBAL deleteAppDataChecked
+  Var chkDeleteData
+
+  ; 自定义卸载页：勾选框，默认不勾选
+  UninstPage custom un.DataChoicePage
+
+  Function un.DataChoicePage
+    nsDialogs::Create 1018
+    Pop $R0
+    ${If} $R0 == error
+      Abort
+    ${EndIf}
+    ${NSD_CreateLabel} 0 0 100% 42u "卸载 念语 时，是否一并删除所有使用数据？$\n（聊天记录、记忆、设置、自定义音效等，位于 AppData 目录）$\n默认不删除，你可稍后手动清理。"
+    Pop $R1
+    ${NSD_CreateCheckBox} 0 54u 100% 16u "删除所有使用数据（不可恢复）"
+    Pop $chkDeleteData
+    ${NSD_SetState} $chkDeleteData 0
+    ${NSD_OnClick} $chkDeleteData un.OnChkDeleteData
+    nsDialogs::Show
+  FunctionEnd
+
+  Function un.OnChkDeleteData
+    ${NSD_GetState} $chkDeleteData $R2
+    StrCpy $deleteAppDataChecked $R2
+  FunctionEnd
+
+  ; 卸载区段末尾：勾选才删除数据目录
+  Section "-postuninstall"
+    ${If} $deleteAppDataChecked == 1
+      RMDir /r "$APPDATA\nianyu-client"
+      RMDir /r "$LOCALAPPDATA\nianyu-client"
+    ${EndIf}
+  SectionEnd
+!endif

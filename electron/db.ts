@@ -137,6 +137,8 @@ class DataManager {
       (m) => !(m.chat_type === 'single' && m.chat_id === id)
     );
     this.store.affinity = this.store.affinity.filter((a) => a.role_id !== id);
+    // 删除数字人：连带删除其全部记忆（自动与手动均清）
+    this.store.memories = this.store.memories.filter((m) => m.roleId !== id);
     this.saveStore();
   }
 
@@ -236,7 +238,7 @@ class DataManager {
     return [...list].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
   }
 
-  addMemory(m: Omit<MemoryEntry, 'id' | 'created_at' | 'updated_at'> & Partial<Pick<MemoryEntry, 'id' | 'created_at' | 'updated_at' | 'sourceMsgId'>>): MemoryEntry {
+  addMemory(m: Omit<MemoryEntry, 'id' | 'created_at' | 'updated_at'> & Partial<Pick<MemoryEntry, 'id' | 'created_at' | 'updated_at' | 'sourceMsgId' | 'sourceMsgIds'>>): MemoryEntry {
     const now = new Date().toISOString();
     const full: MemoryEntry = {
       id: m.id || this.genId('mem'),
@@ -244,6 +246,7 @@ class DataManager {
       content: m.content,
       source: m.source,
       sourceMsgId: (m as any).sourceMsgId,
+      sourceMsgIds: (m as any).sourceMsgIds,
       created_at: m.created_at || now,
       updated_at: now,
     };
@@ -265,23 +268,27 @@ class DataManager {
     this.saveStore();
   }
 
-  // 按 sourceMsgId 删除关联记忆（用于回滚/撤回）
+  // 按 sourceMsgId / sourceMsgIds 删除关联记忆（用于回滚/撤回）
   deleteMemoriesByMsgId(msgId: number): number {
     const before = this.store.memories.length;
-    this.store.memories = this.store.memories.filter((m) => m.sourceMsgId !== msgId);
+    this.store.memories = this.store.memories.filter((m) => {
+      if (m.sourceMsgId === msgId) return false;
+      if (m.sourceMsgIds && m.sourceMsgIds.includes(msgId)) return false;
+      return true;
+    });
     const deleted = before - this.store.memories.length;
     if (deleted > 0) this.saveStore();
     return deleted;
   }
 
-  // 单条删除消息（撤回）
-  deleteMessage(msgId: number): boolean {
+  // 单条删除消息（撤回）；返回是否成功，以及被联动删除的关联记忆条数
+  deleteMessage(msgId: number): { ok: boolean; deletedMems: number } {
     const idx = this.store.messages.findIndex((m) => m.id === msgId);
-    if (idx < 0) return false;
+    if (idx < 0) return { ok: false, deletedMems: 0 };
     this.store.messages.splice(idx, 1);
-    this.deleteMemoriesByMsgId(msgId);
+    const deletedMems = this.deleteMemoriesByMsgId(msgId);
     this.saveStore();
-    return true;
+    return { ok: true, deletedMems };
   }
 
   // 回滚：删除 id >= msgId 的所有消息及其关联记忆
@@ -318,11 +325,48 @@ class DataManager {
     return full;
   }
 
+  // 删除「在某聊天内产生的自动记忆」：按 sourceMsgId / sourceMsgIds 是否属于该聊天消息集合判定。
+  // 手动记忆（source === 'manual'，无 sourceMsgIds 关联）不在此列，调用方需显式决定是否删除。
+  private deleteAutoMemoriesByMsgIds(ids: Set<number>): number {
+    if (ids.size === 0) return 0;
+    const before = this.store.memories.length;
+    this.store.memories = this.store.memories.filter((m) => {
+      if (m.source !== 'auto') return true;
+      if (m.sourceMsgId != null && ids.has(m.sourceMsgId)) return false;
+      if (m.sourceMsgIds && m.sourceMsgIds.some((id) => ids.has(id))) return false;
+      return true;
+    });
+    return before - this.store.memories.length;
+  }
+
+  // 删除聊天：一并删除该聊天内产生的自动记忆（手动记忆保留）
   deleteChat(chatType: string, chatId: string): void {
+    const ids = new Set(
+      this.store.messages
+        .filter((m) => m.chat_type === chatType && m.chat_id === chatId)
+        .map((m) => m.id)
+    );
     this.store.messages = this.store.messages.filter(
       (m) => !(m.chat_type === chatType && m.chat_id === chatId)
     );
+    this.deleteAutoMemoriesByMsgIds(ids);
     this.saveStore();
+  }
+
+  // 清空当前聊天消息；withMemories=true 时一并删除该聊天内产生的自动记忆（手动记忆保留）
+  clearChatMessages(chatType: string, chatId: string, withMemories: boolean): { deletedMsgs: number; deletedMems: number } {
+    const ids = new Set(
+      this.store.messages
+        .filter((m) => m.chat_type === chatType && m.chat_id === chatId)
+        .map((m) => m.id)
+    );
+    this.store.messages = this.store.messages.filter(
+      (m) => !(m.chat_type === chatType && m.chat_id === chatId)
+    );
+    let deletedMems = 0;
+    if (withMemories) deletedMems = this.deleteAutoMemoriesByMsgIds(ids);
+    this.saveStore();
+    return { deletedMsgs: ids.size, deletedMems };
   }
 
   // ---------- 群组 ----------
@@ -345,10 +389,9 @@ class DataManager {
 
   deleteGroup(id: string): void {
     this.store.groups = this.store.groups.filter((g) => g.group_id !== id);
-    this.store.messages = this.store.messages.filter(
-      (m) => !(m.chat_type === 'group' && m.chat_id === id)
-    );
-    this.saveStore();
+    // 复用 deleteChat 处理消息删除 + 自动记忆级联清理（手动记忆保留）
+    this.deleteChat('group', id);
+    // deleteChat 已调用 saveStore()
   }
 
   // 设置「保持群聊」的持久化忽略标记：群聊仅剩 1 人时用户选择不转换后，

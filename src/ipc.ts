@@ -98,7 +98,7 @@ export interface NianyuAPI {
   offGroupObserver: (cb: (e: any, data: any) => void) => void;
 
   // 消息操作
-  recallMessage: (msgId: number) => Promise<boolean>;
+  recallMessage: (msgId: number) => Promise<{ ok: boolean; deletedMems: number }>;
   rollbackMessages: (p: { chatType: string; chatId: string; fromMsgId: number }) => Promise<{ deletedMsgs: number; deletedMems: number }>;
   // 快捷记忆（选中文本一键存入）
   addQuickMemory: (p: { roleId: string; content: string }) => Promise<any>;
@@ -126,6 +126,7 @@ export interface NianyuAPI {
   offRoleMood: (cb: (e: any, data: any) => void) => void;
   eventClosed: (p: { chatType: string; chatId: string }) => Promise<void>;
   deleteChat: (type: string, id: string) => Promise<void>;
+  clearChatMessages: (chatType: string, chatId: string, withMemories: boolean) => Promise<{ deletedMsgs: number; deletedMems: number }>;
 
   getGroups: () => Promise<Group[]>;
   getGroup: (id: string) => Promise<Group | undefined>;

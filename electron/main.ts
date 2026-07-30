@@ -2331,8 +2331,12 @@ async function extractMemories(chatType: string, chatId: string): Promise<number
       .slice(0, 6);
     let n = 0;
     const lastMsgId = history.length > 0 ? history[history.length - 1].id : undefined;
+    // 关联「触发本轮对话的用户消息」+「AI 回复」，任一被撤回/删除时都会联动清理该记忆
+    const lastUserMsg = [...history].reverse().find((m) => m.sender_type === 'user');
+    const userMsgId = lastUserMsg ? lastUserMsg.id : undefined;
+    const sourceMsgIds = [lastMsgId, userMsgId].filter((x): x is number => x !== undefined);
     for (const l of lines) {
-      dm.addMemory({ roleId, content: l, source: 'auto', sourceMsgId: lastMsgId } as any);
+      dm.addMemory({ roleId, content: l, source: 'auto', sourceMsgIds } as any);
       n += 1;
     }
     return n;
@@ -2399,6 +2403,9 @@ function registerIPC(): void {
     if (type === 'group') dm.deleteGroup(id);
     else dm.deleteChat(type, id);
   });
+  ipcMain.handle('chats:clearMessages', (_e, chatType: string, chatId: string, withMemories: boolean) =>
+    dm.clearChatMessages(chatType, chatId, withMemories)
+  );
 
   ipcMain.handle('groups:list', () => dm.listGroups());
   ipcMain.handle('groups:get', (_e, id) => dm.getGroup(id));

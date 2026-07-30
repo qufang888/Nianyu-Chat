@@ -80,6 +80,7 @@ export interface MemoryEntry {
   content: string;
   source: 'manual' | 'auto'; // 手动添加 / AI 自动提炼
   sourceMsgId?: number; // 来源消息 ID（自动记忆关联，用于回滚/撤回时精准删除）
+  sourceMsgIds?: number[]; // 关联的一组消息 ID（触发对话的用户消息 + AI 回复），任一命中即联动删除
   created_at: string;
   updated_at: string;
 }

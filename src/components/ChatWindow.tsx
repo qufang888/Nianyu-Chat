@@ -18,6 +18,7 @@ import { EVENT_COOLDOWN_MS, EVENT_TRIGGER_THRESHOLD } from '../eventThemes';
 import { getEventStore, setEventStore } from '../utils/eventStore';
 import { getIdleActivity, setIdleActivity } from '../utils/idleTimerStore';
 import CustomScrollArea from './CustomScrollArea';
+import { ClearChatModal } from './ClearChatModal';
 
 export const ChatWindow: React.FC<{
   chatType: string;
@@ -38,6 +39,7 @@ export const ChatWindow: React.FC<{
   const [affinityPop, setAffinityPop] = useState<string | null>(null);
   const [showMention, setShowMention] = useState(false);
   const [globalTokens, setGlobalTokens] = useState(0);
+  const [clearOpen, setClearOpen] = useState(false);
   const [modelMap, setModelMap] = useState<Record<string, string>>({});
   const [avatarMap, setAvatarMap] = useState<Record<string, string>>({});
   const [enableStreaming, setEnableStreaming] = useState(false);
@@ -920,8 +922,20 @@ export const ChatWindow: React.FC<{
 
   const handleRecall = async (msgId: number) => {
     if (!(await api.showConfirm!(t('msg.recallConfirm')))) return;
-    await api.recallMessage(msgId);
-    showToast(t('msg.recallDone', { n: 0 }));
+    const res = await api.recallMessage(msgId);
+    showToast(res.deletedMems > 0 ? t('msg.recallDone', { n: res.deletedMems }) : t('msg.recallDoneNone'));
+    reload();
+  };
+
+  // 清空当前聊天消息（可选是否连同自动记忆一起删除）
+  const handleClearChat = async (withMemories: boolean) => {
+    setClearOpen(false);
+    const res = await api.clearChatMessages(chatType, chatId, withMemories);
+    showToast(
+      withMemories
+        ? t('chat.clearMessagesDoneWithMem', { n: res.deletedMsgs, m: res.deletedMems })
+        : t('chat.clearMessagesDone', { n: res.deletedMsgs })
+    );
     reload();
   };
 
@@ -1574,6 +1588,10 @@ export const ChatWindow: React.FC<{
                 >🗑️ {t('chat.deleteChat')}</button>
                 <button
                   className="tool-btn" style={{ width: '100%', justifyContent: 'flex-start', padding: '6px 10px', fontSize: 13 }}
+                  onClick={() => { setClearOpen(true); setMoreOpen(false); }}
+                >🧹 {t('chat.clearMessages')}</button>
+                <button
+                  className="tool-btn" style={{ width: '100%', justifyContent: 'flex-start', padding: '6px 10px', fontSize: 13 }}
                   onClick={() => { (chatBg ? clearBg : setBg)(); setMoreOpen(false); }}
                 >🖼️ {chatBg ? t('chat.clearBackground') : t('chat.setBackground')}</button>
                 <button
@@ -1598,6 +1616,11 @@ export const ChatWindow: React.FC<{
               document.body,
             )}
           </div>
+          <ClearChatModal
+            open={clearOpen}
+            onCancel={() => setClearOpen(false)}
+            onConfirm={handleClearChat}
+          />
           {selfRoles.length > 0 && (
             <SelectMenu
               value={selfRoleId}
