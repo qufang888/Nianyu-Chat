@@ -41,7 +41,7 @@ function cardCSS(dark: boolean): string {
       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
     .ny-close{position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;
       background:rgba(255,255,255,.10);color:rgba(255,255,255,.7);font-size:15px;line-height:22px;text-align:center;
-      cursor:pointer;transition:background .15s;}
+      z-index:3;cursor:pointer;transition:background .15s;}
     .ny-close::after{content:'';position:absolute;inset:-10px;}
     .ny-close:hover{background:rgba(255,255,255,.22);}`;
   }
@@ -69,7 +69,7 @@ function cardCSS(dark: boolean): string {
       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
     .ny-close{position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;
       background:rgba(0,0,0,.06);color:rgba(0,0,0,.45);font-size:15px;line-height:22px;text-align:center;
-      cursor:pointer;transition:background .15s;}
+      z-index:3;cursor:pointer;transition:background .15s;}
     .ny-close::after{content:'';position:absolute;inset:-10px;}
     .ny-close:hover{background:rgba(0,0,0,.14);}`;
 }
