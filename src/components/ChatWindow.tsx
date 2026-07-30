@@ -635,6 +635,8 @@ export const ChatWindow: React.FC<{
       });
     };
     const onDone = (_e: any, data: any) => {
+      // 非本聊天（如观察者私密小窗 obs:群:角色）的流式完成事件不在此窗口渲染，避免回复串到公屏
+      if (!belongs(data.streamId)) return;
       let remaining = 0;
       activeStreamsRef.current.delete(data.streamId);
       streamingCountRef.current = activeStreamsRef.current.size;
@@ -682,6 +684,8 @@ export const ChatWindow: React.FC<{
       }
     };
     const onStart = (_e: any, data: any) => {
+      // 非本聊天的流式开始事件（如观察者私密小窗）跳过，避免在主窗公屏生成空占位气泡
+      if (!belongs(data.streamId)) return;
       // 同一 streamId 可能被复用（继续对话/重发）：重置 seq 与完成标记，避免新一轮 chunk 被误丢弃
       delete seenSeqRef.current[data.streamId];
       doneStreamIds.current.delete(data.streamId);
