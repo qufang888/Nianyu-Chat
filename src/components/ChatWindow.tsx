@@ -107,6 +107,8 @@ export const ChatWindow: React.FC<{
   const [showObserverPanel, setShowObserverPanel] = useState(false);
   const [showObserverConfig, setShowObserverConfig] = useState(false);
   const [showPrivateMenu, setShowPrivateMenu] = useState(false);
+  const [configAnchor, setConfigAnchor] = useState<DOMRect | null>(null);
+  const [privateAnchor, setPrivateAnchor] = useState<DOMRect | null>(null);
   const [observerMembers, setObserverMembers] = useState<Role[]>([]);
   // 群聊内各角色当前心情（头像旁小字显示）
   const [groupMoods, setGroupMoods] = useState<Record<string, string>>({});
@@ -847,11 +849,13 @@ export const ChatWindow: React.FC<{
       observerModeRef.current = false;
       setShowObserverPanel(false);
       setShowObserverConfig(false);
+      setConfigAnchor(null);
       if (res.archivePath) showToast(t('observer.archived', { path: res.archivePath }));
     }
   };
   const openPrivateWindow = async (roleId: string, roleName: string) => {
     setShowPrivateMenu(false);
+    setPrivateAnchor(null);
     try {
       await api.miniOpen({
         initialChat: { chatType: 'single', chatId: `obs:${chatId}:${roleId}`, isObserverPrivate: true },
@@ -866,6 +870,26 @@ export const ChatWindow: React.FC<{
     setObserverConfig(next);
     await api.observerSetConfig({ groupId: chatId, patch: { [key]: value } as any });
   };
+
+  // 观察者下拉菜单（私密小窗 / 对局设置）通过 portal 渲染到 body，脱离 .chat-header-actions 的 overflow 裁剪。
+  // 此处统一处理外部点击 / 滚动 / 缩放时关闭菜单。
+  useEffect(() => {
+    if (!showPrivateMenu && !showObserverConfig) return;
+    const close = () => {
+      setShowPrivateMenu(false);
+      setShowObserverConfig(false);
+      setPrivateAnchor(null);
+      setConfigAnchor(null);
+    };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', close, true);
+    };
+  }, [showPrivateMenu, showObserverConfig]);
 
   // ===== 消息操作：快捷记忆 / 回滚 / 撤回 / 转发 =====
   const handleQuickMemory = async (m: ChatMessage, text: string) => {
@@ -1391,109 +1415,34 @@ export const ChatWindow: React.FC<{
                   >
                     📊 {t('observer.panel')}
                   </button>
-                  <div style={{ position: 'relative' }}>
-                    <button
-                      className="btn-ghost"
-                      style={{ padding: '3px 10px', fontSize: 12 }}
-                      title={t('observer.privateTip')}
-                      onClick={() => {
-                        setShowPrivateMenu((v) => !v);
-                        setShowObserverConfig(false);
-                      }}
-                    >
-                      🔒 {t('observer.private')}
-                    </button>
-                    {showPrivateMenu && (
-                      <div className="obs-menu">
-                        {members.length === 0 && (
-                          <div className="obs-menu-item" style={{ opacity: 0.6 }}>
-                            —
-                          </div>
-                        )}
-                        {members.map((m) => (
-                          <button
-                            key={m.id}
-                            className="obs-menu-item"
-                            onClick={() => openPrivateWindow(m.id, m.name)}
-                          >
-                            🔒 {m.name}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <div style={{ position: 'relative' }}>
-                    <button
-                      className="btn-ghost"
-                      style={{ padding: '3px 10px', fontSize: 12 }}
-                      title={t('observer.configTip')}
-                      onClick={() => {
-                        setShowObserverConfig((v) => !v);
-                        setShowPrivateMenu(false);
-                      }}
-                    >
-                      ⚙ {t('observer.config')}
-                    </button>
-                    {showObserverConfig && (
-                      <div className="obs-menu obs-config">
-                        <label className="obs-toggle">
-                          <input
-                            type="checkbox"
-                            checked={observerConfig.freezeMemory}
-                            onChange={(e) => toggleObserverConfig('freezeMemory', e.target.checked)}
-                          />
-                          <span>
-                            <b>{t('observer.freezeMemory')}</b>
-                            <em>{t('observer.freezeMemoryDesc')}</em>
-                          </span>
-                        </label>
-                        <label className="obs-toggle">
-                          <input
-                            type="checkbox"
-                            checked={observerConfig.publicWriteMemory}
-                            onChange={(e) => toggleObserverConfig('publicWriteMemory', e.target.checked)}
-                          />
-                          <span>
-                            <b>{t('observer.publicWriteMemory')}</b>
-                            <em>{t('observer.publicWriteMemoryDesc')}</em>
-                          </span>
-                        </label>
-                        <label className="obs-toggle">
-                          <input
-                            type="checkbox"
-                            checked={observerConfig.observerNoEmotion}
-                            onChange={(e) => toggleObserverConfig('observerNoEmotion', e.target.checked)}
-                          />
-                          <span>
-                            <b>{t('observer.pureObserver')}</b>
-                            <em>{t('observer.pureObserverDesc')}</em>
-                          </span>
-                        </label>
-                        <label className="obs-toggle">
-                          <input
-                            type="checkbox"
-                            checked={observerConfig.privateWriteMemory}
-                            onChange={(e) => toggleObserverConfig('privateWriteMemory', e.target.checked)}
-                          />
-                          <span>
-                            <b>{t('observer.privateWriteMemory')}</b>
-                            <em>{t('observer.privateWriteMemoryDesc')}</em>
-                          </span>
-                        </label>
-                        <label className="obs-toggle">
-                          <input
-                            type="checkbox"
-                            checked={observerConfig.privateAffectsEmotion}
-                            onChange={(e) => toggleObserverConfig('privateAffectsEmotion', e.target.checked)}
-                          />
-                          <span>
-                            <b>{t('observer.privateAffectsEmotion')}</b>
-                            <em>{t('observer.privateAffectsEmotionDesc')}</em>
-                          </span>
-                        </label>
-                      </div>
-                    )}
-                  </div>
+                  <button
+                    className="btn-ghost"
+                    style={{ padding: '3px 10px', fontSize: 12 }}
+                    title={t('observer.privateTip')}
+                    onClick={(e) => {
+                      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                      setPrivateAnchor(r);
+                      setShowPrivateMenu((v) => !v);
+                      setShowObserverConfig(false);
+                      setConfigAnchor(null);
+                    }}
+                  >
+                    🔒 {t('observer.private')}
+                  </button>
+                  <button
+                    className="btn-ghost"
+                    style={{ padding: '3px 10px', fontSize: 12 }}
+                    title={t('observer.configTip')}
+                    onClick={(e) => {
+                      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                      setConfigAnchor(r);
+                      setShowObserverConfig((v) => !v);
+                      setShowPrivateMenu(false);
+                      setPrivateAnchor(null);
+                    }}
+                  >
+                    ⚙ {t('observer.config')}
+                  </button>
                   <button
                     className="btn-ghost obs-exit"
                     style={{ padding: '3px 10px', fontSize: 12 }}
@@ -1514,6 +1463,52 @@ export const ChatWindow: React.FC<{
                 </button>
               )}
             </>
+          )}
+          {showPrivateMenu && privateAnchor && createPortal(
+            <div
+              className="obs-menu"
+              style={{ position: 'fixed', top: privateAnchor.bottom + 4, right: window.innerWidth - privateAnchor.right, zIndex: 1000 }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              {members.length === 0 && (
+                <div className="obs-menu-item" style={{ opacity: 0.6 }}>—</div>
+              )}
+              {members.map((m) => (
+                <button key={m.id} className="obs-menu-item" onClick={() => openPrivateWindow(m.id, m.name)}>
+                  🔒 {m.name}
+                </button>
+              ))}
+            </div>,
+            document.body
+          )}
+          {showObserverConfig && configAnchor && createPortal(
+            <div
+              className="obs-menu obs-config"
+              style={{ position: 'fixed', top: configAnchor.bottom + 4, right: window.innerWidth - configAnchor.right, zIndex: 1000 }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <label className="obs-toggle">
+                <input type="checkbox" checked={observerConfig.freezeMemory} onChange={(e) => toggleObserverConfig('freezeMemory', e.target.checked)} />
+                <span><b>{t('observer.freezeMemory')}</b><em>{t('observer.freezeMemoryDesc')}</em></span>
+              </label>
+              <label className="obs-toggle">
+                <input type="checkbox" checked={observerConfig.publicWriteMemory} onChange={(e) => toggleObserverConfig('publicWriteMemory', e.target.checked)} />
+                <span><b>{t('observer.publicWriteMemory')}</b><em>{t('observer.publicWriteMemoryDesc')}</em></span>
+              </label>
+              <label className="obs-toggle">
+                <input type="checkbox" checked={observerConfig.observerNoEmotion} onChange={(e) => toggleObserverConfig('observerNoEmotion', e.target.checked)} />
+                <span><b>{t('observer.pureObserver')}</b><em>{t('observer.pureObserverDesc')}</em></span>
+              </label>
+              <label className="obs-toggle">
+                <input type="checkbox" checked={observerConfig.privateWriteMemory} onChange={(e) => toggleObserverConfig('privateWriteMemory', e.target.checked)} />
+                <span><b>{t('observer.privateWriteMemory')}</b><em>{t('observer.privateWriteMemoryDesc')}</em></span>
+              </label>
+              <label className="obs-toggle">
+                <input type="checkbox" checked={observerConfig.privateAffectsEmotion} onChange={(e) => toggleObserverConfig('privateAffectsEmotion', e.target.checked)} />
+                <span><b>{t('observer.privateAffectsEmotion')}</b><em>{t('observer.privateAffectsEmotionDesc')}</em></span>
+              </label>
+            </div>,
+            document.body
           )}
           {chatType === 'group' && !observerMode && (
             <button
