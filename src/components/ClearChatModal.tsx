@@ -18,7 +18,7 @@ export function ClearChatModal({ open, onConfirm, onCancel }: Props) {
     <div
       onClick={onCancel}
       style={{
-        position: 'fixed', inset: 0, zIndex: 2147483646,
+        position: 'fixed', inset: 0, zIndex: 2147483645,
         background: 'rgba(0,0,0,0.45)', display: 'flex',
         alignItems: 'center', justifyContent: 'center',
       }}
