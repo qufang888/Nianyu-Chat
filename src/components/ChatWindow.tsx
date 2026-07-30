@@ -869,6 +869,7 @@ export const ChatWindow: React.FC<{
     const next = { ...observerConfig, [key]: value };
     setObserverConfig(next);
     await api.observerSetConfig({ groupId: chatId, patch: { [key]: value } as any });
+    showToast(t('observer.configApplied'));
   };
 
   // 观察者下拉菜单（私密小窗 / 对局设置）通过 portal 渲染到 body，脱离 .chat-header-actions 的 overflow 裁剪。

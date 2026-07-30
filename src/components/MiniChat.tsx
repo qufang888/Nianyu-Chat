@@ -208,8 +208,8 @@ export const MiniChat: React.FC = () => {
     let avatar: string | undefined;
     const parts = data.chatId.split(':');
     if (data.isObserverPrivate && parts[0] === 'obs' && parts.length >= 3) {
-      const role = await api.getRole(parts[2]);
-      name = role?.name || parts[2];
+      const role = await api.getRole(parts[parts.length - 1]);
+      name = role?.name || parts[parts.length - 1];
       avatar = role?.avatar_path;
     } else if (data.chatType === 'single') {
       const role = await api.getRole(data.chatId);
@@ -342,7 +342,10 @@ export const MiniChat: React.FC = () => {
       // 检测角色/成员删除、群聊转单聊
       (async () => {
         if (current.chat_type === 'single') {
-          const r = await api.getRole(current.chat_id);
+          const rid = current.chat_id.startsWith('obs:')
+            ? current.chat_id.split(':').pop()!
+            : current.chat_id;
+          const r = await api.getRole(rid);
           setRoleMissing(!r);
           setRoleMood(r?.mood || '');
         } else if (current.chat_type === 'group') {
@@ -677,7 +680,13 @@ export const MiniChat: React.FC = () => {
         showToast(msg);
       }
       // 事件会影响角色情绪：刷新心情徽标
-      const r = await api.getRole(current.chat_type === 'single' ? current.chat_id : ev.roleId);
+      const r = await api.getRole(
+        current.chat_type === 'single'
+          ? current.chat_id.startsWith('obs:')
+            ? current.chat_id.split(':').pop()!
+            : current.chat_id
+          : ev.roleId
+      );
       if (r) setRoleMood(r.mood || '');
       void api.eventClosed({ chatType: current.chat_type, chatId: current.chat_id });
       // 立即拉取最新消息，显示后端已写入的「好感/心情」系统消息
@@ -954,7 +963,9 @@ export const MiniChat: React.FC = () => {
     if (!current) return;
     let roleId = '';
     if (current.chat_type === 'single') {
-      roleId = current.chat_id;
+      roleId = current.chat_id.startsWith('obs:')
+        ? current.chat_id.split(':').pop()!
+        : current.chat_id;
     } else if (m.sender_type === 'ai') {
       const roles = await api.getRoles();
       const r = roles.find((x: Role) => x.name === m.sender_name);

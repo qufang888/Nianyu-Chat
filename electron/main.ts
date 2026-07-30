@@ -716,7 +716,7 @@ function resolveWorldBook(chatType: string, chatId: string, settings: AppSetting
     if (v === 'none') return ''; // 该聊天显式不使用世界书
     wbId = v;
   } else if (chatType === 'single') {
-    const r = dm.getRole(chatId);
+    const r = dm.getRole(parseObsRoleId(chatId) || chatId);
     if (r && r.worldBookId) {
       if (r.worldBookId === 'none') return ''; // 该角色显式不使用世界书
       wbId = r.worldBookId;
@@ -990,7 +990,7 @@ async function handleSend(p: {
 function resolveMembers(chatType: string, chatId: string, content: string): Role[] {
   let memberRoles: Role[] = [];
   if (chatType === 'single') {
-    const r = dm.getRole(chatId);
+    const r = dm.getRole(parseObsRoleId(chatId) || chatId);
     if (r) memberRoles = [r];
   } else {
     const g = dm.getGroup(chatId);
@@ -1967,6 +1967,15 @@ function parseObsGroupId(chatId: string): string | null {
   return null;
 }
 
+// 从私密小窗 chatId 提取关联角色 id（roleId 取末段，兼容 groupId 含冒号）
+function parseObsRoleId(chatId: string): string | null {
+  if (chatId.startsWith('obs:')) {
+    const parts = chatId.split(':');
+    if (parts.length >= 3) return parts[parts.length - 1];
+  }
+  return null;
+}
+
 // 取某聊天关联的观察者配置（私密小窗需回溯到所属群）
 function getObserverConfig(chatType: string, chatId: string): ObserverConfig {
   const groupId = chatType === 'group' ? chatId : parseObsGroupId(chatId);
@@ -2296,7 +2305,7 @@ async function extractMemories(chatType: string, chatId: string): Promise<number
   if (history.length < 2) return 0;
   let roleId: string | undefined;
   if (chatType === 'single') {
-    roleId = chatId;
+    roleId = parseObsRoleId(chatId) || chatId;
   } else {
     const lastAi = [...history].reverse().find((m) => m.sender_type === 'ai');
     roleId = lastAi ? dm.getRoleByName(lastAi.sender_name)?.id : undefined;
@@ -2808,7 +2817,7 @@ function registerIPC(): void {
     const key = `${chatType}:${chatId}`;
     if (settings.chatWorldBooks && settings.chatWorldBooks[key]) return settings.chatWorldBooks[key];
     if (chatType === 'single') {
-      const r = dm.getRole(chatId);
+      const r = dm.getRole(parseObsRoleId(chatId) || chatId);
       if (r && r.worldBookId) return r.worldBookId;
     }
     return settings.defaultWorldBookId || '';

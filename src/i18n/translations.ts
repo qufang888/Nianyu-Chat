@@ -212,6 +212,7 @@ export const translations: Record<Lang, Dict> = {
     'observer.privateTitle': '私密观察 · {name}',
     'observer.privateHint': '这是你与该角色的专属私密小窗，对话不会流入公屏，也不会串流给其他参与者。',
     'observer.openPrivate': '打开 {name} 的私密小窗',
+    'observer.configApplied': '设置已生效',
     'observer.presetApplied': '已载入观察者预设：纯旁观 · 不写记忆 · 不影响情绪 · 不冻结记忆',
 
     // 消息操作
@@ -858,6 +859,7 @@ export const translations: Record<Lang, Dict> = {
     'observer.privateTitle': 'Private Observation · {name}',
     'observer.privateHint': 'This is your exclusive private window with the character. Messages do not flow to the public feed nor stream to other participants.',
     'observer.openPrivate': 'Open {name}’s private window',
+    'observer.configApplied': 'Settings applied',
     'observer.presetApplied': 'Observer preset loaded: pure observer · no memory write · no emotion impact · no memory freeze',
 
     // Message operations
