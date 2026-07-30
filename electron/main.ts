@@ -2485,6 +2485,23 @@ function registerIPC(): void {
     // 删除所有记忆
     const mems = dm.listMemories();
     for (const m of mems) dm.deleteMemory(m.id);
+    // 清理文件系统数据（图片、自定义音效等）
+    try {
+      const imagesDir = path.join(app.getPath('userData'), 'data', 'images');
+      if (fs.existsSync(imagesDir)) {
+        for (const f of fs.readdirSync(imagesDir)) {
+          fs.rmSync(path.join(imagesDir, f), { recursive: true, force: true });
+        }
+      }
+      const soundsDir = path.join(app.getPath('userData'), 'custom-sounds');
+      if (fs.existsSync(soundsDir)) {
+        for (const f of fs.readdirSync(soundsDir)) {
+          fs.rmSync(path.join(soundsDir, f), { recursive: true, force: true });
+        }
+      }
+    } catch (e) {
+      console.error('[nianyu] deleteAllData 清理文件系统失败', e);
+    }
     // 重置设置
     dm.resetSettings(false);
     broadcast('settings:changed', { reset: true });

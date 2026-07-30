@@ -36,6 +36,10 @@ BrandingText "念语 Nianyu AI Chat"
 ; =====================================================================
 ; 卸载时询问是否删除使用数据（默认不删）
 ; 仅卸载器编译（BUILD_UNINSTALLER）时生效；安装器编译自动跳过。
+; 使用 UninstPage custom（而非 MUI_UNPAGE_CUSTOM），因为
+; installer.nsh 在 electron-builder 脚本末尾才被 include，
+; 此时 MUI 页宏定义已完成，只能以自定义页形式插入。
+; 删除前先杀进程，防止文件锁导致 RMDir 失败。
 ; 注意：Electron 的 userData 目录取自 package.json 的 name（nianyu-client），
 ;       并非 productName（念语），故此处按真实目录名删除。
 ; =====================================================================
@@ -48,6 +52,7 @@ BrandingText "念语 Nianyu AI Chat"
   UninstPage custom un.DataChoicePage
 
   Function un.DataChoicePage
+    StrCpy $deleteAppDataChecked 0
     nsDialogs::Create 1018
     Pop $R0
     ${If} $R0 == error
@@ -67,9 +72,12 @@ BrandingText "念语 Nianyu AI Chat"
     StrCpy $deleteAppDataChecked $R2
   FunctionEnd
 
-  ; 卸载区段末尾：勾选才删除数据目录
+  ; 卸载区段末尾：先杀进程，勾选才删除数据目录
   Section "-postuninstall"
     ${If} $deleteAppDataChecked == 1
+      ; 杀进程释放文件锁，确保 AppData 目录可删
+      nsExec::Exec 'taskkill /f /im "nianyu-client.exe" 2>nul'
+      Sleep 500
       RMDir /r "$APPDATA\nianyu-client"
       RMDir /r "$LOCALAPPDATA\nianyu-client"
     ${EndIf}

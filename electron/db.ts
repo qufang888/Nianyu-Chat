@@ -14,6 +14,12 @@ import type {
 import { DEFAULT_SETTINGS } from '../src/types';
 
 // 纯 JS 存储：数据以 JSON 文件持久化，无需任何原生编译模块。
+interface ChatSession {
+  chat_type: string;
+  chat_id: string;
+  last_time: string;
+}
+
 interface Store {
   roles: Role[];
   groups: Group[];
@@ -24,6 +30,7 @@ interface Store {
   rules: Rule[];
   memories: MemoryEntry[];
   seq: number; // 自增 id 计数器（用于消息与好感度日志）
+  chatSessions: ChatSession[]; // 已存在的聊天会话（清空消息后仍保留）
 }
 
 class DataManager {
@@ -63,6 +70,18 @@ class DataManager {
       this.saveStore();
       this.saveSettings({});
     }
+    // 为老用户从已有消息填充 chatSessions
+    if (this.store.chatSessions.length === 0 && this.store.messages.length > 0) {
+      const seen = new Set<string>();
+      for (const m of this.store.messages) {
+        const key = `${m.chat_type}:${m.chat_id}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          this.store.chatSessions.push({ chat_type: m.chat_type, chat_id: m.chat_id, last_time: m.timestamp });
+        }
+      }
+      this.saveStore();
+    }
   }
 
   get dataDirectory(): string {
@@ -86,12 +105,13 @@ class DataManager {
           rules: raw.rules || [],
           memories: raw.memories || [],
           seq: raw.seq || 0,
+          chatSessions: raw.chatSessions || [],
         };
       }
     } catch (e) {
       console.error('读取存储失败', e);
     }
-    return { roles: [], groups: [], messages: [], affinity: [], worldBooks: [], rules: [], memories: [], seq: 0 };
+    return { roles: [], groups: [], messages: [], affinity: [], worldBooks: [], rules: [], memories: [], seq: 0, chatSessions: [] };
   }
 
   private genId(prefix: string): string {
@@ -139,6 +159,10 @@ class DataManager {
     this.store.affinity = this.store.affinity.filter((a) => a.role_id !== id);
     // 删除数字人：连带删除其全部记忆（自动与手动均清）
     this.store.memories = this.store.memories.filter((m) => m.roleId !== id);
+    // 删除会话记录
+    this.store.chatSessions = this.store.chatSessions.filter(
+      (s) => !(s.chat_type === 'single' && s.chat_id === id)
+    );
     this.saveStore();
   }
 
@@ -320,6 +344,8 @@ class DataManager {
       // 观察者私密小窗聊天（id 形如 obs:<groupId>:<roleId>）默认为私密类型，便于日志分别标记
       msg_kind: msg.msg_kind ?? (msg.chat_id?.startsWith('obs:') ? 'private' : 'public'),
     };
+    // 首次消息自动创建聊天会话（使清空消息后聊天仍可见）
+    this.ensureChatSession(msg.chat_type, msg.chat_id, msg.timestamp);
     this.store.messages.push(full);
     this.saveStore();
     return full;
@@ -339,7 +365,7 @@ class DataManager {
     return before - this.store.memories.length;
   }
 
-  // 删除聊天：一并删除该聊天内产生的自动记忆（手动记忆保留）
+  // 删除聊天：一并删除该聊天内产生的自动记忆（手动记忆保留），并移除聊天会话
   deleteChat(chatType: string, chatId: string): void {
     const ids = new Set(
       this.store.messages
@@ -350,6 +376,9 @@ class DataManager {
       (m) => !(m.chat_type === chatType && m.chat_id === chatId)
     );
     this.deleteAutoMemoriesByMsgIds(ids);
+    this.store.chatSessions = this.store.chatSessions.filter(
+      (s) => !(s.chat_type === chatType && s.chat_id === chatId)
+    );
     this.saveStore();
   }
 
@@ -499,6 +528,18 @@ class DataManager {
     return this.settings;
   }
 
+  // 确保聊天会话存在（首次消息时自动创建，清空消息后聊天仍可见）
+  private ensureChatSession(chatType: string, chatId: string, timestamp: string): void {
+    if (chatId.startsWith('obs:')) return; // 观察者私密小窗不加入会话列表
+    const exists = this.store.chatSessions.some(
+      (s) => s.chat_type === chatType && s.chat_id === chatId
+    );
+    if (!exists) {
+      this.store.chatSessions.push({ chat_type: chatType, chat_id: chatId, last_time: timestamp });
+      this.saveStore();
+    }
+  }
+
   // 最近聊天列表
   getChatList(): {
     chat_type: string;
@@ -508,6 +549,7 @@ class DataManager {
     last_message: string;
     last_time: string;
   }[] {
+    // 1) 从消息分组推导已有消息的会话
     const groups: { chat_type: string; chat_id: string; ids: number[] }[] = [];
     for (const m of this.store.messages) {
       let g = groups.find((x) => x.chat_type === m.chat_type && x.chat_id === m.chat_id);
@@ -518,6 +560,7 @@ class DataManager {
       g.ids.push(m.id);
     }
     const result: any[] = [];
+    const covered = new Set<string>();
     for (const g of groups) {
       // 观察者私密小窗（obs: 前缀）不属于普通会话列表，仅在私密窗口内访问
       if (g.chat_id.startsWith('obs:')) continue;
@@ -535,6 +578,7 @@ class DataManager {
         if (!grp) continue; // 群组已删除但仍有残留消息，不再列入会话列表（杜绝 0 人幽灵群）
         name = grp.group_name;
       }
+      covered.add(`${g.chat_type}:${g.chat_id}`);
       result.push({
         chat_type: g.chat_type,
         chat_id: g.chat_id,
@@ -542,6 +586,32 @@ class DataManager {
         avatar_path: avatar,
         last_message: last?.image_path || (last?.images && last.images.length) ? '[图片]' : last?.content || '',
         last_time: last?.timestamp || '',
+      });
+    }
+    // 2) 补充仅有 chatSessions 但无消息的聊天（清空消息后保留的空会话）
+    for (const s of this.store.chatSessions) {
+      const key = `${s.chat_type}:${s.chat_id}`;
+      if (covered.has(key)) continue;
+      if (s.chat_id.startsWith('obs:')) continue;
+      let name = s.chat_id;
+      let avatar = '';
+      if (s.chat_type === 'single') {
+        const role = this.getRole(s.chat_id);
+        if (!role) continue;
+        name = role.name;
+        avatar = role.avatar_path || '';
+      } else {
+        const grp = this.getGroup(s.chat_id);
+        if (!grp) continue;
+        name = grp.group_name;
+      }
+      result.push({
+        chat_type: s.chat_type,
+        chat_id: s.chat_id,
+        name,
+        avatar_path: avatar,
+        last_message: '',
+        last_time: s.last_time,
       });
     }
     return result.sort((a, b) => (a.last_time < b.last_time ? 1 : -1));
