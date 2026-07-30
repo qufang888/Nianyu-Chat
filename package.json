@@ -1,6 +1,6 @@
 {
   "name": "nianyu-client",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "念语 - AI 数字人聊天客户端 (Electron + React + TypeScript)",
   "main": "dist-electron/electron/main.js",
   "author": "前方",

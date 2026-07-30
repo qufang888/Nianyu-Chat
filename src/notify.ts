@@ -39,7 +39,7 @@ function cardCSS(dark: boolean): string {
     .ny-name{font-size:14px;font-weight:600;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#fff;}
     .ny-content{font-size:12.5px;color:rgba(255,255,255,.78);line-height:1.35;overflow:hidden;
       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
-    .ny-close{position:absolute;top:-2px;right:0;width:22px;height:22px;border-radius:50%;
+    .ny-close{position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;
       background:rgba(255,255,255,.10);color:rgba(255,255,255,.7);font-size:15px;line-height:22px;text-align:center;
       cursor:pointer;transition:background .15s;}
     .ny-close::after{content:'';position:absolute;inset:-10px;}
@@ -67,7 +67,7 @@ function cardCSS(dark: boolean): string {
     .ny-name{font-size:14px;font-weight:600;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#1a1a1a;}
     .ny-content{font-size:12.5px;color:rgba(0,0,0,.62);line-height:1.35;overflow:hidden;
       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
-    .ny-close{position:absolute;top:-2px;right:0;width:22px;height:22px;border-radius:50%;
+    .ny-close{position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;
       background:rgba(0,0,0,.06);color:rgba(0,0,0,.45);font-size:15px;line-height:22px;text-align:center;
       cursor:pointer;transition:background .15s;}
     .ny-close::after{content:'';position:absolute;inset:-10px;}
@@ -79,8 +79,8 @@ function buildCard(): HTMLElement {
   card.className = 'ny-card';
   card.innerHTML = `
     <div class="ny-avatar" id="ny-avatar">?</div>
+    <div class="ny-close" title="关闭">×</div>
     <div class="ny-body">
-      <div class="ny-close" title="关闭">×</div>
       <div class="ny-label" id="ny-label">新消息</div>
       <div class="ny-name" id="ny-name"></div>
       <div class="ny-content" id="ny-content"></div>
