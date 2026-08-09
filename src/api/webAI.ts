@@ -132,6 +132,7 @@ function partialTagHold(s: string): number {
 // ===================== A+B 混合 CORS 策略 =====================
 // 默认走浏览器 fetch（A 路径，支持真·逐字流式）。若 fetch 抛错（典型为 CORS / "Failed to fetch"），
 // 自动回退到 Capacitor 原生 HTTP 插件（B 路径，由 Java 层发请求，不受 CORS 限制，但非流式）。
+// Capacitor 6+ 起 CapacitorHttp 已并入 @capacitor/core（原生实现由 @capacitor/android 提供）。
 // 通过动态 import @capacitor/core 检测是否在原生壳内，避免在非 Capacitor 环境报错。
 let _capHttp: any = null;
 let _capProbeDone = false;
@@ -140,18 +141,25 @@ async function getCapHttp(): Promise<any> {
   _capProbeDone = true;
   try {
     const cap = await import('@capacitor/core');
-    if (cap && cap.Capacitor && cap.Capacitor.isNativePlatform && cap.Capacitor.isNativePlatform()) {
-      try {
-        const mod = await import('@capacitor/http');
-        _capHttp = mod;
-      } catch {
-        _capHttp = null;
-      }
+    if (cap && (cap as any).Capacitor && (cap as any).Capacitor.isNativePlatform && (cap as any).Capacitor.isNativePlatform()) {
+      _capHttp = (cap as any).CapacitorHttp ?? null;
     }
   } catch {
     _capHttp = null;
   }
   return _capHttp;
+}
+
+// 原生 HTTP 回退返回的数据可能是字符串(JSON)或已解析对象，统一归一化为对象。
+function normalizeHttpData(data: any): any {
+  if (typeof data === 'string') {
+    try {
+      return JSON.parse(data || '{}');
+    } catch {
+      return {};
+    }
+  }
+  return data ?? {};
 }
 
 // 标记：最近一次请求是否走了原生回退（供 UI 提示"已降级为非流式"）
@@ -177,14 +185,15 @@ async function postJson(
   } catch (e) {
     // CORS / 网络失败 → 回退原生 HTTP
     const capHttp = await getCapHttp();
-    if (capHttp && capHttp.Http) {
+    if (capHttp) {
       capFallbackState.used = true;
-      const r = await capHttp.Http.post({
+      const r: any = await capHttp.post({
         url,
         headers,
         data: JSON.stringify(body),
       });
-      return { ok: (r as any).status >= 200 && (r as any).status < 300, status: (r as any).status, text: (r as any).data || '' };
+      const text = typeof r.data === 'string' ? r.data : JSON.stringify(r.data ?? '');
+      return { ok: r.status >= 200 && r.status < 300, status: r.status, text };
     }
     throw e;
   }
@@ -305,9 +314,9 @@ export async function streamAI(
   } catch (e: any) {
     // CORS / "Failed to fetch" → 回退原生 HTTP（B）：整段返回后按字揭示
     const capHttp = await getCapHttp();
-    if (capHttp && capHttp.Http) {
+    if (capHttp) {
       capFallbackState.used = true;
-      const r: any = await capHttp.Http.post({
+      const r: any = await capHttp.post({
         url: joinUrl(cfg.baseUrl, '/chat/completions'),
         headers: h,
         data: JSON.stringify({
@@ -318,7 +327,7 @@ export async function streamAI(
           stream: false,
         }),
       });
-      const data = JSON.parse((r.data as string) || '{}') as any;
+      const data = normalizeHttpData(r.data) as any;
       const msg = data?.choices?.[0]?.message ?? {};
       const rawContent: string = msg?.content ?? '';
       let reasoning: string = extractReasoning(msg);
