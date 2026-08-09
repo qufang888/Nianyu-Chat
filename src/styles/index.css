@@ -1335,23 +1335,7 @@ input[type='range']::-moz-range-thumb {
   transition: none !important;
 }
 
-/* 自定义 Canvas 光标层：最高层级（2147483646），确保不被任何模态/弹窗/Toast 遮挡。
-   pointer-events:none 保证不拦截鼠标事件。z-index 由组件内联 style 覆盖，此处仅作 fallback。 */
-.custom-cursor-canvas {
-  position: fixed !important;
-  top: 0 !important;
-  left: 0 !important;
-  pointer-events: none !important;
-  z-index: 2147483646 !important;
-}
-
-/* 开启动态光标时，强制隐藏全部原生光标（含按钮 cursor:pointer 等），
-   避免 Canvas 自定义光标与原生指针并存产生割裂感。!important 用于压制
-   元素内联/类样式中的 cursor 声明。 */
-body.cursor-hidden,
-body.cursor-hidden * {
-  cursor: none !important;
-}
+/* 自定义 Canvas 光标样式已随桌面端（Electron）移除，移动端无需光标 */
 
 /* ===== SelectMenu 自定义下拉（取代原生 <select>，使动态光标在弹层也生效） ===== */
 .select-menu-trigger {
@@ -1525,9 +1509,6 @@ body.cursor-hidden * {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-secondary);
-}
-body.cursor-hidden ::-webkit-scrollbar-thumb {
-  cursor: none !important;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -2147,103 +2128,110 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   margin-bottom: 4px;
 }
 
-/* ===== 自定义无边框标题栏 ===== */
-.custom-titlebar {
-  display: flex;
-  align-items: center;
-  height: var(--titlebar-height, 44px);
-  background: var(--titlebar-bg);
-  color: var(--titlebar-text);
-  /* 不使用 -webkit-app-region: drag — 见 .mini-titlebar 注释 */
-  user-select: none;
-  flex-shrink: 0;
-  padding: 0 4px 0 6px;
-  border-bottom: 1px solid var(--titlebar-border);
-  backdrop-filter: blur(var(--titlebar-blur, 0px));
-  -webkit-backdrop-filter: blur(var(--titlebar-blur, 0px));
-  position: sticky;
-  top: 0;
-  z-index: 9999;
+/* ===== 触屏适配（移动端 / WebView） ===== */
+* {
+  -webkit-tap-highlight-color: transparent;
 }
-.ctb-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding-left: 6px;
-}
-.ctb-logo,
-.ctb-avatar {
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  overflow: hidden;
-  border-radius: 5px;
-}
-.ctb-avatar img,
-.ctb-avatar .avatar {
-  width: 20px;
-  height: 20px;
-  object-fit: cover;
-  border-radius: 5px;
-}
-.ctb-avatar-fallback {
-  font-size: calc(13px * var(--font-scale));
-}
-.ctb-title {
-  font-size: calc(13px * var(--font-scale));
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ctb-mid {
-  flex: 1;
-}
-.ctb-right {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  -webkit-app-region: no-drag;
-  margin-left: auto;
-}
-.ctb-btn {
-  width: 46px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  color: var(--titlebar-icon);
-  border-radius: 6px;
-  transition: background var(--transition), color var(--transition);
-  font-size: 14px;
-}
-.ctb-btn:hover {
-  background: var(--titlebar-btn-hover);
-  color: var(--titlebar-text);
-}
-.ctb-close:hover {
-  background: var(--titlebar-close-hover-bg);
-  color: var(--titlebar-close-hover-icon);
+@media (hover: none) {
+  /* 触屏无悬停：禁止系统长按弹出菜单，改由自定义长按菜单处理 */
+  .msg-row,
+  .msg-row img,
+  .bubble,
+  .avatar,
+  .avatar img {
+    -webkit-touch-callout: none;
+  }
+  /* 点击反馈改用 :active，避免 :hover 在触屏上残留高亮 */
+  .btn-primary:active,
+  .btn-ghost:active,
+  .select-menu-trigger:active {
+    filter: brightness(0.94);
+  }
+  body { cursor: auto; }
 }
 
-/* 小窗标题栏：更紧凑（36px），仅显示头像+名称+关闭等 */
-.custom-titlebar.mini {
-  height: 36px;
-  padding: 0 4px 0 6px;
+/* 桌面端隐藏移动端返回按钮（窄屏媒体块内再开启） */
+.mobile-back {
+  display: none;
 }
-.custom-titlebar.mini .ctb-btn {
-  width: 34px;
-  height: 28px;
-}
-.custom-titlebar.mini .ctb-title {
-  font-size: calc(12px * var(--font-scale));
+
+/* ===== 移动端布局（安卓 / 触屏，窄屏 ≤820px） ===== */
+@media (max-width: 820px) {
+  .app-root {
+    /* 用 dvh 避免移动浏览器地址栏导致的 100vh 偏差 */
+    height: 100dvh;
+  }
+  .app-shell {
+    flex-direction: column;
+    /* 预留底部 Tab 栏 + 安全区高度，内容不塞到 Tab 下 */
+    padding-bottom: calc(56px + env(safe-area-inset-bottom));
+  }
+  /* 桌面侧栏改造为底部 Tab 栏 */
+  .sidebar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    flex-direction: row;
+    width: 100%;
+    height: auto;
+    padding: 5px 4px calc(5px + env(safe-area-inset-bottom));
+    gap: 2px;
+    border-right: none;
+    border-top: 1px solid var(--color-border);
+    z-index: 210;
+  }
+  .sidebar .nav-logo,
+  .sidebar .nav-spacer {
+    display: none;
+  }
+  .sidebar .nav-item {
+    flex: 1 1 0;
+    width: auto;
+    height: 42px;
+    font-size: 20px;
+    border-radius: 10px;
+  }
+  /* 聊天：列表与详情二选一（列表→详情推入，点返回退出详情） */
+  .app-shell > *:not(.sidebar) {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  .list-pane {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+  }
+  .app-shell:not(.mobile-chat-open) .main-pane {
+    display: none;
+  }
+  .app-shell.mobile-chat-open .list-pane {
+    display: none;
+  }
+  /* 移动端返回按钮（桌面隐藏） */
+  .mobile-back {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    margin-right: 4px;
+    font-size: 28px;
+    line-height: 1;
+    border: none;
+    background: transparent;
+    color: var(--color-text);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  /* 输入框贴底部安全区 */
+  .composer {
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+  .chat-header {
+    padding-left: 8px;
+  }
 }
 
 /* ===== 资源库 Library ===== */

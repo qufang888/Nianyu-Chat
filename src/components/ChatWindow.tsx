@@ -32,7 +32,8 @@ export const ChatWindow: React.FC<{
   onChatDeleted?: (chatId: string) => void;
   onConvertedToSingle?: (roleId: string) => void;
   onGroupUpdated?: () => void;
-}> = ({ chatType, chatId, name, members, onSent, onChatDeleted, onConvertedToSingle, onGroupUpdated }) => {
+  onBack?: () => void;
+}> = ({ chatType, chatId, name, members, onSent, onChatDeleted, onConvertedToSingle, onGroupUpdated, onBack }) => {
   const { t } = useI18n();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -1600,6 +1601,9 @@ export const ChatWindow: React.FC<{
   return (
     <div className="main-pane">
       <div className="chat-header">
+        <button className="mobile-back" type="button" aria-label="back" onClick={() => onBack?.()}>
+          ‹
+        </button>
         <div>
           <div className="title">
             <span className="title-name">{name}</span>
@@ -2405,6 +2409,38 @@ const MessageRow: React.FC<{
     setMenuPos({ x: e.clientX, y: e.clientY });
   };
 
+  // 触屏长按打开右键菜单：移动端无鼠标右键，用 500ms 长按代替。
+  // 长按计时期间如果发生滑动（>12px）则取消，避免与滚动/选取冲突。
+  const longPressTimer = useRef<number | null>(null);
+  const lpStart = useRef<{ x: number; y: number } | null>(null);
+  const cancelLongPress = () => {
+    if (longPressTimer.current !== null) {
+      window.clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+  const handleTouchStart = (e: React.TouchEvent) => {
+    cancelLongPress();
+    const t = e.touches[0];
+    if (!t) return;
+    lpStart.current = { x: t.clientX, y: t.clientY };
+    longPressTimer.current = window.setTimeout(() => {
+      longPressTimer.current = null;
+      const p = lpStart.current;
+      if (!p) return;
+      window.dispatchEvent(new CustomEvent('nianyu:closeCtxMenu', { detail: msg.id }));
+      setMenuPos({ x: p.x, y: p.y });
+    }, 500);
+  };
+  const handleTouchMove = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    const s = lpStart.current;
+    if (t && s && (Math.abs(t.clientX - s.x) > 12 || Math.abs(t.clientY - s.y) > 12)) {
+      cancelLongPress();
+    }
+  };
+  useEffect(() => () => cancelLongPress(), []);
+
   const closeMenu = () => { setMenuPos(null); setSelPopup(null); };
 
   // 在气泡内检测文字选中
@@ -2483,7 +2519,7 @@ const MessageRow: React.FC<{
   }
 
   return (
-    <div className={`msg-row ${isUser ? 'user' : 'ai'}`} data-mid={msg.id} style={{ position: 'relative' }} onContextMenu={handleContextMenu}>
+    <div className={`msg-row ${isUser ? 'user' : 'ai'}`} data-mid={msg.id} style={{ position: 'relative' }} onContextMenu={handleContextMenu} onTouchStart={handleTouchStart} onTouchEnd={cancelLongPress} onTouchMove={handleTouchMove}>
       {timeAbove && <div className="msg-time-above">{timeAbove}</div>}
       <div className="avatar">
         {isUser

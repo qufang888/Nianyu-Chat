@@ -9,14 +9,12 @@ import { ChatWindow } from './components/ChatWindow';
 import { Settings } from './components/Settings';
 import { GroupEditor } from './components/GroupEditor';
 import { StatsView } from './components/StatsView';
-import { CustomTitleBar } from './components/CustomTitleBar';
 import { SplashScreen } from './components/SplashScreen';
 import { AboutModal } from './components/AboutModal';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { Library } from './components/Library';
 import { MomentsView } from './components/MomentsView';
 import { useToast, ToastView } from './components/Toast';
-import CustomCursor from './components/CustomCursor';
 import type { Role } from './types';
 
 type View = 'chats' | 'contacts' | 'settings' | 'stats' | 'library' | 'moments';
@@ -144,10 +142,12 @@ export default function App() {
   return t('app.name');
   })();
 
+  // 移动端：将当前视图标题写入 document.title（桌面端由原生窗口标题栏承载）
+  useEffect(() => { document.title = title || t('app.name'); }, [title, t]);
+
   return (
     <div className="app-root">
-      <CustomTitleBar title={title} />
-      <div className="app-shell" data-refresh={refreshKey}>
+      <div className={`app-shell${view === 'chats' && selected ? ' mobile-chat-open' : ''}`} data-refresh={refreshKey}>
         <Sidebar view={view} onChange={setView} onAbout={() => setAboutOpen(true)} onRefresh={refreshUI} />
       {view === 'chats' && (
         <>
@@ -168,6 +168,7 @@ export default function App() {
               onChatDeleted={onChatDeleted}
               onConvertedToSingle={onConvertedToSingle}
               onGroupUpdated={onGroupUpdated}
+              onBack={() => setSelected(null)}
             />
           ) : (
             <div className="main-pane">
@@ -202,7 +203,6 @@ export default function App() {
         />
       )}
       <ToastView toast={toast} />
-      <CustomCursor />
       </div>
     </div>
   );

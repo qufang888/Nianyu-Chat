@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { api } from '../ipc';
 import { useTheme } from '../theme/ThemeContext';
 import { useI18n } from '../i18n/I18nContext';
@@ -19,7 +19,6 @@ import { SelfRoleSettings } from './SelfRoleSettings';
 import { useToast, ToastView } from './Toast';
 import SelectMenu from './SelectMenu';
 import { invalidateSoundCache, previewSound, type SoundType } from '../utils/sound';
-import cursorPngUrl from '../assets/cursor/cursor.png';
 
 export const THEMES: { key: ThemeName; nameKey: string; swatch: string }[] = [
   { key: 'wechat', nameKey: 'theme.wechat', swatch: 'linear-gradient(135deg,#07c160,#2e2e2e)' },
@@ -47,78 +46,6 @@ const SOUND_ROWS: { type: SoundType; labelKey: string }[] = [
   { type: 'messageSend', labelKey: 'settings.soundMessageSend' },
 ];
 
-// 光标热点预览（拖动红点设置）
-// hotspot 值是相对图像左上角的像素偏移，存储在「基础尺寸 28」坐标系下，
-// 滑块在预览中以 (displaySize / 28) 的比例反映实际位置。
-function CursorHotspotPreview({
-  hotspotX, hotspotY, displaySize = 112, onChange,
-}: {
-  hotspotX: number;
-  hotspotY: number;
-  displaySize?: number;
-  onChange: (x: number, y: number) => void;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const draggingRef = useRef(false);
-  const BASE = 28; // 与 CustomCursor.tsx 的 HOTSPOT_BASE_SIZE 对齐
-  const ratio = displaySize / BASE;
-  const markerLeft = hotspotX * ratio;
-  const markerTop = hotspotY * ratio;
-
-  const handlePointer = (clientX: number, clientY: number) => {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    // clamp 到预览区内
-    const x = Math.max(0, Math.min(displaySize, clientX - r.left));
-    const y = Math.max(0, Math.min(displaySize, clientY - r.top));
-    // 转换回基础尺寸坐标系（整数）
-    onChange(Math.round(x / ratio), Math.round(y / ratio));
-  };
-
-  return (
-    <div
-      ref={ref}
-      data-cursor-preview
-      style={{
-        position: 'relative', width: displaySize, height: displaySize,
-        borderRadius: 10, overflow: 'hidden', background: 'var(--color-input-bg)',
-        border: '1px solid var(--color-border)', touchAction: 'none', userSelect: 'none',
-        // 这里故意用 crosshair 风格的原生光标：CustomCursor 永远在它之上，preview 只是占位提示
-        cursor: 'none',
-      }}
-      onMouseDown={(e) => {
-        draggingRef.current = true;
-        handlePointer(e.clientX, e.clientY);
-        e.preventDefault();
-      }}
-      onMouseMove={(e) => { if (draggingRef.current) handlePointer(e.clientX, e.clientY); }}
-      onMouseUp={() => { draggingRef.current = false; }}
-      onMouseLeave={() => { draggingRef.current = false; }}
-    >
-      <img
-        src={cursorPngUrl}
-        alt="cursor"
-        draggable={false}
-        style={{ width: displaySize, height: displaySize, display: 'block', pointerEvents: 'none' }}
-      />
-      {/* 红色十字 + 圆点标记光标点击点 */}
-      <div
-        style={{
-          position: 'absolute', left: markerLeft, top: markerTop,
-          pointerEvents: 'none', transform: 'translate(-50%, -50%)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}
-      >
-        <div style={{ position: 'absolute', width: 14, height: 1, background: '#ff3b30' }} />
-        <div style={{ position: 'absolute', width: 1, height: 14, background: '#ff3b30' }} />
-        <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'rgba(255,59,48,0.18)', border: '1px solid rgba(255,59,48,0.6)' }} />
-      </div>
-      {/* 左上角 0,0 基准提示 */}
-      <div style={{ position: 'absolute', left: 0, top: 0, width: 4, height: 4, background: 'var(--color-primary)' }} />
-    </div>
-  );
-}
 
 export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWizard }) => {
   const { toast, showToast } = useToast();
@@ -162,10 +89,8 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
   };
   const voice = { ...DEFAULT_SETTINGS.voice, ...(draft.voice || {}) };
   const imageGen = { ...DEFAULT_SETTINGS.imageGen, ...(draft.imageGen || {}) } as ImageGenSettings;
-  const mini = { ...DEFAULT_SETTINGS.miniWindow, ...(draft.miniWindow || {}) };
   const sound = { ...DEFAULT_SETTINGS.sound, ...(draft.sound || {}) };
-  const cursor = { ...DEFAULT_SETTINGS.customCursor, ...(draft.customCursor || {}) };
-  // 语音 / 生图 / 小窗 此前只改本地 draft，必须点底部「保存」才生效，与其他即时保存的开关不一致，
+  // 语音 / 生图 此前只改本地 draft，必须点底部「保存」才生效，与其他即时保存的开关不一致，
   // 容易让用户误以为设置没生效。改为与全页一致：改动即时落盘并触发 reloadSettings。
   const patchVoice = (p: Partial<typeof voice>) => {
     const next = { ...voice, ...p };
@@ -177,17 +102,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
     patch({ imageGen: next });
     api.saveSettings({ imageGen: next }).then(reloadSettings);
   };
-  const patchMini = (p: Partial<typeof mini>) => {
-    const next = { ...mini, ...p };
-    patch({ miniWindow: next });
-    api.saveSettings({ miniWindow: next }).then(reloadSettings);
-  };
   const patchSound = (p: Partial<typeof sound>) => patch({ sound: { ...sound, ...p } });
-  const patchCursor = (p: Partial<typeof cursor>) => patch({ customCursor: { ...cursor, ...p } });
-  // 光标子设置必须落盘并触发 reloadSettings，否则 ThemeContext.settings 不会更新，
-  // CustomCursor 读取不到变化（patch 只改本地 draft）。与 enabled 开关保持一致。
-  const saveCursor = (p: Partial<typeof cursor>) =>
-    api.saveSettings({ customCursor: { ...cursor, ...p } }).then(reloadSettings);
 
   // 生图 / TTS / ASR 模型名拉取：复用 OpenAI 兼容 /models，按类型关键字过滤后填入 datalist，
   // 用户既能从下拉选也能手填。过滤为空时回退全部列表，避免第三方平台命名不标准时漏掉可用模型。
@@ -1295,184 +1210,11 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
                   {field(t('settings.zoomMin'), z.mainMin, 0.5, 3, 0.05, 'mainMin')}
                   {field(t('settings.zoomMax'), z.mainMax, 0.5, 3, 0.05, 'mainMax')}
                 </div>
-                <div className="zoom-group">{t('settings.uiZoomMini')}</div>
-                <div className="zoom-grid">
-                  {field(t('settings.zoomBaseW'), z.miniBaseW, 100, 2000, 10, 'miniBaseW')}
-                  {field(t('settings.zoomBaseH'), z.miniBaseH, 100, 2000, 10, 'miniBaseH')}
-                  {field(t('settings.zoomMin'), z.miniMin, 0.5, 3, 0.05, 'miniMin')}
-                  {field(t('settings.zoomMax'), z.miniMax, 0.5, 3, 0.05, 'miniMax')}
-                </div>
               </>
             );
           })()}
         </div>
 
-        {/* ===== 动态 Canvas 光标 ===== */}
-        <div className="section-title">{t('settings.cursor')}</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 4 }}>
-            {t('settings.cursorDesc')}
-          </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={!!cursor.enabled}
-              onChange={(e) => {
-                patchCursor({ enabled: e.target.checked });
-                api.saveSettings({ customCursor: { ...cursor, enabled: e.target.checked } }).then(reloadSettings);
-              }}
-            />
-            <span style={{ fontSize: 13 }}>{t('settings.cursorEnabled')}</span>
-          </label>
-          {cursor.enabled && (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorLerpSpeed')}</span>
-                <input
-                  type="range"
-                  min={10}
-                  max={50}
-                  step={1}
-                  value={Math.round((cursor.lerpSpeed ?? 0.25) * 100)}
-                  onChange={(e) => saveCursor({ lerpSpeed: Number(e.target.value) / 100 })}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                  {(cursor.lerpSpeed ?? 0.25).toFixed(2)}
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                {t('settings.cursorLerpSpeedDesc')}
-              </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={cursor.trailEnabled !== false}
-                  onChange={(e) => saveCursor({ trailEnabled: e.target.checked })}
-                />
-                <span style={{ fontSize: 13 }}>{t('settings.cursorTrail')}</span>
-              </label>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginLeft: 24 }}>
-                {t('settings.cursorTrailDesc')}
-              </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={cursor.particlesEnabled !== false}
-                  onChange={(e) => saveCursor({ particlesEnabled: e.target.checked })}
-                />
-                <span style={{ fontSize: 13 }}>{t('settings.cursorParticles')}</span>
-              </label>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginLeft: 24 }}>
-                {t('settings.cursorParticlesDesc')}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorHoverScale')}</span>
-                <input
-                  type="range"
-                  min={100}
-                  max={150}
-                  step={5}
-                  value={Math.round((cursor.hoverScale ?? 1.25) * 100)}
-                  onChange={(e) => saveCursor({ hoverScale: Number(e.target.value) / 100 })}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                  {(cursor.hoverScale ?? 1.25).toFixed(2)}x
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                {t('settings.cursorHoverScaleDesc')}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorIdleHide')}</span>
-                <input
-                  type="range"
-                  min={1}
-                  max={300}
-                  step={1}
-                  value={Math.max(1, Math.round((cursor.idleHideMs ?? 5000) / 1000))}
-                  onChange={(e) => saveCursor({ idleHideMs: Number(e.target.value) * 1000 })}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 48, textAlign: 'right' }}>
-                  {Math.max(1, Math.round((cursor.idleHideMs ?? 5000) / 1000))}s
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                {t('settings.cursorIdleHideDesc')}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorSize')}</span>
-                <input
-                  type="range"
-                  min={16}
-                  max={64}
-                  step={1}
-                  value={cursor.cursorSize ?? 28}
-                  onChange={(e) => saveCursor({ cursorSize: Number(e.target.value) })}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                  {cursor.cursorSize ?? 28}px
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                {t('settings.cursorSizeDesc')}
-              </div>
-
-              {/* 热点（点击位置）设置：左侧可拖动预览，右侧滑块微调 */}
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginTop: 4 }}>
-                <div style={{ flexShrink: 0 }}>
-                  <CursorHotspotPreview
-                    hotspotX={cursor.hotspotX ?? 1}
-                    hotspotY={cursor.hotspotY ?? 1}
-                    onChange={(x, y) => saveCursor({ hotspotX: x, hotspotY: y })}
-                  />
-                  <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 4, textAlign: 'center' }}>
-                    {t('settings.hotspotPreview')}
-                  </div>
-                </div>
-                <div style={{ flex: 1, minWidth: 240, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.hotspot')}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.hotspotX')}</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={28}
-                      step={1}
-                      value={cursor.hotspotX ?? 1}
-                      onChange={(e) => saveCursor({ hotspotX: Number(e.target.value) })}
-                      style={{ flex: 1 }}
-                    />
-                    <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                      {cursor.hotspotX ?? 1}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.hotspotY')}</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={28}
-                      step={1}
-                      value={cursor.hotspotY ?? 1}
-                      onChange={(e) => saveCursor({ hotspotY: Number(e.target.value) })}
-                      style={{ flex: 1 }}
-                    />
-                    <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                      {cursor.hotspotY ?? 1}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                    {t('settings.hotspotDesc')}
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
 
         {/* ===== 语音功能（ASR + TTS） ===== */}
         <div className="section-title">{t('settings.voice')}</div>
@@ -1797,67 +1539,6 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
           {t('settings.soundCustomTip')}
         </div>
 
-        {/* ===== 快捷聊天小窗 ===== */}
-        <div className="section-title">{t('settings.mini')}</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={!!mini.enabled}
-              onChange={(e) => patchMini({ enabled: e.target.checked })}
-            />
-            <span style={{ fontSize: 13 }}>{t('settings.miniEnable')}</span>
-          </label>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>{t('settings.miniHotkey')}</span>
-            <input
-              type="text"
-              value={mini.hotkey}
-              placeholder="CommandOrControl+Shift+Z"
-              style={{ flex: 1 }}
-              onChange={(e) => patchMini({ hotkey: e.target.value })}
-            />
-          </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={!!mini.autoPopupOnMinimize}
-              onChange={(e) => patchMini({ autoPopupOnMinimize: e.target.checked })}
-            />
-            <span style={{ fontSize: 13 }}>{t('settings.miniAutoPopup')}</span>
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={!!mini.alwaysOnTop}
-              onChange={(e) => patchMini({ alwaysOnTop: e.target.checked })}
-            />
-            <span style={{ fontSize: 13 }}>{t('settings.miniOnTop')}</span>
-          </label>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>{t('settings.miniDefaultChat')}</span>
-            <SelectMenu
-              value={mini.defaultChat}
-              style={{ flex: 1 }}
-              onChange={(v) => patchMini({ defaultChat: v })}
-              options={[
-                { value: '', label: t('settings.miniDefaultRecent') },
-                ...chatList.map((c) => ({
-                  value: `${c.chat_type}:${c.chat_id}`,
-                  label: `${c.chat_type === 'group' ? '👥 ' : '👤 '}${c.name}`,
-                })),
-              ]}
-            />
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn-ghost" onClick={() => api.miniOpen()}>
-              {t('settings.miniOpenNow')}
-            </button>
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-            {t('settings.miniDesc')}
-          </div>
-        </div>
 
         {/* ===== 数据备份与还原 ===== */}
         <div className="section-title">{t('settings.backup')}</div>

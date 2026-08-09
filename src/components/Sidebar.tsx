@@ -33,7 +33,7 @@ export const Sidebar: React.FC<{ view: View; onChange: (v: View) => void; onAbou
           {it.icon}
         </div>
       ))}
-      <div style={{ flex: 1 }} />
+      <div className="nav-spacer" style={{ flex: 1 }} />
       <div
         className="nav-item"
         role="button"

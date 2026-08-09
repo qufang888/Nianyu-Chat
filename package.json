@@ -14,11 +14,15 @@
     "dist": "electron-builder --win"
   },
   "dependencies": {
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/http": "^0.0.2",
     "adm-zip": "^0.5.16",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
     "@types/adm-zip": "^0.5.5",
     "@types/node": "^22.7.4",
     "@types/react": "^18.3.11",

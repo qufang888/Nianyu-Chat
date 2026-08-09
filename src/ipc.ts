@@ -283,49 +283,34 @@ export interface NianyuAPI {
   offAppError?: (cb: (data: any) => void) => void;
 }
 
-const raw = (window as any).api as NianyuAPI;
-
 // 外部注入的 showConfirm 前置钩子（sound.ts 初始化时注册，避免循环依赖）
 export let _beforeConfirm: (() => void) | null = null;
 export function setBeforeConfirm(fn: () => void): void { _beforeConfirm = fn; }
 
-export const api: NianyuAPI = {
-  ...raw,
-  getGlobalTokens: () => raw.getGlobalTokens(),
-  getRoleStats: () => raw.getRoleStats(),
-  rateInfo: (modelId) => raw.rateInfo(modelId),
-  getChatModelId: (chatType, chatId) => raw.getChatModelId(chatType, chatId),
-  translate: (text) => raw.translate(text),
-  interruptStream: (chatId) => raw.interruptStream(chatId),
-  copyChat: (type, id) => raw.copyChat(type, id),
-  renameChat: (type, id, name) => raw.renameChat(type, id, name),
-  resolveRoleId: (chatType, chatId) => raw.resolveRoleId(chatType, chatId),
-  setStoryEnabled: (chatType, chatId, enabled) => raw.setStoryEnabled(chatType, chatId, enabled),
-  getStoryEnabled: (chatType, chatId) => raw.getStoryEnabled(chatType, chatId),
-  addStoryNode: (chatType, chatId, msgId, title) => raw.addStoryNode(chatType, chatId, msgId, title),
-  listStoryNodes: (chatType, chatId) => raw.listStoryNodes(chatType, chatId),
-  removeStoryNode: (id) => raw.removeStoryNode(id),
-  addMoment: (roleId, content, images, scheduledAt, selfRoleId) => raw.addMoment(roleId, content, images, scheduledAt, selfRoleId),
-  listMoments: (roleId, includeUnpublished, selfRoleId, favoritedOnly) => raw.listMoments(roleId, includeUnpublished, selfRoleId, favoritedOnly),
-  removeMoment: (id) => raw.removeMoment(id),
-  updateMoment: (id, patch) => raw.updateMoment(id, patch),
-  publishDueMoments: () => raw.publishDueMoments(),
-  triggerRelationship: (chatType, chatId, roleId, withMoments, doRelationship) => raw.triggerRelationship(chatType, chatId, roleId, withMoments, doRelationship),
-  adjustBond: (roleId, delta) => raw.adjustBond(roleId, delta),
-  generateImage: (chatType, chatId, prompt) => raw.generateImage(chatType, chatId, prompt),
-  saveImageMemory: (p) => raw.saveImageMemory(p),
-  recallMessage: (msgId) => raw.recallMessage(msgId),
-  rollbackMessages: (p) => raw.rollbackMessages(p),
-  addQuickMemory: (p) => raw.addQuickMemory(p),
-  pickTextFile: (filters) => raw.pickTextFile(filters),
-  pickAudioFile: () => raw.pickAudioFile(),
-  setCustomSound: (p) => raw.setCustomSound(p),
-  saveTextFile: (content, defaultName) => raw.saveTextFile(content, defaultName),
-  importCharacterCard: () => raw.importCharacterCard(),
-  resetSettings: (keepKeys) => raw.resetSettings(keepKeys),
-  deleteAllData: () => raw.deleteAllData(),
-  showConfirm: async (message, title) => {
-    _beforeConfirm?.();
-    return raw.showConfirm!(message, title);
+// 延迟解析 window.api：桌面端由 preload 同步注入；Web / Capacitor 端在启动引导
+// （main.tsx 的 ensureWebBackend）中异步加载 web 后端后再注入。用 Proxy 在「调用时」
+// 读取 window.api，避免模块加载阶段就依赖 window.api——否则 Web 端 ipc 模块加载时
+// 后端尚未注入会拿到 undefined，导致所有 api 调用崩溃。
+function getRaw(): any {
+  return (window as any).api;
+}
+
+export const api: NianyuAPI = new Proxy({} as NianyuAPI, {
+  get(_target, prop) {
+    if (typeof prop !== 'string') return undefined;
+    if (prop === 'then') return undefined;
+    const raw = getRaw();
+    if (!raw) return undefined;
+    if (prop === 'showConfirm') {
+      return async (message: string, title?: string) => {
+        _beforeConfirm?.();
+        const fn = raw.showConfirm;
+        if (typeof fn === 'function') return fn.call(raw, message, title);
+        return typeof window.confirm === 'function' ? window.confirm(message) : false;
+      };
+    }
+    const v = (raw as any)[prop];
+    if (typeof v === 'function') return (...args: any[]) => v.apply(raw, args);
+    return v;
   },
-};
+}) as NianyuAPI;
