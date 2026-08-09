@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
 import type { Role, ModelConfig, WorldBook, Rule } from '../types';
-import { parseCharacterCardText } from '../utils/characterCard';
 import { useToast, ToastView } from './Toast';
 import { MemoryPanel } from './MemoryPanel';
 import { ImageCropper } from './ImageCropper';
@@ -188,7 +187,7 @@ export const RoleEditor: React.FC<{
       first_message: p.first_message || r.first_message,
       avatar_path: res.avatarPath || r.avatar_path,
     }));
-    setMsg(t('role.importCardDone', { name: p.name }));
+    setMsg(t('role.importCardDone', { name: p.name || '' }));
   };
 
   return (
@@ -298,6 +297,17 @@ export const RoleEditor: React.FC<{
                 onChange={(e) => set('affinity_factor', Number(e.target.value) || 1.0)}
               />
             </Field>
+            <Field label={t('role.momentDailyLimit')} hint={t('role.momentDailyLimitHint')}>
+              <input
+                type="number"
+                min={0}
+                placeholder={t('role.momentDailyLimitPlaceholder')}
+                value={role.momentDailyLimit ?? ''}
+                onChange={(e) =>
+                  set('momentDailyLimit', e.target.value === '' ? undefined : Math.max(0, Number(e.target.value)))
+                }
+              />
+            </Field>
             <Field label={t('role.worldbook')} full>
               <SelectMenu
                 value={role.worldBookId || ''}
@@ -403,14 +413,16 @@ export const RoleEditor: React.FC<{
   );
 };
 
-const Field: React.FC<{ label: string; full?: boolean; children: React.ReactNode }> = ({
+const Field: React.FC<{ label: string; full?: boolean; hint?: string; children: React.ReactNode }> = ({
   label,
   full,
+  hint,
   children,
 }) => (
   <div className={`field ${full ? 'full' : ''}`}>
     <label>{label}</label>
     {children}
+    {hint ? <div className="field-hint">{hint}</div> : null}
   </div>
 );
 

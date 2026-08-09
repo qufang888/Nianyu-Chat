@@ -18,6 +18,33 @@ interface ChatSession {
   chat_type: string;
   chat_id: string;
   last_time: string;
+  chat_name?: string; // 聊天卡片自定义名称（重命名），覆盖角色/群名显示，不改动角色/群本身
+  role_id?: string; // 复制出的单聊：chat_id 与 roleId 解绑，用此字段指向真实角色
+  storyEnabled?: boolean; // 自适应故事线：本聊是否开启剧情节点标记
+}
+
+// 剧情节点（自适应故事线）：用户手动标记或由 AI 在故事模式下自动标记
+interface StoryNode {
+  id: number;
+  chat_type: string;
+  chat_id: string;
+  msg_id: number; // 关联的聊天消息 id（点击节点可跳转）
+  title: string; // 节点标题（剧情节点名）
+  timestamp: string;
+}
+
+// 朋友圈动态（人物养成/社交）：角色对外发布的动态，支持定时发布
+interface Moment {
+  id: number;
+  roleId: string; // 发布者角色 id
+  content: string; // 动态正文
+  images: string[]; // 配图路径
+  created_at: string; // 创建时间
+  scheduledAt?: string | null; // 定时发布时间（ISO）；空/null=立即发布
+  published: boolean; // 是否已发布（定时未到点时为 false，到点后转 true）
+  selfRoleId?: string; // 查看者/对话使用的「我的角色卡」id；不同自我身份的朋友圈相互独立，空=未指定
+  liked?: boolean; // 用户点赞（本地单用户，布尔切换）
+  favorited?: boolean; // 用户收藏（收藏板块展示依据）
 }
 
 interface Store {
@@ -31,6 +58,8 @@ interface Store {
   memories: MemoryEntry[];
   seq: number; // 自增 id 计数器（用于消息与好感度日志）
   chatSessions: ChatSession[]; // 已存在的聊天会话（清空消息后仍保留）
+  storyNodes: StoryNode[]; // 自适应故事线的剧情节点
+  moments: Moment[]; // 朋友圈动态（人物养成/社交）
 }
 
 class DataManager {
@@ -82,6 +111,11 @@ class DataManager {
       }
       this.saveStore();
     }
+    // 兼容老数据：moments 数组缺省时补齐
+    if (!Array.isArray(this.store.moments)) {
+      this.store.moments = [];
+      this.saveStore();
+    }
   }
 
   get dataDirectory(): string {
@@ -106,12 +140,14 @@ class DataManager {
           memories: raw.memories || [],
           seq: raw.seq || 0,
           chatSessions: raw.chatSessions || [],
+          storyNodes: raw.storyNodes || [],
+          moments: raw.moments || [],
         };
       }
     } catch (e) {
       console.error('读取存储失败', e);
     }
-    return { roles: [], groups: [], messages: [], affinity: [], worldBooks: [], rules: [], memories: [], seq: 0, chatSessions: [] };
+    return { roles: [], groups: [], messages: [], affinity: [], worldBooks: [], rules: [], memories: [], seq: 0, chatSessions: [], storyNodes: [], moments: [] };
   }
 
   private genId(prefix: string): string {
@@ -271,6 +307,7 @@ class DataManager {
       source: m.source,
       sourceMsgId: (m as any).sourceMsgId,
       sourceMsgIds: (m as any).sourceMsgIds,
+      image_path: (m as any).image_path,
       created_at: m.created_at || now,
       updated_at: now,
     };
@@ -468,6 +505,7 @@ class DataManager {
           models: Array.isArray(raw.models) ? raw.models : [],
           voice: { ...DEFAULT_SETTINGS.voice, ...(raw.voice || {}) },
           miniWindow: { ...DEFAULT_SETTINGS.miniWindow, ...(raw.miniWindow || {}) },
+          imageGen: { ...DEFAULT_SETTINGS.imageGen, ...(raw.imageGen || {}) },
         };
         // 清理遗留的默认 GPT-4o mini 种子模型
         merged.models = merged.models.filter(
@@ -500,6 +538,13 @@ class DataManager {
         ...DEFAULT_SETTINGS.miniWindow,
         ...this.settings.miniWindow,
         ...patch.miniWindow,
+      };
+    }
+    if (patch.imageGen) {
+      this.settings.imageGen = {
+        ...DEFAULT_SETTINGS.imageGen,
+        ...this.settings.imageGen,
+        ...patch.imageGen,
       };
     }
     fs.writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2), 'utf-8');
@@ -540,6 +585,197 @@ class DataManager {
     }
   }
 
+  // 解析单聊真实 roleId：
+  // 普通单聊 chat_id === roleId；观察者私密 obs:<gid>:<rid> 取末段；
+  // 复制出的单聊 chat_id 与 roleId 解绑，需查 chatSessions.role_id。
+  resolveSingleRoleId(chatType: string, chatId: string): string {
+    if (chatType !== 'single') return chatId;
+    if (chatId.startsWith('obs:')) return chatId.split(':').pop() || chatId;
+    if (this.getRole(chatId)) return chatId;
+    const s = this.store.chatSessions.find(
+      (x) => x.chat_type === 'single' && x.chat_id === chatId
+    );
+    if (s?.role_id) return s.role_id;
+    return chatId;
+  }
+
+  // 复制聊天：1:1 复制消息与卡片，新卡片名加「副本」后缀（group 复制整组，single 复制并与角色解绑为新卡片）
+  copyChat(chatType: string, chatId: string): { chat_type: string; chat_id: string; name: string } {
+    const now = new Date().toISOString();
+    if (chatType === 'group') {
+      const g = this.getGroup(chatId);
+      if (!g) throw new Error('group not found');
+      const newId = this.genId('group');
+      const newName = `${g.group_name} 副本`;
+      const newGroup: Group = { ...g, group_id: newId, group_name: newName, created_at: now };
+      this.store.groups.push(newGroup);
+      const msgs = this.store.messages.filter((m) => m.chat_type === 'group' && m.chat_id === chatId);
+      for (const m of msgs) {
+        this.store.messages.push({ ...m, id: this.nextId(), chat_id: newId });
+      }
+      this.store.chatSessions.push({ chat_type: 'group', chat_id: newId, last_time: now });
+      this.saveStore();
+      return { chat_type: 'group', chat_id: newId, name: newName };
+    }
+    // single
+    const roleId = this.resolveSingleRoleId('single', chatId);
+    const role = this.getRole(roleId);
+    const baseName = role?.name || roleId;
+    const newId = `single_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`;
+    const newName = `${baseName} 副本`;
+    const msgs = this.store.messages.filter((m) => m.chat_type === 'single' && m.chat_id === chatId);
+    for (const m of msgs) {
+      this.store.messages.push({ ...m, id: this.nextId(), chat_id: newId });
+    }
+    this.store.chatSessions.push({
+      chat_type: 'single',
+      chat_id: newId,
+      role_id: roleId,
+      chat_name: newName,
+      last_time: now,
+    });
+    this.saveStore();
+    return { chat_type: 'single', chat_id: newId, name: newName };
+  }
+
+  // 重命名聊天卡片：写入 chat_name 覆盖显示名，不改动角色/群本身（非破坏式）
+  renameChat(chatType: string, chatId: string, name: string): void {
+    const s = this.store.chatSessions.find(
+      (x) => x.chat_type === chatType && x.chat_id === chatId
+    );
+    if (s) {
+      s.chat_name = name;
+    } else {
+      this.store.chatSessions.push({
+        chat_type: chatType,
+        chat_id: chatId,
+        chat_name: name,
+        last_time: new Date().toISOString(),
+      });
+    }
+    this.saveStore();
+  }
+
+  // ===== 自适应故事线 =====
+  setStoryEnabled(chatType: string, chatId: string, enabled: boolean): void {
+    let s = this.store.chatSessions.find(
+      (x) => x.chat_type === chatType && x.chat_id === chatId
+    );
+    if (!s) {
+      s = { chat_type: chatType, chat_id: chatId, last_time: new Date().toISOString() };
+      this.store.chatSessions.push(s);
+    }
+    s.storyEnabled = enabled;
+    this.saveStore();
+  }
+
+  getStoryEnabled(chatType: string, chatId: string): boolean {
+    return (
+      this.store.chatSessions.find(
+        (x) => x.chat_type === chatType && x.chat_id === chatId
+      )?.storyEnabled === true
+    );
+  }
+
+  // 标记剧情节点：关联某条消息，返回节点 id
+  addStoryNode(chatType: string, chatId: string, msgId: number, title: string): number {
+    const node: StoryNode = {
+      id: this.nextId(),
+      chat_type: chatType,
+      chat_id: chatId,
+      msg_id: msgId,
+      title: title || `节点 ${this.store.storyNodes.length + 1}`,
+      timestamp: new Date().toISOString(),
+    };
+    this.store.storyNodes.push(node);
+    this.saveStore();
+    return node.id;
+  }
+
+  listStoryNodes(chatType: string, chatId: string): StoryNode[] {
+    return this.store.storyNodes
+      .filter((n) => n.chat_type === chatType && n.chat_id === chatId)
+      .sort((a, b) => a.id - b.id);
+  }
+
+  removeStoryNode(id: number): void {
+    const before = this.store.storyNodes.length;
+    this.store.storyNodes = this.store.storyNodes.filter((n) => n.id !== id);
+    if (this.store.storyNodes.length !== before) this.saveStore();
+  }
+
+  // ===== 朋友圈动态（人物养成/社交） =====
+  // 新增动态：scheduledAt 为空/null 立即发布；否则到点后才发布
+  addMoment(roleId: string, content: string, images: string[], scheduledAt?: string | null, selfRoleId?: string): number {
+    const now = new Date().toISOString();
+    const published = !scheduledAt;
+    const moment: Moment = {
+      id: this.nextId(),
+      roleId,
+      content: content || '',
+      images: images || [],
+      created_at: now,
+      scheduledAt: scheduledAt || null,
+      published,
+      selfRoleId: selfRoleId || undefined,
+      liked: false,
+      favorited: false,
+    };
+    this.store.moments.push(moment);
+    this.saveStore();
+    return moment.id;
+  }
+
+  // 列出动态：roleId 缺省返回全部；selfRoleId 缺省返回全部（不过滤）；默认仅返回已发布，includeUnpublished 控制是否含待发布；favoritedOnly 为 true 时仅返回已收藏
+  listMoments(roleId?: string, includeUnpublished = false, selfRoleId?: string, favoritedOnly = false): Moment[] {
+    return this.store.moments
+      .filter((m) => (roleId ? m.roleId === roleId : true))
+      .filter((m) => (selfRoleId !== undefined ? (m.selfRoleId || '') === selfRoleId : true))
+      .filter((m) => m.published || includeUnpublished)
+      .filter((m) => (favoritedOnly ? !!m.favorited : true))
+      .sort((a, b) => (b.scheduledAt || b.created_at).localeCompare(a.scheduledAt || a.created_at));
+  }
+
+  // 更新单条动态（点赞 / 收藏切换等）
+  updateMoment(id: number, patch: Partial<Moment>): void {
+    const m = this.store.moments.find((x) => x.id === id);
+    if (!m) return;
+    Object.assign(m, patch);
+    this.saveStore();
+  }
+
+  // 到点发布：将已到 scheduledAt 的待发布动态转为 published
+  publishDueMoments(): number {
+    const now = Date.now();
+    let changed = 0;
+    for (const m of this.store.moments) {
+      if (!m.published && m.scheduledAt && new Date(m.scheduledAt).getTime() <= now) {
+        m.published = true;
+        changed++;
+      }
+    }
+    if (changed > 0) this.saveStore();
+    return changed;
+  }
+
+  removeMoment(id: number): void {
+    const before = this.store.moments.length;
+    this.store.moments = this.store.moments.filter((m) => m.id !== id);
+    if (this.store.moments.length !== before) this.saveStore();
+  }
+
+  // ===== 人物养成：关系值与等级（持久化在 Role.bond / Role.level） =====
+  adjustBond(roleId: string, delta: number): number {
+    const r = this.getRole(roleId);
+    if (!r) return 0;
+    const next = Math.max(0, (r.bond || 0) + delta);
+    r.bond = next;
+    // 等级随关系值阶梯推导（每 100 点升一级），可被手动 level 覆盖逻辑在前端处理
+    r.updated_at = new Date().toISOString();
+    this.saveStore();
+    return next;
+  }
+
   // 最近聊天列表
   getChatList(): {
     chat_type: string;
@@ -569,7 +805,7 @@ class DataManager {
       let name = g.chat_id;
       let avatar = '';
       if (g.chat_type === 'single') {
-        const role = this.getRole(g.chat_id);
+        const role = this.getRole(this.resolveSingleRoleId(g.chat_type, g.chat_id));
         if (!role) continue; // 角色已删除，跳过残留会话
         name = role.name;
         avatar = role.avatar_path || '';
@@ -578,11 +814,16 @@ class DataManager {
         if (!grp) continue; // 群组已删除但仍有残留消息，不再列入会话列表（杜绝 0 人幽灵群）
         name = grp.group_name;
       }
+      const gOverride = this.store.chatSessions.find(
+        (x) => x.chat_type === g.chat_type && x.chat_id === g.chat_id
+      )?.chat_name;
+      if (gOverride) name = gOverride;
       covered.add(`${g.chat_type}:${g.chat_id}`);
       result.push({
         chat_type: g.chat_type,
         chat_id: g.chat_id,
         name,
+        chat_name: gOverride,
         avatar_path: avatar,
         last_message: last?.image_path || (last?.images && last.images.length) ? '[图片]' : last?.content || '',
         last_time: last?.timestamp || '',
@@ -596,7 +837,7 @@ class DataManager {
       let name = s.chat_id;
       let avatar = '';
       if (s.chat_type === 'single') {
-        const role = this.getRole(s.chat_id);
+        const role = this.getRole(this.resolveSingleRoleId(s.chat_type, s.chat_id));
         if (!role) continue;
         name = role.name;
         avatar = role.avatar_path || '';
@@ -605,10 +846,12 @@ class DataManager {
         if (!grp) continue;
         name = grp.group_name;
       }
+      if (s.chat_name) name = s.chat_name;
       result.push({
         chat_type: s.chat_type,
         chat_id: s.chat_id,
         name,
+        chat_name: s.chat_name,
         avatar_path: avatar,
         last_message: '',
         last_time: s.last_time,

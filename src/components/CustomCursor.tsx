@@ -319,12 +319,17 @@ const CustomCursor: React.FC = () => {
     rects: { x: number; y: number; w: number; h: number }[]
   ) => {
     const c = ctx.canvas;
+    const dpr = window.devicePixelRatio || 1;
+    // setTransform(dpr,...) 之后所有坐标都是 CSS 像素，c.width/c.height 是物理像素，
+    // 必须除以 dpr 才能得到合法的 CSS 像素边界。否则高 DPR 或缩放时右/下边缘清不干净。
+    const maxW = c.width / dpr;
+    const maxH = c.height / dpr;
     for (let i = 0; i < rects.length; i++) {
       const r = rects[i];
       const x = Math.max(0, r.x);
       const y = Math.max(0, r.y);
-      const x2 = Math.min(c.width, r.x + r.w);
-      const y2 = Math.min(c.height, r.y + r.h);
+      const x2 = Math.min(maxW, r.x + r.w);
+      const y2 = Math.min(maxH, r.y + r.h);
       if (x2 > x && y2 > y) ctx.clearRect(x, y, x2 - x, y2 - y);
     }
   };
@@ -608,11 +613,16 @@ const CustomCursor: React.FC = () => {
       const c = canvasRef.current;
       if (!c) return;
       const dpr = window.devicePixelRatio || 1;
+      // 重置前先清整屏，避免旧内容在尺寸变化后残留在扩展出来的边缘
+      const ctx = c.getContext('2d');
+      if (ctx) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, c.width, c.height);
+      }
       c.width = Math.max(1, Math.floor(window.innerWidth * dpr));
       c.height = Math.max(1, Math.floor(window.innerHeight * dpr));
       c.style.width = window.innerWidth + 'px';
       c.style.height = window.innerHeight + 'px';
-      const ctx = c.getContext('2d');
       if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
     setupCanvas();
@@ -759,6 +769,20 @@ const CustomCursor: React.FC = () => {
       prevDirtyRectsRef.current = []; // 清空旧脏区域
     };
 
+    // ResizeObserver 兜底：窗口缩放因子变化不一定触发 resize 事件，但 canvas 的
+    // contentRect 会变化；用它来重新同步 backing store 与 CSS 尺寸，防止边缘残留。
+    let resizeObserver: ResizeObserver | null = null;
+    try {
+      resizeObserver = new ResizeObserver(() => {
+        setupCanvas();
+        prevDirtyRectsRef.current = [];
+      });
+      const c = canvasRef.current;
+      if (c) resizeObserver.observe(c);
+    } catch {
+      resizeObserver = null;
+    }
+
     // 可见性变化处理
     const onVisibilityChange = () => {
       if (document.hidden) hideCursor();
@@ -793,13 +817,14 @@ const CustomCursor: React.FC = () => {
       window.removeEventListener('resize', onResize);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       if (interactionCheckTimer) clearTimeout(interactionCheckTimer);
+      if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
       cancelIdleHide();
       stopLoop();
       document.body.classList.remove('cursor-hidden');
       hiddenRef.current = true;
       mouseInsideRef.current = false;
       const c = canvasRef.current;
-      if (c) { const ctx = c.getContext('2d'); if (ctx) ctx.clearRect(0, 0, c.width, c.height); }
+      if (c) { const ctx = c.getContext('2d'); if (ctx) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, c.width, c.height); } }
     };
   }, [settings?.customCursor?.enabled]); // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { api } from '../ipc';
 import { FONT_FAMILIES, type AppSettings, type ThemeName } from '../types';
-import { playSoundSync } from '../utils/sound';
 
 interface ThemeCtx {
   theme: ThemeName;

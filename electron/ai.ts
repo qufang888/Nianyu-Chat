@@ -1,8 +1,35 @@
 import type { ModelConfig } from '../src/types';
 
+export interface ContentPart {
+  type: 'text' | 'image_url';
+  text?: string;
+  image_url?: { url: string };
+}
+
 export interface AIMessage {
   role: 'system' | 'user' | 'assistant';
-  content: string;
+  // 多模态：OpenAI 兼容接口允许 content 为字符串或 content parts 数组（含 image_url）
+  content: string | ContentPart[];
+}
+
+// Anthropic 接口：把 content 转为 Anthropic 的 content blocks（图片用 base64 source）
+function toAnthropicContent(content: string | ContentPart[]): any[] {
+  if (typeof content === 'string') {
+    return [{ type: 'text', text: content }];
+  }
+  const blocks: any[] = [];
+  for (const part of content) {
+    if (part.type === 'text' && part.text) {
+      blocks.push({ type: 'text', text: part.text });
+    } else if (part.type === 'image_url' && part.image_url) {
+      const m = part.image_url.url.match(/^data:(image\/\w+);base64,(.+)$/);
+      if (m) {
+        const mediaType = m[1] === 'image/jpg' ? 'image/jpeg' : (m[1] as string);
+        blocks.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: m[2] } });
+      }
+    }
+  }
+  return blocks.length ? blocks : [{ type: 'text', text: '' }];
 }
 
 // 拼接 Base URL 与接口后缀，自动清理尾部斜杠，避免 // 问题
@@ -119,7 +146,8 @@ function partialTagHold(s: string): number {
 export async function queryAI(
   cfg: ModelConfig,
   messages: AIMessage[],
-  maxTokens = 1024
+  maxTokens = 1024,
+  parentSignal?: AbortSignal
 ): Promise<AIResult> {
   if (!cfg.apiKey && cfg.provider !== 'openai-compatible') {
     return {
@@ -131,6 +159,11 @@ export async function queryAI(
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120000);
+  let onParentAbort: (() => void) | undefined;
+  if (parentSignal) {
+    onParentAbort = () => controller.abort();
+    parentSignal.addEventListener('abort', onParentAbort, { once: true });
+  }
 
   try {
     if (cfg.provider === 'anthropic') {
@@ -145,6 +178,9 @@ export async function queryAI(
     };
   } finally {
     clearTimeout(timer);
+    if (parentSignal && onParentAbort) {
+      parentSignal.removeEventListener('abort', onParentAbort);
+    }
   }
 }
 
@@ -315,7 +351,7 @@ async function queryAnthropic(
   const system = messages.find((m) => m.role === 'system')?.content || '';
   const turns = messages
     .filter((m) => m.role !== 'system')
-    .map((m) => ({ role: m.role, content: m.content }));
+    .map((m) => ({ role: m.role, content: toAnthropicContent(m.content) }));
   const resp = await fetch(`${cfg.baseUrl}/messages`, {
     method: 'POST',
     headers: {
@@ -485,6 +521,39 @@ export async function textToSpeech(
     }
     const buf = Buffer.from(await resp.arrayBuffer());
     return buf;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 图像生成（OpenAI 兼容 /images/generations）：返回 base64 或图片 URL
+export async function generateImage(
+  cfg: { baseUrl: string; apiKey: string },
+  prompt: string,
+  model: string,
+  size: string
+): Promise<{ b64?: string; url?: string }> {
+  if (!cfg.apiKey) throw new Error('生图模型未配置 API Key');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 120000);
+  try {
+    const resp = await fetch(joinUrl(cfg.baseUrl, '/images/generations'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.apiKey}`,
+      },
+      body: JSON.stringify({ model: model || 'gpt-image-1', prompt, n: 1, size: size || '1024x1024' }),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`生图失败 ${resp.status}: ${errText.slice(0, 300)}`);
+    }
+    const data = (await resp.json()) as any;
+    const item = data?.data?.[0];
+    if (!item) throw new Error('生图接口未返回图片数据');
+    return { b64: item.b64_json, url: item.url };
   } finally {
     clearTimeout(timer);
   }

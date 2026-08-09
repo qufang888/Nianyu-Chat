@@ -3,7 +3,6 @@ import { api } from './ipc';
 import { useI18n } from './i18n/I18nContext';
 import { useTheme } from './theme/ThemeContext';
 import { Sidebar } from './components/Sidebar';
-import { playSoundSync } from './utils/sound';
 import { ChatList } from './components/ChatList';
 import { RoleList } from './components/RoleList';
 import { ChatWindow } from './components/ChatWindow';
@@ -15,11 +14,12 @@ import { SplashScreen } from './components/SplashScreen';
 import { AboutModal } from './components/AboutModal';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { Library } from './components/Library';
+import { MomentsView } from './components/MomentsView';
 import { useToast, ToastView } from './components/Toast';
 import CustomCursor from './components/CustomCursor';
 import type { Role } from './types';
 
-type View = 'chats' | 'contacts' | 'settings' | 'stats' | 'library';
+type View = 'chats' | 'contacts' | 'settings' | 'stats' | 'library' | 'moments';
 interface Selected {
   type: string;
   id: string;
@@ -61,6 +61,16 @@ export default function App() {
     if (typeof api.onAppOpenChat !== 'function') return;
     const off = api.onAppOpenChat((_e, data) => {
       onSelectChat({ chat_type: data.chatType, chat_id: data.chatId, name: data.name });
+    });
+    return off;
+  }, []);
+
+  // AI 自动发朋友圈后弹 toast 提示
+  useEffect(() => {
+    if (typeof api.onMomentsAutoPosted !== 'function') return;
+    const off = api.onMomentsAutoPosted((_e, data) => {
+      const name = data?.roleName || t('moments.unknownAuthor');
+      showToast(`「${name}」发布了 ${data?.count || 0} 条朋友圈`);
     });
     return off;
   }, []);
@@ -128,9 +138,10 @@ export default function App() {
 
   const title = (() => {
     if (view === 'chats' && selected) return selected.name;
-    if (view === 'contacts') return t('nav.contacts');
-    if (view === 'settings') return t('nav.settings');
-    return t('app.name');
+  if (view === 'contacts') return t('nav.contacts');
+  if (view === 'settings') return t('nav.settings');
+  if (view === 'moments') return t('nav.moments');
+  return t('app.name');
   })();
 
   return (
@@ -174,6 +185,7 @@ export default function App() {
         <Settings onRerunWizard={() => { setView('chats'); setShowOnboarding(true); }} />
       )}
       {view === 'stats' && <StatsView />}
+      {view === 'moments' && <MomentsView />}
       {view === 'library' && <Library onClose={() => setView('chats')} />}
 
       {showGroup && (

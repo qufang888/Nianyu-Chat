@@ -71,7 +71,7 @@ export const ModelEditor: React.FC<{
       showToast(res.ok ? t('model.testOkToast') : t('model.testFailToast'), !res.ok);
     } catch (e: any) {
       setTestState({ ok: false, message: e?.message || String(e) });
-      showToast(t('model.testFailToast'), true);
+      showToast(t('model.testFailToast'), { error: true });
     } finally {
       setTesting(false);
     }
@@ -206,6 +206,31 @@ export const ModelEditor: React.FC<{
                 onChange={(e) => set('temperature', Number(e.target.value))}
                 style={{ width: '100%' }}
               />
+            </Field>
+            <Field label={t('model.supportsImages')}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={!!cfg.supportsImages}
+                  onChange={(e) => set('supportsImages', e.target.checked)}
+                />
+                {cfg.supportsImages ? t('model.enabledOn') : t('model.enabledOff')}
+              </label>
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                {t('model.supportsImagesDesc')}
+              </div>
+            </Field>
+            <Field label={t('model.qps')}>
+              <input
+                type="number"
+                min={0}
+                placeholder={t('model.qpsDesc')}
+                value={cfg.qps ?? ''}
+                onChange={(e) => set('qps', e.target.value === '' ? undefined : Number(e.target.value) || 0)}
+              />
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                {t('model.qpsHint')}
+              </div>
             </Field>
           </div>
 

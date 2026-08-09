@@ -205,7 +205,7 @@ const WorldBookEditor: React.FC<{
 
   const save = async () => {
     if (!draft.name.trim()) {
-      showToast(t('library.nameRequired'), true);
+      showToast(t('library.nameRequired'), { error: true });
       return;
     }
     await api.saveWorldBook({ ...draft, name: draft.name.trim(), updated_at: new Date().toISOString() });
@@ -383,7 +383,7 @@ const RuleEditor: React.FC<{ rule: Rule; onClose: () => void; onSaved: () => voi
 
   const save = async () => {
     if (!draft.name.trim()) {
-      showToast(t('library.nameRequired'), true);
+      showToast(t('library.nameRequired'), { error: true });
       return;
     }
     const shared = (await api.getSettings()).sharedRuleIds || [];

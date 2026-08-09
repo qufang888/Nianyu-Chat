@@ -80,8 +80,8 @@ export const GroupEditor: React.FC<{
   };
 
   const save = async () => {
-    if (!name.trim()) return showToast(t('group.needName'), true);
-    if (selected.size < 1) return showToast(t('group.needMember'), true);
+    if (!name.trim()) return showToast(t('group.needName'), { error: true });
+    if (selected.size < 1) return showToast(t('group.needMember'), { error: true });
     // 编辑模式下若重新凑齐 ≥2 人，清除「保持群聊」忽略标记，使其后若再减回 1 人可重新提示
     const existing = group ? await api.getGroup(group.group_id) : undefined;
     const g: Group = {

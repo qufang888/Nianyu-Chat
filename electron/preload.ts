@@ -51,6 +51,14 @@ export interface NianyuAPI {
     imagePath?: string | null;
     imagePaths?: string[];
   }) => Promise<{ userMessage: ChatMessage; members: { streamId: string; roleId: string; roleName: string }[] }>;
+  // 请求限速（QPS）状态查询
+  rateInfo: (modelId: string) => Promise<{ enabled: boolean; limit: number; waitMs: number }>;
+  // 当前聊天参与限速的代表模型 id（单聊=角色模型；群聊=默认模型）
+  getChatModelId: (chatType: string, chatId: string) => Promise<string>;
+  // 翻译文本（右键菜单翻译）
+  translate: (text: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
+  // 打断生成
+  interruptStream: (chatId: string) => Promise<{ ok: boolean }>;
   groupContinue: (p: {
     chatId: string;
   }) => Promise<{ ok: boolean; roleId?: string; roleName?: string; error?: string }>;
@@ -120,8 +128,35 @@ export interface NianyuAPI {
   onIdleTick: (cb: (e: any, data: Record<string, number>) => void) => () => void;
   onRoleMood: (cb: (e: any, data: any) => void) => () => void;
   offRoleMood: (cb: (e: any, data: any) => void) => void;
+  // 关系值（bond）变更广播：一端调整，主窗/小窗同步刷新展示
+  onRoleBond: (cb: (e: any, data: { roleId: string }) => void) => () => void;
+  offRoleBond: (cb: (e: any, data: any) => void) => void;
+  onMomentsChanged: (cb: (e: any, data: { roleId: string; selfRoleId: string }) => void) => () => void;
+  offMomentsChanged: (cb: (e: any, data: any) => void) => void;
+  onMomentsAutoPosted: (cb: (e: any, data: { roleId: string; selfRoleId: string; roleName: string; count: number }) => void) => () => void;
+  offMomentsAutoPosted: (cb: (e: any, data: any) => void) => void;
+  // 故事线开关变更广播：一端开/关，主窗/小窗同步刷新展示
+  onStoryChanged: (cb: (e: any, data: { chatType: string; chatId: string; enabled: boolean }) => void) => () => void;
+  offStoryChanged: (cb: (e: any, data: any) => void) => void;
   eventClosed: (p: { chatType: string; chatId: string }) => Promise<void>;
   deleteChat: (type: string, id: string) => Promise<void>;
+  copyChat: (type: string, id: string) => Promise<ChatListItem>;
+  renameChat: (type: string, id: string, name: string) => Promise<void>;
+  resolveRoleId: (chatType: string, chatId: string) => Promise<string>;
+  setStoryEnabled: (chatType: string, chatId: string, enabled: boolean) => Promise<void>;
+  getStoryEnabled: (chatType: string, chatId: string) => Promise<boolean>;
+  addStoryNode: (chatType: string, chatId: string, msgId: number, title: string) => Promise<number>;
+  listStoryNodes: (chatType: string, chatId: string) => Promise<any[]>;
+  removeStoryNode: (id: number) => Promise<void>;
+  addMoment: (roleId: string, content: string, images: string[], scheduledAt?: string | null, selfRoleId?: string) => Promise<number>;
+  listMoments: (roleId?: string, includeUnpublished?: boolean, selfRoleId?: string, favoritedOnly?: boolean) => Promise<any[]>;
+  removeMoment: (id: number) => Promise<void>;
+  updateMoment: (id: number, patch: Record<string, unknown>) => Promise<void>;
+  publishDueMoments: () => Promise<number>;
+  triggerRelationship: (chatType: string, chatId: string, roleId: string, withMoments?: boolean, doRelationship?: boolean) => Promise<{ ok: boolean; moments: number; relation?: string; error?: string }>;
+  adjustBond: (roleId: string, delta: number) => Promise<number>;
+  generateImage: (chatType: string, chatId: string, prompt: string) => Promise<{ ok: boolean; imagePath: string }>;
+  saveImageMemory: (p: { roleId: string; imagePath: string; note?: string }) => Promise<any>;
   clearChatMessages: (chatType: string, chatId: string, withMemories: boolean) => Promise<{ deletedMsgs: number; deletedMems: number }>;
   syncAutoChat: (p: { chatId: string; action: 'start' | 'stop' }) => Promise<void>;
   syncMessages: (p: { chatType: string; chatId: string; action: 'cleared' | 'recalled' | 'rolledBack' }) => Promise<void>;
@@ -133,6 +168,7 @@ export interface NianyuAPI {
   releaseAutoChat: (chatId: string) => Promise<{ released: boolean }>;
   forceStopAutoChat: (chatId: string) => Promise<{ ok: boolean }>;
   updateAutoChatRound: (chatId: string, round: number) => Promise<void>;
+  getAutoChatState: (chatId: string) => Promise<{ active: boolean; driverId?: number }>;
   onAutoChatDriver: (cb: (data: { chatId: string; action: 'start' | 'stop' | 'round'; driverId?: number; round?: number; reason?: string }) => void) => () => void;
   onClearFailed: (cb: (data: { chatId: string }) => void) => () => void;
   // 群成员编辑：单窗口锁
@@ -263,6 +299,10 @@ const api: NianyuAPI = {
   sendUserMessage: (p) => ipcRenderer.invoke('chats:sendUser', p),
   sendAIMessages: (p) => ipcRenderer.invoke('chats:sendAI', p),
   startStream: (p) => ipcRenderer.invoke('chats:stream', p),
+  rateInfo: (modelId) => ipcRenderer.invoke('chats:rateInfo', modelId),
+  getChatModelId: (chatType, chatId) => ipcRenderer.invoke('chats:activeModel', chatType, chatId),
+  translate: (text) => ipcRenderer.invoke('chats:translate', text),
+  interruptStream: (chatId) => ipcRenderer.invoke('chats:interrupt', chatId),
   groupContinue: (p) => ipcRenderer.invoke('chats:groupContinue', p),
   proactive: (p) => ipcRenderer.invoke('chats:proactive', p),
   randomEvent: (p) => ipcRenderer.invoke('chats:randomEvent', p),
@@ -342,8 +382,49 @@ const api: NianyuAPI = {
     return () => ipcRenderer.removeListener('role:mood', listener);
   },
   offRoleMood: () => {},
+  onRoleBond: (cb) => {
+    const listener = (e: any, data: any) => cb(e, data);
+    ipcRenderer.on('role:bond', listener);
+    return () => ipcRenderer.removeListener('role:bond', listener);
+  },
+  offRoleBond: () => {},
+  onMomentsChanged: (cb) => {
+    const listener = (e: any, data: any) => cb(e, data);
+    ipcRenderer.on('moments:changed', listener);
+    return () => ipcRenderer.removeListener('moments:changed', listener);
+  },
+  offMomentsChanged: () => {},
+  onMomentsAutoPosted: (cb) => {
+    const listener = (e: any, data: any) => cb(e, data);
+    ipcRenderer.on('moments:autoPosted', listener);
+    return () => ipcRenderer.removeListener('moments:autoPosted', listener);
+  },
+  offMomentsAutoPosted: () => {},
+  onStoryChanged: (cb) => {
+    const listener = (e: any, data: any) => cb(e, data);
+    ipcRenderer.on('story:changed', listener);
+    return () => ipcRenderer.removeListener('story:changed', listener);
+  },
+  offStoryChanged: () => {},
   eventClosed: (p) => ipcRenderer.invoke('chats:eventClosed', p),
   deleteChat: (type, id) => ipcRenderer.invoke('chats:delete', type, id),
+  copyChat: (type, id) => ipcRenderer.invoke('chats:copy', type, id),
+  renameChat: (type, id, name) => ipcRenderer.invoke('chats:rename', type, id, name),
+  resolveRoleId: (chatType, chatId) => ipcRenderer.invoke('chats:resolveRole', chatType, chatId),
+  setStoryEnabled: (chatType, chatId, enabled) => ipcRenderer.invoke('chats:setStory', chatType, chatId, enabled),
+  getStoryEnabled: (chatType, chatId) => ipcRenderer.invoke('chats:getStory', chatType, chatId),
+  addStoryNode: (chatType, chatId, msgId, title) => ipcRenderer.invoke('chats:addStoryNode', chatType, chatId, msgId, title),
+  listStoryNodes: (chatType, chatId) => ipcRenderer.invoke('chats:listStoryNodes', chatType, chatId),
+  removeStoryNode: (id) => ipcRenderer.invoke('chats:removeStoryNode', id),
+  addMoment: (roleId, content, images, scheduledAt, selfRoleId) => ipcRenderer.invoke('moments:add', roleId, content, images, scheduledAt, selfRoleId),
+  listMoments: (roleId, includeUnpublished, selfRoleId, favoritedOnly) => ipcRenderer.invoke('moments:list', roleId, includeUnpublished, selfRoleId, favoritedOnly),
+  removeMoment: (id) => ipcRenderer.invoke('moments:remove', id),
+  updateMoment: (id, patch) => ipcRenderer.invoke('moments:update', id, patch),
+  publishDueMoments: () => ipcRenderer.invoke('moments:publishDue'),
+  triggerRelationship: (chatType, chatId, roleId, withMoments, doRelationship) => ipcRenderer.invoke('relationship:trigger', chatType, chatId, roleId, withMoments, doRelationship),
+  adjustBond: (roleId, delta) => ipcRenderer.invoke('role:adjustBond', roleId, delta),
+  generateImage: (chatType, chatId, prompt) => ipcRenderer.invoke('image:generate', chatType, chatId, prompt),
+  saveImageMemory: (p) => ipcRenderer.invoke('memory:saveImage', p),
   clearChatMessages: (chatType, chatId, withMemories) => ipcRenderer.invoke('chats:clearMessages', chatType, chatId, withMemories),
   // 窗口间同步
   syncAutoChat: (p) => ipcRenderer.invoke('chat:syncAutoChat', p),
@@ -368,6 +449,7 @@ const api: NianyuAPI = {
   releaseAutoChat: (chatId) => ipcRenderer.invoke('chat:autoChat:release', chatId),
   forceStopAutoChat: (chatId) => ipcRenderer.invoke('chat:autoChat:forceStop', chatId),
   updateAutoChatRound: (chatId, round) => ipcRenderer.invoke('chat:autoChat:round', chatId, round),
+  getAutoChatState: (chatId) => ipcRenderer.invoke('chat:autoChat:state', chatId),
   onAutoChatDriver: (cb) => {
     const listener = (_e: any, data: any) => cb(data);
     ipcRenderer.on('chat:autoChat:driver', listener);

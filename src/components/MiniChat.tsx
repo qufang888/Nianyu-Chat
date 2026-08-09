@@ -17,10 +17,14 @@ import { ReasoningBlock } from './ReasoningBlock';
 import RandomEventModal, { RandomEventData } from './RandomEventModal';
 import PendingImageThumb from './PendingImageThumb';
 import ImageGrid from './ImageGrid';
+import { MomentsView } from './MomentsView';
 import { EVENT_COOLDOWN_MS, EVENT_TRIGGER_THRESHOLD } from '../eventThemes';
 import { getEventStore, setEventStore } from '../utils/eventStore';
-import { getIdleActivity, setIdleActivity } from '../utils/idleTimerStore';
+import { setIdleActivity } from '../utils/idleTimerStore';
+import { useVoiceInput } from '../hooks/useVoiceInput';
 import { ClearChatModal } from './ClearChatModal';
+import { MessageSearch } from './MessageSearch';
+import { BondPanel } from './BondPanel';
 
 // 快捷聊天小窗（独立无边框窗口，#mini 路由渲染）
 // 交互逻辑与 ChatWindow 主界面保持一致：图片发送/预览、语音输入、TTS、回到底部、重发、@提及、群聊转单聊提示等。
@@ -33,13 +37,34 @@ export const MiniChat: React.FC = () => {
   const [streamingMsgs, setStreamingMsgs] = useState<Record<string, ChatMessage>>({});
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  // 请求限速（QPS）预排队状态
+  const [queue, setQueue] = useState<{ waitMs: number; startedAt: number } | null>(null);
+  const [queueLeft, setQueueLeft] = useState(0);
+  // 语音转文字：识别文本送入输入框（不自动发送），由用户手动发送
+  const voice = useVoiceInput(
+    (text) => {
+      setInput((prev) => (prev && !prev.endsWith(' ') && !prev.endsWith('\n') ? prev + ' ' : prev) + text);
+      setTimeout(() => inputRef.current?.focus(), 0);
+    },
+    (msg) => showToast(t('chat.voiceFailed', { msg }))
+  );
   const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [preview, setPreview] = useState<string | null>(null);
+  const [translateModal, setTranslateModal] = useState<{ source: string; text?: string; loading?: boolean; error?: string } | null>(null);
+  const [genOpen, setGenOpen] = useState(false);
+  const [genText, setGenText] = useState('');
+  const [genLoading, setGenLoading] = useState(false);
   const [pinned, setPinned] = useState(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [clearOpen, setClearOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [momentsOpen, setMomentsOpen] = useState(false);
+  // 消息查找（🔍）与关系值（💞）开关
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [bondOpen, setBondOpen] = useState(false);
+  const [bondRoleId, setBondRoleId] = useState('');
   // 已结束的 streamId 集合，防止同一 AI 消息被重复追加（与 ChatWindow 一致）
   const doneStreamIds = useRef<Set<string>>(new Set());
   const seenSeqRef = useRef<Record<string, number>>({});
@@ -60,8 +85,40 @@ export const MiniChat: React.FC = () => {
   const [chatWorldBookId, setChatWorldBookId] = useState('');
   const autoMemoryRef = useRef(false);
   const [hideReasoning, setHideReasoning] = useState(true);
+  const [enableStreaming, setEnableStreaming] = useState(false);
   // 好感度变化提示（与主界面一致）
   const [affinityPop, setAffinityPop] = useState<string | null>(null);
+  // 自适应故事线：开关 / 节点列表 / 侧栏（与主界面同步）
+  const [storyOn, setStoryOn] = useState(false);
+  const [storyNodes, setStoryNodes] = useState<{ id: number; msg_id: number; title: string; timestamp: string }[]>([]);
+  const [showStories, setShowStories] = useState(false);
+  useEffect(() => {
+    if (!current) return;
+    api.getStoryEnabled(current.chat_type, current.chat_id).then(setStoryOn);
+    api.listStoryNodes(current.chat_type, current.chat_id).then(setStoryNodes);
+  }, [current?.chat_type, current?.chat_id]);
+  const toggleStory = async () => {
+    if (!current) return;
+    const next = !storyOn;
+    setStoryOn(next);
+    await api.setStoryEnabled(current.chat_type, current.chat_id, next);
+  };
+  const markNode = async (msg: ChatMessage) => {
+    if (!current) return;
+    const title = (msg.content || '').replace(/\s+/g, ' ').trim().slice(0, 30) || t('chat.stories');
+    await api.addStoryNode(current.chat_type, current.chat_id, msg.id, title);
+    setStoryNodes(await api.listStoryNodes(current.chat_type, current.chat_id));
+    showToast(t('chat.markNode'));
+  };
+  const gotoNode = (msgId: number) => {
+    const el = document.querySelector(`[data-mid="${msgId}"]`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+  const removeNode = async (id: number) => {
+    if (!current) return;
+    await api.removeStoryNode(id);
+    setStoryNodes(await api.listStoryNodes(current.chat_type, current.chat_id));
+  };
   // 随机事件（与主界面一致，按 chatKey 隔离）
   const chatKey = current ? `${current.chat_type}:${current.chat_id}` : '';
   const [eventState, setEventState] = useState<RandomEventData | null>(() => (chatKey ? getEventStore(chatKey).event : null));
@@ -180,9 +237,9 @@ export const MiniChat: React.FC = () => {
     setModelMap(map);
     setAvatarMap(avatars);
     setVoiceCfg({
-      asr: !!settings.voice?.asrModelId,
-      tts: !!settings.voice?.ttsModelId,
-      auto: !!settings.voice?.ttsModelId && !!settings.voice?.ttsAutoPlay,
+      asr: !!(settings.voice?.asrBaseUrl && settings.voice?.asrApiKey),
+      tts: !!(settings.voice?.ttsBaseUrl && settings.voice?.ttsApiKey),
+      auto: !!(settings.voice?.ttsBaseUrl && settings.voice?.ttsApiKey) && !!settings.voice?.ttsAutoPlay,
     });
     setSelfRoles(settings.selfRoles || []);
     // 同步 body/html 背景与 shell 一致，填补原生窗口圆角与 CSS 圆角间的透明缝隙
@@ -191,6 +248,7 @@ export const MiniChat: React.FC = () => {
     setDefaultSelfId(settings.currentSelfRoleId || '');
     autoMemoryRef.current = !!settings.enableAutoMemory;
     setHideReasoning(settings.hideReasoning !== false);
+    setEnableStreaming(!!settings.enableStreaming);
     setEnableRandomEvents(settings.enableRandomEvents !== false);
     const globalOn = settings.idleEnabled !== false;
     const perChat = current ? (settings.chatIdleEnabled || {})[`${current.chat_type}:${current.chat_id}`] : undefined;
@@ -356,9 +414,7 @@ export const MiniChat: React.FC = () => {
       // 检测角色/成员删除、群聊转单聊
       (async () => {
         if (current.chat_type === 'single') {
-          const rid = current.chat_id.startsWith('obs:')
-            ? current.chat_id.split(':').pop()!
-            : current.chat_id;
+          const rid = await api.resolveRoleId(current.chat_type, current.chat_id);
           const r = await api.getRole(rid);
           setRoleMissing(!r);
           setRoleMood(r?.mood || '');
@@ -589,63 +645,62 @@ export const MiniChat: React.FC = () => {
   useEffect(() => {
     const off = api.onSettingsChanged(async (_e, patch: Record<string, any>) => {
       if (!patch || !current) return;
+      // 统一从最新 settings 重派生所有本地开关与样式（含 groupAutoChain / enableStreaming），杜绝字段遗漏
       const settings = await api.getSettings();
       const key = `${current.chat_type}:${current.chat_id}`;
-      // 主题同步
-      if (patch.theme) {
-        document.documentElement.setAttribute('data-theme', patch.theme);
+      // 主题与 CSS 变量（圆角/气泡透明度/字体/主题/动效）与主界面一致
+      document.documentElement.setAttribute('data-theme', settings.theme || 'wechat');
+      const root = document.documentElement;
+      const ui = Number(settings.uiRadius);
+      if (Number.isFinite(ui) && ui >= 0) {
+        root.style.setProperty('--radius', `${ui}px`);
+        root.style.setProperty('--radius-sm', `${Math.max(2, Math.round(ui * 0.6))}px`);
       }
-      if (patch.chatWorldBooks) {
-        setChatWorldBookId((settings.chatWorldBooks || {})[key] ?? '');
+      const bubble = Number(settings.bubbleRadius);
+      if (Number.isFinite(bubble) && bubble >= 0) root.style.setProperty('--bubble-radius', `${bubble}px`);
+      const bo = Number(settings.bubbleOpacity);
+      root.style.setProperty('--bubble-opacity', bo >= 50 && bo <= 100 ? String(bo / 100) : '1');
+      const fs = Number(settings.fontSize);
+      if (Number.isFinite(fs) && fs > 0) {
+        root.style.setProperty('--font-size', `${fs}px`);
+        root.style.setProperty('--font-scale', String(fs / 14));
       }
-      if (patch.chatSelfRoles) {
-        setSelfRoleId((settings.chatSelfRoles || {})[key] ?? 'default');
-      }
-      if (patch.hideReasoning !== undefined) setHideReasoning(patch.hideReasoning !== false);
-      if (patch.enableAutoMemory !== undefined) autoMemoryRef.current = !!patch.enableAutoMemory;
-      if (patch.enableRandomEvents !== undefined) setEnableRandomEvents(patch.enableRandomEvents !== false);
-      if (patch.idleEnabled !== undefined || patch.chatIdleEnabled !== undefined) {
-        const ns = await api.getSettings();
-        const globalOn = ns.idleEnabled !== false;
-        const perChat = (ns.chatIdleEnabled || {})[key];
-        const eff = globalOn && (perChat === undefined ? true : perChat);
-        setIdleReplyOn(eff);
-        idleReplyOnRef.current = eff;
-      }
-      if (patch.idleInterval !== undefined) idleSecondsRef.current = patch.idleInterval || 600;
-      if (patch.voice) {
-        setVoiceCfg({
-          asr: !!patch.voice.asrModelId,
-          tts: !!patch.voice.ttsModelId,
-          auto: !!patch.voice.ttsModelId && !!patch.voice.ttsAutoPlay,
-        });
-      }
-      // 同步 CSS 变量（圆角、气泡透明度、字体等，让 MiniChat 与主界面一致无需重启）
-      if (patch.uiRadius !== undefined || patch.bubbleRadius !== undefined || patch.bubbleOpacity !== undefined || patch.fontSize !== undefined || patch.fontFamily !== undefined) {
-        const ns = await api.getSettings();
-        const root = document.documentElement;
-        if (Number.isFinite(ns.uiRadius) && ns.uiRadius >= 0) {
-          root.style.setProperty('--radius', `${ns.uiRadius}px`);
-          root.style.setProperty('--radius-sm', `${Math.max(2, Math.round(ns.uiRadius * 0.6))}px`);
-        }
-        if (Number.isFinite(ns.bubbleRadius) && ns.bubbleRadius >= 0) {
-          root.style.setProperty('--bubble-radius', `${ns.bubbleRadius}px`);
-        }
-        const bo = Number(ns.bubbleOpacity);
-        root.style.setProperty('--bubble-opacity', bo >= 50 && bo <= 100 ? String(bo / 100) : '1');
-        if (Number.isFinite(ns.fontSize) && ns.fontSize > 0) {
-          root.style.setProperty('--font-size', `${ns.fontSize}px`);
-          root.style.setProperty('--font-scale', String(ns.fontSize / 14));
-        }
-        const FONT_FAMILIES: Record<string, string> = {
-          system: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-          serif: 'Georgia, "Noto Serif SC", "Source Han Serif SC", serif',
-          round: '"M PLUS Rounded 1c", "PingFang SC", "Microsoft YaHei UI", sans-serif',
-          mono: '"JetBrains Mono", "Source Code Pro", "Fira Code", Consolas, monospace',
-          cjk: '"Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Microsoft YaHei UI", sans-serif',
-        };
-        const ff = FONT_FAMILIES[ns.fontFamily] || FONT_FAMILIES.system;
-        if (ff) root.style.setProperty('--font-family', ff);
+      const FONT_FAMILIES: Record<string, string> = {
+        system: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+        serif: 'Georgia, "Noto Serif SC", "Source Han Serif SC", serif',
+        round: '"M PLUS Rounded 1c", "PingFang SC", "Microsoft YaHei UI", sans-serif',
+        mono: '"JetBrains Mono", "Source Code Pro", "Fira Code", Consolas, monospace',
+        cjk: '"Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Microsoft YaHei UI", sans-serif',
+      };
+      const ff = FONT_FAMILIES[settings.fontFamily] || FONT_FAMILIES.system;
+      if (ff) root.style.setProperty('--font-family', ff);
+      root.classList.toggle('anim-off', !settings.enableAnimations);
+      // 全局开关统一重派生
+      setHideReasoning(settings.hideReasoning !== false);
+      setEnableStreaming(!!settings.enableStreaming);
+      autoMemoryRef.current = !!settings.enableAutoMemory;
+      setEnableRandomEvents(settings.enableRandomEvents !== false);
+      const globalOn = settings.idleEnabled !== false;
+      const perChat = (settings.chatIdleEnabled || {})[key];
+      const eff = globalOn && (perChat === undefined ? true : perChat);
+      setIdleReplyOn(eff);
+      idleReplyOnRef.current = eff;
+      idleSecondsRef.current = settings.idleInterval || 600;
+      idleSwitchActionRef.current = settings.idleSwitchAction || 'pause';
+      setGroupAutoChain(settings.groupAutoChain !== false);
+      setVoiceCfg({
+        asr: !!(settings.voice?.asrBaseUrl && settings.voice?.asrApiKey),
+        tts: !!(settings.voice?.ttsBaseUrl && settings.voice?.ttsApiKey),
+        auto: !!(settings.voice?.ttsBaseUrl && settings.voice?.ttsApiKey) && !!settings.voice?.ttsAutoPlay,
+      });
+      // 按聊天覆盖的设置
+      setChatWorldBookId((settings.chatWorldBooks || {})[key] ?? '');
+      setSelfRoleId((settings.chatSelfRoles || {})[key] ?? 'default');
+      const bgPath = (settings.chatBackgrounds || {})[key];
+      if (bgPath) {
+        api.getImage(bgPath).then((src) => setChatBg(src));
+      } else {
+        setChatBg(null);
       }
     });
     return off;
@@ -667,6 +722,19 @@ export const MiniChat: React.FC = () => {
       }
     });
     return off;
+  }, [current]);
+
+  // 挂载即同步当前自动接话状态（小窗常晚于主窗开启，避免卡在非自动接话状态）
+  useEffect(() => {
+    if (!current) return;
+    let alive = true;
+    api.getAutoChatState(current.chat_id).then((s) => {
+      if (alive && s?.active) {
+        setAutoChat(true);
+        setAutoRound(0);
+      }
+    }).catch(() => {});
+    return () => { alive = false; };
   }, [current]);
 
   // 窗口间同步：消息变更（清空/撤回/回滚后重载）
@@ -692,6 +760,16 @@ export const MiniChat: React.FC = () => {
           setChatBg(null);
         }
       }
+    });
+    return off;
+  }, [current]);
+
+  // 窗口间同步：故事线开关变更（一端开/关，另一端实时刷新）
+  useEffect(() => {
+    if (!current) return;
+    const off = api.onStoryChanged((_e, data) => {
+      if (data.chatType !== current.chat_type || data.chatId !== current.chat_id) return;
+      setStoryOn(data.enabled);
     });
     return off;
   }, [current]);
@@ -751,13 +829,10 @@ export const MiniChat: React.FC = () => {
         showToast(msg);
       }
       // 事件会影响角色情绪：刷新心情徽标
-      const r = await api.getRole(
-        current.chat_type === 'single'
-          ? current.chat_id.startsWith('obs:')
-            ? current.chat_id.split(':').pop()!
-            : current.chat_id
-          : ev.roleId
-      );
+      const rid = current.chat_type === 'single'
+        ? await api.resolveRoleId(current.chat_type, current.chat_id)
+        : ev.roleId;
+      const r = await api.getRole(rid);
       if (r) setRoleMood(r.mood || '');
       void api.eventClosed({ chatType: current.chat_type, chatId: current.chat_id });
       // 立即拉取最新消息，显示后端已写入的「好感/心情」系统消息
@@ -859,7 +934,7 @@ export const MiniChat: React.FC = () => {
       setFailed({
         content,
         imagePaths,
-        phase: userSent && !settings?.enableStreaming ? 'ai' : 'full',
+        phase: userSent && !enableStreaming ? 'ai' : 'full',
         error: e?.message || String(e),
       });
     } finally {
@@ -903,8 +978,8 @@ export const MiniChat: React.FC = () => {
       });
       inputRef.current.dispatchEvent(fakeEvent);
     };
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => window.removeEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keydown', onKeyDown, { error: true });
+    return () => window.removeEventListener('keydown', onKeyDown, { error: true });
   }, []);
 
   // 随机事件弹窗关闭后，若当前无其他模态/遮罩打开，立即把焦点归还小窗输入框
@@ -1005,7 +1080,7 @@ export const MiniChat: React.FC = () => {
     return offTick;
   }, [current]);
 
-  const send = async () => {
+  const doSendMini = async () => {
     if (!current || roleMissing || (!input.trim() && pendingImages.length === 0) || sending) return;
     const content = input.trim();
     const imgs = pendingImages;
@@ -1017,11 +1092,46 @@ export const MiniChat: React.FC = () => {
     // 微信风格：所有选中图片合并为一条消息的图集（无绿色气泡），一次性发送
     await performSend(content, imgs, 'full');
     // 非流式：performSend 已 await 完整首轮，直接触发（流式由 onDone 触发）
-    if (!settings?.enableStreaming && pendingAutoChain.current) {
+    if (!enableStreaming && pendingAutoChain.current) {
       pendingAutoChain.current = false;
       maybeChain();
     }
   };
+
+  const send = async () => {
+    if (!current || roleMissing || (!input.trim() && pendingImages.length === 0) || sending) return;
+    // 请求限速（QPS）：超限进入预排队，输入框保留文本、可编辑、倒计时后自动发送
+    try {
+      const modelId = await api.getChatModelId(current.chat_type, current.chat_id);
+      if (modelId) {
+        const info = await api.rateInfo(modelId);
+        if (info.enabled && info.waitMs > 0) {
+          setQueue({ waitMs: info.waitMs, startedAt: Date.now() });
+          return;
+        }
+      }
+    } catch {
+      // 限速查询失败则按正常发送
+    }
+    await doSendMini();
+  };
+
+  // QPS 预排队倒计时：归零后清空队列并自动发送（使用当前输入框文本）
+  useEffect(() => {
+    if (!queue) return;
+    const tick = () => {
+      const left = queue.waitMs - (Date.now() - queue.startedAt);
+      if (left <= 0) {
+        setQueue(null);
+        void doSendMini();
+      } else {
+        setQueueLeft(Math.ceil(left / 1000));
+      }
+    };
+    tick();
+    const id = setInterval(tick, 200);
+    return () => clearInterval(id);
+  }, [queue]);
 
   const resend = () => {
     if (!failed || sending) return;
@@ -1045,6 +1155,43 @@ export const MiniChat: React.FC = () => {
     if (!roleId) return;
     await api.addQuickMemory({ roleId, content: text.trim().slice(0, 500) });
     showToast(t('msg.quickMemoryDone', { name: m.sender_name }));
+  };
+
+  // 生图：由主进程生成并落库（经 stream:user 广播同步到本窗）
+  const doGenerate = async () => {
+    if (!current) return;
+    const prompt = genText.trim();
+    if (!prompt) return;
+    setGenLoading(true);
+    try {
+      await api.generateImage(current.chat_type, current.chat_id, prompt);
+      setGenOpen(false);
+      setGenText('');
+    } catch (e: any) {
+      showToast(e?.message || t('chat.drawFailed'));
+    } finally {
+      setGenLoading(false);
+    }
+  };
+
+  // 手动把图片存进角色记忆（AI 不会自动保存图片记忆）
+  const handleSaveImageMemory = async (m: ChatMessage) => {
+    if (!current) return;
+    const imgs = m.images && m.images.length ? m.images : m.image_path ? [m.image_path] : [];
+    if (!imgs.length) return;
+    let roleId = '';
+    if (current.chat_type === 'single') {
+      roleId = await api.resolveRoleId(current.chat_type, current.chat_id);
+    } else if (m.sender_type === 'ai') {
+      const r = members.find((x) => x.name === m.sender_name);
+      roleId = r?.id || '';
+    }
+    if (!roleId) {
+      showToast(t('chat.drawMemoryNoRole'));
+      return;
+    }
+    await api.saveImageMemory({ roleId, imagePath: imgs[0] });
+    showToast(t('chat.drawMemorySaved'));
   };
   const handleRecall = async (msgId: number) => {
     if (!(await api.showConfirm!(t('msg.recallConfirm')))) return;
@@ -1120,7 +1267,7 @@ export const MiniChat: React.FC = () => {
     // 先争抢 driver 角色
     const claim = await api.claimAutoChat(chatId);
     if (!claim.isDriver) {
-      showToast(t('chat.autoAlreadyRunning'), true);
+      showToast(t('chat.autoAlreadyRunning'), { error: true });
       return;
     }
     autoRef.current = true;
@@ -1200,7 +1347,7 @@ export const MiniChat: React.FC = () => {
     if (!current) return;
     const res = await api.openGroupEditor(current.chat_id);
     if (!res.ok) {
-      showToast(t('group.editLockedTip'), true);
+      showToast(t('group.editLockedTip'), { error: true });
       return;
     }
     setShowGroupEditor(true);
@@ -1231,7 +1378,7 @@ export const MiniChat: React.FC = () => {
 
   const handleKeepGroup = async () => {
     if (!current || current.chat_type !== 'group') return;
-    await api.setGroupIgnoreConvert(current.chat_id, true);
+    await api.setGroupIgnoreConvert(current.chat_id, { error: true });
     setConvertPrompt(false);
   };
 
@@ -1324,6 +1471,17 @@ export const MiniChat: React.FC = () => {
     setShowMention(false);
   };
 
+  const handleTranslate = async (text: string) => {
+    setTranslateModal({ source: text, loading: true });
+    try {
+      const res = await api.translate(text);
+      if (res.ok) setTranslateModal({ source: text, text: res.text || '' });
+      else setTranslateModal({ source: text, error: res.error || t('msg.translateFailed') });
+    } catch (e: any) {
+      setTranslateModal({ source: text, error: e?.message || t('msg.translateFailed') });
+    }
+  };
+
   const fmtTime = (iso: string) =>
     new Date(iso).toLocaleString(lang === 'en' ? 'en-US' : 'zh-CN', {
       month: 'numeric',
@@ -1343,6 +1501,7 @@ export const MiniChat: React.FC = () => {
   const allMessagesUnique = Array.from(uniqueMessages.values());
 
   const replying = sending || Object.keys(streamingMsgs).length > 0;
+  const isStreaming = Object.keys(streamingMsgs).length > 0;
   const totalTokens = messages.reduce((s, m) => s + (m.token_used || 0), 0);
 
   const activeSelfRole = selfRoleId !== 'none' && selfRoleId !== 'default'
@@ -1491,6 +1650,18 @@ export const MiniChat: React.FC = () => {
         </div>
       )}
 
+      {searchOpen && (
+        <MessageSearch
+          messages={allMessagesUnique}
+          compact
+          onClose={() => setSearchOpen(false)}
+          onJump={(msgId) => {
+            const el = document.querySelector(`[data-mid="${msgId}"]`);
+            if (el) (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }}
+        />
+      )}
+
       {/* 消息列表（最近 10 条） */}
       <CustomScrollArea className="mini-messages" scrollRef={scrollRef} style={chatBg ? {
         flex: 1,
@@ -1518,9 +1689,12 @@ export const MiniChat: React.FC = () => {
             onSpeak={() => speak(m)}
             onReasoningCopied={() => showToast(t('toast.reasoningCopied'))}
             onQuickMemory={(text) => handleQuickMemory(m, text)}
+            onSaveImageMemory={handleSaveImageMemory}
             onRollback={(msgId) => handleRollback(m.chat_type, m.chat_id, msgId)}
             onRecall={(msgId) => handleRecall(msgId)}
             onCopy={(text) => { navigator.clipboard.writeText(text); showToast(t('toast.copied')); }}
+            onTranslate={handleTranslate}
+            onMarkNode={storyOn ? markNode : undefined}
             failed={failed}
           />
         ))}
@@ -1577,47 +1751,50 @@ export const MiniChat: React.FC = () => {
             ))}
           </div>
         )}
-        <div className="mini-toolbar">
-          <button className="mini-btn" title={t('chat.sendImage')} onClick={pickImage}>
-            🖼️
-          </button>
-          <button className="mini-btn" title={t('chat.randomEventTip')} onClick={() => triggerEvent()} disabled={eventLoading || !!eventState}>
-            🎲
-          </button>
-          {current?.chat_type === 'group' && (
-            <button className="mini-btn" title={t('group.edit')} onClick={openGroupEditorLocked}>
-              👥✎
-            </button>
-          )}
-          {current?.chat_type === 'group' && groupAutoChain && (
-            <>
-              <button
-                className="mini-btn"
-                title={t('group.continueTalkTip')}
-                onClick={continueOnce}
-                disabled={continuing || autoChat || sending}
-              >
-                {continuing && !autoChat ? '⏳' : '▶'}
-              </button>
-              <button
-                className="mini-btn"
-                title={autoChat ? t('group.autoStopTip') : t('group.autoTalkTip')}
-                onClick={autoChat ? stopAuto : startAuto}
-                disabled={!autoChat && (continuing || sending)}
-                style={autoChat ? { color: '#e06c75' } : undefined}
-              >
-                {autoChat ? `⏹${autoRound}` : '🔁'}
-              </button>
-            </>
-          )}
-          <div style={{ flex: 1 }} />
-          <button className="mini-btn" title={t('chat.clearMessages')} onClick={() => setClearOpen(true)}>
-            🧹
-          </button>
-          <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-            {t('chat.tokenBar', { total: totalTokens, global: globalTokens })}
-          </span>
-        </div>
+      <div className="mini-toolbar">
+        <button className="mini-btn" title={t('mini.menu')} onClick={() => setDrawerOpen((o) => !o)}>
+          ☰
+        </button>
+        <button
+          className={`mini-btn${voice.recording ? ' recording' : ''}`}
+          title={voice.recording ? t('chat.voiceRecording') : t('chat.voiceInput')}
+          onClick={voice.toggle}
+        >
+          {voice.recording ? '⏹' : '🎤'}
+        </button>
+        <button className="mini-btn" title={t('chat.sendImage')} onClick={pickImage}>
+          🖼️
+        </button>
+        <button className="mini-btn" title={t('chat.drawImage')} onClick={() => setGenOpen(true)}>
+          🎨
+        </button>
+        <button
+          className={`mini-btn${searchOpen ? ' active' : ''}`}
+          title={t('search.title')}
+          onClick={() => setSearchOpen((o) => !o)}
+        >
+          🔍
+        </button>
+        <button
+          className={`mini-btn${enableStreaming ? ' active' : ''}`}
+          title={t('settings.enableStreaming')}
+          onClick={() => {
+            const next = !enableStreaming;
+            setEnableStreaming(next);
+            api.saveSettings({ enableStreaming: next });
+            showToast(t(next ? 'settings.streamingEnabled' : 'settings.streamingDisabled'), {
+              duration: 3000,
+              animation: 'linear',
+            });
+          }}
+        >
+          🌊
+        </button>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+          {t('chat.tokenBar', { total: totalTokens, global: globalTokens })}
+        </span>
+      </div>
         {pendingImages.length > 0 && (
           <div className="img-preview-bar mini">
             {pendingImages.map((p, i) => (
@@ -1627,6 +1804,15 @@ export const MiniChat: React.FC = () => {
                 onRemove={() => setPendingImages((arr) => arr.filter((_, idx) => idx !== i))}
               />
             ))}
+          </div>
+        )}
+        {queue && (
+          <div className="qps-queue mini">
+            <span className="qps-tip">⏳ {t('chat.rateLimited')}</span>
+            <span className="qps-count">{t('chat.queueAutoSend', { sec: queueLeft })}</span>
+            <button className="qps-cancel" onClick={() => setQueue(null)}>
+              {t('chat.queueCancel')}
+            </button>
           </div>
         )}
         <div style={{ display: 'flex', gap: 6, width: '100%' }} onClick={() => inputRef.current?.focus()}>
@@ -1640,19 +1826,149 @@ export const MiniChat: React.FC = () => {
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
+                if (isStreaming) return;
                 send();
               }
             }}
           />
-          <button className="btn-primary mini-send" disabled={sending || !current || roleMissing} onClick={send}>
-            {sending ? '…' : t('chat.send')}
-          </button>
+          {isStreaming ? (
+            <button
+              className="btn-primary mini-send"
+              onClick={() => current && api.interruptStream(current.chat_id)}
+              title={t('chat.interruptTip')}
+              aria-label={t('chat.interrupt')}
+            >
+              <span className="interrupt-icon" />
+            </button>
+          ) : (
+            <button className="btn-primary mini-send" disabled={sending || !current || roleMissing} onClick={send}>
+              {sending ? '…' : t('chat.send')}
+            </button>
+          )}
         </div>
       </div>
+
+      {drawerOpen && (
+        <div className="mini-drawer-mask" onClick={() => setDrawerOpen(false)}>
+          <div className="mini-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="mini-drawer-head">
+              <span>{t('mini.menu')}</span>
+              <span className="mini-drawer-close" onClick={() => setDrawerOpen(false)}>×</span>
+            </div>
+            <div className="mini-drawer-item" onClick={() => { setDrawerOpen(false); setMomentsOpen(true); }}>
+              🌟 {t('nav.moments')}
+            </div>
+            <div className="mini-drawer-item" onClick={() => { setDrawerOpen(false); triggerEvent(); }}>
+              🎲 {t('chat.randomEvent')}
+            </div>
+            <div className="mini-drawer-item" onClick={() => { setDrawerOpen(false); toggleStory(); }}>
+              📖 {storyOn ? t('chat.storyOff') : t('chat.storyOn')}
+            </div>
+            {current?.chat_type === 'single' && (
+              <div
+                className="mini-drawer-item"
+                onClick={async () => {
+                  setDrawerOpen(false);
+                  const rid = await api.resolveRoleId(current.chat_type, current.chat_id);
+                  setBondRoleId(rid);
+                  setBondOpen(true);
+                }}
+              >
+                💞 {t('bond.title')}
+              </div>
+            )}
+            {current?.chat_type === 'group' && (
+              <div className="mini-drawer-item" onClick={() => { setDrawerOpen(false); openGroupEditorLocked(); }}>
+                👥✎ {t('group.edit')}
+              </div>
+            )}
+            {current?.chat_type === 'group' && groupAutoChain && (
+              <>
+                <div className="mini-drawer-item" onClick={() => { setDrawerOpen(false); continueOnce(); }}>
+                  ▶ {t('group.continueTalk')}
+                </div>
+                <div className="mini-drawer-item" onClick={() => { setDrawerOpen(false); autoChat ? stopAuto() : startAuto(); }}>
+                  {autoChat ? `⏹ ${autoRound}` : '🔁'} {autoChat ? t('group.autoStop') : t('group.autoTalk')}
+                </div>
+              </>
+            )}
+            <div className="mini-drawer-item" onClick={() => { setDrawerOpen(false); scrollToBottom(); }}>
+              🔝 {t('chat.scrollToBottom')}
+            </div>
+            <div className="mini-drawer-item" onClick={() => { setDrawerOpen(false); setClearOpen(true); }}>
+              🧹 {t('chat.clearMessages')}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {momentsOpen && (
+        <div className="modal-mask" onClick={() => setMomentsOpen(false)}>
+          <div className="modal moments-modal" onClick={(e) => e.stopPropagation()}>
+            <MomentsView />
+          </div>
+        </div>
+      )}
+
+      {bondOpen && bondRoleId && (
+        <BondPanel roleId={bondRoleId} roleName={current?.name} onClose={() => setBondOpen(false)} />
+      )}
 
       {preview && (
         <div className="modal-mask" onClick={() => setPreview(null)}>
           <img className="image-preview" src={preview} alt={t('chat.preview')} />
+        </div>
+      )}
+      {translateModal && (
+        <div className="modal-mask" onClick={() => setTranslateModal(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480, width: '90%' }}>
+            <div className="modal-title">{t('msg.translate')}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 6 }}>{t('msg.translateSource')}</div>
+            <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 140, overflowY: 'auto', padding: 8, background: 'var(--color-panel-alt)', borderRadius: 8, marginBottom: 10 }}>
+              {translateModal.source}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 6 }}>{t('msg.translateResult')}</div>
+            {translateModal.loading ? (
+              <div style={{ padding: 8 }}>{t('chat.transcribing')}</div>
+            ) : translateModal.error ? (
+              <div style={{ color: '#e74c3c', padding: 8 }}>{translateModal.error}</div>
+            ) : (
+              <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflowY: 'auto', padding: 8, background: 'var(--color-panel)', borderRadius: 8 }}>
+                {translateModal.text}
+              </div>
+            )}
+            <div style={{ textAlign: 'right', marginTop: 12 }}>
+              <button className="btn-primary" onClick={() => setTranslateModal(null)}>{t('common.ok')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {genOpen && (
+        <div className="modal-mask" onClick={() => !genLoading && setGenOpen(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420, width: '90%' }}>
+            <div className="draw-input-panel">
+              <div className="draw-title">{t('chat.drawImage')}</div>
+              <div className="draw-desc">{t('chat.drawImageDesc')}</div>
+              <textarea
+                value={genText}
+                onChange={(e) => setGenText(e.target.value)}
+                placeholder={t('chat.drawPromptPlaceholder')}
+                rows={4}
+                disabled={genLoading}
+                autoFocus
+              />
+            </div>
+            {genLoading && <div style={{ padding: '8px 0', color: 'var(--color-text-secondary)' }}>{t('chat.generating')}</div>}
+            <div style={{ textAlign: 'right', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn-ghost" disabled={genLoading} onClick={() => setGenOpen(false)}>
+                {t('msg.editCancel')}
+              </button>
+              <button className="btn-primary" disabled={genLoading || !genText.trim()} onClick={doGenerate}>
+                {t('chat.drawImage')}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1664,7 +1980,7 @@ export const MiniChat: React.FC = () => {
           event={eventState}
           loading={eventLoading && !eventState}
           onChoose={(opt) => chooseOption(opt)}
-          onAutoChoose={(opt) => chooseOption(opt, true)}
+          onAutoChoose={(opt) => chooseOption(opt, { error: true })}
           onClose={() => {
             setEventState(null);
             setEventLoading(false);
@@ -1692,6 +2008,45 @@ export const MiniChat: React.FC = () => {
         onCancel={() => setClearOpen(false)}
         onConfirm={handleClearChat}
       />
+      {/* 自适应故事线：悬停自动弹出、移开收回的侧边栏（不占聊天区） */}
+      {storyOn && (
+        <div
+          className="stories"
+          onMouseEnter={() => setShowStories(true)}
+          onMouseLeave={() => setShowStories(false)}
+        >
+          <div className="stories-tab" title={t('chat.stories')}>{t('chat.stories')}</div>
+          {showStories && (
+            <div className="stories-panel">
+              <div className="stories-head">
+                <span>{t('chat.stories')}</span>
+                <span className="stories-count">{storyNodes.length}</span>
+              </div>
+              <div className="stories-list">
+                {storyNodes.length === 0 ? (
+                  <div className="stories-empty">{t('chat.noNodes')}</div>
+                ) : (
+                  storyNodes.map((n) => (
+                    <div
+                      key={n.id}
+                      className="story-node"
+                      onClick={() => gotoNode(n.msg_id)}
+                      title={n.title}
+                    >
+                      <span className="story-title">{n.title}</span>
+                      <button
+                        className="story-del"
+                        onClick={(e) => { e.stopPropagation(); removeNode(n.id); }}
+                        title={t('msg.recall')}
+                      >✕</button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };
@@ -1709,13 +2064,16 @@ const MiniMessageRow: React.FC<{
   onSpeak?: () => void;
   onReasoningCopied?: () => void;
   onQuickMemory?: (text: string) => void;
+  onSaveImageMemory?: (msg: ChatMessage) => void;
   onRollback?: (msgId: number) => void;
   onRecall?: (msgId: number) => void;
   onCopy?: (text: string) => void;
+  onTranslate?: (text: string) => void;
+  onMarkNode?: (msg: ChatMessage) => void;
   failed?: { content: string; imagePaths: string[]; phase: 'full' | 'ai'; error: string } | null;
 }> = ({
   msg, onImage, fmtTime, modelName, avatarPath, userAvatarPath, showTts, speaking, hideReasoning, onSpeak, onReasoningCopied,
-  onQuickMemory, onRollback, onRecall, onCopy, failed,
+  onQuickMemory, onSaveImageMemory, onRollback, onRecall, onCopy, onTranslate, onMarkNode, failed,
 }) => {
   const { t } = useI18n();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -1724,6 +2082,8 @@ const MiniMessageRow: React.FC<{
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
+    // 跨气泡协调：通知其他气泡关闭各自的右键菜单，保证一个聊天界面同时只有一个菜单
+    window.dispatchEvent(new CustomEvent('nianyu:closeCtxMenu', { detail: msg.id }));
     setMenuPos({ x: e.clientX, y: e.clientY });
   };
   const closeMenu = () => { setMenuPos(null); setSelPopup(null); };
@@ -1738,12 +2098,38 @@ const MiniMessageRow: React.FC<{
     }
   };
 
+  // 全局关闭菜单：左键点菜单外关闭；右键气泡交给 React onContextMenu 打开/重定位，不再在同事件里关闭导致二次右键失效；Esc 关闭
   useEffect(() => {
     if (!menuPos && !selPopup) return;
-    const h = () => { setMenuPos(null); setSelPopup(null); };
-    window.addEventListener('click', h);
-    return () => window.removeEventListener('click', h);
+    const onDoc = (e: MouseEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.closest('.ctx-menu') || el.closest('.sel-popup'))) return;
+      if (e.type === 'contextmenu' && el && el.closest('.msg-row')) return;
+      setMenuPos(null);
+      setSelPopup(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setMenuPos(null); setSelPopup(null); }
+    };
+    window.addEventListener('click', onDoc);
+    window.addEventListener('contextmenu', onDoc);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', onDoc);
+      window.removeEventListener('contextmenu', onDoc);
+      window.removeEventListener('keydown', onKey);
+    };
   }, [menuPos, selPopup]);
+
+  // 跨气泡菜单协调：收到其他气泡的打开通知时关闭本气泡菜单，确保整窗唯一
+  useEffect(() => {
+    const onCloseOthers = (ev: Event) => {
+      const detail = (ev as CustomEvent<unknown>).detail;
+      if (detail !== msg.id) { setMenuPos(null); setSelPopup(null); }
+    };
+    window.addEventListener('nianyu:closeCtxMenu', onCloseOthers);
+    return () => window.removeEventListener('nianyu:closeCtxMenu', onCloseOthers);
+  }, [msg.id]);
 
   if (msg.sender_type === 'system') {
     return <div className="system-msg" style={{ padding: '2px 8px' }}>{msg.content}</div>;
@@ -1762,7 +2148,7 @@ const MiniMessageRow: React.FC<{
   const imgs = msg.images && msg.images.length ? msg.images : msg.image_path ? [msg.image_path] : [];
   const hasText = !!(msg.content && msg.content.trim());
   return (
-    <div className={`msg-row ${isUser ? 'user' : 'ai'}`} onContextMenu={handleContextMenu}>
+    <div className={`msg-row ${isUser ? 'user' : 'ai'}`} data-mid={msg.id} onContextMenu={handleContextMenu}>
       {!isUser ? (
         <div className="avatar" style={{ marginRight: 6, fontSize: 16 }}>
           {avatarPath ? <AvatarImg path={avatarPath} /> : '🤖'}
@@ -1800,7 +2186,7 @@ const MiniMessageRow: React.FC<{
                 {renderMarkdown(msg.content)}
               </div>
             )}
-            {imgs.length > 0 && <ImageGrid paths={imgs} onImage={onImage} failed={failed} />}
+            {imgs.length > 0 && <ImageGrid paths={imgs} onImage={onImage} failed={!!failed} />}
           </>
         )}
         <div className="msg-meta">
@@ -1826,6 +2212,11 @@ const MiniMessageRow: React.FC<{
         >
           <button className="ctx-menu-item" onClick={() => { onCopy?.(msg.content); closeMenu(); }}>{t('msg.copy')}</button>
           {onQuickMemory && <button className="ctx-menu-item" onClick={() => { onQuickMemory(msg.content); closeMenu(); }}>{t('msg.quickMemory')}</button>}
+          {onTranslate && <button className="ctx-menu-item" onClick={() => { onTranslate(msg.content); closeMenu(); }}>{t('msg.translate')}</button>}
+          {onMarkNode && <button className="ctx-menu-item" onClick={() => { onMarkNode(msg); closeMenu(); }}>{t('chat.markNode')}</button>}
+          {onSaveImageMemory && (msg.images?.length || msg.image_path) && (
+            <button className="ctx-menu-item" onClick={() => { onSaveImageMemory(msg); closeMenu(); }}>{t('chat.drawMemory')}</button>
+          )}
           {onRollback && <button className="ctx-menu-item ctx-menu-danger" onClick={() => { onRollback(msg.id); closeMenu(); }}>{t('msg.rollback')}</button>}
           {onRecall && <button className="ctx-menu-item ctx-menu-danger" onClick={() => { onRecall(msg.id); closeMenu(); }}>{t('msg.recall')}</button>}
         </div>,
@@ -1845,7 +2236,8 @@ const MiniMessageRow: React.FC<{
           <button className="sel-popup-btn" onClick={() => { onQuickMemory(selPopup.text); setSelPopup(null); }}>
             🧠 {t('msg.quickMemory')}
           </button>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

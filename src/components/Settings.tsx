@@ -7,6 +7,7 @@ import {
   DEFAULT_SETTINGS,
   type ThemeName,
   type AppSettings,
+  type ImageGenSettings,
   type ModelConfig,
   type ChatListItem,
   type SelfRole,
@@ -154,19 +155,79 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
   const providerLabel = (p: string) =>
     p === 'custom' ? t('model.providerCustom') : PROVIDER_DEFAULTS[p as keyof typeof PROVIDER_DEFAULTS]?.label || p;
 
-  const patch = (p: Partial<AppSettings>) => setDraft((d) => ({ ...(d as AppSettings), ...p }));
+  // 所有改动即时落盘并广播到其他窗口，与全页一致；不再依赖底部「保存」按钮
+  const patch = (p: Partial<AppSettings>) => {
+    setDraft((d) => ({ ...(d as AppSettings), ...p }));
+    api.saveSettings(p).then(reloadSettings);
+  };
   const voice = { ...DEFAULT_SETTINGS.voice, ...(draft.voice || {}) };
+  const imageGen = { ...DEFAULT_SETTINGS.imageGen, ...(draft.imageGen || {}) } as ImageGenSettings;
   const mini = { ...DEFAULT_SETTINGS.miniWindow, ...(draft.miniWindow || {}) };
   const sound = { ...DEFAULT_SETTINGS.sound, ...(draft.sound || {}) };
   const cursor = { ...DEFAULT_SETTINGS.customCursor, ...(draft.customCursor || {}) };
-  const patchVoice = (p: Partial<typeof voice>) => patch({ voice: { ...voice, ...p } });
-  const patchMini = (p: Partial<typeof mini>) => patch({ miniWindow: { ...mini, ...p } });
+  // 语音 / 生图 / 小窗 此前只改本地 draft，必须点底部「保存」才生效，与其他即时保存的开关不一致，
+  // 容易让用户误以为设置没生效。改为与全页一致：改动即时落盘并触发 reloadSettings。
+  const patchVoice = (p: Partial<typeof voice>) => {
+    const next = { ...voice, ...p };
+    patch({ voice: next });
+    api.saveSettings({ voice: next }).then(reloadSettings);
+  };
+  const patchImageGen = (p: Partial<typeof imageGen>) => {
+    const next = { ...imageGen, ...p } as ImageGenSettings;
+    patch({ imageGen: next });
+    api.saveSettings({ imageGen: next }).then(reloadSettings);
+  };
+  const patchMini = (p: Partial<typeof mini>) => {
+    const next = { ...mini, ...p };
+    patch({ miniWindow: next });
+    api.saveSettings({ miniWindow: next }).then(reloadSettings);
+  };
   const patchSound = (p: Partial<typeof sound>) => patch({ sound: { ...sound, ...p } });
   const patchCursor = (p: Partial<typeof cursor>) => patch({ customCursor: { ...cursor, ...p } });
   // 光标子设置必须落盘并触发 reloadSettings，否则 ThemeContext.settings 不会更新，
   // CustomCursor 读取不到变化（patch 只改本地 draft）。与 enabled 开关保持一致。
   const saveCursor = (p: Partial<typeof cursor>) =>
     api.saveSettings({ customCursor: { ...cursor, ...p } }).then(reloadSettings);
+
+  // 生图 / TTS / ASR 模型名拉取：复用 OpenAI 兼容 /models，按类型关键字过滤后填入 datalist，
+  // 用户既能从下拉选也能手填。过滤为空时回退全部列表，避免第三方平台命名不标准时漏掉可用模型。
+  const [asrModelList, setAsrModelList] = useState<string[]>([]);
+  const [ttsModelList, setTtsModelList] = useState<string[]>([]);
+  const [imgModelList, setImgModelList] = useState<string[]>([]);
+  const [modelLoading, setModelLoading] = useState<{ asr?: boolean; tts?: boolean; img?: boolean }>({});
+
+  const filterModelsByKind = (list: string[], kind: 'asr' | 'tts' | 'img'): string[] => {
+    const test = (id: string) => {
+      const s = id.toLowerCase();
+      if (kind === 'asr') return /whisper|transcrib|audio/.test(s);
+      if (kind === 'tts') return /tts|speech/.test(s);
+      return /dall-e|image/.test(s);
+    };
+    const filtered = list.filter(test);
+    return filtered.length ? filtered : list;
+  };
+
+  const refreshModelList = async (kind: 'asr' | 'tts' | 'img', baseUrl: string, apiKey: string) => {
+    if (!baseUrl) {
+      showToast(t('settings.baseUrlRequired'));
+      return;
+    }
+    setModelLoading((p) => ({ ...p, [kind]: true }));
+    try {
+      const list = await api.listModels({ baseUrl, apiKey } as any);
+      const filtered = filterModelsByKind(list, kind);
+      if (kind === 'asr') setAsrModelList(filtered);
+      else if (kind === 'tts') setTtsModelList(filtered);
+      else setImgModelList(filtered);
+      if (list.length === 0) showToast(t('model.listEmpty'));
+      else showToast(t('model.refreshed', { count: filtered.length }));
+    } catch (e: any) {
+      showToast(t('model.listFail', { msg: e?.message || String(e) }));
+    } finally {
+      setModelLoading((p) => ({ ...p, [kind]: false }));
+    }
+  };
+
 
   // 自定义音效：选择本地 MP3/WAV 文件并保存
   const pickSound = async (type: SoundType) => {
@@ -203,7 +264,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
       if (s.lang !== lang) setLang(s.lang);
       showToast(t('settings.resetDone'));
     } catch (e: any) {
-      showToast(t('settings.resetFailed', { err: e?.message || String(e) }), true);
+      showToast(t('settings.resetFailed', { err: e?.message || String(e) }), { error: true });
     }
   };
 
@@ -214,16 +275,10 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
       await reloadSettings();
       window.location.reload();
     } catch (e: any) {
-      showToast(t('settings.resetFailed', { err: e?.message || String(e) }), true);
+      showToast(t('settings.resetFailed', { err: e?.message || String(e) }), { error: true });
     }
   };
 
-  const saveApi = async () => {
-    if (!draft) return;
-    await api.saveSettings(draft);
-    await reloadSettings();
-    showToast(t('settings.saved'));
-  };
 
   const persistModels = (next: ModelConfig[]) => {
     if (draft) api.saveSettings({ ...draft, models: next }).then(reloadSettings);
@@ -481,6 +536,66 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
           </label>
           <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
             {t('settings.autoMemoryDesc')}
+          </div>
+
+          {/* AI 自动判定关系值开关 */}
+          <label
+            style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
+          >
+            <input
+              type="checkbox"
+              checked={draft.autoRelationship !== false}
+              onChange={(e) => {
+                patch({ autoRelationship: e.target.checked });
+                api.saveSettings({ autoRelationship: e.target.checked });
+              }}
+            />
+            <span>{t('settings.autoRelationship')}</span>
+          </label>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+            {t('settings.autoRelationshipDesc')}
+          </div>
+
+          {/* AI 自动发朋友圈开关 */}
+          <label
+            style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
+          >
+            <input
+              type="checkbox"
+              checked={draft.autoMoments !== false}
+              onChange={(e) => {
+                patch({ autoMoments: e.target.checked });
+                api.saveSettings({ autoMoments: e.target.checked });
+              }}
+            />
+            <span>{t('settings.autoMoments')}</span>
+          </label>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+            {t('settings.autoMomentsDesc')}
+          </div>
+
+          {/* 朋友圈每日上限 */}
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span>{t('settings.dailyMomentLimit')}</span>
+              <span>{draft.dailyMomentLimit === 0 ? t('moments.unlimited') : (draft.dailyMomentLimit ?? 5)}</span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={20}
+              step={1}
+              value={draft.dailyMomentLimit ?? 5}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                patch({ dailyMomentLimit: v });
+                api.saveSettings({ dailyMomentLimit: v });
+              }}
+              style={{ width: '100%', marginTop: 6 }}
+            />
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+              {t('settings.dailyMomentLimitDesc')}
+            </div>
           </div>
 
           {/* ===== 隐藏思维链 ===== */}
@@ -1133,6 +1248,65 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
           </div>
         </div>
 
+        {/* ===== 窗口整体等比缩放：基准尺寸 + 上下限（主窗/小窗分别配置） ===== */}
+        <div className="section-title" style={{ marginTop: 16 }}>
+          {t('settings.uiZoom')}
+        </div>
+        <div style={{ maxWidth: 480 }}>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 8 }}>
+            {t('settings.uiZoomDesc')}
+          </div>
+          {(() => {
+            const z = draft.uiZoom || DEFAULT_SETTINGS.uiZoom!;
+            const setZoom = (p: Partial<NonNullable<AppSettings['uiZoom']>>) => {
+              const next = { ...z, ...p };
+              patch({ uiZoom: next });
+              api.saveSettings({ uiZoom: next }).then(reloadSettings);
+            };
+            const field = (
+              label: string,
+              val: number,
+              mn: number,
+              mx: number,
+              st: number,
+              keyName: keyof NonNullable<AppSettings['uiZoom']>
+            ) => (
+              <label className="zoom-field" key={keyName}>
+                <span>{label}</span>
+                <input
+                  type="number"
+                  min={mn}
+                  max={mx}
+                  step={st}
+                  value={val}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (!Number.isNaN(v)) setZoom({ [keyName]: v } as Partial<NonNullable<AppSettings['uiZoom']>>);
+                  }}
+                />
+              </label>
+            );
+            return (
+              <>
+                <div className="zoom-group">{t('settings.uiZoomMain')}</div>
+                <div className="zoom-grid">
+                  {field(t('settings.zoomBaseW'), z.mainBaseW, 200, 4000, 10, 'mainBaseW')}
+                  {field(t('settings.zoomBaseH'), z.mainBaseH, 200, 4000, 10, 'mainBaseH')}
+                  {field(t('settings.zoomMin'), z.mainMin, 0.5, 3, 0.05, 'mainMin')}
+                  {field(t('settings.zoomMax'), z.mainMax, 0.5, 3, 0.05, 'mainMax')}
+                </div>
+                <div className="zoom-group">{t('settings.uiZoomMini')}</div>
+                <div className="zoom-grid">
+                  {field(t('settings.zoomBaseW'), z.miniBaseW, 100, 2000, 10, 'miniBaseW')}
+                  {field(t('settings.zoomBaseH'), z.miniBaseH, 100, 2000, 10, 'miniBaseH')}
+                  {field(t('settings.zoomMin'), z.miniMin, 0.5, 3, 0.05, 'miniMin')}
+                  {field(t('settings.zoomMax'), z.miniMax, 0.5, 3, 0.05, 'miniMax')}
+                </div>
+              </>
+            );
+          })()}
+        </div>
+
         {/* ===== 动态 Canvas 光标 ===== */}
         <div className="section-title">{t('settings.cursor')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
@@ -1305,25 +1479,51 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.asrTitle')}
+              {t('settings.asrApi')}
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <SelectMenu
-                value={voice.asrModelId}
-                style={{ flex: 1, minWidth: 160 }}
-                onChange={(v) => patchVoice({ asrModelId: v })}
-                options={[
-                  { value: '', label: t('settings.voiceOff') },
-                  ...(draft.models || []).map((m) => ({ value: m.id, label: m.name })),
-                ]}
+              <input
+                type="text"
+                placeholder="https://api.openai.com/v1"
+                value={voice.asrBaseUrl}
+                style={{ flex: 1, minWidth: 200 }}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  // 首次填写 ASR 专用 API 时即视为接入，语音转文本默认开启
+                  patchVoice({ asrBaseUrl: val });
+                }}
+              />
+              <input
+                type="password"
+                placeholder={t('settings.apiKey')}
+                value={voice.asrApiKey}
+                style={{ width: 180 }}
+                onChange={(e) => patchVoice({ asrApiKey: e.target.value })}
               />
               <input
                 type="text"
                 placeholder="whisper-1"
                 value={voice.asrModel}
                 style={{ width: 140 }}
+                list="asr-model-options"
                 onChange={(e) => patchVoice({ asrModel: e.target.value })}
               />
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <button
+                type="button"
+                className="btn-ghost"
+                style={{ padding: '3px 10px', fontSize: 12 }}
+                disabled={modelLoading.asr}
+                onClick={() => refreshModelList('asr', voice.asrBaseUrl, voice.asrApiKey)}
+              >
+                {modelLoading.asr ? t('model.refreshing') : t('model.refreshModels')}
+              </button>
+              <datalist id="asr-model-options">
+                {asrModelList.map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
             </div>
             <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
               {t('settings.asrDesc')}
@@ -1334,23 +1534,30 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
               {t('settings.ttsTitle')}
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <SelectMenu
-                value={voice.ttsModelId}
-                style={{ flex: 1, minWidth: 160 }}
-                onChange={(id) => {
-                  // 首次接入 TTS 模型时，默认打开全局自动播报
-                  patchVoice({ ttsModelId: id, ...(id && !voice.ttsModelId ? { ttsAutoPlay: true } : {}) });
+              <input
+                type="text"
+                placeholder="https://api.openai.com/v1"
+                value={voice.ttsBaseUrl}
+                style={{ flex: 1, minWidth: 200 }}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  // 首次填写 TTS 专用 API 时，默认打开全局自动播报
+                  patchVoice({ ttsBaseUrl: val, ...(val && !voice.ttsBaseUrl ? { ttsAutoPlay: true } : {}) });
                 }}
-                options={[
-                  { value: '', label: t('settings.voiceOff') },
-                  ...(draft.models || []).map((m) => ({ value: m.id, label: m.name })),
-                ]}
+              />
+              <input
+                type="password"
+                placeholder={t('settings.apiKey')}
+                value={voice.ttsApiKey}
+                style={{ width: 180 }}
+                onChange={(e) => patchVoice({ ttsApiKey: e.target.value })}
               />
               <input
                 type="text"
                 placeholder="tts-1"
                 value={voice.ttsModel}
                 style={{ width: 110 }}
+                list="tts-model-options"
                 onChange={(e) => patchVoice({ ttsModel: e.target.value })}
               />
               <input
@@ -1365,14 +1572,154 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
               <input
                 type="checkbox"
                 checked={!!voice.ttsAutoPlay}
-                disabled={!voice.ttsModelId}
+                disabled={!voice.ttsBaseUrl}
                 onChange={(e) => patchVoice({ ttsAutoPlay: e.target.checked })}
               />
               <span style={{ fontSize: 13 }}>{t('settings.ttsAutoPlay')}</span>
             </label>
+            <div style={{ marginTop: 8 }}>
+              <button
+                type="button"
+                className="btn-ghost"
+                style={{ padding: '3px 10px', fontSize: 12 }}
+                disabled={modelLoading.tts}
+                onClick={() => refreshModelList('tts', voice.ttsBaseUrl, voice.ttsApiKey)}
+              >
+                {modelLoading.tts ? t('model.refreshing') : t('model.refreshModels')}
+              </button>
+              <datalist id="tts-model-options">
+                {ttsModelList.map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+            </div>
             <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
               {t('settings.ttsDesc')}
             </div>
+          </div>
+        </div>
+
+        {/* ===== 生图（专用图像生成 API） ===== */}
+        <div className="section-title">{t('settings.imageGen')}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={!!imageGen.enabled}
+              onChange={(e) => patchImageGen({ enabled: e.target.checked })}
+            />
+            <span style={{ fontSize: 13 }}>{t('settings.imageGenEnabled')}</span>
+          </label>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              {t('settings.imageGenApi')}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                placeholder="https://api.openai.com/v1"
+                value={imageGen.baseUrl}
+                style={{ flex: 1, minWidth: 200 }}
+                onChange={(e) => patchImageGen({ baseUrl: e.target.value })}
+              />
+              <input
+                type="password"
+                placeholder={t('settings.apiKey')}
+                value={imageGen.apiKey}
+                style={{ width: 180 }}
+                onChange={(e) => patchImageGen({ apiKey: e.target.value })}
+              />
+              <input
+                type="text"
+                placeholder={t('settings.imageGenModelPlaceholder')}
+                value={imageGen.model}
+                style={{ width: 150 }}
+                list="img-model-options"
+                onChange={(e) => patchImageGen({ model: e.target.value })}
+              />
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <button
+                type="button"
+                className="btn-ghost"
+                style={{ padding: '3px 10px', fontSize: 12 }}
+                disabled={modelLoading.img}
+                onClick={() => refreshModelList('img', imageGen.baseUrl, imageGen.apiKey)}
+              >
+                {modelLoading.img ? t('model.refreshing') : t('model.refreshModels')}
+              </button>
+              <datalist id="img-model-options">
+                {imgModelList.map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+              {t('settings.imageGenDesc')}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              {t('settings.imageGenSize')}
+            </div>
+            <input
+              type="text"
+              placeholder="1024x1024"
+              value={imageGen.size}
+              style={{ width: 150 }}
+              onChange={(e) => patchImageGen({ size: e.target.value })}
+            />
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+              {t('settings.imageGenSizeDesc')}
+            </div>
+          </div>
+        </div>
+
+        {/* ===== 翻译（右键消息翻译文本） ===== */}
+        <div className="section-title">{t('settings.translation')}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={!!draft.translationEnabled}
+              onChange={(e) => patch({ translationEnabled: e.target.checked })}
+            />
+            <span style={{ fontSize: 13 }}>{t('settings.translationEnabled')}</span>
+          </label>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+            {t('settings.translationEnabledDesc')}
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              {t('settings.translationModel')}
+            </div>
+            <SelectMenu
+              value={draft.translationModelId || ''}
+              style={{ width: '100%' }}
+              onChange={(v) => patch({ translationModelId: v })}
+              options={[
+                { value: '', label: t('settings.voiceOff') },
+                ...(draft.models || []).map((m) => ({ value: m.id, label: m.name })),
+              ]}
+            />
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+              {t('settings.translationModelDesc')}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              {t('settings.translationLang')}
+            </div>
+            <SelectMenu
+              value={draft.translationLang || 'auto'}
+              style={{ width: 200 }}
+              onChange={(v) => patch({ translationLang: v as 'auto' | 'zh' | 'en' })}
+              options={[
+                { value: 'auto', label: t('settings.translationLangAuto') },
+                { value: 'zh', label: t('settings.translationLangZh') },
+                { value: 'en', label: t('settings.translationLangEn') },
+              ]}
+            />
           </div>
         </div>
 
@@ -1573,9 +1920,6 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
         </div>
 
         <div className="row-actions">
-          <button className="btn-primary" onClick={saveApi}>
-            {t('settings.save')}
-          </button>
           {onRerunWizard && (
             <button
               className="btn-ghost"

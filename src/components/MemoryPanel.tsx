@@ -77,6 +77,14 @@ export const MemoryPanel: React.FC<{ roleId: string }> = ({ roleId }) => {
         <div className="mem-list">
           {mems.map((m) => (
             <div className="mem-item" key={m.id}>
+              {m.image_path ? (
+                <img
+                  src={m.image_path}
+                  alt={m.content || 'image memory'}
+                  className="mem-image"
+                  style={{ maxWidth: '100%', borderRadius: 8, marginBottom: 6, display: 'block' }}
+                />
+              ) : null}
               <div className="mem-text">{m.content}</div>
               <div className="mem-foot">
                 <span className={`badge ${m.source === 'auto' ? 'auto' : 'manual'}`}>

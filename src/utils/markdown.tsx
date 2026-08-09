@@ -49,12 +49,48 @@ export function renderMarkdown(text: string): React.ReactNode {
 }
 
 function inline(line: string): React.ReactNode {
-  // 处理行内代码与粗体
+  // 先按旁白分隔（（）与 “”/"" 包裹）切分，再对普通片段做行内代码/粗体处理
+  const segments = splitNarration(line);
+  const parts: React.ReactNode[] = [];
+  let k = 0;
+  for (const seg of segments) {
+    if (seg.narration) {
+      parts.push(
+        <span key={k++} className="narration">
+          {seg.text}
+        </span>
+      );
+    } else {
+      const fmt = formatInline(seg.text, k);
+      fmt.forEach((n) => parts.push(n));
+      k += fmt.length;
+    }
+  }
+  return parts;
+}
+
+// 旁白分隔：（）与 “”/"" 内的内容标记为旁白（斜体+灰字），定界符本身不显示
+function splitNarration(text: string): { text: string; narration: boolean }[] {
+  const re = /（[^（）]*）|“[^”]*”|＂[^＂]*＂|"[^"]*"/g;
+  const out: { text: string; narration: boolean }[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push({ text: text.slice(last, m.index), narration: false });
+    out.push({ text: m[0].slice(1, -1), narration: true });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last), narration: false });
+  return out;
+}
+
+// 处理行内代码与粗体
+function formatInline(line: string, kStart: number): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
   const regex = /(`[^`]+`|\*\*[^*]+\*\*)/g;
   let last = 0;
   let m: RegExpExecArray | null;
-  let k = 0;
+  let k = kStart;
   while ((m = regex.exec(line)) !== null) {
     if (m.index > last) parts.push(line.slice(last, m.index));
     const token = m[0];

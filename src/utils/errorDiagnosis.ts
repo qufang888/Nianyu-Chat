@@ -128,8 +128,8 @@ const DIAGNOSES: DiagnosisRule[] = [
       en: 'Speech recognition (ASR) or text-to-speech (TTS) failed. Voice-related model config may be incomplete.',
     },
     solution: {
-      zh: '在设置→语音中确认已正确配置 ASR 和 TTS 模型（需模型支持 /audio/transcriptions 和 /audio/speech 端点）；检查 API 提供商是否支持语音功能。',
-      en: 'In Settings → Voice, verify ASR and TTS models are configured correctly (requires /audio/transcriptions and /audio/speech endpoints); check if the provider supports voice features.',
+      zh: '在设置→语音中确认已正确配置 ASR 与 TTS 专用 API（Base URL 与 API Key，分别调用 /audio/transcriptions 与 /audio/speech 端点）；检查 API 提供商是否支持语音功能。',
+      en: 'In Settings → Voice, verify ASR and TTS dedicated APIs are configured correctly (Base URL and API Key, calling /audio/transcriptions and /audio/speech endpoints respectively); check if the provider supports voice features.',
     },
   },
   // ===== 图片处理失败 =====

@@ -11,6 +11,9 @@ export const ChatList: React.FC<{
 }> = ({ selectedId, onSelect, onNewGroup, onDelete }) => {
   const { t, lang } = useI18n();
   const [items, setItems] = useState<ChatListItem[]>([]);
+  const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameVal, setRenameVal] = useState('');
 
   const refresh = () => api.getChatList().then(setItems);
   useEffect(() => {
@@ -29,6 +32,26 @@ export const ChatList: React.FC<{
     return d.toLocaleDateString(loc, { month: 'numeric', day: 'numeric' });
   };
 
+  const handleCopy = async (it: ChatListItem) => {
+    setMenuOpen(null);
+    const res = await api.copyChat(it.chat_type, it.chat_id);
+    refresh();
+    void res;
+  };
+
+  const startRename = (it: ChatListItem) => {
+    setMenuOpen(null);
+    setRenaming(it.chat_id);
+    setRenameVal(it.chat_name || it.name);
+  };
+
+  const commitRename = async (it: ChatListItem) => {
+    const v = renameVal.trim();
+    if (v) await api.renameChat(it.chat_type, it.chat_id, v);
+    setRenaming(null);
+    refresh();
+  };
+
   return (
     <div className="list-pane">
       <div className="list-header">
@@ -37,7 +60,7 @@ export const ChatList: React.FC<{
           ＋
         </button>
       </div>
-      <div className="list-scroll">
+      <div className="list-scroll" onClick={() => menuOpen && setMenuOpen(null)}>
         {items.length === 0 && (
           <div style={{ padding: 24, color: 'var(--color-text-secondary)', fontSize: 13 }}>
             {t('chats.empty')}
@@ -49,32 +72,65 @@ export const ChatList: React.FC<{
             className={`list-item ${selectedId === it.chat_id ? 'active' : ''}`}
             onClick={() => onSelect(it)}
           >
-            <button
-              className="list-del"
-              title={t('chats.delete')}
-              onClick={async (e) => {
-                e.stopPropagation();
-                if (await api.showConfirm!(t('chats.confirmDelete'))) onDelete(it);
-              }}
-            >
-              🗑
-            </button>
-            <div className="avatar">
-              {it.avatar_path ? (
-                <AvatarImg path={it.avatar_path} />
-              ) : it.chat_type === 'group' ? (
-                '👥'
-              ) : (
-                '🤖'
-              )}
-            </div>
-            <div className="meta">
-              <div className="name">
-                {it.name} {it.member_count ? `(${it.member_count})` : ''}
-              </div>
-              <div className="preview">{it.last_message}</div>
-            </div>
-            <div className="time">{fmtTime(it.last_time)}</div>
+            {renaming === it.chat_id ? (
+              <input
+                className="rename-input"
+                autoFocus
+                value={renameVal}
+                onChange={(e) => setRenameVal(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                onBlur={() => commitRename(it)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitRename(it);
+                  else if (e.key === 'Escape') setRenaming(null);
+                }}
+              />
+            ) : (
+              <>
+                <button
+                  className="list-del"
+                  title={t('chats.delete')}
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    if (await api.showConfirm!(t('chats.confirmDelete'))) onDelete(it);
+                  }}
+                >
+                  🗑
+                </button>
+                <div className="avatar">
+                  {it.avatar_path ? (
+                    <AvatarImg path={it.avatar_path} />
+                  ) : it.chat_type === 'group' ? (
+                    '👥'
+                  ) : (
+                    '🤖'
+                  )}
+                </div>
+                <div className="meta">
+                  <div className="name">
+                    {it.chat_name || it.name} {it.member_count ? `(${it.member_count})` : ''}
+                  </div>
+                  <div className="preview">{it.last_message}</div>
+                </div>
+                <div className="time">{fmtTime(it.last_time)}</div>
+                <button
+                  className="list-more"
+                  title={t('chats.more')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenuOpen(menuOpen === it.chat_id ? null : it.chat_id);
+                  }}
+                >
+                  ⋯
+                </button>
+                {menuOpen === it.chat_id && (
+                  <div className="list-menu" onClick={(e) => e.stopPropagation()}>
+                    <button onClick={() => handleCopy(it)}>{t('chats.copy')}</button>
+                    <button onClick={() => startRename(it)}>{t('chats.rename')}</button>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         ))}
       </div>

@@ -19,9 +19,11 @@ import {
   listModels,
   testConnection,
   AIMessage,
+  ContentPart,
   streamAI,
   transcribeAudio,
   textToSpeech,
+  generateImage,
 } from './ai';
 import { createBackup, restoreBackup } from './backup';
 import { parseCharacterCard, parseCharacterCardText } from '../src/utils/characterCard';
@@ -38,12 +40,22 @@ import type {
   MemoryEntry,
   Group,
 } from '../src/types';
+import { normalizeRelation } from '../src/types';
+import { RELATION_TYPES, RELATION_LABELS } from '../src/types';
 
 // 自定义音效协议：用于播放用户选择的 MP3/WAV（映射到 userData/custom-sounds）
 // 必须在 app ready 之前注册为特权协议，才能被 <audio> 正常加载。
 protocol.registerSchemesAsPrivileged([
   { scheme: 'nysound', privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true } },
 ]);
+
+// 禁用若干 Chromium 媒体/GPU 子功能。本应用无视频播放，这些功能初始化时
+// 常会在 Windows 显卡驱动上触发 [ERROR:ffmpeg_common.cc(965)] Unsupported pixel format: -1 日志。
+// 提前关闭它们可避免终端/调试窗口被此类无意义错误刷屏。
+app.commandLine.appendSwitch(
+  'disable-features',
+  'HardwareMediaKeyHandling,MediaSessionService,AudioServiceOutOfProcess'
+);
 
 let mainWindow: BrowserWindow | null = null;
 let miniWindow: BrowserWindow | null = null;
@@ -217,6 +229,51 @@ function scheduleSaveBounds(): void {
   }, 400);
 }
 
+// 窗口整体 UI 等比缩放：窗口尺寸变化时，以基准设计尺寸为参照，按「宽/高缩放比取较小值」统一缩放整个页面
+// （字体、间距、图标、边框一并等比缩放），使内部内容随窗口大小成比例适配，而非仅 flex 重排。
+// 关键：缩放因子基于 getBounds() 返回的设备像素（不受 zoom 影响），因此不会形成反馈回路。
+// 基准尺寸与上下限为硬编码可调值：主窗 1200×800（0.85~1.3），小窗 340×520（0.75~1.8）。
+// 从设置读取缩放基准与上下限（旧设置缺省时回退到内置默认值，保证不崩）
+function getZoomCfg(isMini: boolean): { baseW: number; baseH: number; min: number; max: number } {
+  const s = dm.getSettings().uiZoom;
+  if (!s) {
+    return isMini
+      ? { baseW: 340, baseH: 520, min: 0.75, max: 1.8 }
+      : { baseW: 1200, baseH: 800, min: 0.85, max: 1.3 };
+  }
+  return isMini
+    ? { baseW: s.miniBaseW, baseH: s.miniBaseH, min: s.miniMin, max: s.miniMax }
+    : { baseW: s.mainBaseW, baseH: s.mainBaseH, min: s.mainMin, max: s.mainMax };
+}
+
+function applyWindowZoom(win: BrowserWindow | null, isMini: boolean): void {
+  if (!win || win.isDestroyed()) return;
+  const { baseW, baseH, min, max } = getZoomCfg(isMini);
+  const b = win.getBounds();
+  const z = Math.min(b.width / baseW, b.height / baseH);
+  const clamped = Math.max(min, Math.min(max, z));
+  try {
+    win.webContents.setZoomFactor(clamped);
+  } catch {
+    // webContents 尚未就绪时静默忽略
+  }
+}
+
+const zoomTimers = new Map<number, ReturnType<typeof setTimeout>>();
+function scheduleWindowZoom(win: BrowserWindow | null, isMini: boolean): void {
+  if (!win || win.isDestroyed()) return;
+  const id = win.webContents.id;
+  const existing = zoomTimers.get(id);
+  if (existing) clearTimeout(existing);
+  zoomTimers.set(
+    id,
+    setTimeout(() => {
+      zoomTimers.delete(id);
+      applyWindowZoom(win, isMini);
+    }, 60),
+  );
+}
+
 function createWindow(): void {
   const saved = dm.getSettings();
   const b = saved.windowBounds || { x: 0, y: 0, width: 1200, height: 800 };
@@ -290,6 +347,8 @@ function createWindow(): void {
   mainWindow.on('unmaximize', pushWindowState);
   mainWindow.on('resize', scheduleSaveBounds);
   mainWindow.on('move', scheduleSaveBounds);
+  // 主窗整体 UI 随窗口尺寸等比缩放（字体/间距/图标一并缩放），适配不同窗口大小
+  mainWindow.on('resize', () => scheduleWindowZoom(mainWindow, false));
   // 注意:'closed' 事件触发时 BrowserWindow 已被销毁,访问 webContents 会抛 "Object has been destroyed"。
   // 必须在窗口创建时即缓存 webContents.id,closed 处理中只用该缓存值。
   const mainWindowWcId = mainWindow.webContents.id;
@@ -304,7 +363,9 @@ function createWindow(): void {
   });
   // 首次加载完成后推送初始窗口状态（最大化/还原图标同步）
   mainWindow.webContents.once('did-finish-load', () => {
-    mainWindow?.webContents.send('window-state-change', mainWindow.isMaximized());
+    safeSend(mainWindow, 'window-state-change', mainWindow ? mainWindow.isMaximized() : false);
+    // 首屏加载完成后按当前窗口尺寸设定初始缩放
+    applyWindowZoom(mainWindow, false);
   });
 
   mainWindow.on('closed', () => {
@@ -375,6 +436,10 @@ function createMiniWindow(): void {
     if (x !== b.x || y !== b.y) miniWindow.setPosition(x, y);
   });
 
+  // 小窗整体 UI 随窗口尺寸等比缩放（字体/间距/图标一并缩放），缩放因子基于窗口真实像素、无反馈回路
+  miniWindow.on('resize', () => scheduleWindowZoom(miniWindow, true));
+  miniWindow.webContents.once('did-finish-load', () => applyWindowZoom(miniWindow, true));
+
   // 有交互时恢复不透明
   miniWindow.on('focus', () => miniWindow?.setOpacity(1));
 
@@ -396,7 +461,7 @@ function showMiniWindow(): void {
     const b = miniWindow.getBounds();
     miniWindow.setPosition(wa.x + wa.width - b.width - 16, wa.y + wa.height - b.height - 16);
   }
-  miniWindow.webContents.send('mini:switch', null);
+  safeSend(miniWindow, 'mini:switch', null);
   miniWindow.setOpacity(1);
   miniWindow.show();
   miniWindow.focus();
@@ -497,7 +562,7 @@ function processNotifyQueue(): void {
   positionNotifyWindow();
   notifyWindow.setIgnoreMouseEvents(true, { forward: true });
   notifyWindow.showInactive();
-  notifyWindow.webContents.send('notify:data', {
+  safeSend(notifyWindow, 'notify:data', {
     action: 'show',
     label: lang === 'en' ? 'New message' : '新消息',
     roleName: item.roleName,
@@ -729,7 +794,7 @@ function resolveWorldBook(chatType: string, chatId: string, settings: AppSetting
     if (v === 'none') return ''; // 该聊天显式不使用世界书
     wbId = v;
   } else if (chatType === 'single') {
-    const r = dm.getRole(parseObsRoleId(chatId) || chatId);
+    const r = dm.getRole(dm.resolveSingleRoleId(chatType, chatId));
     if (r && r.worldBookId) {
       if (r.worldBookId === 'none') return ''; // 该角色显式不使用世界书
       wbId = r.worldBookId;
@@ -840,6 +905,201 @@ async function requestMoodJudge(chatType: string, chatId: string, roleId: string
     logEmotionIfObserver(chatType, chatId, roleId); // 记录对局情绪轨迹
   }
 }
+
+const relationshipCooldown = new Map<string, number>();
+const DAILY_MOMENT_LIMIT = 5; // 每个（角色 + 自我身份）每天自动发朋友圈上限，防止长聊灌满
+
+// 把生图返回的 base64 写入图片库，返回本地路径（模块级，供生图 handler 与朋友圈自动配图共用）
+function saveGeneratedImage(b64: string): string | null {
+  try {
+    const m = b64.match(/^data:(image\/\w+);base64,(.+)$/);
+    const meta = m ? m[1] : 'image/png';
+    const data = m ? m[2] : b64;
+    const ext = meta === 'image/jpeg' ? '.jpg' : '.png';
+    const name = `gen_${Date.now()}_${Math.floor(Math.random() * 1e6)}${ext}`;
+    const dest = path.join(dm.imagesDir, name);
+    fs.writeFileSync(dest, Buffer.from(data, 'base64'));
+    return dest;
+  } catch (e) {
+    console.error('保存生图失败', e);
+    return null;
+  }
+}
+
+// 一轮单聊 AI 回复完成后，后台由 AI 依据聊天内容判定关系值/关系类别，并视情况自动发朋友圈动态。
+// 关系值纯展示、绝不回灌聊天 prompt（只有剧情影响关系值，关系值不影响剧情）。
+async function requestRelationshipAndMoments(
+  chatType: string,
+  chatId: string,
+  roleId: string,
+  opts: { force?: boolean; doRelationship?: boolean; doMoments?: boolean } = {}
+): Promise<{ ok: boolean; moments: number; relation?: string }> {
+  const force = opts.force ?? false;
+  const settings = dm.getSettings();
+  const doRelationship = opts.doRelationship ?? settings.autoRelationship;
+  const doMoments = opts.doMoments ?? settings.autoMoments;
+  if (chatType !== 'single' && chatType !== 'group') return { ok: false, moments: 0 };
+  if (!doRelationship && !doMoments) return { ok: false, moments: 0 };
+  const now = Date.now();
+  const last = relationshipCooldown.get(roleId) || 0;
+  if (!force && now - last < (settings.moodJudgeCooldownMs ?? 20000)) return { ok: false, moments: 0 }; // 复用心情判定冷却，避免每轮都烧 token；手动触发(force)绕过冷却
+  relationshipCooldown.set(roleId, now);
+  const role = dm.getRole(roleId);
+  if (!role) return { ok: false, moments: 0 };
+  const cfg = getDefaultModelConfig(settings) || resolveRoleModel(role, settings);
+  if (!cfg) return { ok: false, moments: 0 };
+  const selfRole = resolveActiveSelfRole(settings, chatType, chatId);
+  const history = dm.getMessages(chatType, chatId).slice(-(settings.moodJudgeHistory ?? 10));
+  const recent = history.map((m) => `${m.sender_name}: ${(m.content || '').slice(0, 200)}`).join('\n');
+  const userDesc = selfRole
+    ? `用户当前使用的身份「${selfRole.name}」${selfRole.personality ? `（${selfRole.personality}）` : ''}。`
+    : '用户身份未指定（默认身份）。';
+
+  let storedRelation: string | undefined;
+  if (doRelationship) {
+    storedRelation = await judgeRelationship(role, cfg, userDesc, recent);
+  }
+  let added = 0;
+  if (doMoments) {
+    added = await judgeAndPostMoments(role, cfg, userDesc, recent, settings, selfRole, force);
+  }
+  return { ok: true, moments: added, relation: storedRelation };
+}
+
+// 关系值/关系类别判定：独立 prompt，直接采用 AI 给出的亲密度作为当前关系值（不做增量阻尼）
+async function judgeRelationship(role: Role, cfg: ModelConfig, userDesc: string, recent: string): Promise<string | undefined> {
+  const prompt = [
+    `你是关系分析助手。请基于最近对话，分析角色「${role.name}」与用户之间的关系状态。`,
+    `角色设定：${role.personality || role.background || '（无）'}`,
+    userDesc,
+    `最近对话：\n${recent || '（尚无对话）'}`,
+    `请输出严格 JSON，不要任何多余内容：`,
+    `{`,
+    `  "relation": "关系类别，必须从以下枚举中精确选一个 key：${RELATION_TYPES.map((k) => `${k}(${RELATION_LABELS[k]})`).join('/')}；无法确定时给 stranger",`,
+    `  "trend": "closer 表示关系更亲近 / farther 表示更疏远 / same 表示持平",`,
+    `  "intimacy": 0到100的整数，表示当前的亲密程度`,
+    `}`,
+  ].join('\n');
+  try {
+    const res = await queryAI(
+      cfg,
+      [
+        { role: 'system', content: '你是分析助手，严格只输出要求的 JSON，不要输出任何解释或多余内容。' },
+        { role: 'user', content: prompt },
+      ],
+      600
+    );
+    const parsed: any = parseFirstJson(res.content);
+    if (!parsed || typeof parsed !== 'object') return undefined;
+    const prevBond = role.bond ?? 0;
+    const intimacy = typeof parsed.intimacy === 'number' ? Math.max(0, Math.min(100, Math.round(parsed.intimacy))) : null;
+    const patch: Partial<Role> = {};
+    if (intimacy != null) {
+      // 直接采用 AI 给出的亲密度作为当前关系值（0~100 -> 0~1000，维持每 100 = 1 级的展示语义），不做 +/-20 增量阻尼
+      const next = Math.round(Math.max(0, Math.min(1000, intimacy * 10)));
+      if (next !== prevBond) patch.bond = next;
+    }
+    const rel = normalizeRelation(parsed.relation);
+    if (rel) patch.relation = rel;
+    if (Object.keys(patch).length) {
+      dm.updateRole(role.id, patch);
+      broadcast('role:bond', { roleId: role.id });
+    }
+    return rel;
+  } catch {
+    return undefined;
+  }
+}
+
+// 朋友圈判定与发布：独立 prompt，由 AI 动态判定此刻是否想发（postMoments），与关系值判定完全无关
+async function judgeAndPostMoments(
+  role: Role,
+  cfg: ModelConfig,
+  userDesc: string,
+  recent: string,
+  settings: AppSettings,
+  selfRole: SelfRole | undefined,
+  force: boolean
+): Promise<number> {
+  const prompt = [
+    `你是朋友圈动态助手。请基于最近对话，判断角色「${role.name}」此刻是否想发一条朋友圈，并写出内容。`,
+    `角色设定：${role.personality || role.background || '（无）'}`,
+    userDesc,
+    `最近对话：\n${recent || '（尚无对话）'}`,
+    `请输出严格 JSON，不要任何多余内容：`,
+    `{`,
+    `  "postMoments": true或false，表示角色此刻是否真的想发朋友圈。仅当对话中出现了角色有冲动分享的内容（真实情绪起伏、重要事件、用户说了特别的话、关系进展、有趣的梗等）才为 true；日常寒暄、礼节性回复、无明显可分享点时必须为 false。不要因为被要求就发。`,
+    `  "moments": [ { "content": "角色视角的朋友圈文案，第一人称，自然口语化，不超过60字", "needImage": true或false, "imagePrompt": "若需要配图，这里是英文生图提示词，否则空串" } ]`,
+    `}`,
+    `只有当 postMoments 为 true 时才给出 moments，最多2条；否则 moments 给空数组。发朋友圈应当是低频、有质感的，不要每条对话都发。`,
+  ].join('\n');
+  let parsed: any = null;
+  try {
+    const res = await queryAI(
+      cfg,
+      [
+        { role: 'system', content: '你是朋友圈助手，严格只输出要求的 JSON，不要输出任何解释或多余内容。' },
+        { role: 'user', content: prompt },
+      ],
+      600
+    );
+    parsed = parseFirstJson(res.content);
+  } catch {
+    return 0;
+  }
+  if (!parsed || typeof parsed !== 'object') return 0;
+  if (parsed.postMoments === false) return 0; // 显式 false 不发
+  if (!Array.isArray(parsed.moments) || parsed.moments.length === 0) return 0; // 无内容不发（旧模型未返回 postMoments 时，有内容才发，向后兼容）
+
+  const ig = settings.imageGen;
+  const igCfg = ig && ig.enabled && ig.baseUrl && ig.apiKey ? { baseUrl: ig.baseUrl, apiKey: ig.apiKey } : undefined;
+  const selfRoleId = selfRole?.id || '';
+  const todayKey = new Date().toISOString().slice(0, 10);
+  // 单人物每日上限：手动触发(force)不受限；自动触发受角色 momentDailyLimit 约束（角色未填则用全局 dailyMomentLimit）
+  const resolvedLimit =
+    role.momentDailyLimit && role.momentDailyLimit > 0
+      ? role.momentDailyLimit
+      : settings.dailyMomentLimit === 0
+        ? Infinity // 全局显式设为无限（0 哨兵），角色未单独设置时继承
+        : settings.dailyMomentLimit && settings.dailyMomentLimit > 0
+          ? settings.dailyMomentLimit
+          : DAILY_MOMENT_LIMIT;
+  const perCharLimit = force ? Infinity : resolvedLimit;
+  let todayCount = force
+    ? 0
+    : dm.listMoments(role.id, true).filter((m) => m.published && (m.created_at || '').slice(0, 10) === todayKey).length;
+  let added = 0;
+  for (const mm of parsed.moments.slice(0, 2)) {
+    if (todayCount >= perCharLimit) break; // 自动触发达单人物每日上限即暂停；手动触发无上限
+    if (!mm || typeof mm.content !== 'string' || !mm.content.trim()) continue;
+    const images: string[] = [];
+    if (mm.needImage && igCfg) {
+      try {
+        const { b64 } = await generateImage(
+          { baseUrl: igCfg.baseUrl, apiKey: igCfg.apiKey },
+          String(mm.imagePrompt || mm.content).slice(0, 400),
+          ig!.model || 'gpt-image-1',
+          ig!.size || '1024x1024'
+        );
+        if (b64) {
+          const p = saveGeneratedImage(b64);
+          if (p) images.push(p);
+        }
+      } catch {
+        // 配图失败则降级为纯文字动态，不阻塞
+      }
+    }
+    dm.addMoment(role.id, mm.content.trim(), images, undefined, selfRoleId);
+    added++;
+    todayCount++;
+  }
+  if (added > 0) {
+    broadcast('moments:changed', { roleId: role.id, selfRoleId });
+    broadcast('moments:autoPosted', { roleId: role.id, selfRoleId, roleName: role.name, count: added });
+  }
+  return added;
+}
+
 
 function buildSystemPrompt(role: Role, freezeMemory = false): string {
   const parts: string[] = [];
@@ -970,11 +1230,104 @@ function writeBase64Avatar(b64: string): string | null {
   }
 }
 
-function historyToMessages(history: ChatMessage[]): AIMessage[] {
-  return history.map((m) => ({
-    role: m.sender_type === 'user' ? 'user' : 'assistant',
-    content: m.image_path || (m.images && m.images.length) ? `[用户发送了一张图片]${m.content || ''}` : m.content || '',
-  }));
+// 将图片绝对路径读为 data URL（base64 内联），用于多模态模型输入
+function imageToDataUrl(p: string): string | null {
+  try {
+    if (!fs.existsSync(p)) return null;
+    const ext = path.extname(p).toLowerCase();
+    const mime =
+      ext === '.jpg' || ext === '.jpeg'
+        ? 'image/jpeg'
+        : ext === '.webp'
+          ? 'image/webp'
+          : ext === '.gif'
+            ? 'image/gif'
+            : 'image/png';
+    const b64 = fs.readFileSync(p).toString('base64');
+    return `data:${mime};base64,${b64}`;
+  } catch {
+    return null;
+  }
+}
+
+// 收集一条消息的图片绝对路径（images 数组优先，回退 image_path）
+function collectImagePaths(m: ChatMessage): string[] {
+  return ((m.images && m.images.length ? m.images : m.image_path ? [m.image_path] : []) as string[]).filter(Boolean);
+}
+
+// 构建用户消息内容：vision 模型返回多模态 content parts（文本 + 图片），否则返回占位文本（不报错）
+function buildUserContent(text: string, images: string[], vision: boolean): string | ContentPart[] {
+  if (vision && images.length) {
+    const parts: ContentPart[] = [];
+    if (text && text.trim()) parts.push({ type: 'text', text });
+    for (const p of images) {
+      const url = imageToDataUrl(p);
+      if (url) parts.push({ type: 'image_url', image_url: { url } });
+    }
+    if (parts.length) return parts;
+  }
+  return images.length ? `[用户发送了一张图片]${text || ''}` : text || '';
+}
+
+function historyToMessages(history: ChatMessage[], vision = false): AIMessage[] {
+  return history.map((m) => {
+    const images = collectImagePaths(m);
+    const base = m.content || '';
+    return {
+      role: m.sender_type === 'user' ? 'user' : 'assistant',
+      content: buildUserContent(base, images, vision),
+    };
+  });
+}
+
+// ===== 请求限速（QPS）：每模型每分钟最多 N 次请求 =====
+// 仅记录时间戳，真实延迟由调用方在发请求前 sleep；前端也会用 rateInfo 做预排队 UI。
+const RATE_WINDOW_MS = 60000;
+const modelRequestLog = new Map<string, number[]>();
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// 计算某模型还需等待多少毫秒才能再发一次（基于该模型配置的 qps）；无限制返回 0
+function rateWaitMs(modelId: string): number {
+  const settings = dm.getSettings();
+  const cfg = settings.models.find((m) => m.id === modelId);
+  const qps = cfg?.qps;
+  if (!qps || qps <= 0) return 0;
+  const now = Date.now();
+  const arr = (modelRequestLog.get(modelId) || []).filter((t) => now - t < RATE_WINDOW_MS);
+  modelRequestLog.set(modelId, arr);
+  if (arr.length < qps) return 0;
+  return RATE_WINDOW_MS - (now - arr[0]) + 50;
+}
+
+// 标记一次实际发出的请求（用于计数）
+function rateMark(modelId: string): void {
+  if (!modelId) return;
+  const now = Date.now();
+  const arr = (modelRequestLog.get(modelId) || []).filter((t) => now - t < RATE_WINDOW_MS);
+  arr.push(now);
+  modelRequestLog.set(modelId, arr);
+}
+
+// ===== 翻译（右键菜单翻译文本） =====
+async function translateText(text: string, settings: AppSettings): Promise<string> {
+  const modelId = settings.translationModelId || settings.defaultModel;
+  const cfg = settings.models.find((m) => m.id === modelId && m.enabled);
+  if (!cfg) return text;
+  const target = settings.translationLang === 'auto' ? settings.lang : settings.translationLang || settings.lang;
+  const langName = target === 'en' ? 'English' : '中文';
+  const prompt = `请将下面的文本翻译成${langName}，只返回译文本身，不要任何解释，也不要用引号包裹：\n\n${text}`;
+  const res = await queryAI(
+    cfg,
+    [
+      { role: 'system', content: 'You are a precise translator. Output only the translation.' },
+      { role: 'user', content: prompt },
+    ],
+    1024
+  );
+  return res.content || text;
 }
 
 async function handleSend(p: {
@@ -993,7 +1346,7 @@ async function handleSend(p: {
 
   const userMsg = addUserMessage(p);
   const result = await generateAIResponses(
-    { ...p, imagePath: userMsg.image_path },
+    { ...p, imagePath: userMsg.image_path, imagePaths: userMsg.images },
     memberRoles,
     settings
   );
@@ -1003,7 +1356,7 @@ async function handleSend(p: {
 function resolveMembers(chatType: string, chatId: string, content: string): Role[] {
   let memberRoles: Role[] = [];
   if (chatType === 'single') {
-    const r = dm.getRole(parseObsRoleId(chatId) || chatId);
+    const r = dm.getRole(dm.resolveSingleRoleId(chatType, chatId));
     if (r) memberRoles = [r];
   } else {
     const g = dm.getGroup(chatId);
@@ -1105,7 +1458,9 @@ function buildMessagesForRole(
   worldBook?: string,
   instruction?: string,
   freezeMemory = false,
-  privateObserver = false
+  privateObserver = false,
+  storedImages?: string[] | null,
+  vision = false
 ): AIMessage[] {
   const parts: string[] = [buildSystemPrompt({ ...role, affinity: affinityTotal }, freezeMemory)];
   // 观察者私密小窗：告知 AI 这是完全私密的一对一，可袒露内心推演
@@ -1128,12 +1483,16 @@ function buildMessagesForRole(
     parts.push(`【对话对象（用户）设定】\n${b.join('\n')}`);
   }
   const sysPrompt = parts.join('\n\n');
+  const finalImages =
+    storedImages && storedImages.length ? storedImages : storedImage ? [storedImage] : [];
   return [
     { role: 'system', content: sysPrompt },
-    ...historyToMessages(history),
+    ...historyToMessages(history, vision),
     {
       role: 'user',
-      content: instruction || (storedImage ? '[用户发送了一张图片，请结合图片内容回应]' : content),
+      content: instruction
+        ? instruction
+        : buildUserContent(content, finalImages, vision),
     },
   ];
 }
@@ -1151,7 +1510,8 @@ function buildGroupMessages(
   worldBook: string,
   instruction?: string,
   freezeMemory = false,
-  groupId?: string
+  groupId?: string,
+  vision = false
 ): AIMessage[] {
   const parts: string[] = [buildSystemPrompt({ ...role, affinity: affinityTotal }, freezeMemory)];
   if (worldBook && worldBook.trim()) {
@@ -1178,12 +1538,26 @@ function buildGroupMessages(
   );
   const msgs: AIMessage[] = [{ role: 'system', content: parts.join('\n\n') }];
   for (const m of history) {
-    const text = m.image_path || (m.images && m.images.length) ? `[发送了一张图片]${m.content || ''}` : m.content || '';
+    const images = collectImagePaths(m);
     const isSelf = m.sender_type === 'ai' && m.sender_name === role.name;
     const roleTag: 'user' | 'assistant' = isSelf ? 'assistant' : 'user';
-    const content = isSelf ? text : `${m.sender_name}: ${text}`;
+    const text = images.length ? `[发送了一张图片]${m.content || ''}` : (m.content || '');
+    const textContent = isSelf ? text : `${m.sender_name}: ${text}`;
+    let content: string | ContentPart[];
+    if (vision && images.length) {
+      const parts2: ContentPart[] = [];
+      if (textContent) parts2.push({ type: 'text', text: textContent });
+      for (const p of images) {
+        const url = imageToDataUrl(p);
+        if (url) parts2.push({ type: 'image_url', image_url: { url } });
+      }
+      content = parts2.length ? parts2 : textContent;
+    } else {
+      content = textContent;
+    }
     const last = msgs[msgs.length - 1];
-    if (last && last.role === roleTag) {
+    // 多模态内容（数组）不与文本合并，避免破坏 parts 结构；仅文本之间合并
+    if (last && last.role === roleTag && typeof last.content === 'string' && typeof content === 'string') {
       last.content += `\n${content}`;
     } else {
       msgs.push({ role: roleTag, content });
@@ -1191,7 +1565,7 @@ function buildGroupMessages(
   }
   if (instruction) {
     const last = msgs[msgs.length - 1];
-    if (last.role === 'user') last.content += `\n\n${instruction}`;
+    if (last.role === 'user' && typeof last.content === 'string') last.content += `\n\n${instruction}`;
     else msgs.push({ role: 'user', content: instruction });
   } else if (msgs[msgs.length - 1].role !== 'user') {
     msgs.push({ role: 'user', content: '（请继续这段群聊，自然接话）' });
@@ -1212,11 +1586,13 @@ function getGroupMemberNames(groupId: string): string[] {
 }
 
 async function generateAIResponses(
-  p: { chatType: string; chatId: string; content: string; imagePath?: string | null },
+  p: { chatType: string; chatId: string; content: string; imagePath?: string | null; imagePaths?: string[] | null },
   memberRoles: Role[],
-  settings: AppSettings
+  settings: AppSettings,
+  controller?: AbortController
 ): Promise<Omit<SendMessageResult, 'userMessage'>> {
   const storedImage = p.imagePath || null;
+  const storedImages = p.imagePaths && p.imagePaths.length ? p.imagePaths : (p.imagePath ? [p.imagePath] : []);
   const history = dm.getMessages(p.chatType, p.chatId).slice(-16);
   const resolveModel = (role: Role): ModelConfig | undefined => resolveRoleModel(role, settings);
   const selfRole = resolveActiveSelfRole(settings, p.chatType, p.chatId);
@@ -1228,13 +1604,14 @@ async function generateAIResponses(
 
   const runOne = async (role: Role, hist: ChatMessage[]) => {
     const cfg = resolveModel(role) as ModelConfig;
+    const vision = !!cfg?.supportsImages;
     // 私密小窗：若关闭「影响情绪好感」，则不因该对话改变好感度
     const isPrivate = !isGroup && p.chatId.startsWith('obs:');
     const allowEmotion = !isPrivate || !!obs?.privateAffectsEmotion;
     const total = allowEmotion ? applyAffinityChange(role, p.content, storedImage) : role.affinity;
     // 群聊：串行 + 带发言人标注，让成员能看见彼此的发言；单聊维持原逻辑
     const messages = isGroup
-      ? buildGroupMessages(role, groupNames, hist, total, selfRole, worldBook, undefined, obs?.freezeMemory, p.chatId)
+      ? buildGroupMessages(role, groupNames, hist, total, selfRole, worldBook, undefined, obs?.freezeMemory, p.chatId, vision)
       : buildMessagesForRole(
           role,
           p.content,
@@ -1245,13 +1622,19 @@ async function generateAIResponses(
           worldBook,
           undefined,
           obs?.freezeMemory,
-          isPrivate
+          isPrivate,
+          storedImages,
+          vision
         );
     const streamId = `${p.chatId}:${role.id}`;
     // 每个成员完成时立即广播，前端按完成顺序逐步显示；即使关闭全局流式也生效。
     sendStreamStart(streamId, role.id, role.name);
     try {
-      const res = await queryAI(cfg, messages, 1024);
+      // 请求限速（QPS）：超出则等待限速窗口解除后再发，避免触发服务端限流
+      const wait = rateWaitMs(cfg.id);
+      if (wait > 0) await sleep(wait);
+      rateMark(cfg.id);
+      const res = await queryAI(cfg, messages, 1024, controller?.signal);
       const aiMsg = dm.addMessage({
         chat_type: p.chatType as any,
         chat_id: p.chatId,
@@ -1265,21 +1648,24 @@ async function generateAIResponses(
       });
       sendStreamDone(streamId, aiMsg);
       void requestMoodJudge(p.chatType, p.chatId, role.id);
+      void requestRelationshipAndMoments(p.chatType, p.chatId, role.id);
       return { aiMsg, roleId: role.id, total, tokens: aiMsg.token_used };
     } catch (e: any) {
-      // 失败也广播完成，避免占位气泡卡住
-      const errMsg = dm.addMessage({
+      // 被打断时保留头像/名称/气泡，用省略号占位；其他异常仍显示错误信息
+      const interrupted = controller ? controller.signal.aborted : false;
+      const content = interrupted ? '...' : `⚠️ ${e?.message || String(e)}`;
+      const msg = dm.addMessage({
         chat_type: p.chatType as any,
         chat_id: p.chatId,
         sender_type: 'ai',
         sender_name: role.name,
-        content: `⚠️ ${e?.message || String(e)}`,
+        content,
         image_path: null,
         token_used: 0,
         timestamp: new Date().toISOString(),
       });
-      sendStreamDone(streamId, errMsg);
-      return { aiMsg: errMsg, roleId: role.id, total, tokens: 0 };
+      sendStreamDone(streamId, msg);
+      return { aiMsg: msg, roleId: role.id, total, tokens: 0 };
     }
   };
 
@@ -1348,7 +1734,15 @@ async function handleSendAI(p: {
     throw new Error('未找到可回复的角色，请检查群组成员或角色是否存在');
   }
   validateModels(memberRoles, settings);
-  return generateAIResponses(p, memberRoles, settings);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 120000);
+  registerStream(p.chatId, controller);
+  try {
+    return await generateAIResponses(p, memberRoles, settings, controller);
+  } finally {
+    clearTimeout(timer);
+    unregisterStream(p.chatId, controller);
+  }
 }
 
 // 流式生成：单聊与群聊通用；群聊按 settings.streamParallel 分批并发
@@ -1369,6 +1763,7 @@ async function handleStream(p: {
 
   const userMsg = addUserMessage(p);
   const storedImage = userMsg.image_path;
+  const storedImages = userMsg.images || (userMsg.image_path ? [userMsg.image_path] : []);
   const history = dm.getMessages(p.chatType, p.chatId).slice(-16);
   const selfRole = resolveActiveSelfRole(settings, p.chatType, p.chatId);
   const isGroup = p.chatType === 'group';
@@ -1391,6 +1786,7 @@ async function handleStream(p: {
   const streamOne = async (role: Role) => {
     if (controller.signal.aborted) return;
     const cfg = resolveRoleModel(role, settings) as ModelConfig;
+    const vision = !!cfg?.supportsImages;
     const streamId = `${p.chatId}:${role.id}`;
     let seq = 0;
     const emitChunk = (content: string, done: boolean, error: string, reasoning = '') => {
@@ -1404,7 +1800,7 @@ async function handleStream(p: {
     // 群聊：每位成员发言前重新读取最新历史（含前面成员刚说的话），并用带发言人标注的构建器
     const hist = isGroup ? dm.getMessages(p.chatType, p.chatId).slice(-24) : history;
     const messages = isGroup
-      ? buildGroupMessages(role, groupNames, hist, total, selfRole, worldBook, undefined, obs?.freezeMemory, p.chatId)
+      ? buildGroupMessages(role, groupNames, hist, total, selfRole, worldBook, undefined, obs?.freezeMemory, p.chatId, vision)
       : buildMessagesForRole(
           role,
           p.content,
@@ -1415,57 +1811,76 @@ async function handleStream(p: {
           worldBook,
           undefined,
           obs?.freezeMemory,
-          isPrivate
+          isPrivate,
+          storedImages,
+          vision
         );
     sendStreamStart(streamId, role.id, role.name);
+    // 中断时保留已生成的部分内容并落库（DeepSeek 风格的「打断生成」）
+    let full = '';
+    let reasoningAcc = '';
+    // 被打断时给已输出内容追加省略号，未输出部分用「...」占位，避免气泡消失只剩头像名称
+    const truncateMarker = '...';
+    const finalizeRole = (content: string, reasoning: string, interrupted: boolean) => {
+      let finalContent = content.trim();
+      if (interrupted) {
+        if (!finalContent) finalContent = truncateMarker;
+        else if (!/[.…。]+$/.test(finalContent)) finalContent += truncateMarker;
+      }
+      const aiMsg = dm.addMessage({
+        chat_type: p.chatType as any,
+        chat_id: p.chatId,
+        sender_type: 'ai',
+        sender_name: role.name,
+        content: finalContent,
+        reasoning: reasoning || '',
+        image_path: null,
+        token_used: 0,
+        timestamp: new Date().toISOString(),
+      });
+      sendStreamDone(streamId, aiMsg);
+      if (!interrupted) void requestMoodJudge(p.chatType, p.chatId, role.id);
+      if (!interrupted) void requestRelationshipAndMoments(p.chatType, p.chatId, role.id);
+    };
     try {
+      // 请求限速（QPS）：超出则等待限速窗口解除后再发，避免触发服务端限流
+      const wait = rateWaitMs(cfg.id);
+      if (wait > 0) await sleep(wait);
+      rateMark(cfg.id);
       // Anthropic 不支持流式，回退到非流式（一次性整段）
       if (cfg.provider === 'anthropic') {
         const res = await queryAI(cfg, messages, 1024);
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted) {
+          finalizeRole(res.content || '', res.reasoning || '', true);
+          return;
+        }
         emitChunk(res.content, true, '', res.reasoning || '');
-        const aiMsg = dm.addMessage({
-          chat_type: p.chatType as any,
-          chat_id: p.chatId,
-          sender_type: 'ai',
-          sender_name: role.name,
-          content: res.content,
-          reasoning: res.reasoning,
-          image_path: null,
-          token_used: res.promptTokens + res.completionTokens,
-          timestamp: new Date().toISOString(),
-        });
-        sendStreamDone(streamId, aiMsg);
-        void requestMoodJudge(p.chatType, p.chatId, role.id);
+        finalizeRole(res.content, res.reasoning || '', false);
         return;
       }
 
-      let full = '';
       const res = await streamAI(
         cfg,
         messages,
         1024,
         (chunk) => {
           if (chunk.content) full += chunk.content;
+          if (chunk.reasoning) reasoningAcc += chunk.reasoning;
           emitChunk(chunk.content || '', chunk.done, '', chunk.reasoning || '');
         },
         controller
       );
-      if (controller.signal.aborted) return;
-      const aiMsg = dm.addMessage({
-        chat_type: p.chatType as any,
-        chat_id: p.chatId,
-        sender_type: 'ai',
-        sender_name: role.name,
-        content: full || res.content,
-        reasoning: res.reasoning,
-        image_path: null,
-        token_used: res.promptTokens + res.completionTokens,
-        timestamp: new Date().toISOString(),
-      });
-      sendStreamDone(streamId, aiMsg);
-      void requestMoodJudge(p.chatType, p.chatId, role.id);
+      if (controller.signal.aborted) {
+        finalizeRole(full || '', reasoningAcc || '', true);
+        return;
+      }
+      finalizeRole(full || res.content || '', reasoningAcc || res.reasoning || '', false);
     } catch (e: any) {
+      if (controller.signal.aborted) {
+        // 中断导致的流异常：保留已生成部分内容，静默收尾
+        finalizeRole(full || '', reasoningAcc || '', true);
+        return;
+      }
       emitChunk('', true, e?.message || String(e));
     }
   };
@@ -1664,6 +2079,7 @@ async function handleGroupContinue(
     });
     sendStreamDone(streamId, aiMsg);
     void requestMoodJudge('group', p.chatId, role.id);
+    void requestRelationshipAndMoments('group', p.chatId, role.id);
     return { ok: true, roleId: role.id, roleName: role.name };
   } catch (e: any) {
     emitChunk('', true, e?.message || String(e));
@@ -1767,6 +2183,7 @@ async function handleProactive(p: {
     } as any);
     sendStreamDone(streamId, aiMsg);
     void requestMoodJudge(p.chatType, p.chatId, role.id);
+    void requestRelationshipAndMoments(p.chatType, p.chatId, role.id);
     return { ok: true, roleId: role.id, roleName: role.name };
   } catch (e: any) {
     const errMsg = dm.addMessage({
@@ -1992,14 +2409,8 @@ function parseObsGroupId(chatId: string): string | null {
   return null;
 }
 
-// 从私密小窗 chatId 提取关联角色 id（roleId 取末段，兼容 groupId 含冒号）
-function parseObsRoleId(chatId: string): string | null {
-  if (chatId.startsWith('obs:')) {
-    const parts = chatId.split(':');
-    if (parts.length >= 3) return parts[parts.length - 1];
-  }
-  return null;
-}
+
+
 
 // 取某聊天关联的观察者配置（私密小窗需回溯到所属群）
 function getObserverConfig(chatType: string, chatId: string): ObserverConfig {
@@ -2330,15 +2741,17 @@ async function extractMemories(chatType: string, chatId: string): Promise<number
   if (history.length < 2) return 0;
   let roleId: string | undefined;
   if (chatType === 'single') {
-    roleId = parseObsRoleId(chatId) || chatId;
+    roleId = dm.resolveSingleRoleId(chatType, chatId);
   } else {
     const lastAi = [...history].reverse().find((m) => m.sender_type === 'ai');
     roleId = lastAi ? dm.getRoleByName(lastAi.sender_name)?.id : undefined;
   }
   if (!roleId) return 0;
   const existing = dm.listMemories(roleId).map((m) => m.content.trim());
+  // 图片消息（生图结果/用户发图）不送入自动记忆提炼：AI 不会自动总结或保存图片记忆，仅可手动保存
   const convo = history
     .slice(-14)
+    .filter((m) => !(m.images && m.images.length) && !m.image_path)
     .map((m) => `${m.sender_name}: ${m.content || ''}`)
     .join('\n');
   const cfg =
@@ -2371,10 +2784,28 @@ async function extractMemories(chatType: string, chatId: string): Promise<number
   }
 }
 
+// 安全发送：窗口不存在或已销毁时静默跳过，杜绝 "Object has been destroyed"
+function safeSend(
+  win: BrowserWindow | null | undefined,
+  channel: string,
+  payload?: unknown
+): void {
+  try {
+    if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+  } catch (e) {
+    // 极端竞态下仍可能抛错，静默吞掉避免触发 uncaughtException 弹窗
+    console.warn('[nianyu] safeSend skip:', channel, (e as Error)?.message);
+  }
+}
+
 // 广播到所有窗口（主窗 + 快捷小窗）
 function broadcast(channel: string, payload: unknown): void {
-  for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) w.webContents.send(channel, payload);
+  try {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send(channel, payload);
+    }
+  } catch (e) {
+    console.warn('[nianyu] broadcast skip:', channel, (e as Error)?.message);
   }
 }
 
@@ -2441,6 +2872,40 @@ function registerIPC(): void {
   ipcMain.handle('chats:sendUser', async (_e, p) => handleSendUser(p));
   ipcMain.handle('chats:sendAI', async (_e, p) => handleSendAI(p));
   ipcMain.handle('chats:stream', async (_e, p) => handleStream(p));
+  // 请求限速（QPS）状态查询：前端据此做"X 秒后自动发送"预排队 UI
+  ipcMain.handle('chats:rateInfo', async (_e, modelId: string) => {
+    const settings = dm.getSettings();
+    const cfg = settings.models.find((m) => m.id === modelId);
+    const qps = cfg?.qps;
+    const wait = rateWaitMs(modelId);
+    return { enabled: !!(qps && qps > 0), limit: qps || 0, waitMs: wait };
+  });
+  // 取当前聊天参与限速的代表模型 id（单聊=角色模型；群聊=默认模型），供前端预排队 UI 使用
+  ipcMain.handle('chats:activeModel', (_e, chatType: string, chatId: string) => {
+    const settings = dm.getSettings();
+    if (chatType === 'single') {
+      const role = dm.getRole(dm.resolveSingleRoleId(chatType, chatId));
+      if (role) return resolveRoleModel(role, settings)?.id || '';
+      return '';
+    }
+    return settings.models.find((m) => m.id === settings.defaultModel && m.enabled)?.id || '';
+  });
+  // 翻译文本（右键菜单"翻译文本"）：未设翻译专用模型则用默认模型
+  ipcMain.handle('chats:translate', async (_e, text: string) => {
+    const settings = dm.getSettings();
+    if (!settings.translationEnabled) return { ok: false, error: 'disabled' };
+    try {
+      const out = await translateText(String(text || ''), settings);
+      return { ok: true, text: out };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+  // 打断生成：中止某聊天当前进行中的流式，已生成的部分内容仍会落库并 finalize
+  ipcMain.handle('chats:interrupt', (_e, chatId: string): { ok: boolean } => {
+    abortStreamsForChat(chatId);
+    return { ok: true };
+  });
   ipcMain.handle('chats:groupContinue', (e, p) => handleGroupContinue(e, p));
   ipcMain.handle('chats:proactive', async (_e, p) => handleProactive(p));
   ipcMain.handle('chats:randomEvent', async (_e, p) => handleRandomEvent(p));
@@ -2454,6 +2919,64 @@ function registerIPC(): void {
     // 群聊删除时一并移除群组记录，避免残留
     if (type === 'group') dm.deleteGroup(id);
     else dm.deleteChat(type, id);
+  });
+  // 复制聊天：1:1 复制消息与卡片，新卡片名加「副本」后缀
+  ipcMain.handle('chats:copy', (_e, chatType: string, chatId: string) => dm.copyChat(chatType, chatId));
+  // 重命名聊天卡片：写入 chat_name 覆盖显示名，不改动角色/群本身
+  ipcMain.handle('chats:rename', (_e, chatType: string, chatId: string, name: string) =>
+    dm.renameChat(chatType, chatId, name)
+  );
+  // 解析单聊真实 roleId（普通单聊 / 观察者私密 / 复制出的解绑单聊），前端用于角色缺失判定等
+  ipcMain.handle('chats:resolveRole', (_e, chatType: string, chatId: string) =>
+    dm.resolveSingleRoleId(chatType, chatId)
+  );
+  // 自适应故事线：开关 / 查询 / 标记节点 / 列表 / 删除节点
+  ipcMain.handle('chats:setStory', (_e, chatType: string, chatId: string, enabled: boolean) => {
+    const v = dm.setStoryEnabled(chatType, chatId, enabled);
+    broadcast('story:changed', { chatType, chatId, enabled });
+    return v;
+  });
+  ipcMain.handle('chats:getStory', (_e, chatType: string, chatId: string) =>
+    dm.getStoryEnabled(chatType, chatId)
+  );
+  ipcMain.handle('chats:addStoryNode', (_e, chatType: string, chatId: string, msgId: number, title: string) =>
+    dm.addStoryNode(chatType, chatId, msgId, title)
+  );
+  ipcMain.handle('chats:listStoryNodes', (_e, chatType: string, chatId: string) =>
+    dm.listStoryNodes(chatType, chatId)
+  );
+  ipcMain.handle('chats:removeStoryNode', (_e, id: number) => dm.removeStoryNode(id));
+  // 朋友圈动态：新增 / 列表 / 删除 / 到点发布
+  ipcMain.handle('moments:add', (_e, roleId: string, content: string, images: string[], scheduledAt?: string | null, selfRoleId?: string) =>
+    dm.addMoment(roleId, content, images, scheduledAt, selfRoleId)
+  );
+  ipcMain.handle('moments:list', (_e, roleId?: string, includeUnpublished?: boolean, selfRoleId?: string, favoritedOnly?: boolean) =>
+    dm.listMoments(roleId, includeUnpublished, selfRoleId, favoritedOnly)
+  );
+  ipcMain.handle('moments:remove', (_e, id: number) => dm.removeMoment(id));
+  ipcMain.handle('moments:update', (_e, id: number, patch: Record<string, unknown>) => {
+    dm.updateMoment(id, patch as any);
+    broadcast('moments:changed', { id });
+  });
+  ipcMain.handle('moments:publishDue', () => dm.publishDueMoments());
+  // 人物养成：关系值增减
+  ipcMain.handle('role:adjustBond', (_e, roleId: string, delta: number) => {
+    const v = dm.adjustBond(roleId, delta);
+    // 广播关系值变更，主窗与小窗同步刷新展示（避免一端调了另一端没显示）
+    broadcast('role:bond', { roleId });
+    return v;
+  });
+  // 手动触发：withMoments 控制是否连带生成朋友圈。
+  // 关系值界面只判定关系（withMoments=false），朋友圈板块的生成按钮才发朋友圈（withMoments=true）。
+  // 手动触发：withMoments 控制是否发朋友圈，doRelationship 控制是否判定关系值（两者独立）。
+  // 关系值界面只判定关系（withMoments=false，doRelationship=true）；朋友圈板块只生成（withMoments=true，doRelationship=false）。
+  ipcMain.handle('relationship:trigger', async (_e, chatType: string, chatId: string, roleId: string, withMoments = true, doRelationship = true) => {
+    try {
+      const r = await requestRelationshipAndMoments(chatType, chatId, roleId, { force: true, doMoments: withMoments, doRelationship });
+      return r;
+    } catch (err) {
+      return { ok: false, moments: 0, error: String(err) };
+    }
   });
   ipcMain.handle('chats:clearMessages', (_e, chatType: string, chatId: string, withMemories: boolean) =>
     dm.clearChatMessages(chatType, chatId, withMemories)
@@ -2502,6 +3025,12 @@ function registerIPC(): void {
   });
   ipcMain.handle('chat:autoChat:round', (_e, chatId: string, round: number): void => {
     broadcast('chat:autoChat:driver', { chatId, action: 'round', round });
+  });
+  // 查询某聊天当前是否处于自动接话（被某窗口驱动）。用于窗口（尤其小窗）在驱动已存在后才打开时，
+  // 挂载即同步为「运行中」显示状态，避免卡在「非自动接话」状态导致按钮/轮数不同步。
+  ipcMain.handle('chat:autoChat:state', (_e, chatId: string): { active: boolean; driverId?: number } => {
+    const owner = autoChatDrivers.get(chatId);
+    return { active: owner !== undefined, driverId: owner };
   });
   // ===== 群成员编辑：单窗口锁 =====
   ipcMain.handle('chat:groupEditor:open', (e, groupId: string): { ok: boolean; ownerId?: number } => {
@@ -2574,6 +3103,11 @@ function registerIPC(): void {
     }
     // 广播设置变更，让主窗与小窗同步刷新（世界书/身份/背景/开关等）
     broadcast('settings:changed', patch || {});
+    // 缩放基准/上下限变更时，主窗与小窗立即按新参数重新缩放（两端同步显示）
+    if (patch && patch.uiZoom) {
+      applyWindowZoom(mainWindow, false);
+      applyWindowZoom(miniWindow, true);
+    }
     return next;
   });
   ipcMain.handle('settings:reset', (_e, keepKeys: boolean) => {
@@ -2802,6 +3336,78 @@ function registerIPC(): void {
     }
   });
 
+  // ---------- 生图（专用图像生成 API） ----------
+  ipcMain.handle('image:generate', async (_e, chatType: string, chatId: string, prompt: string) => {
+    const s = dm.getSettings();
+    const ig = s.imageGen;
+    if (!ig || !ig.enabled || !ig.baseUrl || !ig.apiKey) {
+      throw new Error('未配置生图 API，请在设置中开启「生图」并填写独立的 Base URL 与 API Key');
+    }
+    const { b64, url } = await generateImage(
+      { baseUrl: ig.baseUrl, apiKey: ig.apiKey },
+      prompt,
+      ig.model || 'gpt-image-1',
+      ig.size || '1024x1024'
+    );
+    let imagePath: string | null = null;
+    if (b64) {
+      imagePath = saveGeneratedImage(b64);
+    } else if (url) {
+      try {
+        const resp = await fetch(url);
+        const buf = Buffer.from(await resp.arrayBuffer());
+        const name = `gen_${Date.now()}_${Math.floor(Math.random() * 1e6)}.png`;
+        const dest = path.join(dm.imagesDir, name);
+        fs.writeFileSync(dest, buf);
+        imagePath = dest;
+      } catch (e) {
+        console.error('下载生图失败', e);
+      }
+    }
+    if (!imagePath) throw new Error('生图失败：未获取到图片数据');
+
+    // 用户描述消息（与 sendUserMessage 同源的发送者名）
+    const selfRole = resolveActiveSelfRole(s, chatType, chatId);
+    const userMsg = dm.addMessage({
+      chat_type: chatType as any,
+      chat_id: chatId,
+      sender_type: 'user',
+      sender_name: selfRole?.name || '我',
+      content: prompt,
+      image_path: null,
+      images: null,
+      token_used: 0,
+      timestamp: new Date().toISOString(),
+    });
+    broadcast('stream:user', userMsg);
+
+    // AI 图片消息
+    const aiName =
+      chatType === 'single'
+        ? dm.getRole(dm.resolveSingleRoleId(chatType, chatId))?.name || 'AI'
+        : dm.getGroup(chatId)?.group_name || 'AI';
+    const aiMsg = dm.addMessage({
+      chat_type: chatType as any,
+      chat_id: chatId,
+      sender_type: 'ai',
+      sender_name: aiName,
+      content: '',
+      image_path: imagePath,
+      token_used: 0,
+      timestamp: new Date().toISOString(),
+    });
+    broadcast('stream:user', aiMsg);
+    return { ok: true, imagePath };
+  });
+
+  // 手动把一张图片存入角色记忆（AI 不会自动保存图片记忆）
+  ipcMain.handle('memory:saveImage', (_e, p: { roleId: string; imagePath: string; note?: string }) => {
+    if (!p.roleId || !p.imagePath) return null;
+    const name = (p.imagePath || '').split(/[\\/]/).pop() || '图片';
+    const content = p.note && p.note.trim() ? p.note.trim() : `生成/收到图片：${name}`;
+    return dm.addMemory({ roleId: p.roleId, content, source: 'manual', image_path: p.imagePath } as any);
+  });
+
   ipcMain.handle('backup:pickTarget', async () => {
     if (!mainWindow) return null;
     const s = dm.getSettings();
@@ -2860,11 +3466,9 @@ function registerIPC(): void {
   ipcMain.handle('audio:transcribe', async (_e, data: Uint8Array) => {
     const s = dm.getSettings();
     const v = s.voice;
-    if (!v?.asrModelId) throw new Error('未配置语音输入模型');
-    const cfg = s.models.find((m) => m.id === v.asrModelId);
-    if (!cfg) throw new Error('语音输入引用的模型配置不存在');
+    if (!v?.asrBaseUrl || !v?.asrApiKey) throw new Error('未配置语音输入 API（请在设置中填写 ASR 专用 Base URL 与 API Key）');
     return transcribeAudio(
-      { baseUrl: cfg.baseUrl, apiKey: cfg.apiKey },
+      { baseUrl: v.asrBaseUrl, apiKey: v.asrApiKey },
       Buffer.from(data),
       v.asrModel || 'whisper-1'
     );
@@ -2874,11 +3478,9 @@ function registerIPC(): void {
   ipcMain.handle('audio:tts', async (_e, text: string) => {
     const s = dm.getSettings();
     const v = s.voice;
-    if (!v?.ttsModelId) throw new Error('未配置 TTS 模型');
-    const cfg = s.models.find((m) => m.id === v.ttsModelId);
-    if (!cfg) throw new Error('TTS 引用的模型配置不存在');
+    if (!v?.ttsBaseUrl || !v?.ttsApiKey) throw new Error('未配置 TTS 专用 API，请在设置中填写独立的 Base URL 与 API Key');
     const buf = await textToSpeech(
-      { baseUrl: cfg.baseUrl, apiKey: cfg.apiKey },
+      { baseUrl: v.ttsBaseUrl, apiKey: v.ttsApiKey },
       text,
       v.ttsModel || 'tts-1',
       v.ttsVoice || 'alloy'
@@ -2932,6 +3534,7 @@ function registerIPC(): void {
   });
   // 全局 tick：广播各聊天已静默毫秒数，渲染进程据此计算剩余秒数（多窗口完全一致）
   setInterval(() => {
+    if (quitting) return;
     if (idleState.size === 0) return;
     const now = Date.now();
     const payload: Record<string, number> = {};
@@ -2962,7 +3565,7 @@ function registerIPC(): void {
     const key = `${chatType}:${chatId}`;
     if (settings.chatWorldBooks && settings.chatWorldBooks[key]) return settings.chatWorldBooks[key];
     if (chatType === 'single') {
-      const r = dm.getRole(parseObsRoleId(chatId) || chatId);
+      const r = dm.getRole(dm.resolveSingleRoleId(chatType, chatId));
       if (r && r.worldBookId) return r.worldBookId;
     }
     return settings.defaultWorldBookId || '';
@@ -3069,6 +3672,11 @@ function getAppLangFromSettings(): 'zh' | 'en' {
 process.on('uncaughtException', (error) => {
   const lang = getAppLangFromSettings();
   const msg = error?.message || String(error);
+  // 退出流程中窗口已销毁的竞态错误：静电忽略，不再弹窗也不再退出
+  if (/object has been destroyed/i.test(msg)) {
+    console.warn('[nianyu] ignored destroyed-object exception during quit:', msg);
+    return;
+  }
   const diag = diagnoseError(msg);
   console.error('[nianyu] uncaughtException:', msg);
   const isZh = lang === 'zh';
@@ -3125,6 +3733,9 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   applyMiniSettings();
+  // 朋友圈：启动时发布已到点的定时动态，并每 60 秒轮询一次，实现「定时发动态」
+  dm.publishDueMoments();
+  setInterval(() => { try { dm.publishDueMoments(); } catch { /* 忽略：数据异常不影响主流程 */ } }, 60 * 1000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -3133,7 +3744,9 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   quitting = true;
+  autoChatDrivers.clear();
   if (notifyWindow && !notifyWindow.isDestroyed()) notifyWindow.destroy();
+  notifyWindow = null;
 });
 
 app.on('will-quit', () => {

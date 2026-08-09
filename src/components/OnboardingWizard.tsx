@@ -6,7 +6,7 @@ import type { ThemeName, ModelConfig, SelfRole, Role } from '../types';
 import { THEMES } from './Settings';
 import { ModelEditor } from './ModelEditor';
 import { SelfRoleEditor } from './SelfRoleEditor';
-import { parseCharacterCardText, type ParsedCharacter } from '../utils/characterCard';
+import { type ParsedCharacter } from '../utils/characterCard';
 import { useToast, ToastView } from './Toast';
 
 const TOTAL = 5;
@@ -81,7 +81,7 @@ export const OnboardingWizard: React.FC<{ onDone: () => void }> = ({ onDone }) =
   const importCard = async () => {
     const res = await api.importCharacterCard();
     if (!res || res.error || !res.parsed || !res.parsed.name) {
-      showToast(t('role.importCardFail'), true);
+      showToast(t('role.importCardFail'), { error: true });
       return;
     }
     const role = cardToRole(res.parsed, t('role.importedFallbackName'));
