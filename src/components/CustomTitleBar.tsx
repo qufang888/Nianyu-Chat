@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
+import { useTheme } from '../theme/ThemeContext';
 import { AvatarImg } from './ChatList';
 
 interface CustomTitleBarProps {
@@ -56,8 +57,37 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
   onOpenMain,
 }) => {
   const { t } = useI18n();
+  const { settings } = useTheme();
   const isMini = variant === 'mini';
   const [isMax, setIsMax] = useState(maximized);
+  const [showClosePrompt, setShowClosePrompt] = useState(false);
+  const [dontShowAgain, setDontShowAgain] = useState(false);
+  // 弹窗内临时选择的行为（默认跟随当前设置，用户可在弹窗内切换）
+  const [promptCloseToTray, setPromptCloseToTray] = useState(true);
+
+  // 主窗首次关闭提示：询问行为 + 支持「不再提示」（即时生效写入设置）。小窗无此逻辑，关闭即隐藏。
+  const handleMainClose = () => {
+    if (isMini) {
+      api.windowControl('close');
+      return;
+    }
+    if (settings?.closeConfirmDone) {
+      api.windowControl('close');
+      return;
+    }
+    // 每次打开弹窗时同步当前设置
+    setPromptCloseToTray(settings?.closeToTray !== false);
+    setShowClosePrompt(true);
+  };
+  const confirmClose = async () => {
+    // 先把用户在弹窗里选的行为写回设置
+    try { await api.saveSettings({ closeToTray: promptCloseToTray }); } catch {}
+    if (dontShowAgain) {
+      try { await api.saveSettings({ closeConfirmDone: true }); } catch {}
+    }
+    setShowClosePrompt(false);
+    api.windowControl('close');
+  };
 
   useEffect(() => setIsMax(maximized), [maximized]);
 
@@ -175,13 +205,113 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
             <button
               className="ctb-btn ctb-close"
               title={t('titlebar.close')}
-              onClick={() => api.windowControl('close')}
+              onClick={handleMainClose}
             >
               <IconClose />
             </button>
           </>
         )}
       </div>
+      {showClosePrompt && !isMini && (
+        <div className="modal-mask" onClick={() => setShowClosePrompt(false)} style={{ zIndex: 10000 }}>
+          <div
+            className="modal-card"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: 440,
+              width: '92%',
+              maxHeight: '85vh',
+              overflowY: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <div className="modal-head">
+              <span>{t('titlebar.closeConfirmTitle')}</span>
+            </div>
+            <div className="modal-body" style={{ flex: 1 }}>
+              {/* 行为选择：托盘 vs 退出 */}
+              <div style={{ marginBottom: 12 }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 10,
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    border: promptCloseToTray ? '2px solid var(--color-primary)' : '2px solid transparent',
+                    background: promptCloseToTray ? 'var(--color-hover)' : 'transparent',
+                    transition: 'all 0.15s',
+                  }}
+                  onClick={() => setPromptCloseToTray(true)}
+                >
+                  <input
+                    type="radio"
+                    name="closeBehavior"
+                    checked={promptCloseToTray}
+                    onChange={() => setPromptCloseToTray(true)}
+                    style={{ marginTop: 2 }}
+                  />
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{t('settings.closeToTray')}</div>
+                    <div style={{ fontSize: 12.5, lineHeight: 1.6, color: 'var(--color-text-secondary)' }}>{t('titlebar.closeConfirmTray')}</div>
+                  </div>
+                </label>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 10,
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    border: !promptCloseToTray ? '2px solid var(--color-primary)' : '2px solid transparent',
+                    background: !promptCloseToTray ? 'var(--color-hover)' : 'transparent',
+                    transition: 'all 0.15s',
+                  }}
+                  onClick={() => setPromptCloseToTray(false)}
+                >
+                  <input
+                    type="radio"
+                    name="closeBehavior"
+                    checked={!promptCloseToTray}
+                    onChange={() => setPromptCloseToTray(false)}
+                    style={{ marginTop: 2 }}
+                  />
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{t('settings.closeExit')}</div>
+                    <div style={{ fontSize: 12.5, lineHeight: 1.6, color: 'var(--color-text-secondary)' }}>{t('titlebar.closeConfirmExit')}</div>
+                  </div>
+                </label>
+              </div>
+
+              {/* 提示说明 */}
+              <div style={{
+                fontSize: 12,
+                lineHeight: 1.6,
+                marginBottom: 12,
+                padding: '8px 10px',
+                borderRadius: 6,
+                background: 'var(--color-hover)',
+                color: 'var(--color-text-secondary)',
+              }}>
+                {t('titlebar.closeConfirmHint')}
+              </div>
+
+              {/* 不再提示 */}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
+                <input type="checkbox" checked={dontShowAgain} onChange={(e) => setDontShowAgain(e.target.checked)} />
+                {t('titlebar.closeConfirmNoMore')}
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', padding: '12px 16px', borderTop: '1px solid var(--color-border)', flexShrink: 0 }}>
+              <button className="btn-ghost" onClick={() => setShowClosePrompt(false)}>{t('common.cancel')}</button>
+              <button className="btn-primary" onClick={confirmClose}>{t('common.confirm')}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

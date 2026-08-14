@@ -46,6 +46,8 @@ export const ChatWindow: React.FC<{
   const [genOpen, setGenOpen] = useState(false);
   const [genText, setGenText] = useState('');
   const [genLoading, setGenLoading] = useState(false);
+  const [genTyping, setGenTyping] = useState(false); // 生图期间在聊天框显示「AI 正在回复」动画（用户不会看到自己的生图指令）
+  const [promptView, setPromptView] = useState<string | null>(null); // 查看提示词弹窗
   const [showMention, setShowMention] = useState(false);
   // 消息查找（🔍）与关系值（💞）面板开关
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1072,6 +1074,7 @@ export const ChatWindow: React.FC<{
     const prompt = genText.trim();
     if (!prompt) return;
     setGenLoading(true);
+    setGenTyping(true); // 生成期间显示 AI 正在回复动画
     try {
       await api.generateImage(chatType, chatId, prompt);
       setGenOpen(false);
@@ -1080,6 +1083,7 @@ export const ChatWindow: React.FC<{
       showToast(e?.message || t('chat.drawFailed'));
     } finally {
       setGenLoading(false);
+      setGenTyping(false);
     }
   };
 
@@ -1551,7 +1555,7 @@ export const ChatWindow: React.FC<{
       await audio.play();
     } catch (e: any) {
       setSpeakingId(null);
-      alert(t('chat.ttsFailed', { msg: e?.message || String(e) }));
+      showToast(t('chat.ttsFailed', { msg: e?.message || String(e) }), { error: true });
     }
   };
 
@@ -1987,6 +1991,7 @@ export const ChatWindow: React.FC<{
             onReasoningCopied={() => showToast(t('toast.reasoningCopied'))}
             onQuickMemory={(text) => handleQuickMemory(m, text)}
             onSaveImageMemory={handleSaveImageMemory}
+            onViewPrompt={(p) => setPromptView(p)}
             onForward={(msg) => openForwardPicker(msg)}
             onEdit={(msg) => { setEditMsg(msg); setInput(msg.content); }}
             onRollback={(msgId) => handleRollback(msgId)}
@@ -1997,6 +2002,18 @@ export const ChatWindow: React.FC<{
             roleMood={chatType === 'group' && m.sender_type === 'ai' ? groupMoods[m.sender_name] : undefined}
           />
         ))}
+        {genTyping && (
+          <div className="msg-row ai" style={{ opacity: 0.85 }}>
+            <div className="avatar">🤖</div>
+            <div>
+              <div className="bubble">
+                <div className="typing" aria-label={t('chat.replying')}>
+                  <span className="typing-bar" />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         {failed && (
           <div className="msg-row user" style={{ alignSelf: 'flex-end' }}>
             <div
@@ -2188,6 +2205,32 @@ export const ChatWindow: React.FC<{
           <img className="image-preview" src={preview} alt={t('chat.preview')} />
         </div>
       )}
+      {promptView && (
+        <div className="modal-mask" onClick={() => setPromptView(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520, width: '90%' }}>
+            <div className="modal-head">
+              <span>{t('msg.viewPrompt')}</span>
+              <span className="modal-close" onClick={() => setPromptView(null)}>×</span>
+            </div>
+            <div className="modal-body">
+              <div
+                style={{
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  background: 'var(--color-input-bg)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '12px 14px',
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                }}
+              >
+                {promptView}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {translateModal && (
         <div className="modal-mask" onClick={() => setTranslateModal(null)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520, width: '90%' }}>
@@ -2365,6 +2408,7 @@ const MessageRow: React.FC<{
   onReasoningCopied?: () => void;
   onQuickMemory?: (text: string) => void;
   onSaveImageMemory?: (msg: ChatMessage) => void;
+  onViewPrompt?: (prompt: string) => void;
   onForward?: (msg: ChatMessage) => void;
   onEdit?: (msg: ChatMessage) => void;
   onRollback?: (msgId: number) => void;
@@ -2375,7 +2419,7 @@ const MessageRow: React.FC<{
   roleMood?: string;
 }> = ({
   msg, onImage, prevTimestamp, modelName, avatarPath, userAvatarPath, showTts, speaking, typing, streaming, hideReasoning, onSpeak, onReasoningCopied,
-  onQuickMemory, onSaveImageMemory, onForward, onEdit, onRollback, onRecall, onCopy, onTranslate, onMarkNode, roleMood,
+  onQuickMemory, onSaveImageMemory, onViewPrompt, onForward, onEdit, onRollback, onRecall, onCopy, onTranslate, onMarkNode, roleMood,
 }) => {
   const { t } = useI18n();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -2560,6 +2604,9 @@ const MessageRow: React.FC<{
           {onMarkNode && <button className="ctx-menu-item" onClick={() => { onMarkNode(msg); closeMenu(); }}>{t('chat.markNode')}</button>}
           {onSaveImageMemory && (msg.images?.length || msg.image_path) && (
             <button className="ctx-menu-item" onClick={() => { onSaveImageMemory(msg); closeMenu(); }}>{t('chat.drawMemory')}</button>
+          )}
+          {msg.genPrompt && (
+            <button className="ctx-menu-item" onClick={() => { onViewPrompt?.(msg.genPrompt!); closeMenu(); }}>{t('msg.viewPrompt')}</button>
           )}
           {onForward && <button className="ctx-menu-item" onClick={handleForward}>{t('msg.forward')}</button>}
           {isUser && onEdit && <button className="ctx-menu-item" onClick={handleEdit}>{t('msg.edit')}</button>}

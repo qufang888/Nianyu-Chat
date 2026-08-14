@@ -62,22 +62,175 @@ interface Store {
   moments: Moment[]; // 朋友圈动态（人物养成/社交）
 }
 
+// 数据保存路径配置：存放在固定的 userData 下（不随数据目录移动），避免「先读设置才能定位数据目录」的鸡生蛋问题。
+const PATH_CONFIG_PATH = path.join(app.getPath('userData'), 'path-config.json');
+interface PathConfig {
+  dataPath?: string; // 用户自定义的实时数据目录（空 = 使用默认「文档/念语数据」）
+  legacyMigrated?: boolean; // 是否已从旧版 userData/data 迁移过
+}
+
+function readPathConfig(): PathConfig {
+  try {
+    if (fs.existsSync(PATH_CONFIG_PATH)) {
+      return JSON.parse(fs.readFileSync(PATH_CONFIG_PATH, 'utf-8')) as PathConfig;
+    }
+  } catch {
+    /* 忽略损坏配置 */
+  }
+  return {};
+}
+function writePathConfig(cfg: PathConfig): void {
+  try {
+    fs.writeFileSync(PATH_CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf-8');
+  } catch {
+    /* 忽略写入失败 */
+  }
+}
+
+// 解析当前实时数据目录：自定义路径优先；否则默认「文档/念语数据」。
+function resolveDataDir(): string {
+  const cfg = readPathConfig();
+  if (cfg.dataPath && cfg.dataPath.trim()) {
+    return path.resolve(cfg.dataPath.trim());
+  }
+  return path.join(app.getPath('documents'), '念语数据');
+}
+
+// 默认数据目录（文档/念语数据），供前端展示。
+export function defaultDataDirPath(): string {
+  return path.join(app.getPath('documents'), '念语数据');
+}
+
+// 旧版数据位于 userData/data；首次启动（且仍用默认路径、且旧目录有数据、目标目录为空）时一次性迁移到新目录。
+function migrateLegacyData(targetDir: string): void {
+  const cfg = readPathConfig();
+  if (cfg.legacyMigrated) return;
+  const legacy = path.join(app.getPath('userData'), 'data');
+  const hasLegacy =
+    fs.existsSync(path.join(legacy, 'store.json')) || fs.existsSync(path.join(legacy, 'settings.json'));
+  const targetEmpty = !fs.existsSync(path.join(targetDir, 'store.json')) && !fs.existsSync(path.join(targetDir, 'settings.json'));
+  if (hasLegacy && targetEmpty) {
+    try {
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.cpSync(legacy, targetDir, { recursive: true });
+    } catch (e) {
+      console.error('迁移旧数据失败', e);
+    }
+  }
+  cfg.legacyMigrated = true;
+  writePathConfig(cfg);
+}
+
 class DataManager {
   private dataDir: string;
   private storePath: string;
   private settingsPath: string;
+  private errorLogPath: string;
   private store: Store;
   private settings: AppSettings;
+  private errorSeq = 0;
 
   constructor() {
-    this.dataDir = path.join(app.getPath('userData'), 'data');
+    this.dataDir = resolveDataDir();
+    migrateLegacyData(this.dataDir);
     fs.mkdirSync(this.dataDir, { recursive: true });
     fs.mkdirSync(path.join(this.dataDir, 'images'), { recursive: true });
     this.storePath = path.join(this.dataDir, 'store.json');
     this.settingsPath = path.join(this.dataDir, 'settings.json');
+    this.errorLogPath = path.join(this.dataDir, 'errors.json');
     this.store = this.loadStore();
     this.settings = this.loadSettings();
     this.migrate();
+  }
+
+  // 重新从磁盘加载 store 与 settings（恢复备份后调用，使内存态与磁盘一致）
+  reloadAll(): void {
+    this.store = this.loadStore();
+    this.settings = this.loadSettings();
+  }
+
+  // ===== 错误日志：持久化到 dataDir/errors.json，按时间倒序，上限 1000 条 =====
+  logError(category: 'functional' | 'model' | 'other', message: string, detail?: string): void {
+    try {
+      let list: import('../src/types').ErrorLogEntry[] = [];
+      if (fs.existsSync(this.errorLogPath)) {
+        list = JSON.parse(fs.readFileSync(this.errorLogPath, 'utf-8')) as import('../src/types').ErrorLogEntry[];
+      }
+      this.errorSeq += 1;
+      list.push({ id: this.errorSeq, time: new Date().toISOString(), category, message: String(message).slice(0, 2000), detail: detail ? String(detail).slice(0, 8000) : undefined });
+      if (list.length > 1000) list = list.slice(-1000);
+      fs.writeFileSync(this.errorLogPath, JSON.stringify(list, null, 2), 'utf-8');
+    } catch {
+      /* 错误日志写入失败不应影响主流程 */
+    }
+  }
+  getErrorLog(): import('../src/types').ErrorLogEntry[] {
+    try {
+      if (fs.existsSync(this.errorLogPath)) {
+        return JSON.parse(fs.readFileSync(this.errorLogPath, 'utf-8')) as import('../src/types').ErrorLogEntry[];
+      }
+    } catch {
+      /* 忽略 */
+    }
+    return [];
+  }
+  clearErrorLog(): void {
+    try {
+      if (fs.existsSync(this.errorLogPath)) fs.rmSync(this.errorLogPath, { force: true });
+    } catch {
+      /* 忽略 */
+    }
+  }
+
+  // ===== 数据保存路径 =====
+  getCurrentDataPath(): string {
+    return this.dataDir;
+  }
+  getCustomDataPath(): string | null {
+    return readPathConfig().dataPath?.trim() || null;
+  }
+  // 将当前实时数据整体迁移到新目录，并写入 path-config（下次启动生效）。已存在的目标目录会被合并覆盖。
+  // 同时将路径写入明文 custom-data-path.txt 供卸载器读取删除。
+  setCustomDataPath(dir: string): { ok: boolean; error?: string } {
+    const target = path.resolve((dir || '').trim());
+    if (!target) return { ok: false, error: '路径不能为空' };
+    if (target === this.dataDir) return { ok: false, error: '新路径与当前路径相同' };
+    try {
+      fs.mkdirSync(target, { recursive: true });
+      fs.cpSync(this.dataDir, target, { recursive: true });
+      const cfg = readPathConfig();
+      cfg.dataPath = target;
+      writePathConfig(cfg);
+      // 写明文副本供 NSIS 卸载器读取
+      try {
+        fs.writeFileSync(path.join(app.getPath('userData'), 'custom-data-path.txt'), target + '\n', 'utf-8');
+      } catch (_) { /* 非致命，忽略 */ }
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  }
+  // 恢复默认数据目录（文档/念语数据）：把当前数据迁回默认目录并清除自定义路径。
+  resetDataPathToDefault(): { ok: boolean; error?: string } {
+    const target = defaultDataDirPath();
+    if (target === this.dataDir) {
+      const cfg = readPathConfig();
+      cfg.dataPath = '';
+      writePathConfig(cfg);
+      try { fs.unlinkSync(path.join(app.getPath('userData'), 'custom-data-path.txt')); } catch (_) { /* ignore */ }
+      return { ok: true };
+    }
+    try {
+      fs.mkdirSync(target, { recursive: true });
+      fs.cpSync(this.dataDir, target, { recursive: true });
+      const cfg = readPathConfig();
+      cfg.dataPath = '';
+      writePathConfig(cfg);
+      try { fs.unlinkSync(path.join(app.getPath('userData'), 'custom-data-path.txt')); } catch (_) { /* ignore */ }
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
   }
 
   // 旧版单一 worldBook 字符串迁移为「世界书库」中的一条，并设为全局默认

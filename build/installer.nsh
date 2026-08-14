@@ -80,6 +80,7 @@ BrandingText "念语 Nianyu AI Chat"
   FunctionEnd
 
   ; 卸载区段末尾：先杀进程，勾选才删除数据目录
+  ; 同时检查自定义数据路径（用户可能将数据迁移到了文档文件夹等位置）
   Section "-postuninstall"
     ${If} $deleteAppDataChecked == 1
       ; 杀进程释放文件锁，确保 AppData 目录可删
@@ -87,6 +88,23 @@ BrandingText "念语 Nianyu AI Chat"
       Sleep 500
       RMDir /r "$APPDATA\nianyu-client"
       RMDir /r "$LOCALAPPDATA\nianyu-client"
+      ; 删除自定义数据目录（路径存储在 custom-data-path.txt 中，每行一个路径）
+      ${If} ${FileExists} "$APPDATA\nianyu-client\custom-data-path.txt"
+        ; NSIS 3.x 可用 FileRead 逐行读取并删除
+        FileOpen $4 "$APPDATA\nianyu-client\custom-data-path.txt" r
+        IfErrors done_custom_path
+        loop_custom_path:
+          FileRead $4 $5
+          IfErrors done_custom_path
+          StrCpy $5 "$5" "" -1  ; 去掉换行符
+          StrCmp $5 "" loop_custom_path  ; 跳过空行
+          ; 先删 custom-data-path.txt 自身（它在待删目录内的话会被 RMDir /r 一并删除）
+          ; 但它实际在 APPDATA 里，所以单独保留到后面统一清
+          RMDir /r "$5"
+          Goto loop_custom_path
+        done_custom_path:
+        FileClose $4
+      ${EndIf}
     ${EndIf}
   SectionEnd
 !endif

@@ -12,6 +12,7 @@ import type {
   WorldBook,
   Rule,
   MemoryEntry,
+  ErrorLogEntry,
 } from '../src/types';
 import type { ImportCharacterResult } from '../src/utils/characterCard';
 
@@ -212,6 +213,16 @@ export interface NianyuAPI {
   restoreBackup: (zipPath: string) => Promise<void>;
   pickBackupDir: () => Promise<string | null>;
   exportBackup: () => Promise<string>;
+
+  // ===== 应用数据保存路径（实时数据，非备份）=====
+  getDataPath: () => Promise<{ current: string; custom: string | null; def: string }>;
+  setDataPath: (dir: string) => Promise<{ ok: boolean; error?: string }>;
+  pickDataDir: () => Promise<string | null>;
+
+  // ===== 错误日志 =====
+  logAppError: (category: 'functional' | 'model' | 'other', message: string, detail?: string) => Promise<void>;
+  getErrorLog: () => Promise<ErrorLogEntry[]>;
+  clearErrorLog: () => Promise<void>;
 
   listModels: (cfg: ModelConfig) => Promise<string[]>;
   testModel: (cfg: ModelConfig) => Promise<{ ok: boolean; message: string }>;
@@ -506,6 +517,13 @@ const api: NianyuAPI = {
   restoreBackup: (zipPath) => ipcRenderer.invoke('backup:restore', zipPath),
   pickBackupDir: () => ipcRenderer.invoke('backup:pickDir'),
   exportBackup: () => ipcRenderer.invoke('backup:export'),
+
+  getDataPath: () => ipcRenderer.invoke('data:getPath'),
+  setDataPath: (dir) => ipcRenderer.invoke('data:setPath', dir),
+  pickDataDir: () => ipcRenderer.invoke('data:pickDir'),
+  logAppError: (category, message, detail) => ipcRenderer.invoke('error:log', category, message, detail),
+  getErrorLog: () => ipcRenderer.invoke('error:get'),
+  clearErrorLog: () => ipcRenderer.invoke('error:clear'),
 
   listModels: (cfg) => ipcRenderer.invoke('models:list', cfg),
   testModel: (cfg) => ipcRenderer.invoke('models:test', cfg),

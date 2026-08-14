@@ -1902,6 +1902,9 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   color: var(--color-text);
   overflow: hidden;
   border-radius: var(--radius-sm);
+  /* 毛玻璃主题下小窗也需背景模糊，防止多层文字重叠 */
+  backdrop-filter: blur(var(--window-bg-blur, 0px));
+  -webkit-backdrop-filter: blur(var(--window-bg-blur, 0px));
   /* 强制创建独立合成层，让子元素被窗口圆角正确裁剪，
      否则底部 .mini-composer 方角会穿透圆角，在左下/右下角形成双层边框伪影 */
   transform: translateZ(0);

@@ -70,37 +70,37 @@
   --color-primary: #7c83ff;
   --color-primary-text: #ffffff;
   --color-bg: linear-gradient(135deg, #1e2a78 0%, #6a3aa8 55%, #a1429c 100%);
-  --color-panel: rgba(255, 255, 255, 0.15);
-  --color-panel-alt: rgba(255, 255, 255, 0.10);
-  --color-chat-bg: rgba(255, 255, 255, 0.08);
-  --color-nav-bg: rgba(20, 20, 40, 0.35);
+  --color-panel: rgba(255, 255, 255, 0.22);
+  --color-panel-alt: rgba(255, 255, 255, 0.15);
+  --color-chat-bg: rgba(255, 255, 255, 0.10);
+  --color-nav-bg: rgba(20, 20, 40, 0.45);
   --color-nav-icon: rgba(255, 255, 255, 0.7);
   --color-nav-active: #ffffff;
   --color-text: #f4f4ff;
   --color-text-secondary: rgba(255, 255, 255, 0.65);
-  --color-border: rgba(255, 255, 255, 0.2);
+  --color-border: rgba(255, 255, 255, 0.22);
   --color-bubble-user: linear-gradient(135deg, #6ec6ff, #4a9eff);
   --color-bubble-user-text: #ffffff;
-  --color-bubble-ai: rgba(255, 255, 255, 0.22);
+  --color-bubble-ai: rgba(255, 255, 255, 0.28);
   --color-bubble-ai-text: #f4f4ff;
-  --color-input-bg: rgba(255, 255, 255, 0.18);
-  --color-hover: rgba(255, 255, 255, 0.12);
-  --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.25);
-  --blur: 20px;
+  --color-input-bg: rgba(255, 255, 255, 0.22);
+  --color-hover: rgba(255, 255, 255, 0.15);
+  --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.3);
+  --blur: 35px;
   --color-system-msg: rgba(255, 255, 255, 0.6);
   --color-select-bg: #241b45;
   --color-select-text: #f4f4ff;
   /* 毛玻璃：标题栏半透明 + 磨砂；根容器半透明可透出桌面 */
-  --app-bg: linear-gradient(135deg, rgba(30,42,120,0.45) 0%, rgba(106,58,168,0.45) 55%, rgba(161,66,156,0.45) 100%);
-  --window-bg-blur: 22px;
-  --titlebar-bg: rgba(255, 255, 255, 0.12);
+  --app-bg: linear-gradient(135deg, rgba(30,42,120,0.55) 0%, rgba(106,58,168,0.55) 55%, rgba(161,66,156,0.55) 100%);
+  --window-bg-blur: 40px;
+  --titlebar-bg: rgba(255, 255, 255, 0.15);
   --titlebar-text: #ffffff;
   --titlebar-icon: rgba(255, 255, 255, 0.85);
   --titlebar-btn-hover: rgba(255, 255, 255, 0.18);
   --titlebar-close-hover-bg: #ff5c5c;
   --titlebar-close-hover-icon: #ffffff;
-  --titlebar-border: rgba(255, 255, 255, 0.1);
-  --titlebar-blur: 20px;
+  --titlebar-border: rgba(255, 255, 255, 0.12);
+  --titlebar-blur: 30px;
 }
 
 /* 极简暗色模式 */

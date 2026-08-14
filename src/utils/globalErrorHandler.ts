@@ -145,18 +145,30 @@ function escapeHtml(str: string): string {
     .replace(/'/g, '&#039;');
 }
 
+// 将错误异步写入主进程错误日志（不阻塞，失败静默）
+function persistError(category: 'functional' | 'model' | 'other', message: string, detail?: string): void {
+  try {
+    const w = window as any;
+    w.api?.logAppError?.(category, message, detail);
+  } catch {
+    /* 忽略：错误日志写入失败不应影响主流程 */
+  }
+}
+
 // 注册全局错误监听器
 export function registerGlobalErrorHandlers() {
   // 捕获未处理的 Promise rejection
   window.addEventListener('unhandledrejection', (event) => {
     const err = event.reason instanceof Error ? event.reason : new Error(String(event.reason || 'Unknown Promise rejection'));
     event.preventDefault();
+    persistError('other', err.message || String(event.reason), err.stack);
     showErrorDialog({ error: err, source: 'Promise', fatal: false });
   });
 
   // 捕获全局运行时错误
   window.onerror = (message, source, lineno, colno, error) => {
     const err = error || new Error(String(message));
+    persistError('functional', err.message || String(message), `${source}:${lineno}:${colno}\n${err.stack || ''}`);
     showErrorDialog({
       error: err,
       source: source ? `${source}:${lineno}:${colno}` : 'runtime',

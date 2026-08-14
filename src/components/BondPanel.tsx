@@ -55,6 +55,10 @@ export function BondPanel({
     setTriggering(true);
     try {
       const res = await api.triggerRelationship('single', roleId, roleId, false);
+      if (res?.noNewContent) {
+        showToast(t('bond.noNewContent'));
+        return;
+      }
       if (res?.ok) {
         const parts: string[] = [];
         if (res.relation) parts.push(t('bond.relationUpdated'));
@@ -104,7 +108,6 @@ export function BondPanel({
           <div className="bond-bar-label">
             {inLevel}/100 → Lv.{level + 1}
           </div>
-          <div className="bond-hint">{t('bond.hint')}</div>
         </div>
       </div>
     </div>

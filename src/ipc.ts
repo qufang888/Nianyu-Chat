@@ -158,7 +158,7 @@ export interface NianyuAPI {
   removeMoment: (id: number) => Promise<void>;
   updateMoment: (id: number, patch: Record<string, unknown>) => Promise<void>;
   publishDueMoments: () => Promise<number>;
-  triggerRelationship: (chatType: string, chatId: string, roleId: string, withMoments?: boolean, doRelationship?: boolean) => Promise<{ ok: boolean; moments: number; relation?: string; error?: string }>;
+  triggerRelationship: (chatType: string, chatId: string, roleId: string, withMoments?: boolean, doRelationship?: boolean) => Promise<{ ok: boolean; moments: number; relation?: string; error?: string; noNewContent?: boolean }>;
   adjustBond: (roleId: string, delta: number) => Promise<number>;
   generateImage: (chatType: string, chatId: string, prompt: string) => Promise<{ ok: boolean; imagePath: string }>;
   saveImageMemory: (p: { roleId: string; imagePath: string; note?: string }) => Promise<any>;
@@ -281,6 +281,16 @@ export interface NianyuAPI {
   // ===== 主进程错误推送 =====
   onAppError?: (cb: (data: { message: string; cause: string; solution: string; lang: string }) => void) => () => void;
   offAppError?: (cb: (data: any) => void) => void;
+
+  // ===== 应用数据保存路径（正在使用的实时数据，非备份）=====
+  getDataPath: () => Promise<{ current: string; custom: string | null; def: string }>;
+  setDataPath: (dir: string) => Promise<{ ok: boolean; error?: string }>;
+  pickDataDir: () => Promise<string | null>;
+
+  // ===== 错误日志 =====
+  logAppError: (category: 'functional' | 'model' | 'other', message: string, detail?: string) => Promise<void>;
+  getErrorLog: () => Promise<import('./types').ErrorLogEntry[]>;
+  clearErrorLog: () => Promise<void>;
 }
 
 const raw = (window as any).api as NianyuAPI;
@@ -328,4 +338,10 @@ export const api: NianyuAPI = {
     _beforeConfirm?.();
     return raw.showConfirm!(message, title);
   },
+  getDataPath: () => raw.getDataPath(),
+  setDataPath: (dir) => raw.setDataPath(dir),
+  pickDataDir: () => raw.pickDataDir(),
+  logAppError: (category, message, detail) => raw.logAppError(category, message, detail),
+  getErrorLog: () => raw.getErrorLog(),
+  clearErrorLog: () => raw.clearErrorLog(),
 };

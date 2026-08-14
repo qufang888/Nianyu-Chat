@@ -44,7 +44,8 @@ export const ModelEditor: React.FC<{
   }, [onClose]);
 
   const refreshModels = async () => {
-    if (!cfg.baseUrl) {
+    const effBase = isHiddenBase ? PROVIDER_DEFAULTS[cfg.provider].baseUrl : cfg.baseUrl;
+    if (!effBase) {
       setListError(t('model.listFail', { msg: '请先填写 API Base URL' }));
       return;
     }
@@ -52,7 +53,7 @@ export const ModelEditor: React.FC<{
     setListError('');
     setModelList([]);
     try {
-      const list = await api.listModels({ ...cfg });
+      const list = await api.listModels({ ...cfg, baseUrl: effBase });
       if (list.length === 0) setListError(t('model.listEmpty'));
       else setModelList(list);
     } catch (e: any) {
@@ -82,11 +83,15 @@ export const ModelEditor: React.FC<{
     setCfg((c) => ({ ...c, provider: p, baseUrl: d.baseUrl, model: d.model, maxContext: d.maxContext }));
   };
 
+  const isHiddenBase = cfg.provider === 'openai' || cfg.provider === 'deepseek' || cfg.provider === 'anthropic';
+
   const save = () => {
     if (!cfg.name.trim()) return setMsg(t('model.needName'));
-    if (!cfg.baseUrl.trim()) return setMsg(t('model.needBaseUrl'));
+    if (!isHiddenBase && !cfg.baseUrl.trim()) return setMsg(t('model.needBaseUrl'));
     if (!cfg.model.trim()) return setMsg(t('model.needModelId'));
-    onSave({ ...cfg, name: cfg.name.trim(), model: cfg.model.trim() });
+    // OpenAI / DeepSeek / Anthropic 由各厂商官方 Base URL 直连，前端不暴露输入框，仅用默认地址
+    const baseUrl = isHiddenBase ? PROVIDER_DEFAULTS[cfg.provider].baseUrl : cfg.baseUrl.trim();
+    onSave({ ...cfg, name: cfg.name.trim(), model: cfg.model.trim(), baseUrl });
   };
 
   return (
@@ -136,18 +141,20 @@ export const ModelEditor: React.FC<{
                 {t('model.enabledNote')}
               </div>
             </Field>
-            <Field label={t('model.baseUrl')} full>
-              <input
-                value={cfg.baseUrl}
-                onChange={(e) => set('baseUrl', e.target.value)}
-                placeholder={cfg.provider === 'openai-compatible' ? '' : 'https://api.openai.com/v1'}
-              />
-              {cfg.provider === 'openai-compatible' && (
-                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-                  {t('model.baseUrlHint')}
-                </div>
-              )}
-            </Field>
+            {!isHiddenBase && (
+              <Field label={t('model.baseUrl')} full>
+                <input
+                  value={cfg.baseUrl}
+                  onChange={(e) => set('baseUrl', e.target.value)}
+                  placeholder={cfg.provider === 'openai-compatible' ? '' : 'https://api.openai.com/v1'}
+                />
+                {cfg.provider === 'openai-compatible' && (
+                  <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+                    {t('model.baseUrlHint')}
+                  </div>
+                )}
+              </Field>
+            )}
             <Field label={t('model.apiKey')}>
               <input
                 type="password"
@@ -174,7 +181,7 @@ export const ModelEditor: React.FC<{
                   type="button"
                   className="btn-ghost"
                   onClick={refreshModels}
-                  disabled={listLoading || !cfg.baseUrl}
+                  disabled={listLoading}
                   style={{ whiteSpace: 'nowrap' }}
                 >
                   {listLoading ? t('model.refreshing') : t('model.refreshModels')}

@@ -45,6 +45,7 @@ export interface Role {
   bond?: number; // 人物养成：关系值（由 AI 依据聊天内容判定，纯展示，不影响剧情）
   level?: number; // 人物养成：养成等级（由 bond 推导，默认 1）
   relation?: string; // 人物养成：AI 判定的关系类别（如 恋人/朋友/……），纯展示
+  bondSnapshot?: string; // 关系值判定时的聊天内容快照：用于判断「自上次判定后是否有新聊天内容」，无变化则跳过重新判定
   momentDailyLimit?: number; // 朋友圈：单人物每日自动发送上限（留空用全局 dailyMomentLimit 兜底）；与手动触发无关
   created_at: string;
   updated_at: string;
@@ -110,6 +111,7 @@ export interface ChatMessage {
   msg_kind?: 'public' | 'private'; // 观察者模式：公屏 / 私密小窗对话（默认 public）
   status?: 'normal' | 'recalled' | 'failed'; // 消息状态：正常 / 已撤回 / 发送失败
   from_proactive?: boolean; // 是否由主动消息机制产生（用于记忆控制：空闲主动发消息时此字段为 true）
+  genPrompt?: string; // 软件内生图时使用的提示词：仅 AI 生成的图片消息带此字段；手动发送的图片为空，用于右键「查看提示词」
 }
 
 export interface Group {
@@ -258,6 +260,9 @@ export interface AppSettings {
     };
   };
   silent: boolean; // 静默模式：暂停后台消息卡片通知 + 关闭消息提示音（点击/报错音效仍正常）
+  // ===== 关闭主界面行为 =====
+  closeToTray: boolean; // 关闭主界面时：true=最小化到托盘继续运行；false=直接退出程序。设置内即时生效
+  closeConfirmDone: boolean; // 是否已走过「首次关闭提示」并勾选「不再提示」；false 时首次点关闭会弹提示框
   // ===== 自定义 Canvas 光标 =====
   customCursor: {
     enabled: boolean; // 总开关：false=系统原生光标，true=动态Canvas光标
@@ -418,6 +423,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     },
   },
   silent: false,
+  closeToTray: true,
+  closeConfirmDone: false,
   customCursor: {
     enabled: false,
     lerpSpeed: 0.25,
@@ -543,4 +550,15 @@ export interface RoleStat {
   roleName: string;
   tokens: number; // 该人物参与对话累计消耗的 token（含单聊与该人物名义的群聊回复）
   messages: number; // 计入该人物的消息条数
+}
+
+// ===== 错误日志 =====
+// 错误类别：功能错误（界面/交互/本地逻辑异常）、模型错误（AI/生图/ASR/TTS 调用失败）、其他错误（兜底）
+export type ErrorCategory = 'functional' | 'model' | 'other';
+export interface ErrorLogEntry {
+  id: number;
+  time: string; // ISO 时间戳
+  category: ErrorCategory;
+  message: string; // 简短错误信息
+  detail?: string; // 详细堆栈/上下文
 }

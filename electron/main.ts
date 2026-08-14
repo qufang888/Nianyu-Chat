@@ -12,7 +12,7 @@ import {
 } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
-import { getDataManager } from './db';
+import { getDataManager, defaultDataDirPath } from './db';
 import {
   queryAI,
   aiCompleteRole,
@@ -56,6 +56,11 @@ app.commandLine.appendSwitch(
   'disable-features',
   'HardwareMediaKeyHandling,MediaSessionService,AudioServiceOutOfProcess'
 );
+
+// 修复 Windows 上 Chromium 缓存目录拒绝访问 / GPU 磁盘缓存创建失败的问题
+// (cache_util_win.cc:20 Unable to move the cache + gpu_disk_cache.cc:713 Gpu Cache Creation failed)
+app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
+app.commandLine.appendSwitch('disk-cache-dir', path.join(app.getPath('userData'), 'Cache'));
 
 let mainWindow: BrowserWindow | null = null;
 let miniWindow: BrowserWindow | null = null;
@@ -323,8 +328,13 @@ function createWindow(): void {
       });
     }
     if (!quitting) {
-      e.preventDefault();
-      mainWindow?.hide();
+      // 关闭行为设置：true=最小化到托盘继续运行；false=直接退出程序（即时生效，读取实时设置）
+      const closeToTray = dm.getSettings().closeToTray !== false;
+      if (closeToTray) {
+        e.preventDefault();
+        mainWindow?.hide();
+      }
+      // 否则不拦截，窗口按默认行为关闭（window-all-closed 触发 app.quit）
     }
   });
 
@@ -924,6 +934,12 @@ function saveGeneratedImage(b64: string): string | null {
     console.error('保存生图失败', e);
     return null;
   }
+}
+
+// 计算某聊天的「内容快照」：取最近若干条消息的 id+内容拼接，用于判断自上次关系判定后是否有新聊天内容。
+function computeChatSnapshot(chatType: string, chatId: string): string {
+  const msgs = dm.getMessages(chatType, chatId).slice(-50);
+  return msgs.map((m) => `${m.id}:${(m.content || '').slice(0, 200)}`).join('|');
 }
 
 // 一轮单聊 AI 回复完成后，后台由 AI 依据聊天内容判定关系值/关系类别，并视情况自动发朋友圈动态。
@@ -1654,6 +1670,7 @@ async function generateAIResponses(
       // 被打断时保留头像/名称/气泡，用省略号占位；其他异常仍显示错误信息
       const interrupted = controller ? controller.signal.aborted : false;
       const content = interrupted ? '...' : `⚠️ ${e?.message || String(e)}`;
+      if (!interrupted) dm.logError('model', `AI 回复生成失败：${e?.message || String(e)}`, e?.stack);
       const msg = dm.addMessage({
         chat_type: p.chatType as any,
         chat_id: p.chatId,
@@ -2971,8 +2988,21 @@ function registerIPC(): void {
   // 手动触发：withMoments 控制是否发朋友圈，doRelationship 控制是否判定关系值（两者独立）。
   // 关系值界面只判定关系（withMoments=false，doRelationship=true）；朋友圈板块只生成（withMoments=true，doRelationship=false）。
   ipcMain.handle('relationship:trigger', async (_e, chatType: string, chatId: string, roleId: string, withMoments = true, doRelationship = true) => {
+    const role = dm.getRole(roleId);
+    if (!role) return { ok: false, moments: 0, error: '角色不存在' };
     try {
+      // 仅「手动重新判定关系」时检查：自上次判定后聊天内容无变化则跳过 AI，提示用户继续聊天
+      if (doRelationship) {
+        const sig = computeChatSnapshot(chatType, chatId);
+        if (role.bondSnapshot && role.bondSnapshot === sig) {
+          return { ok: true, moments: 0, noNewContent: true };
+        }
+      }
       const r = await requestRelationshipAndMoments(chatType, chatId, roleId, { force: true, doMoments: withMoments, doRelationship });
+      if (doRelationship && r.ok) {
+        const sig = computeChatSnapshot(chatType, chatId);
+        dm.updateRole(roleId, { bondSnapshot: sig });
+      }
       return r;
     } catch (err) {
       return { ok: false, moments: 0, error: String(err) };
@@ -3140,9 +3170,10 @@ function registerIPC(): void {
     // 删除所有记忆
     const mems = dm.listMemories();
     for (const m of mems) dm.deleteMemory(m.id);
-    // 清理文件系统数据（图片、自定义音效等）
+    // 清理文件系统数据（图片、自定义音效等）—— 必须用 dm.dataDir 而非硬编码路径，
+    // 因为用户可能已将数据目录迁移到自定义位置（如文档文件夹）。
     try {
-      const imagesDir = path.join(app.getPath('userData'), 'data', 'images');
+      const imagesDir = path.join(dm.getCurrentDataPath(), 'images');
       if (fs.existsSync(imagesDir)) {
         for (const f of fs.readdirSync(imagesDir)) {
           fs.rmSync(path.join(imagesDir, f), { recursive: true, force: true });
@@ -3164,7 +3195,16 @@ function registerIPC(): void {
   });
 
   ipcMain.handle('models:list', async (_e, cfg) => listModels(cfg));
-  ipcMain.handle('models:test', async (_e, cfg) => testConnection(cfg));
+  ipcMain.handle('models:test', async (_e, cfg) => {
+    try {
+      const res = await testConnection(cfg);
+      if (!res.ok) dm.logError('model', `模型连接测试失败：${res.message}`);
+      return res;
+    } catch (e: any) {
+      dm.logError('model', `模型连接测试异常：${e?.message || String(e)}`, e?.stack);
+      throw e;
+    }
+  });
   ipcMain.handle('app:setMenuLang', (_e, lang: string) => {
     if (lang === 'zh' || lang === 'en') Menu.setApplicationMenu(buildMenu(lang));
   });
@@ -3366,22 +3406,8 @@ function registerIPC(): void {
     }
     if (!imagePath) throw new Error('生图失败：未获取到图片数据');
 
-    // 用户描述消息（与 sendUserMessage 同源的发送者名）
-    const selfRole = resolveActiveSelfRole(s, chatType, chatId);
-    const userMsg = dm.addMessage({
-      chat_type: chatType as any,
-      chat_id: chatId,
-      sender_type: 'user',
-      sender_name: selfRole?.name || '我',
-      content: prompt,
-      image_path: null,
-      images: null,
-      token_used: 0,
-      timestamp: new Date().toISOString(),
-    });
-    broadcast('stream:user', userMsg);
-
-    // AI 图片消息
+    // 软件内生图：不把用户输入的提示词作为聊天消息写入（用户不会在对话中看到自己的生图指令），
+    // 仅产生一条 AI 图片消息，并保留 genPrompt 供右键「查看提示词」使用。
     const aiName =
       chatType === 'single'
         ? dm.getRole(dm.resolveSingleRoleId(chatType, chatId))?.name || 'AI'
@@ -3395,6 +3421,7 @@ function registerIPC(): void {
       image_path: imagePath,
       token_used: 0,
       timestamp: new Date().toISOString(),
+      genPrompt: prompt,
     });
     broadcast('stream:user', aiMsg);
     return { ok: true, imagePath };
@@ -3458,9 +3485,46 @@ function registerIPC(): void {
   });
   ipcMain.handle('backup:restore', (_e, zipPath) => {
     restoreBackup(zipPath, dm.dataDirectory);
+    dm.reloadAll();
     app.relaunch();
     app.exit(0);
   });
+
+  // ---------- 应用数据保存路径（实时数据，非备份）----------
+  ipcMain.handle('data:getPath', () => {
+    return {
+      current: dm.getCurrentDataPath(),
+      custom: dm.getCustomDataPath(),
+      def: defaultDataDirPath(),
+    };
+  });
+  ipcMain.handle('data:setPath', (_e, dir: string) => {
+    const res = dir && dir.trim() ? dm.setCustomDataPath(dir) : dm.resetDataPathToDefault();
+    if (res.ok) {
+      // 数据已整体迁移到新目录并写入 path-config；延迟重启以让 IPC 响应先返回前端，
+      // 重启后 resolveDataDir() 读取新配置，后续写入落到新目录，避免内存态与磁盘配置不一致。
+      setTimeout(() => {
+        app.relaunch();
+        app.exit(0);
+      }, 400);
+    }
+    return res;
+  });
+  ipcMain.handle('data:pickDir', async () => {
+    if (!mainWindow) return null;
+    const res = await dialog.showOpenDialog(mainWindow, {
+      title: '选择应用数据保存目录',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    return res.canceled ? null : res.filePaths[0];
+  });
+
+  // ---------- 错误日志 ----------
+  ipcMain.handle('error:log', (_e, category: 'functional' | 'model' | 'other', message: string, detail?: string) => {
+    dm.logError(category, message, detail);
+  });
+  ipcMain.handle('error:get', () => dm.getErrorLog());
+  ipcMain.handle('error:clear', () => dm.clearErrorLog());
 
   // ---------- 语音：ASR 转写 ----------
   ipcMain.handle('audio:transcribe', async (_e, data: Uint8Array) => {

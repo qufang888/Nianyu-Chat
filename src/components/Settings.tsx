@@ -12,6 +12,7 @@ import {
   type ChatListItem,
   type SelfRole,
   type WorldBook,
+  type ErrorLogEntry,
 } from '../types';
 import { ModelEditor } from './ModelEditor';
 import { FontSettings } from './FontSettings';
@@ -134,6 +135,19 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
   const [worldBooks, setWorldBooks] = useState<WorldBook[]>([]);
   const [resetOpen, setResetOpen] = useState(false);
   const [deleteAllOpen, setDeleteAllOpen] = useState(false);
+  // 应用数据保存路径（实时数据，非备份）
+  const [dataPathInfo, setDataPathInfo] = useState<{ current: string; custom: string | null; def: string }>({
+    current: '',
+    custom: null,
+    def: '',
+  });
+  const [dataPathBusy, setDataPathBusy] = useState(false);
+  // 错误日志
+  const [errorLogOpen, setErrorLogOpen] = useState(false);
+  const [errorLog, setErrorLog] = useState<ErrorLogEntry[]>([]);
+  useEffect(() => {
+    api.getDataPath().then(setDataPathInfo).catch(() => {});
+  }, []);
   useEffect(() => {
     api.listWorldBooks().then(setWorldBooks).catch(() => {});
   }, []);
@@ -257,6 +271,10 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
   const doReset = async (keepKeys: boolean) => {
     setResetOpen(false);
     try {
+      // 完全重置（keepKeys=false）时，先清除所有聊天/角色/群组等 store 数据，再重置设置
+      if (!keepKeys) {
+        await api.deleteAllData();
+      }
       const s = await api.resetSettings(keepKeys);
       setDraft(s);
       await reloadSettings();
@@ -391,6 +409,56 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
       setBusy(false);
     }
   };
+
+  // 应用数据保存路径：选择自定义目录（主进程迁移数据后延迟重启以加载新目录）
+  const pickDataPath = async () => {
+    const dir = await api.pickDataDir();
+    if (!dir) return;
+    setDataPathBusy(true);
+    try {
+      const res = await api.setDataPath(dir);
+      if (!res.ok) showToast(t('common.failed') + (res.error ? `: ${res.error}` : ''), { error: true });
+      else api.getDataPath().then(setDataPathInfo).catch(() => {});
+    } catch (e: any) {
+      showToast(t('common.failed') + `: ${e?.message || String(e)}`, { error: true });
+    } finally {
+      setDataPathBusy(false);
+    }
+  };
+  // 恢复默认数据目录（迁移回「文档/念语数据」后重启）
+  const resetDataPath = async () => {
+    setDataPathBusy(true);
+    try {
+      const res = await api.setDataPath('');
+      if (!res.ok) showToast(t('common.failed') + (res.error ? `: ${res.error}` : ''), { error: true });
+      else api.getDataPath().then(setDataPathInfo).catch(() => {});
+    } catch (e: any) {
+      showToast(t('common.failed') + `: ${e?.message || String(e)}`, { error: true });
+    } finally {
+      setDataPathBusy(false);
+    }
+  };
+  // 打开错误日志面板
+  const openErrorLog = async () => {
+    try {
+      const list = await api.getErrorLog();
+      setErrorLog(list);
+      setErrorLogOpen(true);
+    } catch {
+      /* 忽略 */
+    }
+  };
+  const clearErrorLogAll = async () => {
+    try {
+      await api.clearErrorLog();
+      setErrorLog([]);
+      showToast(t('common.done'));
+    } catch {
+      /* 忽略 */
+    }
+  };
+  const errorCategoryLabel = (c: 'functional' | 'model' | 'other'): string =>
+    c === 'functional' ? t('settings.errorFunctional') : c === 'model' ? t('settings.errorModel') : t('settings.errorOther');
 
   return (
     <div className="main-pane">
@@ -1859,8 +1927,72 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
           </div>
         </div>
 
+        {/* ===== 应用数据保存路径（实时数据，非备份） ===== */}
+        <div className="section-title" style={{ marginTop: 24 }}>{t('settings.dataPath')}</div>
+        <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 10 }}>
+          {t('settings.dataPathDesc')}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, maxWidth: 760, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>{t('settings.dataPathCurrent')}</span>
+          <input
+            type="text"
+            readOnly
+            value={dataPathInfo.current || t('common.loading')}
+            style={{ flex: 1, minWidth: 240, fontSize: 12, color: dataPathInfo.current ? undefined : 'var(--color-text-secondary)' }}
+          />
+          <button className="btn-ghost" onClick={pickDataPath} disabled={dataPathBusy}>
+            {t('settings.dataPathPick')}
+          </button>
+          {dataPathInfo.custom && (
+            <button className="btn-ghost" onClick={resetDataPath} disabled={dataPathBusy}>
+              {t('settings.dataPathReset')}
+            </button>
+          )}
+        </div>
+        {!dataPathInfo.custom && (
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+            {t('settings.dataPathDefault')}：{dataPathInfo.def}
+          </div>
+        )}
+
+        {/* ===== 关闭主界面行为 ===== */}
+        <div className="section-title" style={{ marginTop: 24 }}>{t('settings.closeBehavior')}</div>
+        <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 10 }}>
+          {t('settings.closeBehaviorDesc')}
+        </div>
+        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="radio"
+              checked={draft.closeToTray !== false}
+              onChange={() => patch({ closeToTray: true })}
+            />
+            {t('settings.closeToTray')}
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="radio"
+              checked={draft.closeToTray === false}
+              onChange={() => patch({ closeToTray: false })}
+            />
+            {t('settings.closeExit')}
+          </label>
+        </div>
+
+        {/* ===== 错误日志 ===== */}
+        <div className="section-title" style={{ marginTop: 24 }}>{t('settings.errorLog')}</div>
+        <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 10 }}>
+          {t('settings.errorLogDesc')}
+        </div>
+        <button className="btn-ghost" onClick={openErrorLog}>
+          {t('settings.errorLogBtn')}
+          {errorLog.length > 0 && (
+            <span style={{ marginLeft: 6, color: '#e06c75' }}>({errorLog.length})</span>
+          )}
+        </button>
+
         {/* ===== 数据备份与还原 ===== */}
-        <div className="section-title">{t('settings.backup')}</div>
+        <div className="section-title" style={{ marginTop: 24 }}>{t('settings.backup')}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, maxWidth: 560 }}>
           <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>{t('settings.backupDir')}</span>
           <input
@@ -2057,6 +2189,81 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
               <button className="btn-ghost" onClick={() => setDeleteAllOpen(false)}>
                 {t('common.cancel')}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {errorLogOpen && (
+        <div
+          onClick={() => setErrorLogOpen(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(0,0,0,0.5)',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'var(--color-bg-elevated, #1e1e1e)',
+              color: 'var(--color-text, #eee)',
+              borderRadius: 14,
+              padding: '22px 24px',
+              maxWidth: 680,
+              width: '92%',
+              maxHeight: '80vh',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 12px 48px rgba(0,0,0,0.4)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>{t('settings.errorLog')}</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn-ghost" onClick={clearErrorLogAll} disabled={errorLog.length === 0}>
+                  {t('settings.errorLogClear')}
+                </button>
+                <button className="btn-ghost" onClick={() => setErrorLogOpen(false)}>
+                  {t('common.close')}
+                </button>
+              </div>
+            </div>
+            <div style={{ overflowY: 'auto', flex: 1, fontSize: 12.5 }}>
+              {errorLog.length === 0 ? (
+                <div style={{ color: 'var(--color-text-secondary, #999)', padding: '16px 4px' }}>
+                  {t('settings.errorLogEmpty')}
+                </div>
+              ) : (
+                [...errorLog].reverse().map((e) => (
+                  <div key={e.id} style={{ borderBottom: '1px solid var(--color-border, #333)', padding: '10px 4px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <span
+                        style={{
+                          fontSize: 11,
+                          padding: '1px 8px',
+                          borderRadius: 10,
+                          color: '#fff',
+                          background: e.category === 'model' ? '#d98a00' : e.category === 'functional' ? '#c0392b' : '#5a6b7b',
+                        }}
+                      >
+                        {errorCategoryLabel(e.category)}
+                      </span>
+                      <span style={{ color: 'var(--color-text-secondary, #999)' }}>{new Date(e.time).toLocaleString(loc)}</span>
+                    </div>
+                    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginBottom: e.detail ? 4 : 0 }}>{e.message}</div>
+                    {e.detail && (
+                      <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--color-text-secondary, #999)', fontSize: 11.5 }}>
+                        {e.detail}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>

@@ -54,6 +54,8 @@ export const MiniChat: React.FC = () => {
   const [genOpen, setGenOpen] = useState(false);
   const [genText, setGenText] = useState('');
   const [genLoading, setGenLoading] = useState(false);
+  const [genTyping, setGenTyping] = useState(false); // 生图期间在聊天框显示「AI 正在回复」动画（与主界面一致，用户不会看到自己的生图指令）
+  const [promptView, setPromptView] = useState<string | null>(null); // 查看提示词弹窗
   const [pinned, setPinned] = useState(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1163,6 +1165,7 @@ export const MiniChat: React.FC = () => {
     const prompt = genText.trim();
     if (!prompt) return;
     setGenLoading(true);
+    setGenTyping(true);
     try {
       await api.generateImage(current.chat_type, current.chat_id, prompt);
       setGenOpen(false);
@@ -1171,6 +1174,7 @@ export const MiniChat: React.FC = () => {
       showToast(e?.message || t('chat.drawFailed'));
     } finally {
       setGenLoading(false);
+      setGenTyping(false);
     }
   };
 
@@ -1454,7 +1458,7 @@ export const MiniChat: React.FC = () => {
       await audio.play();
     } catch (e: any) {
       setSpeakingId(null);
-      alert(t('chat.ttsFailed', { msg: e?.message || String(e) }));
+      showToast(t('chat.ttsFailed', { msg: e?.message || String(e) }), { error: true });
     }
   };
 
@@ -1698,6 +1702,18 @@ export const MiniChat: React.FC = () => {
             failed={failed}
           />
         ))}
+        {genTyping && (
+          <div className="msg-row ai" style={{ opacity: 0.85 }}>
+            <div className="avatar">🤖</div>
+            <div>
+              <div className="bubble">
+                <div className="typing" aria-label={t('chat.replying')}>
+                  <span className="typing-bar" />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         {failed && (
           <div className="msg-row user" style={{ alignSelf: 'flex-end' }}>
             <div
@@ -2001,6 +2017,32 @@ export const MiniChat: React.FC = () => {
           onUpdated={onGroupEditorUpdatedLocked}
         />
       )}
+      {promptView && (
+        <div className="modal-mask" onClick={() => setPromptView(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520, width: '90%' }}>
+            <div className="modal-head">
+              <span>{t('msg.viewPrompt')}</span>
+              <span className="modal-close" onClick={() => setPromptView(null)}>×</span>
+            </div>
+            <div className="modal-body">
+              <div
+                style={{
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  background: 'var(--color-input-bg)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '12px 14px',
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                }}
+              >
+                {promptView}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <ToastView toast={toast} />
       <CustomCursor />
       <ClearChatModal
@@ -2211,6 +2253,9 @@ const MiniMessageRow: React.FC<{
           }}
         >
           <button className="ctx-menu-item" onClick={() => { onCopy?.(msg.content); closeMenu(); }}>{t('msg.copy')}</button>
+          {msg.genPrompt && (
+            <button className="ctx-menu-item" onClick={() => { setPromptView(msg.genPrompt!); closeMenu(); }}>{t('msg.viewPrompt')}</button>
+          )}
           {onQuickMemory && <button className="ctx-menu-item" onClick={() => { onQuickMemory(msg.content); closeMenu(); }}>{t('msg.quickMemory')}</button>}
           {onTranslate && <button className="ctx-menu-item" onClick={() => { onTranslate(msg.content); closeMenu(); }}>{t('msg.translate')}</button>}
           {onMarkNode && <button className="ctx-menu-item" onClick={() => { onMarkNode(msg); closeMenu(); }}>{t('chat.markNode')}</button>}

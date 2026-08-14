@@ -101,7 +101,7 @@ export const OnboardingWizard: React.FC<{ onDone: () => void }> = ({ onDone }) =
 
   const finish = async () => {
     if (models.length === 0) {
-      alert(t('onboarding.needModel'));
+      showToast(t('onboarding.needModel'), { error: true });
       setStep(2);
       return;
     }
@@ -119,6 +119,17 @@ export const OnboardingWizard: React.FC<{ onDone: () => void }> = ({ onDone }) =
 
   const canNext = step !== 2 || models.length > 0;
 
+  // 从备份恢复：选择备份 zip 后由主进程还原数据并重启（还原后备份中的 firstRunDone 为真，自动跳过向导）
+  const restoreFromBackup = async () => {
+    const zip = await api.pickRestoreFile();
+    if (!zip) return;
+    try {
+      await api.restoreBackup(zip);
+    } catch (e: any) {
+      showToast(t('onboarding.restoreFailed', { err: e?.message || String(e) }), { error: true });
+    }
+  };
+
   return (
     <div className="modal-mask" style={{ alignItems: 'stretch', justifyContent: 'center' }}>
       <div
@@ -133,7 +144,7 @@ export const OnboardingWizard: React.FC<{ onDone: () => void }> = ({ onDone }) =
               {t('onboarding.subtitle')}
             </div>
           </div>
-          <span className="modal-close" onClick={() => alert(t('onboarding.needModel'))}>
+          <span className="modal-close" onClick={() => showToast(t('onboarding.needModel'), { error: true })} title={t('onboarding.needModel')}>
             ×
           </span>
         </div>
@@ -367,7 +378,10 @@ export const OnboardingWizard: React.FC<{ onDone: () => void }> = ({ onDone }) =
             flexShrink: 0,
           }}
         >
-          <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <button className="btn-ghost" onClick={restoreFromBackup} title={t('onboarding.restoreBackupDesc')}>
+              📦 {t('onboarding.restoreBackup')}
+            </button>
             {step > 1 && (
               <button className="btn-ghost" onClick={() => setStep((s) => Math.max(1, s - 1))}>
                 {t('onboarding.back')}
