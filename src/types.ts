@@ -39,6 +39,7 @@ export interface Role {
   affinity_factor: number;
   soundPath?: string | null; // 角色自定义消息音效文件名（nysound:// 协议）；缺省/空=使用全局通知音
   mood?: string; // 当前情绪/心情（事件设定或按好感度推导），影响模型输出语气与上下文情绪
+  moodValue?: number; // 心情平滑过渡：底层连续情绪值（-100~100），由 AI 判定目标与「心情过渡指数」平滑推导，显示用的 mood 由该值分段得到
   model_config_id: string; // 绑定的模型配置 ID
   worldBookId?: string; // 绑定世界书（空=继承全局默认/按聊），优先级低于 chatWorldBooks
   ruleIds: string[]; // 从规则库勾选的专属规则 id 列表
@@ -236,6 +237,8 @@ export interface AppSettings {
   // ===== 情绪与事件（高级可调）=====
   moodJudgeCooldownMs: number; // 心情判定冷却（毫秒）：防止每轮都调用 AI 判定，节省调用
   moodJudgeHistory: number; // 心情判定回顾的最近消息条数：AI 据此判断角色此刻心情
+  moodSmoothing: number; // 心情过渡指数（0~1）：越小越平滑，角色不会忽喜忽悲；越大越灵敏，越贴近 AI 每次判定的目标心情。设为 1 等同旧版每次直接跳变
+  momentsSensitivity: number; // 朋友圈敏感程度（0~1）：越高越容易自动发朋友圈（聊到尽兴就发），越低越克制，普通唠嗑几乎不发
   eventNegAffinity: number; // 好感度低于该值（或心情负面）→ 随机事件偏向冲突/拌嘴
   eventPosAffinity: number; // 好感度高于该值（或心情正面）→ 随机事件偏向甜蜜/撒娇
   eventHistory: number; // 事件生成时参考的最近对话条数
@@ -402,6 +405,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoMoments: true,
   dailyMomentLimit: 5,
   moodJudgeHistory: 10,
+  moodSmoothing: 0.5, // 心情过渡指数：默认 0.5，平滑过渡，避免忽喜忽悲
+  momentsSensitivity: 0.5, // 朋友圈敏感程度：默认 0.5，中等，普通唠嗑不发、聊到尽兴才发
   eventNegAffinity: 30,
   eventPosAffinity: 70,
   eventHistory: 12,

@@ -848,6 +848,50 @@ function buildEmotionContext(role: Role): string {
   return `【当前情绪】${desc}`;
 }
 
+// 心情平滑过渡：把离散心情词映射为连续情绪值（-100~100），便于做指数平滑，避免忽喜忽悲
+const MOOD_VALENCE: Record<string, number> = {
+  生气: -100,
+  难过: -75,
+  低落: -45,
+  平静: 0,
+  害羞: 25,
+  撒娇: 50,
+  心动: 75,
+  开心: 100,
+};
+
+// 连续情绪值 → 最近的心情词（分段取中值，保证过渡连续、不会瞬跳）
+function valenceToMood(v: number): string {
+  if (v <= -87.5) return '生气';
+  if (v <= -60) return '难过';
+  if (v <= -22.5) return '低落';
+  if (v <= 12.5) return '平静';
+  if (v <= 37.5) return '害羞';
+  if (v <= 62.5) return '撒娇';
+  if (v <= 87.5) return '心动';
+  return '开心';
+}
+
+// 心情平滑过渡核心：以「心情过渡指数」(settings.moodSmoothing) 为步进系数，
+// 把底层连续情绪 moodValue 朝 AI 判定的目标心情平滑移动，再反推出显示用的离散心情词。
+// 返回最终生效的心情词与连续值；若目标非法则返回 null（保持原状）。
+function applyMoodChange(
+  role: Role,
+  targetLabel: string,
+  settings: AppSettings,
+  ctx: { chatType: string; chatId: string }
+): { label: string; value: number } | null {
+  if (!targetLabel || !(MOODS as readonly string[]).includes(targetLabel)) return null;
+  const smoothing = Math.max(0, Math.min(1, settings.moodSmoothing ?? 0.5));
+  const targetVal = MOOD_VALENCE[targetLabel] ?? 0;
+  const oldVal = typeof role.moodValue === 'number' ? role.moodValue : MOOD_VALENCE[role.mood || '平静'] ?? 0;
+  const newVal = Math.round(oldVal + smoothing * (targetVal - oldVal));
+  const newLabel = valenceToMood(newVal);
+  dm.updateRole(role.id, { mood: newLabel, moodValue: newVal });
+  broadcast('role:mood', { roleId: role.id, chatType: ctx.chatType, chatId: ctx.chatId, mood: newLabel });
+  return { label: newLabel, value: newVal };
+}
+
 // AI 根据最近对话判定角色「此刻」心情（使用默认模型，不计入聊天 token 消耗）
 async function judgeMood(role: Role, settings: AppSettings, recent: string): Promise<string | null> {
   const cfg = getDefaultModelConfig(settings) || resolveRoleModel(role, settings);
@@ -910,8 +954,7 @@ async function requestMoodJudge(chatType: string, chatId: string, roleId: string
   const recent = history.map((m) => `${m.sender_name}: ${(m.content || '').slice(0, 140)}`).join('\n');
   const mood = await judgeMood(role, settings, recent);
   if (mood) {
-    dm.updateRole(roleId, { mood });
-    broadcast('role:mood', { roleId, chatType, chatId, mood });
+    applyMoodChange(role, mood, settings, { chatType, chatId }); // 平滑过渡，避免忽喜忽悲
     logEmotionIfObserver(chatType, chatId, roleId); // 记录对局情绪轨迹
   }
 }
@@ -1041,10 +1084,12 @@ async function judgeAndPostMoments(
     `你是朋友圈动态助手。请基于最近对话，判断角色「${role.name}」此刻是否想发一条朋友圈，并写出内容。`,
     `角色设定：${role.personality || role.background || '（无）'}`,
     userDesc,
+    `角色当前心情：${role.mood || '平静'}（只有聊到尽兴、情绪上扬、有共鸣或有有趣梗时才更想分享）。`,
     `最近对话：\n${recent || '（尚无对话）'}`,
     `请输出严格 JSON，不要任何多余内容：`,
     `{`,
     `  "postMoments": true或false，表示角色此刻是否真的想发朋友圈。仅当对话中出现了角色有冲动分享的内容（真实情绪起伏、重要事件、用户说了特别的话、关系进展、有趣的梗等）才为 true；日常寒暄、礼节性回复、无明显可分享点时必须为 false。不要因为被要求就发。`,
+    `  "shareUrge": 0到100的整数，表示此刻想发朋友圈的强烈程度；聊到尽兴、有共鸣、有有趣梗或重要情绪起伏时更高，普通寒暄、礼节性回复时很低（接近0）。`,
     `  "moments": [ { "content": "角色视角的朋友圈文案，第一人称，自然口语化，不超过60字", "needImage": true或false, "imagePrompt": "若需要配图，这里是英文生图提示词，否则空串" } ]`,
     `}`,
     `只有当 postMoments 为 true 时才给出 moments，最多2条；否则 moments 给空数组。发朋友圈应当是低频、有质感的，不要每条对话都发。`,
@@ -1064,8 +1109,15 @@ async function judgeAndPostMoments(
     return 0;
   }
   if (!parsed || typeof parsed !== 'object') return 0;
-  if (parsed.postMoments === false) return 0; // 显式 false 不发
-  if (!Array.isArray(parsed.moments) || parsed.moments.length === 0) return 0; // 无内容不发（旧模型未返回 postMoments 时，有内容才发，向后兼容）
+  if (parsed.postMoments === false) return 0; // 显式不想发才硬拦截；缺省视为由阈值决定（向后兼容旧模型）
+  // 朋友圈敏感程度：threshold = (1 - momentsSensitivity) * 100；
+  // 敏感度高(→1) → 阈值低 → 稍想发就发；敏感度低(→0) → 阈值高(100) → 只有极度想发才发，普通唠嗑绝不发
+  const sensitivity = Math.max(0, Math.min(1, settings.momentsSensitivity ?? 0.5));
+  const threshold = Math.round((1 - sensitivity) * 100);
+  // 旧模型未返回 shareUrge 时视为 100（始终满足阈值），向后兼容
+  const urge = typeof parsed.shareUrge === 'number' ? parsed.shareUrge : 100;
+  if (urge < threshold) return 0; // 分享冲动未达敏感阈值，不发（避免普通唠嗑也发朋友圈）
+  if (!Array.isArray(parsed.moments) || parsed.moments.length === 0) return 0; // 无内容不发
 
   const ig = settings.imageGen;
   const igCfg = ig && ig.enabled && ig.baseUrl && ig.apiKey ? { baseUrl: ig.baseUrl, apiKey: ig.apiKey } : undefined;
@@ -2366,14 +2418,14 @@ async function handleChooseEvent(p: {
   // 事件影响心情程度（0 = 事件只改好感度；>0 = 按所选心情改变角色心情，概率 = eventMoodImpact）
   const impact = dm.getSettings().eventMoodImpact ?? 1;
   if (p.mood && impact > 0 && Math.random() < impact) {
-    dm.updateRole(p.roleId, { mood: p.mood });
-    mood = p.mood;
-    broadcast('role:mood', { roleId: p.roleId, chatType: p.chatType, chatId: p.chatId, mood: p.mood });
+    // 事件选定的心情也走平滑过渡，避免点一下就忽喜忽悲
+    const res = applyMoodChange(role, p.mood, dm.getSettings(), { chatType: p.chatType, chatId: p.chatId });
+    if (res) mood = res.label;
   }
   logEmotionIfObserver(p.chatType, p.chatId, p.roleId); // 记录对局情绪轨迹（事件也会改变好感/心情）
   activeEvents.delete(p.chatId); // 选完即关闭该聊天的事件占用
   // 在聊天中插入系统消息通知好感/情绪变化
-  const moodNote = p.mood && mood === p.mood ? ` · 心情 → ${mood}` : '';
+  const moodNote = p.mood ? ` · 心情 → ${mood}` : '';
   const affinityNote = p.change !== 0 ? `好感 ${p.change > 0 ? '+' : ''}${p.change}` : '';
   let sysMsg: any = null;
   if (affinityNote || moodNote) {

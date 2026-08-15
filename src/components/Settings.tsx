@@ -666,6 +666,30 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
             </div>
           </div>
 
+          {/* 朋友圈敏感程度 */}
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span>{t('settings.momentsSensitivity')}</span>
+              <span>{Math.round((draft.momentsSensitivity ?? 0.5) * 100)}%</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={Math.round((draft.momentsSensitivity ?? 0.5) * 100)}
+              onChange={(e) => {
+                const v = Number(e.target.value) / 100;
+                patch({ momentsSensitivity: v });
+                api.saveSettings({ momentsSensitivity: v });
+              }}
+              style={{ width: '100%', marginTop: 6 }}
+            />
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+              {t('settings.momentsSensitivityDesc')}
+            </div>
+          </div>
+
           {/* ===== 隐藏思维链 ===== */}
           <label
             style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
@@ -746,6 +770,30 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
             />
             <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
               {t('settings.dialogueMoodImpactDesc')}
+            </div>
+          </div>
+
+          {/* 心情过渡指数 */}
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span>{t('settings.moodSmoothing')}</span>
+              <span>{Math.round((draft.moodSmoothing ?? 0.5) * 100)}%</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={Math.round((draft.moodSmoothing ?? 0.5) * 100)}
+              onChange={(e) => {
+                const v = Number(e.target.value) / 100;
+                patch({ moodSmoothing: v });
+                api.saveSettings({ moodSmoothing: v });
+              }}
+              style={{ width: '100%', marginTop: 6 }}
+            />
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+              {t('settings.moodSmoothingDesc')}
             </div>
           </div>
 
