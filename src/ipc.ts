@@ -11,6 +11,7 @@ import type {
   WorldBook,
   Rule,
   MemoryEntry,
+  Plugin,
 } from './types';
 import type { ImportCharacterResult } from './utils/characterCard';
 export type { ImportCharacterResult };
@@ -113,6 +114,8 @@ export interface NianyuAPI {
 
   onSettingsChanged: (cb: (e: any, data: any) => void) => () => void;
   offSettingsChanged: (cb: (e: any, data: any) => void) => void;
+  onSearchStatus: (cb: (e: any, data: any) => void) => () => void;
+  offSearchStatus: (cb: (e: any, data: any) => void) => void;
 
   onStreamChunk: (cb: (e: any, data: any) => void) => () => void;
   offStreamChunk: (cb: (e: any, data: any) => void) => void;
@@ -264,8 +267,12 @@ export interface NianyuAPI {
   deleteMemory: (id: string) => Promise<void>;
   extractMemories: (chatType: string, chatId: string) => Promise<number>;
 
-  // ===== 插件导入 =====
-  importPlugin: (content: string, name: string) => Promise<{ kind: 'worldbook' | 'rule' | 'role'; id: string; name: string }>;
+  // ===== 插件（导入 / 列表 / 启停 / 删除 / 受控调用） =====
+  importPlugin: (content: string, name: string) => Promise<{ kind: 'worldbook' | 'rule' | 'role' | 'plugin'; id: string; name: string }>;
+  listPlugins: () => Promise<Plugin[]>;
+  removePlugin: (id: string) => Promise<{ ok: boolean }>;
+  togglePlugin: (id: string, enabled: boolean) => Promise<{ ok: boolean; plugin?: Plugin }>;
+  callPluginTool: (pluginId: string, toolName: string, arg: string) => Promise<{ ok: boolean; text?: string }>;
 
   // ===== 确认对话框 =====
   showConfirm?: (message: string, title?: string) => Promise<boolean>;

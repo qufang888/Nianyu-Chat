@@ -13,6 +13,7 @@ import {
   type SelfRole,
   type WorldBook,
   type ErrorLogEntry,
+  type Plugin,
 } from '../types';
 import { ModelEditor } from './ModelEditor';
 import { FontSettings } from './FontSettings';
@@ -151,6 +152,15 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
   useEffect(() => {
     api.listWorldBooks().then(setWorldBooks).catch(() => {});
   }, []);
+
+  // 已导入插件列表（声明式，受控 HTTP，兼容外部常见格式）
+  const [plugins, setPlugins] = useState<Plugin[]>([]);
+  const refreshPlugins = React.useCallback(() => {
+    api.listPlugins().then(setPlugins).catch(() => {});
+  }, []);
+  useEffect(() => {
+    refreshPlugins();
+  }, [refreshPlugins]);
 
   useEffect(() => {
     if (settings) setDraft(settings);
@@ -1789,6 +1799,194 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
               {t('settings.imageGenSizeDesc')}
             </div>
           </div>
+        </div>
+
+        {/* ===== 异步场景生图 ===== */}
+        <div className="section-title">{t('settings.sceneImage')}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+            {t('settings.sceneImageDesc')}
+          </div>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span>{t('settings.sceneImageInterval')}</span>
+              <span>{Math.round(draft.sceneImageIntervalSec ?? 120)}s</span>
+            </div>
+            <input
+              type="range"
+              min={10}
+              max={600}
+              step={10}
+              value={Math.round(draft.sceneImageIntervalSec ?? 120)}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                patch({ sceneImageIntervalSec: v });
+                api.saveSettings({ sceneImageIntervalSec: v });
+              }}
+              style={{ width: '100%', marginTop: 6 }}
+            />
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+              {t('settings.sceneImageIntervalDesc')}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              {t('settings.sceneImageJudge')}
+            </div>
+            <select
+              value={draft.sceneImageJudge ?? 'llm'}
+              onChange={(e) => {
+                const v = e.target.value as 'llm' | 'heuristic';
+                patch({ sceneImageJudge: v });
+                api.saveSettings({ sceneImageJudge: v });
+              }}
+              style={{ padding: '6px 8px', borderRadius: 8, width: 260 }}
+            >
+              <option value="llm">{t('settings.sceneImageJudgeLLM')}</option>
+              <option value="heuristic">{t('settings.sceneImageJudgeHeuristic')}</option>
+            </select>
+          </div>
+        </div>
+
+        {/* ===== 联网搜索 ===== */}
+        <div className="section-title">{t('settings.webSearch')}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+            {t('settings.webSearchDesc')}
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              {t('settings.searchProvider')}
+            </div>
+            <select
+              value={draft.searchProvider ?? 'duckduckgo'}
+              onChange={(e) => {
+                const v = e.target.value as AppSettings['searchProvider'];
+                patch({ searchProvider: v });
+                api.saveSettings({ searchProvider: v });
+              }}
+              style={{ padding: '6px 8px', borderRadius: 8, width: 260 }}
+            >
+              <option value="duckduckgo">{t('settings.searchProviderDuckduckgo')}</option>
+              <option value="tavily">{t('settings.searchProviderTavily')}</option>
+              <option value="bing">{t('settings.searchProviderBing')}</option>
+              <option value="serpapi">{t('settings.searchProviderSerpapi')}</option>
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              {t('settings.searchApiKey')}
+            </div>
+            <input
+              type="password"
+              placeholder={t('settings.apiKey')}
+              value={draft.searchApiKey ?? ''}
+              style={{ width: 320 }}
+              onChange={(e) => {
+                const v = e.target.value;
+                patch({ searchApiKey: v });
+                api.saveSettings({ searchApiKey: v });
+              }}
+            />
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+              {t('settings.searchProviderDuckduckgo')}
+              {draft.searchProvider && draft.searchProvider !== 'duckduckgo'
+                ? ' — ' + t('settings.searchApiKey')
+                : ''}
+            </div>
+          </div>
+        </div>
+
+        {/* ===== 插件 ===== */}
+        <div className="section-title">{t('settings.plugins')}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 560 }}>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+            {t('settings.pluginsDesc')}
+          </div>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 10,
+              cursor: 'pointer',
+              padding: '10px 12px',
+              borderRadius: 8,
+              background: 'rgba(255,80,80,0.08)',
+              border: '1px solid rgba(255,80,80,0.3)',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={!!draft.pluginAllowJs}
+              onChange={(e) => {
+                const v = e.target.checked;
+                patch({ pluginAllowJs: v });
+                api.saveSettings({ pluginAllowJs: v });
+              }}
+              style={{ marginTop: 2 }}
+            />
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#ff8a8a' }}>
+                {t('settings.pluginAllowJs')}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                {t('settings.pluginAllowJsDesc')}
+              </div>
+            </div>
+          </label>
+
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.pluginManage')}</div>
+          {plugins.length === 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+              {t('settings.pluginEmpty')}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {plugins.map((p) => (
+                <div
+                  key={p.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    background: 'var(--color-bg-elevated, rgba(255,255,255,0.05))',
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{p.name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+                      {p.source}
+                      {p.description ? ` · ${p.description}` : ''}
+                    </div>
+                  </div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12 }}>
+                    <input
+                      type="checkbox"
+                      checked={!!p.enabled}
+                      onChange={async (e) => {
+                        await api.togglePlugin(p.id, e.target.checked);
+                        refreshPlugins();
+                      }}
+                    />
+                    {p.enabled ? t('settings.pluginEnabled') : t('settings.pluginDisabled')}
+                  </label>
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    style={{ padding: '3px 10px', fontSize: 12 }}
+                    onClick={async () => {
+                      await api.removePlugin(p.id);
+                      refreshPlugins();
+                    }}
+                  >
+                    {t('settings.pluginRemove')}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* ===== 翻译（右键消息翻译文本） ===== */}

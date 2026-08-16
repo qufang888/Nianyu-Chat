@@ -186,6 +186,10 @@ export const ChatWindow: React.FC<{
   // 本对话的世界书选择（''=继承全局/角色默认；'none'=不使用；其它=具体世界书ID）
   const [worldBooks, setWorldBooks] = useState<WorldBook[]>([]);
   const [chatWorldBookId, setChatWorldBookId] = useState('');
+  // 本对话独立开关：异步场景生图 / 联网搜索（主界面与小窗共用同一份数据，经 settings:changed 同步，不会出现一端开一端关）
+  const [sceneImageOn, setSceneImageOn] = useState(false);
+  const [webSearchOn, setWebSearchOn] = useState(false);
+  const [searchStatus, setSearchStatus] = useState<'idle' | 'searching' | 'done' | 'failed'>('idle');
   // 轻提示（自动出现又自动缩回，无需手动关闭）
   const { toast, showToast } = useToast();
   const openMini = async () => {
@@ -492,6 +496,9 @@ export const ChatWindow: React.FC<{
       setSelfRoleId(override ?? 'default');
       // 本对话世界书
       setChatWorldBookId(settings.chatWorldBooks?.[bgKey] ?? '');
+      // 本对话独立开关：场景生图 / 联网搜索
+      setSceneImageOn(!!settings.autoSceneImageChats?.[bgKey]);
+      setWebSearchOn(!!settings.webSearchChats?.[bgKey]);
       const bgPath = settings.chatBackgrounds?.[bgKey];
       if (bgPath) {
         api.getImage(bgPath).then((src) => setChatBg(src));
@@ -912,6 +919,8 @@ export const ChatWindow: React.FC<{
       });
       // 按聊天覆盖的设置（以 bgKey 为维度）
       setChatWorldBookId((settings.chatWorldBooks || {})[key] ?? '');
+      setSceneImageOn(!!(settings.autoSceneImageChats || {})[key]);
+      setWebSearchOn(!!(settings.webSearchChats || {})[key]);
       setSelfRoleId((settings.chatSelfRoles || {})[key] ?? 'default');
       const bgPath = (settings.chatBackgrounds || {})[key];
       if (bgPath) {
@@ -922,6 +931,23 @@ export const ChatWindow: React.FC<{
     });
     return off;
   }, [bgKey]);
+
+  // 联网搜索状态：仅关心当前聊天，用于在小窗/主界面提示「搜索中…」
+  useEffect(() => {
+    const off = api.onSearchStatus((_e, data: any) => {
+      if (!data || data.chatType !== chatType || data.chatId !== chatId) return;
+      if (data.status === 'searching') {
+        setSearchStatus('searching');
+      } else if (data.status === 'done') {
+        setSearchStatus('done');
+        setTimeout(() => setSearchStatus('idle'), 2500);
+      } else if (data.status === 'failed') {
+        setSearchStatus('failed');
+        setTimeout(() => setSearchStatus('idle'), 2500);
+      }
+    });
+    return off;
+  }, [chatType, chatId]);
 
   // 窗口间同步：故事线开关变更（一端开/关，另一端实时刷新）
   useEffect(() => {
@@ -1245,6 +1271,28 @@ export const ChatWindow: React.FC<{
         ? t('worldbook.none')
         : (worldBooks.find((w) => w.id === val)?.name || val);
     showToast(t('toast.worldbookSwitched', { name }));
+  };
+
+  // 本对话独立开关：异步场景生图
+  const toggleSceneImage = async (v: boolean) => {
+    setSceneImageOn(v);
+    const settings = await api.getSettings();
+    const next = { ...(settings.autoSceneImageChats || {}) };
+    if (v) next[bgKey] = true;
+    else delete next[bgKey];
+    await api.saveSettings({ autoSceneImageChats: next });
+    showToast(t(v ? 'chat.sceneImageOn' : 'chat.sceneImageOff'), { duration: 2000, animation: 'linear' });
+  };
+
+  // 本对话独立开关：联网搜索
+  const toggleWebSearch = async (v: boolean) => {
+    setWebSearchOn(v);
+    const settings = await api.getSettings();
+    const next = { ...(settings.webSearchChats || {}) };
+    if (v) next[bgKey] = true;
+    else delete next[bgKey];
+    await api.saveSettings({ webSearchChats: next });
+    showToast(t(v ? 'chat.webSearchOn' : 'chat.webSearchOff'), { duration: 2000, animation: 'linear' });
   };
 
   // AI 自动提炼记忆（仅在设置开启时触发，静默执行，失败不打扰用户）
@@ -2097,6 +2145,26 @@ export const ChatWindow: React.FC<{
           </button>
           <button className="tool-btn" title={t('chat.drawImage')} onClick={() => setGenOpen(true)}>
             🎨
+          </button>
+          <button
+            className={`tool-btn${sceneImageOn ? ' active' : ''}`}
+            title={t('chat.sceneImageToggle')}
+            onClick={() => toggleSceneImage(!sceneImageOn)}
+          >
+            🖼️
+          </button>
+          <button
+            className={`tool-btn${webSearchOn ? ' active' : ''}`}
+            title={
+              searchStatus === 'searching'
+                ? t('chat.searching')
+                : searchStatus === 'failed'
+                ? t('chat.searchFailed')
+                : t('chat.webSearchToggle')
+            }
+            onClick={() => toggleWebSearch(!webSearchOn)}
+          >
+            {searchStatus === 'searching' ? '⏳' : '🌐'}
           </button>
           <button
             className={`tool-btn${searchOpen ? ' active' : ''}`}

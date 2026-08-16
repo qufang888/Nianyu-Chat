@@ -10,6 +10,7 @@ import type {
   WorldBook,
   Rule,
   MemoryEntry,
+  Plugin,
 } from '../src/types';
 import { DEFAULT_SETTINGS } from '../src/types';
 
@@ -60,6 +61,7 @@ interface Store {
   chatSessions: ChatSession[]; // 已存在的聊天会话（清空消息后仍保留）
   storyNodes: StoryNode[]; // 自适应故事线的剧情节点
   moments: Moment[]; // 朋友圈动态（人物养成/社交）
+  plugins: Plugin[]; // 插件（声明式/受控 HTTP，兼容外部常见格式）
 }
 
 // 数据保存路径配置：存放在固定的 userData 下（不随数据目录移动），避免「先读设置才能定位数据目录」的鸡生蛋问题。
@@ -295,12 +297,13 @@ class DataManager {
           chatSessions: raw.chatSessions || [],
           storyNodes: raw.storyNodes || [],
           moments: raw.moments || [],
+          plugins: raw.plugins || [],
         };
       }
     } catch (e) {
       console.error('读取存储失败', e);
     }
-    return { roles: [], groups: [], messages: [], affinity: [], worldBooks: [], rules: [], memories: [], seq: 0, chatSessions: [], storyNodes: [], moments: [] };
+    return { roles: [], groups: [], messages: [], affinity: [], worldBooks: [], rules: [], memories: [], seq: 0, chatSessions: [], storyNodes: [], moments: [], plugins: [] };
   }
 
   private genId(prefix: string): string {
@@ -406,6 +409,39 @@ class DataManager {
     this.saveStore();
     return copy;
   }
+
+  // ===================== 插件 =====================
+  // 插件以声明式结构存储：worldBook / role / rule（复用既有资产）+ 受控 HTTP 工具 + 可选提示词片段。
+  // 默认不执行任何 JS；若 settings.pluginAllowJs 为真且插件带 jsEntry，才在沙箱化的受限上下文里加载。
+  listPlugins(): Plugin[] {
+    return [...this.store.plugins].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+  }
+
+  getPlugin(id: string): Plugin | undefined {
+    return this.store.plugins.find((p) => p.id === id);
+  }
+
+  savePlugin(p: Plugin): void {
+    const idx = this.store.plugins.findIndex((x) => x.id === p.id);
+    if (idx >= 0) this.store.plugins[idx] = p;
+    else this.store.plugins.push(p);
+    this.saveStore();
+  }
+
+  updatePlugin(id: string, patch: Partial<Plugin>): Plugin | undefined {
+    const idx = this.store.plugins.findIndex((x) => x.id === id);
+    if (idx < 0) return undefined;
+    const next = { ...this.store.plugins[idx], ...patch, id };
+    this.store.plugins[idx] = next;
+    this.saveStore();
+    return next;
+  }
+
+  deletePlugin(id: string): void {
+    this.store.plugins = this.store.plugins.filter((p) => p.id !== id);
+    this.saveStore();
+  }
+
 
   // ===================== 规则库 =====================
   listRules(): Rule[] {

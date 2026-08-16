@@ -85,6 +85,10 @@ export const MiniChat: React.FC = () => {
   // 本对话世界书（''=继承；'none'=不使用；其它=具体ID）
   const [worldBooks, setWorldBooks] = useState<WorldBook[]>([]);
   const [chatWorldBookId, setChatWorldBookId] = useState('');
+  // 本对话独立开关：异步场景生图 / 联网搜索（与主界面共用同一份数据，经 settings:changed 同步）
+  const [sceneImageOn, setSceneImageOn] = useState(false);
+  const [webSearchOn, setWebSearchOn] = useState(false);
+  const [searchStatus, setSearchStatus] = useState<'idle' | 'searching' | 'done' | 'failed'>('idle');
   const autoMemoryRef = useRef(false);
   const [hideReasoning, setHideReasoning] = useState(true);
   const [enableStreaming, setEnableStreaming] = useState(false);
@@ -443,6 +447,8 @@ export const MiniChat: React.FC = () => {
         const key = `${current.chat_type}:${current.chat_id}`;
         setSelfRoleId(s.chatSelfRoles?.[key] ?? 'default');
         setChatWorldBookId(s.chatWorldBooks?.[key] ?? '');
+        setSceneImageOn(!!s.autoSceneImageChats?.[key]);
+        setWebSearchOn(!!s.webSearchChats?.[key]);
       })();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -697,6 +703,8 @@ export const MiniChat: React.FC = () => {
       });
       // 按聊天覆盖的设置
       setChatWorldBookId((settings.chatWorldBooks || {})[key] ?? '');
+      setSceneImageOn(!!(settings.autoSceneImageChats || {})[key]);
+      setWebSearchOn(!!(settings.webSearchChats || {})[key]);
       setSelfRoleId((settings.chatSelfRoles || {})[key] ?? 'default');
       const bgPath = (settings.chatBackgrounds || {})[key];
       if (bgPath) {
@@ -761,6 +769,24 @@ export const MiniChat: React.FC = () => {
         } else {
           setChatBg(null);
         }
+      }
+    });
+    return off;
+  }, [current]);
+
+  // 联网搜索状态：仅关心当前聊天，用于提示「搜索中…」
+  useEffect(() => {
+    if (!current) return;
+    const off = api.onSearchStatus((_e, data: any) => {
+      if (!data || data.chatType !== current.chat_type || data.chatId !== current.chat_id) return;
+      if (data.status === 'searching') {
+        setSearchStatus('searching');
+      } else if (data.status === 'done') {
+        setSearchStatus('done');
+        setTimeout(() => setSearchStatus('idle'), 2500);
+      } else if (data.status === 'failed') {
+        setSearchStatus('failed');
+        setTimeout(() => setSearchStatus('idle'), 2500);
       }
     });
     return off;
@@ -1437,6 +1463,32 @@ export const MiniChat: React.FC = () => {
     showToast(t('toast.worldbookSwitched', { name }));
   };
 
+  // 本对话独立开关：异步场景生图
+  const toggleSceneImage = async (v: boolean) => {
+    setSceneImageOn(v);
+    if (!current) return;
+    const settings = await api.getSettings();
+    const key = `${current.chat_type}:${current.chat_id}`;
+    const next = { ...(settings.autoSceneImageChats || {}) };
+    if (v) next[key] = true;
+    else delete next[key];
+    await api.saveSettings({ autoSceneImageChats: next });
+    showToast(t(v ? 'chat.sceneImageOn' : 'chat.sceneImageOff'), { duration: 2000, animation: 'linear' });
+  };
+
+  // 本对话独立开关：联网搜索
+  const toggleWebSearch = async (v: boolean) => {
+    setWebSearchOn(v);
+    if (!current) return;
+    const settings = await api.getSettings();
+    const key = `${current.chat_type}:${current.chat_id}`;
+    const next = { ...(settings.webSearchChats || {}) };
+    if (v) next[key] = true;
+    else delete next[key];
+    await api.saveSettings({ webSearchChats: next });
+    showToast(t(v ? 'chat.webSearchOn' : 'chat.webSearchOff'), { duration: 2000, animation: 'linear' });
+  };
+
   // ---------- 语音输入（ASR） ----------
   // ---------- 文本转语音（TTS） ----------
   const speak = async (msg: ChatMessage) => {
@@ -1783,6 +1835,26 @@ export const MiniChat: React.FC = () => {
         </button>
         <button className="mini-btn" title={t('chat.drawImage')} onClick={() => setGenOpen(true)}>
           🎨
+        </button>
+        <button
+          className={`mini-btn${sceneImageOn ? ' active' : ''}`}
+          title={t('chat.sceneImageToggle')}
+          onClick={() => toggleSceneImage(!sceneImageOn)}
+        >
+          🖼️
+        </button>
+        <button
+          className={`mini-btn${webSearchOn ? ' active' : ''}`}
+          title={
+            searchStatus === 'searching'
+              ? t('chat.searching')
+              : searchStatus === 'failed'
+              ? t('chat.searchFailed')
+              : t('chat.webSearchToggle')
+          }
+          onClick={() => toggleWebSearch(!webSearchOn)}
+        >
+          {searchStatus === 'searching' ? '⏳' : '🌐'}
         </button>
         <button
           className={`mini-btn${searchOpen ? ' active' : ''}`}

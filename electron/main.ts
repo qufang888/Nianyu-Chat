@@ -39,6 +39,8 @@ import type {
   Rule,
   MemoryEntry,
   Group,
+  Plugin,
+  PluginTool,
 } from '../src/types';
 import { normalizeRelation } from '../src/types';
 import { RELATION_TYPES, RELATION_LABELS } from '../src/types';
@@ -1168,6 +1170,246 @@ async function judgeAndPostMoments(
   return added;
 }
 
+// ===== 异步场景生图：AI 判定当前对话是否值得配一张场景图（指令不进聊天界面） =====
+const lastSceneImageAt = new Map<string, number>(); // `${chatType}:${chatId}` -> 上次生图时间戳
+
+// LLM 判定：是否该生成场景图 + 英文生图提示词
+async function judgeSceneImageLLM(
+  role: Role,
+  cfg: ModelConfig,
+  recent: string
+): Promise<{ should: boolean; prompt: string }> {
+  const prompt = [
+    `你是场景插画助手。请基于最近对话，判断此刻是否值得为这段对话生成一张「场景配图」，帮助可视化当前的氛围、地点或画面感。`,
+    `角色设定：${role.personality || role.background || '（无）'}`,
+    `最近对话：\n${recent || '（尚无对话）'}`,
+    `判定原则：仅当对话中出现了具体地点、画面感强的场景、明显情绪高潮、动作或可被视觉化的意象时 should 才为 true；日常寒暄、纯文字讨论、无明显画面感时应为 false。不要每条对话都生图。`,
+    `请输出严格 JSON，不要任何多余内容：`,
+    `{`,
+    `  "should": true或false，表示是否值得生成场景配图`,
+    `  "prompt": "若 should 为 true，给出英文场景生图提示词（不超过200词，含角色名与画面氛围，写实插画风）；否则给空串"`,
+    `}`,
+  ].join('\n');
+  try {
+    const res = await queryAI(
+      cfg,
+      [
+        { role: 'system', content: '你是场景判定助手，严格只输出要求的 JSON，不要任何解释。' },
+        { role: 'user', content: prompt },
+      ],
+      400
+    );
+    const p: any = parseFirstJson(res.content);
+    if (!p || typeof p !== 'object') return { should: false, prompt: '' };
+    if (p.should === true && typeof p.prompt === 'string' && p.prompt.trim()) {
+      return { should: true, prompt: p.prompt.trim().slice(0, 400) };
+    }
+    return { should: false, prompt: '' };
+  } catch {
+    return { should: false, prompt: '' };
+  }
+}
+
+// 启发式判定：无需调用 AI，扫描最近对话中的画面感关键词
+const SCENE_KEYWORDS = [
+  '看', '景色', '风景', '海边', '海', '山', '天空', '夕阳', '落日', '夜晚', '夜里',
+  '房间', '咖啡', '雨', '雪', '笑', '哭', '抱', '吻', '街', '公园', '城市', '灯',
+  '月光', '花园', '窗外', '阳光', '樱花', '森林', '湖', '床', '沙发', '厨房', '车站', '机场',
+];
+function judgeSceneImageHeuristic(recent: string): { should: boolean; prompt: string } {
+  let hits = 0;
+  for (const k of SCENE_KEYWORDS) if (recent.includes(k)) hits += 1;
+  if (hits >= 2) {
+    const snippet = recent.replace(/\s+/g, ' ').slice(-120);
+    return { should: true, prompt: `Scene illustration, atmospheric, detailed, character present: ${snippet}` };
+  }
+  return { should: false, prompt: '' };
+}
+
+// 主入口：判定 + 生图 + 落库 + 双窗广播（只生一次，指令不写入聊天）
+async function triggerSceneImage(chatType: string, chatId: string, roleId: string): Promise<void> {
+  const settings = dm.getSettings();
+  if (!settings.autoSceneImageChats?.[`${chatType}:${chatId}`]) return; // 该对话未开启场景生图
+  const ig = settings.imageGen;
+  if (!ig || !ig.enabled || !ig.baseUrl || !ig.apiKey) return; // 未配置生图 API 则跳过
+  const key = `${chatType}:${chatId}`;
+  const now = Date.now();
+  const last = lastSceneImageAt.get(key) || 0;
+  const interval = Math.max(5, Math.min(3600, settings.sceneImageIntervalSec || 120)) * 1000;
+  if (now - last < interval) return; // 节流：两次生图间隔不足则跳过
+  const role = dm.getRole(roleId);
+  if (!role) return;
+  const history = dm.getMessages(chatType, chatId).slice(-(settings.moodJudgeHistory ?? 10));
+  const recent = history.map((m) => `${m.sender_name}: ${(m.content || '').slice(0, 200)}`).join('\n');
+  let judge: { should: boolean; prompt: string };
+  if (settings.sceneImageJudge === 'heuristic') {
+    judge = judgeSceneImageHeuristic(recent);
+  } else {
+    const cfg = getDefaultModelConfig(settings) || resolveRoleModel(role, settings);
+    if (!cfg) return;
+    judge = await judgeSceneImageLLM(role, cfg, recent);
+  }
+  if (!judge.should || !judge.prompt) return;
+  lastSceneImageAt.set(key, now); // 先占位，避免并发重复生成
+  try {
+    const { b64, url } = await generateImage(
+      { baseUrl: ig.baseUrl!, apiKey: ig.apiKey! },
+      judge.prompt,
+      ig.model || 'gpt-image-1',
+      ig.size || '1024x1024'
+    );
+    let imagePath: string | null = null;
+    if (b64) imagePath = saveGeneratedImage(b64);
+    else if (url) {
+      try {
+        const resp = await fetch(url);
+        const buf = Buffer.from(await resp.arrayBuffer());
+        const name = `gen_${Date.now()}_${Math.floor(Math.random() * 1e6)}.png`;
+        const dest = path.join(dm.imagesDir, name);
+        fs.writeFileSync(dest, buf);
+        imagePath = dest;
+      } catch {
+        /* 下载失败则放弃 */
+      }
+    }
+    if (!imagePath) return;
+    const aiName = chatType === 'single' ? role.name : dm.getGroup(chatId)?.group_name || 'AI';
+    const aiMsg = dm.addMessage({
+      chat_type: chatType as any,
+      chat_id: chatId,
+      sender_type: 'ai',
+      sender_name: aiName,
+      content: '',
+      image_path: imagePath,
+      token_used: 0,
+      timestamp: new Date().toISOString(),
+      genPrompt: judge.prompt,
+    });
+    broadcast('stream:user', aiMsg); // 主窗/小窗同时收到，只生一次
+  } catch (e) {
+    console.error('[nianyu] 场景生图失败', e);
+    lastSceneImageAt.delete(key); // 失败则回退节流，允许下次重试
+  }
+}
+
+// ===== 联网搜索：把检索结果作为上下文注入 AI 回复（类 DeepSeek 联网搜索） =====
+interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+function stripTags(s: string): string {
+  return (s || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+}
+function decodeEntities(s: string): string {
+  return (s || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ');
+}
+
+// 按 provider 执行检索；DuckDuckGo HTML 免费无需 Key，其余需 Key
+async function searchWeb(provider: string, query: string, apiKey: string): Promise<SearchResult[]> {
+  const q = (query || '').trim().slice(0, 400);
+  if (!q) return [];
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), 15000);
+  try {
+    if (provider === 'tavily') {
+      if (!apiKey) return [];
+      const r = await fetch('https://api.tavily.com/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: apiKey, query: q, max_results: 5, search_depth: 'basic' }),
+        signal: abort.signal,
+      });
+      if (!r.ok) return [];
+      const j: any = await r.json();
+      const arr = Array.isArray(j?.results) ? j.results : [];
+      return arr
+        .slice(0, 5)
+        .map((x: any) => ({ title: String(x.title || ''), url: String(x.url || ''), snippet: String(x.content || x.snippet || '') }))
+        .filter((x: SearchResult) => x.url.startsWith('http'));
+    }
+    if (provider === 'bing') {
+      if (!apiKey) return [];
+      const r = await fetch(`https://api.bing.microsoft.com/v7.0/search?q=${encodeURIComponent(q)}&count=5`, {
+        headers: { 'Ocp-Apim-Subscription-Key': apiKey },
+        signal: abort.signal,
+      });
+      if (!r.ok) return [];
+      const j: any = await r.json();
+      const arr = j?.webPages?.value || [];
+      return arr
+        .slice(0, 5)
+        .map((x: any) => ({ title: String(x.name || ''), url: String(x.url || ''), snippet: String(x.snippet || '') }))
+        .filter((x: SearchResult) => x.url.startsWith('http'));
+    }
+    if (provider === 'serpapi') {
+      if (!apiKey) return [];
+      const r = await fetch(
+        `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q)}&api_key=${encodeURIComponent(apiKey)}`,
+        { signal: abort.signal }
+      );
+      if (!r.ok) return [];
+      const j: any = await r.json();
+      const arr = j?.organic_results || [];
+      return arr
+        .slice(0, 5)
+        .map((x: any) => ({ title: String(x.title || ''), url: String(x.link || ''), snippet: String(x.snippet || '') }))
+        .filter((x: SearchResult) => x.url.startsWith('http'));
+    }
+    // 默认：DuckDuckGo HTML（免费、无需 Key）
+    const r = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: abort.signal,
+    });
+    if (!r.ok) return [];
+    const html = await r.text();
+    const results: SearchResult[] = [];
+    const re =
+      /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) !== null && results.length < 5) {
+      const href = m[1];
+      const title = decodeEntities(stripTags(m[2]));
+      const snippet = decodeEntities(stripTags(m[3]));
+      const uddg = /[?&]uddg=([^&]+)/.exec(href);
+      const url = uddg ? decodeURIComponent(uddg[1]) : href;
+      if (url && url.startsWith('http')) results.push({ title, url, snippet });
+    }
+    return results;
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 取检索结果拼成上下文文本（每聊一次只检索一次），并广播状态供前端提示
+async function fetchSearchContext(
+  chatType: string,
+  chatId: string,
+  query: string,
+  settings: AppSettings
+): Promise<string | null> {
+  if (!settings.webSearchChats?.[`${chatType}:${chatId}`]) return null;
+  broadcast('search:status', { chatType, chatId, status: 'searching' });
+  const results = await searchWeb(settings.searchProvider || 'duckduckgo', query, settings.searchApiKey || '');
+  broadcast('search:status', {
+    chatType,
+    chatId,
+    status: results.length ? 'done' : 'failed',
+    count: results.length,
+  });
+  if (!results.length) return null;
+  return results.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.snippet}`).join('\n\n');
+}
+
 
 function buildSystemPrompt(role: Role, freezeMemory = false): string {
   const parts: string[] = [];
@@ -1670,7 +1912,15 @@ async function generateAIResponses(
   const worldBook = obs?.freezeMemory ? '' : resolveWorldBook(p.chatType, p.chatId, settings);
   const groupNames = isGroup ? getGroupMemberNames(p.chatId) : [];
 
-  const runOne = async (role: Role, hist: ChatMessage[]) => {
+  // 联网搜索：每个聊天每次只检索一次，结果作为上下文注入所有成员的回复
+  let searchCtx: string | null = null;
+  if (settings.webSearchChats?.[`${p.chatType}:${p.chatId}`]) {
+    searchCtx = await fetchSearchContext(p.chatType, p.chatId, p.content, settings);
+  }
+  // 已启用插件的提示词片段（声明式，全局生效）
+  const pluginCtx = getEnabledPluginContext();
+
+  const runOne = async (role: Role, hist: ChatMessage[], searchContext?: string | null) => {
     const cfg = resolveModel(role) as ModelConfig;
     const vision = !!cfg?.supportsImages;
     // 私密小窗：若关闭「影响情绪好感」，则不因该对话改变好感度
@@ -1694,6 +1944,15 @@ async function generateAIResponses(
           storedImages,
           vision
         );
+    if (searchContext) {
+      messages.push({
+        role: 'system',
+        content: `【联网搜索结果（仅供回答参考，请自然地把信息融入回复，不要提及"我搜索了"之类的来源说明）】\n${searchContext}`,
+      });
+    }
+    if (pluginCtx) {
+      messages.push({ role: 'system', content: `【已启用插件指令】\n${pluginCtx}` });
+    }
     const streamId = `${p.chatId}:${role.id}`;
     // 每个成员完成时立即广播，前端按完成顺序逐步显示；即使关闭全局流式也生效。
     sendStreamStart(streamId, role.id, role.name);
@@ -1717,6 +1976,7 @@ async function generateAIResponses(
       sendStreamDone(streamId, aiMsg);
       void requestMoodJudge(p.chatType, p.chatId, role.id);
       void requestRelationshipAndMoments(p.chatType, p.chatId, role.id);
+      void triggerSceneImage(p.chatType, p.chatId, role.id);
       return { aiMsg, roleId: role.id, total, tokens: aiMsg.token_used };
     } catch (e: any) {
       // 被打断时保留头像/名称/气泡，用省略号占位；其他异常仍显示错误信息
@@ -1744,10 +2004,10 @@ async function generateAIResponses(
     results = [];
     for (const role of memberRoles) {
       const hist = dm.getMessages(p.chatType, p.chatId).slice(-24);
-      results.push(await runOne(role, hist));
+      results.push(await runOne(role, hist, searchCtx));
     }
   } else {
-    results = await Promise.all(memberRoles.map((role) => runOne(role, history)));
+    results = await Promise.all(memberRoles.map((role) => runOne(role, history, searchCtx)));
   }
 
   const aiMessages: ChatMessage[] = [];
@@ -1841,6 +2101,14 @@ async function handleStream(p: {
   const worldBook = obs?.freezeMemory ? '' : resolveWorldBook(p.chatType, p.chatId, settings);
   const groupNames = isGroup ? getGroupMemberNames(p.chatId) : [];
 
+  // 联网搜索：每个聊天每次只检索一次，结果作为上下文注入所有成员的回复
+  let searchCtx: string | null = null;
+  if (settings.webSearchChats?.[`${p.chatType}:${p.chatId}`]) {
+    searchCtx = await fetchSearchContext(p.chatType, p.chatId, p.content, settings);
+  }
+  // 已启用插件的提示词片段（声明式，全局生效）
+  const pluginCtx = getEnabledPluginContext();
+
   const members = memberRoles.map((role) => ({
     streamId: `${p.chatId}:${role.id}`,
     roleId: role.id,
@@ -1852,7 +2120,7 @@ async function handleStream(p: {
   const timer = setTimeout(() => controller.abort(), 120000);
   registerStream(p.chatId, controller);
 
-  const streamOne = async (role: Role) => {
+  const streamOne = async (role: Role, searchContext?: string | null) => {
     if (controller.signal.aborted) return;
     const cfg = resolveRoleModel(role, settings) as ModelConfig;
     const vision = !!cfg?.supportsImages;
@@ -1884,6 +2152,15 @@ async function handleStream(p: {
           storedImages,
           vision
         );
+    if (searchContext) {
+      messages.push({
+        role: 'system',
+        content: `【联网搜索结果（仅供回答参考，请自然地把信息融入回复，不要提及"我搜索了"之类的来源说明）】\n${searchContext}`,
+      });
+    }
+    if (pluginCtx) {
+      messages.push({ role: 'system', content: `【已启用插件指令】\n${pluginCtx}` });
+    }
     sendStreamStart(streamId, role.id, role.name);
     // 中断时保留已生成的部分内容并落库（DeepSeek 风格的「打断生成」）
     let full = '';
@@ -1910,6 +2187,7 @@ async function handleStream(p: {
       sendStreamDone(streamId, aiMsg);
       if (!interrupted) void requestMoodJudge(p.chatType, p.chatId, role.id);
       if (!interrupted) void requestRelationshipAndMoments(p.chatType, p.chatId, role.id);
+      if (!interrupted) void triggerSceneImage(p.chatType, p.chatId, role.id);
     };
     try {
       // 请求限速（QPS）：超出则等待限速窗口解除后再发，避免触发服务端限流
@@ -1962,13 +2240,13 @@ async function handleStream(p: {
       if (isGroup) {
         for (const role of memberRoles) {
           if (controller.signal.aborted) break;
-          await streamOne(role);
+          await streamOne(role, searchCtx);
         }
       } else {
         for (let i = 0; i < memberRoles.length; i += parallel) {
           if (controller.signal.aborted) break;
           const batch = memberRoles.slice(i, i + parallel);
-          await Promise.all(batch.map((role) => streamOne(role)));
+          await Promise.all(batch.map((role) => streamOne(role, searchCtx)));
         }
       }
     } finally {
@@ -2149,6 +2427,7 @@ async function handleGroupContinue(
     sendStreamDone(streamId, aiMsg);
     void requestMoodJudge('group', p.chatId, role.id);
     void requestRelationshipAndMoments('group', p.chatId, role.id);
+    void triggerSceneImage('group', p.chatId, role.id);
     return { ok: true, roleId: role.id, roleName: role.name };
   } catch (e: any) {
     emitChunk('', true, e?.message || String(e));
@@ -2253,6 +2532,7 @@ async function handleProactive(p: {
     sendStreamDone(streamId, aiMsg);
     void requestMoodJudge(p.chatType, p.chatId, role.id);
     void requestRelationshipAndMoments(p.chatType, p.chatId, role.id);
+    void triggerSceneImage(p.chatType, p.chatId, role.id);
     return { ok: true, roleId: role.id, roleName: role.name };
   } catch (e: any) {
     const errMsg = dm.addMessage({
@@ -2751,11 +3031,34 @@ function buildRoleFromParsed(p: any, nameHint?: string): Role {
   };
 }
 
-// 插件导入：自动识别为世界书 / 角色预设包 / 提示词规则包
+function normalizePluginTool(t: any): PluginTool {
+  return {
+    name: String(t?.name || 'tool'),
+    description: String(t?.description || ''),
+    method: t?.method === 'POST' ? 'POST' : 'GET',
+    url: String(t?.url || ''),
+    headers: t?.headers && typeof t.headers === 'object' ? t.headers : undefined,
+    bodyTemplate: t?.bodyTemplate ? String(t.bodyTemplate) : undefined,
+    paramName: t?.paramName ? String(t.paramName) : undefined,
+  };
+}
+
+// 取所有「已启用且带提示词片段」的插件上下文，作为系统提示注入 AI 回复
+function getEnabledPluginContext(): string {
+  const plugins = dm
+    .listPlugins()
+    .filter((p) => p.enabled && p.promptSegments && p.promptSegments.length);
+  if (!plugins.length) return '';
+  return plugins.map((p) => `【插件「${p.name}」】\n${p.promptSegments!.join('\n')}`).join('\n\n');
+}
+
+// 插件导入：自动识别为外部插件清单 / 世界书 / 角色预设包 / 提示词规则包
+// 统一落为声明式 Plugin 记录（兼容 SillyTavern / NovelAI / OpenAI ai-plugin.json / 念语原生清单）。
+// 安全约束：默认不执行任何 JS；只有 settings.pluginAllowJs 为真且插件带 jsEntry 时才在受限上下文加载。
 async function importPluginLogic(
   content: string,
   name: string
-): Promise<{ kind: 'worldbook' | 'rule' | 'role'; id: string; name: string }> {
+): Promise<{ kind: 'worldbook' | 'rule' | 'role' | 'plugin'; id: string; name: string }> {
   const text = (content || '').trim();
   let raw: any = null;
   try {
@@ -2763,12 +3066,72 @@ async function importPluginLogic(
   } catch {
     raw = null;
   }
+
+  // 念语原生插件清单：直接采用声明的 Plugin 结构
+  if (raw && typeof raw === 'object' && (raw.tools || raw.promptSegments || raw.source === 'tool' || raw.jsEntry)) {
+    const plugin: Plugin = {
+      id: uid('plugin'),
+      name: String(raw.name || name || '导入的插件'),
+      description: String(raw.description || ''),
+      version: raw.version ? String(raw.version) : undefined,
+      author: raw.author ? String(raw.author) : undefined,
+      source: 'tool',
+      tools: Array.isArray(raw.tools) ? raw.tools.map(normalizePluginTool) : [],
+      promptSegments: Array.isArray(raw.promptSegments) ? raw.promptSegments.map(String) : [],
+      jsEntry: raw.jsEntry ? String(raw.jsEntry) : undefined,
+      enabled: true,
+      created_at: new Date().toISOString(),
+    };
+    dm.savePlugin(plugin);
+    return { kind: 'plugin', id: plugin.id, name: plugin.name };
+  }
+
+  // OpenAI 插件清单 ai-plugin.json
+  if (raw && typeof raw === 'object' && raw.name_for_model && (raw.description_for_model || raw.api?.url)) {
+    const plugin: Plugin = {
+      id: uid('plugin'),
+      name: String(raw.name_for_human || raw.name_for_model || name || 'OpenAI 插件'),
+      description: String(raw.description_for_human || ''),
+      version: typeof raw.version === 'string' ? raw.version : undefined,
+      author: undefined,
+      source: 'tool',
+      tools: raw.api?.url
+        ? [
+            {
+              name: String(raw.name_for_model),
+              description: String(raw.description_for_model || ''),
+              method: 'GET',
+              url: String(raw.api.url),
+              paramName: 'q',
+            },
+          ]
+        : [],
+      promptSegments: raw.description_for_model ? [String(raw.description_for_model)] : [],
+      jsEntry: undefined,
+      enabled: true,
+      created_at: new Date().toISOString(),
+    };
+    dm.savePlugin(plugin);
+    return { kind: 'plugin', id: plugin.id, name: plugin.name };
+  }
+
+  // 其余走原有世界书/角色/规则识别
   if (raw && typeof raw === 'object') {
     const ent = extractLoreEntries(raw);
     if (ent.length > 0 || raw.lorebook || raw.worldbook || raw.world_book) {
       const wb = parseWorldBook(content, name || '导入的世界书');
       wb.id = uid('wb');
       dm.saveWorldBook(wb);
+      const plugin: Plugin = {
+        id: uid('plugin'),
+        name: wb.name,
+        description: '导入的世界书',
+        source: 'worldbook',
+        worldBookId: wb.id,
+        enabled: true,
+        created_at: new Date().toISOString(),
+      };
+      dm.savePlugin(plugin);
       return { kind: 'worldbook', id: wb.id, name: wb.name };
     }
     const d = raw.data && typeof raw.data === 'object' ? raw.data : raw;
@@ -2778,12 +3141,32 @@ async function importPluginLogic(
       const parsed = parseCharacterCard(raw);
       const role = buildRoleFromParsed(parsed, name);
       dm.createRole(role);
+      const plugin: Plugin = {
+        id: uid('plugin'),
+        name: role.name,
+        description: '导入的角色卡',
+        source: 'role',
+        roleId: role.id,
+        enabled: true,
+        created_at: new Date().toISOString(),
+      };
+      dm.savePlugin(plugin);
       return { kind: 'role', id: role.id, name: role.name };
     }
   }
   const rule = parseRule(content, name || '导入的规则');
   rule.id = uid('rule');
   dm.saveRule(rule);
+  const plugin: Plugin = {
+    id: uid('plugin'),
+    name: rule.name,
+    description: '导入的提示词规则',
+    source: 'rule',
+    ruleId: rule.id,
+    enabled: true,
+    created_at: new Date().toISOString(),
+  };
+  dm.savePlugin(plugin);
   return { kind: 'rule', id: rule.id, name: rule.name };
 }
 
@@ -3713,6 +4096,47 @@ function registerIPC(): void {
   // ---------- 插件导入 ----------
   ipcMain.handle('plugin:import', async (_e, content: string, name: string) =>
     importPluginLogic(content, name)
+  );
+
+  // 插件列表
+  ipcMain.handle('plugin:list', () => dm.listPlugins());
+
+  // 删除插件（仅删插件记录，不级联删底层世界书/角色/规则，避免误伤既有资产）
+  ipcMain.handle('plugin:remove', (_e, id: string) => {
+    dm.deletePlugin(id);
+    return { ok: true };
+  });
+
+  // 启停插件
+  ipcMain.handle('plugin:toggle', (_e, id: string, enabled: boolean) => {
+    const next = dm.updatePlugin(id, { enabled });
+    return { ok: !!next, plugin: next };
+  });
+
+  // 受控 HTTP 工具调用：只发预设的请求，绝不执行任意代码（安全边界）
+  ipcMain.handle(
+    'plugin:callTool',
+    async (_e, pluginId: string, toolName: string, arg: string) => {
+      const plugin = dm.getPlugin(pluginId);
+      const tool = plugin?.tools?.find((t) => t.name === toolName);
+      if (!plugin || !tool || !tool.url) throw new Error('插件或工具不存在');
+      const base = tool.url;
+      const url = tool.paramName
+        ? `${base}${base.includes('?') ? '&' : '?'}${encodeURIComponent(tool.paramName)}=${encodeURIComponent(arg || '')}`
+        : base;
+      const headers: Record<string, string> = tool.headers || {};
+      const body = tool.bodyTemplate
+        ? tool.bodyTemplate.replace(/\{\{arg\}\}/g, arg || '').replace(/\{\{query\}\}/g, arg || '')
+        : undefined;
+      const r = await fetch(url, {
+        method: tool.method,
+        headers: Object.keys(headers).length ? headers : undefined,
+        body: body || undefined,
+      });
+      if (!r.ok) throw new Error(`插件请求失败：${r.status}`);
+      const text = await r.text();
+      return { ok: true, text: text.slice(0, 8000) };
+    }
   );
 
   // ---------- 窗口控制（最小化 / 最大化 / 还原 / 关闭） ----------

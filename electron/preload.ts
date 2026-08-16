@@ -106,6 +106,9 @@ export interface NianyuAPI {
   onSettingsChanged: (cb: (e: any, data: any) => void) => () => void;
   offSettingsChanged: (cb: (e: any, data: any) => void) => void;
 
+  onSearchStatus: (cb: (e: any, data: any) => void) => () => void;
+  offSearchStatus: (cb: (e: any, data: any) => void) => void;
+
   // 消息操作
   recallMessage: (msgId: number) => Promise<{ ok: boolean; deletedMems: number }>;
   rollbackMessages: (p: { chatType: string; chatId: string; fromMsgId: number }) => Promise<{ deletedMsgs: number; deletedMems: number }>;
@@ -271,8 +274,12 @@ export interface NianyuAPI {
   deleteMemory: (id: string) => Promise<void>;
   extractMemories: (chatType: string, chatId: string) => Promise<number>;
 
-  // ===== 插件导入 =====
-  importPlugin: (content: string, name: string) => Promise<{ kind: 'worldbook' | 'rule' | 'role'; id: string; name: string }>;
+  // ===== 插件（导入 / 列表 / 启停 / 删除 / 受控调用） =====
+  importPlugin: (content: string, name: string) => Promise<{ kind: 'worldbook' | 'rule' | 'role' | 'plugin'; id: string; name: string }>;
+  listPlugins: () => Promise<import('../src/types').Plugin[]>;
+  removePlugin: (id: string) => Promise<{ ok: boolean }>;
+  togglePlugin: (id: string, enabled: boolean) => Promise<{ ok: boolean; plugin?: import('../src/types').Plugin }>;
+  callPluginTool: (pluginId: string, toolName: string, arg: string) => Promise<{ ok: boolean; text?: string }>;
 
   // ===== 确认对话框 =====
   showConfirm: (message: string, title?: string) => Promise<boolean>;
@@ -340,6 +347,14 @@ const api: NianyuAPI = {
     return () => ipcRenderer.removeListener('settings:changed', listener);
   },
   offSettingsChanged: () => {},
+
+  // 联网搜索状态广播（searching / done / failed），供聊天界面提示
+  onSearchStatus: (cb) => {
+    const listener = (e: any, data: any) => cb(e, data);
+    ipcRenderer.on('search:status', listener);
+    return () => ipcRenderer.removeListener('search:status', listener);
+  },
+  offSearchStatus: () => {},
 
   // 在 preload 内部创建 listener 包装并返回 unsubscribe，避免 contextBridge
   // 跨边界导致 on/off 传入的回调被包装成不同代理、无法正确移除监听（监听器累积）。
@@ -585,8 +600,13 @@ const api: NianyuAPI = {
   deleteMemory: (id) => ipcRenderer.invoke('memories:delete', id),
   extractMemories: (chatType, chatId) => ipcRenderer.invoke('memories:extract', chatType, chatId),
 
-  // ===== 插件导入 =====
+  // ===== 插件（导入 / 列表 / 启停 / 删除 / 受控调用） =====
   importPlugin: (content, name) => ipcRenderer.invoke('plugin:import', content, name),
+  listPlugins: () => ipcRenderer.invoke('plugin:list'),
+  removePlugin: (id) => ipcRenderer.invoke('plugin:remove', id),
+  togglePlugin: (id, enabled) => ipcRenderer.invoke('plugin:toggle', id, enabled),
+  callPluginTool: (pluginId, toolName, arg) =>
+    ipcRenderer.invoke('plugin:callTool', pluginId, toolName, arg),
 
   // ===== 确认对话框 =====
   showConfirm: (message, title) => ipcRenderer.invoke('app:confirm', message, title),

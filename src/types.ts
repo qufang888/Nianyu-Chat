@@ -190,6 +190,38 @@ export interface ImageGenSettings {
   size: string; // 尺寸，如 1024x1024
 }
 
+// ===== 插件（声明式 / 受控 HTTP；可含沙箱化 JS，默认关）=====
+// 工具型插件：声明一个受主进程白名单管控的 HTTP 调用，不执行任意 JS（除非 pluginAllowJs 开启）
+export interface PluginTool {
+  name: string; // 工具名（英文标识）
+  description: string; // 用途说明（给人/给模型看）
+  method: 'GET' | 'POST';
+  url: string; // 目标 URL（须命中域名白名单）
+  headers?: Record<string, string>;
+  bodyTemplate?: string; // POST 请求体模板，可用 {{arg}} 占位
+  paramName?: string; // GET 查询参数名（如 q）
+}
+export interface Plugin {
+  id: string;
+  name: string;
+  description: string;
+  version?: string;
+  author?: string;
+  source: 'worldbook' | 'role' | 'rule' | 'tool' | 'mixed'; // 导入后归类
+  // 内容挂载（声明式）
+  worldBookId?: string; // 若导入为世界书，记录其 id
+  roleId?: string; // 若导入为角色，记录其 id
+  ruleId?: string; // 若导入为规则，记录其 id
+  // 工具挂载（受控 HTTP）
+  tools?: PluginTool[];
+  // 提示词片段（注入系统提示词）
+  promptSegments?: string[];
+  // 本地 JS 扩展入口（仅当全局 pluginAllowJs 时由沙箱加载）
+  jsEntry?: string; // 相对插件目录的 js 文件名
+  enabled: boolean; // 是否启用
+  created_at: string;
+}
+
 export interface AppSettings {
   apiKeys: ApiKeys;
   defaultModel: string;
@@ -285,6 +317,16 @@ export interface AppSettings {
   translationModelId?: string; // 翻译专用模型配置 id（空=使用默认模型）
   translationLang?: 'auto' | 'zh' | 'en'; // 翻译目标语言：auto=随软件语言
   imageGen?: ImageGenSettings; // 生图（专用图像生成 API）设置
+  // ===== 异步场景生图（后端按对话场景自动生图，节流 + 每对话开关）=====
+  autoSceneImageChats: Record<string, boolean>; // 每对话独立开关：key="single:roleId"/"group:groupId" -> bool（主窗/小窗共用同一值，杜绝主关小开）
+  sceneImageIntervalSec: number; // 两次生图最小间隔（秒），设置内可调节
+  sceneImageJudge: 'llm' | 'heuristic'; // 场景判定方式：'llm'=轻量模型判定（最准，耗 token）；'heuristic'=关键词/情绪启发式（零成本）
+  // ===== 插件系统 =====
+  pluginAllowJs: boolean; // 允许本地 JS 插件（默认关；开启有 RCE 风险，需弹窗确认）
+  // ===== 联网搜索（类 DeepSeek，上下文注入式）=====
+  webSearchChats: Record<string, boolean>; // 每对话独立开关：key="single:roleId"/"group:groupId" -> bool
+  searchProvider: 'duckduckgo' | 'tavily' | 'bing' | 'serpapi' | 'model-native'; // 搜索供应商（duckduckgo=免费可用源）
+  searchApiKey: string; // 搜索 API Key（duckduckgo 免费源可空）
   // ===== 窗口整体等比缩放（基准尺寸 + 上下限，主窗与小窗分别配置）=====
   uiZoom?: {
     mainBaseW: number; // 主窗基准宽（zoom=1 的参考宽）
@@ -381,6 +423,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
     model: 'gpt-image-1',
     size: '1024x1024',
   },
+  // ===== 异步场景生图默认值 =====
+  autoSceneImageChats: {},
+  sceneImageIntervalSec: 120,
+  sceneImageJudge: 'llm',
+  // ===== 插件系统默认值 =====
+  pluginAllowJs: false,
+  // ===== 联网搜索默认值 =====
+  webSearchChats: {},
+  searchProvider: 'duckduckgo',
+  searchApiKey: '',
   enableAnimations: true,
   firstRunDone: false,
   selfRoles: [],
