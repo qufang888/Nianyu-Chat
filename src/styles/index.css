@@ -1096,6 +1096,125 @@ input[type='range']::-moz-range-thumb {
   margin-bottom: 12px;
 }
 
+/* 联网搜索结果折叠气泡：默认收起为一行低调药丸，展开后列出全部结果 */
+.search-result-bubble {
+  margin: 10px auto 4px;
+  width: calc(100% - 24px);
+  max-width: 720px;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-panel);
+}
+.srb-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text);
+  font-size: 13px;
+  font-family: inherit;
+  text-align: left;
+}
+.srb-head:hover { background: var(--color-hover); }
+.srb-icon { font-size: 14px; line-height: 1; }
+.srb-title { flex: 1; font-weight: 600; }
+.srb-chevron { color: var(--color-text-secondary); font-size: 12px; }
+.srb-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 10px 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  border-top: 1px solid var(--color-border);
+}
+.srb-item {
+  display: block;
+  text-decoration: none;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-input-bg);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  transition: background 0.15s, border-color 0.15s;
+}
+.srb-item:hover {
+  background: var(--color-hover);
+  border-color: var(--color-primary);
+}
+.srb-item-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+.srb-item-idx {
+  flex: 0 0 auto;
+  min-width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  cursor: pointer;
+}
+/* AI 回复正文内联引用徽标：可点击跳转对应网页 */
+.cite-badge {
+  display: inline;
+  color: var(--color-primary);
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0 1px;
+  border-radius: 3px;
+  transition: background 0.15s ease;
+}
+.cite-badge:hover {
+  background: rgba(128, 128, 128, 0.18);
+  text-decoration: underline;
+}
+.cite-badge:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.srb-item {
+  cursor: pointer;
+}
+.srb-item:hover .srb-item-title {
+  text-decoration: underline;
+}
+.srb-item-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--color-primary);
+  margin-bottom: 3px;
+}
+.srb-item-snippet {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.srb-item-url {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  word-break: break-all;
+}
+
 /* 生图弹窗：把标题、说明、输入区整体包进白底面板，类似随机事件 */
 .draw-input-panel {
   background: var(--color-input-bg);

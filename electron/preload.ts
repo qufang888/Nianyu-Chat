@@ -108,6 +108,8 @@ export interface NianyuAPI {
 
   onSearchStatus: (cb: (e: any, data: any) => void) => () => void;
   offSearchStatus: (cb: (e: any, data: any) => void) => void;
+  onSearchResults: (cb: (e: any, data: any) => void) => () => void;
+  offSearchResults: (cb: (e: any, data: any) => void) => void;
 
   // 消息操作
   recallMessage: (msgId: number) => Promise<{ ok: boolean; deletedMems: number }>;
@@ -297,6 +299,9 @@ export interface NianyuAPI {
   // ===== 主进程错误推送 =====
   onAppError: (cb: (data: { message: string; cause: string; solution: string; lang: string }) => void) => () => void;
   offAppError: (cb: (data: any) => void) => void;
+
+  // ===== 打开外部网页（点击联网搜索结果编号） =====
+  openExternal: (url: string) => void;
 }
 
 const windowStateListeners = new Map<
@@ -355,6 +360,14 @@ const api: NianyuAPI = {
     return () => ipcRenderer.removeListener('search:status', listener);
   },
   offSearchStatus: () => {},
+
+  // 联网搜索结果广播（原始检索结果），供聊天界面折叠展示
+  onSearchResults: (cb) => {
+    const listener = (e: any, data: any) => cb(e, data);
+    ipcRenderer.on('search:results', listener);
+    return () => ipcRenderer.removeListener('search:results', listener);
+  },
+  offSearchResults: () => {},
 
   // 在 preload 内部创建 listener 包装并返回 unsubscribe，避免 contextBridge
   // 跨边界导致 on/off 传入的回调被包装成不同代理、无法正确移除监听（监听器累积）。
@@ -638,6 +651,9 @@ const api: NianyuAPI = {
   offAppError: (cb: (data: any) => void) => {
     ipcRenderer.off('app:error', cb);
   },
+
+  // ===== 打开外部网页（点击联网搜索结果编号） =====
+  openExternal: (url) => ipcRenderer.send('app:openExternal', url),
 };
 
 contextBridge.exposeInMainWorld('api', api);

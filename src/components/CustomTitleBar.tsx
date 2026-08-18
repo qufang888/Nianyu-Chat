@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
 import { useTheme } from '../theme/ThemeContext';
@@ -212,7 +213,8 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
           </>
         )}
       </div>
-      {showClosePrompt && !isMini && (
+      {(showClosePrompt && !isMini) &&
+        createPortal(
         <div className="modal-mask" onClick={() => setShowClosePrompt(false)} style={{ zIndex: 10000 }}>
           <div
             className="modal-card"
@@ -310,8 +312,9 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
               <button className="btn-primary" onClick={confirmClose}>{t('common.confirm')}</button>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+          document.body
+        )}
     </div>
   );
 };

@@ -1859,17 +1859,19 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
               {t('settings.searchProvider')}
             </div>
             <select
-              value={draft.searchProvider ?? 'duckduckgo'}
+              value={draft.searchProvider ?? 'auto'}
               onChange={(e) => {
                 const v = e.target.value as AppSettings['searchProvider'];
                 patch({ searchProvider: v });
                 api.saveSettings({ searchProvider: v });
               }}
-              style={{ padding: '6px 8px', borderRadius: 8, width: 260 }}
+              style={{ padding: '6px 8px', borderRadius: 8, width: 320 }}
             >
+              <option value="auto">{t('settings.searchProviderAuto')}</option>
+              <option value="bing">{t('settings.searchProviderBing')}</option>
+              <option value="baidu">{t('settings.searchProviderBaidu')}</option>
               <option value="duckduckgo">{t('settings.searchProviderDuckduckgo')}</option>
               <option value="tavily">{t('settings.searchProviderTavily')}</option>
-              <option value="bing">{t('settings.searchProviderBing')}</option>
               <option value="serpapi">{t('settings.searchProviderSerpapi')}</option>
             </select>
           </div>
@@ -1889,10 +1891,62 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
               }}
             />
             <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.searchProviderDuckduckgo')}
-              {draft.searchProvider && draft.searchProvider !== 'duckduckgo'
-                ? ' — ' + t('settings.searchApiKey')
-                : ''}
+              {t('settings.searchApiKeyHint')}
+            </div>
+          </div>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 4 }}>
+            <input
+              type="checkbox"
+              checked={!!draft.webSearchFetchPages}
+              onChange={(e) => {
+                const v = e.target.checked;
+                patch({ webSearchFetchPages: v });
+                api.saveSettings({ webSearchFetchPages: v });
+              }}
+              style={{ marginTop: 2 }}
+            />
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.webSearchFetchPages')}</div>
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                {t('settings.webSearchFetchPagesDesc')}
+              </div>
+            </div>
+          </label>
+          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginTop: 4 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+                {t('settings.webSearchFetchCount')}
+              </div>
+              <input
+                type="number"
+                min={1}
+                max={6}
+                value={draft.webSearchFetchCount ?? 5}
+                style={{ width: 120, padding: '6px 8px', borderRadius: 8 }}
+                onChange={(e) => {
+                  const v = Math.min(6, Math.max(1, Number(e.target.value) || 5));
+                  patch({ webSearchFetchCount: v });
+                  api.saveSettings({ webSearchFetchCount: v });
+                }}
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+                {t('settings.webSearchFetchTimeout')}
+              </div>
+              <input
+                type="number"
+                min={2000}
+                max={20000}
+                step={1000}
+                value={draft.webSearchFetchTimeout ?? 8000}
+                style={{ width: 140, padding: '6px 8px', borderRadius: 8 }}
+                onChange={(e) => {
+                  const v = Math.min(20000, Math.max(2000, Number(e.target.value) || 8000));
+                  patch({ webSearchFetchTimeout: v });
+                  api.saveSettings({ webSearchFetchTimeout: v });
+                }}
+              />
             </div>
           </div>
         </div>

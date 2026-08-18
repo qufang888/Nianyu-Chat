@@ -116,6 +116,8 @@ export interface NianyuAPI {
   offSettingsChanged: (cb: (e: any, data: any) => void) => void;
   onSearchStatus: (cb: (e: any, data: any) => void) => () => void;
   offSearchStatus: (cb: (e: any, data: any) => void) => void;
+  onSearchResults: (cb: (e: any, data: any) => void) => () => void;
+  offSearchResults: (cb: (e: any, data: any) => void) => void;
 
   onStreamChunk: (cb: (e: any, data: any) => void) => () => void;
   offStreamChunk: (cb: (e: any, data: any) => void) => void;
@@ -298,6 +300,9 @@ export interface NianyuAPI {
   logAppError: (category: 'functional' | 'model' | 'other', message: string, detail?: string) => Promise<void>;
   getErrorLog: () => Promise<import('./types').ErrorLogEntry[]>;
   clearErrorLog: () => Promise<void>;
+
+  // ===== 打开外部网页（点击联网搜索结果编号） =====
+  openExternal: (url: string) => void;
 }
 
 const raw = (window as any).api as NianyuAPI;

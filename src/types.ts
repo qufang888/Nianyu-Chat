@@ -325,8 +325,13 @@ export interface AppSettings {
   pluginAllowJs: boolean; // 允许本地 JS 插件（默认关；开启有 RCE 风险，需弹窗确认）
   // ===== 联网搜索（类 DeepSeek，上下文注入式）=====
   webSearchChats: Record<string, boolean>; // 每对话独立开关：key="single:roleId"/"group:groupId" -> bool
-  searchProvider: 'duckduckgo' | 'tavily' | 'bing' | 'serpapi' | 'model-native'; // 搜索供应商（duckduckgo=免费可用源）
+  searchProvider: 'auto' | 'duckduckgo' | 'bing' | 'baidu' | 'tavily' | 'serpapi' | 'model-native'; // 搜索供应商（auto=多引擎免费回退；duckduckgo/bing/baidu=免费直爬；tavily/serpapi=需 Key）
   searchApiKey: string; // 搜索 API Key（duckduckgo 免费源可空）
+  // DeepSeek 式「检索后抓取网页正文」：搜索拿到结果链接后，并发读取前 N 篇网页的纯文本正文，
+  // 过滤广告/CSS/JS 后作为上下文注入模型（而非仅用搜索摘要）。关闭则回退到摘要格式。
+  webSearchFetchPages: boolean; // 是否抓取网页正文（默认 true）
+  webSearchFetchCount: number; // 抓取前 N 条结果的正文（默认 5，范围 1~6）
+  webSearchFetchTimeout: number; // 单页抓取超时 ms（默认 8000，范围 2000~20000）
   // ===== 窗口整体等比缩放（基准尺寸 + 上下限，主窗与小窗分别配置）=====
   uiZoom?: {
     mainBaseW: number; // 主窗基准宽（zoom=1 的参考宽）
@@ -431,7 +436,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   pluginAllowJs: false,
   // ===== 联网搜索默认值 =====
   webSearchChats: {},
-  searchProvider: 'duckduckgo',
+  searchProvider: 'auto',
+  webSearchFetchPages: true,
+  webSearchFetchCount: 5,
+  webSearchFetchTimeout: 8000,
   searchApiKey: '',
   enableAnimations: true,
   firstRunDone: false,

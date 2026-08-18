@@ -1,8 +1,15 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
 import type { ChatListItem, ChatMessage, ChatType, Role, SelfRole, WorldBook } from '../types';
+
+// 联网搜索结果项（后端 search:results 广播的结构，前端仅用于折叠展示）
+interface SearchResultItem {
+  title: string;
+  url: string;
+  snippet: string;
+}
 import { renderMarkdown } from '../utils/markdown';
 import { AvatarImg } from './ChatList';
 import { GroupEditor } from './GroupEditor';
@@ -190,6 +197,13 @@ export const ChatWindow: React.FC<{
   const [sceneImageOn, setSceneImageOn] = useState(false);
   const [webSearchOn, setWebSearchOn] = useState(false);
   const [searchStatus, setSearchStatus] = useState<'idle' | 'searching' | 'done' | 'failed'>('idle');
+  // 联网搜索结果：按 streamId 分桶，每条 AI 回复独立拥有自己的折叠气泡（不在全聊共享一个气泡）
+  const [searchResultsByStream, setSearchResultsByStream] = useState<Record<string, SearchResultItem[]>>({});
+  const [expandedStreams, setExpandedStreams] = useState<Record<string, boolean>>({});
+  // 检索在流式开始前完成，先把结果暂存为 pending；首个 stream:start 将其挂到对应消息的 streamId
+  const pendingSearchRef = useRef<SearchResultItem[] | null>(null);
+  // 已完成的 AI 消息 id -> streamId 映射，用于历史消息继续显示其搜索气泡
+  const streamMsgIdRef = useRef<Record<string, string>>({});
   // 轻提示（自动出现又自动缩回，无需手动关闭）
   const { toast, showToast } = useToast();
   const openMini = async () => {
@@ -745,6 +759,8 @@ export const ChatWindow: React.FC<{
       });
       if (data.message && !doneStreamIds.current.has(data.streamId)) {
         doneStreamIds.current.add(data.streamId);
+        // 记录 消息id -> streamId，让已完成的回复在历史中仍显示自己的搜索气泡
+        if (data.message.id != null) streamMsgIdRef.current[String(data.message.id)] = data.streamId;
         setMessages((prev) => {
           if (prev.find((m) => m.id === data.message.id)) return prev;
           return [...prev, data.message];
@@ -784,6 +800,12 @@ export const ChatWindow: React.FC<{
       doneStreamIds.current.delete(data.streamId);
       activeStreamsRef.current.add(data.streamId);
       streamingCountRef.current = activeStreamsRef.current.size;
+      // 检索在流式开始前已完成：把暂存的搜索结果挂到本消息的 streamId（每条回复独立气泡，仅首个成员消费）
+      if (pendingSearchRef.current) {
+        const payload = pendingSearchRef.current;
+        pendingSearchRef.current = null;
+        setSearchResultsByStream((prev) => ({ ...prev, [data.streamId]: payload }));
+      }
       setStreamingMsgs((prev) => {
         if (prev[data.streamId]) return prev;
         const placeholder: ChatMessage = {
@@ -796,7 +818,8 @@ export const ChatWindow: React.FC<{
           image_path: null,
           token_used: 0,
           timestamp: new Date().toISOString(),
-        };
+          streamId: data.streamId,
+        } as any;
         return { ...prev, [data.streamId]: placeholder };
       });
     };
@@ -945,6 +968,22 @@ export const ChatWindow: React.FC<{
         setSearchStatus('failed');
         setTimeout(() => setSearchStatus('idle'), 2500);
       }
+    });
+    return off;
+  }, [chatType, chatId]);
+
+  // 联网搜索结果：仅关心当前聊天；按每条回复独立展示，切换对话时清空重置
+  useEffect(() => {
+    setSearchResultsByStream({});
+    setExpandedStreams({});
+    pendingSearchRef.current = null;
+    streamMsgIdRef.current = {};
+    const off = api.onSearchResults((_e, data: any) => {
+      if (!data || data.chatType !== chatType || data.chatId !== chatId) return;
+      const incoming: SearchResultItem[] = Array.isArray(data.results) ? data.results : [];
+      if (!incoming.length) return;
+      // 暂存：检索在流式开始前完成，等首个 stream:start 再挂到对应消息，实现「每条回复独立气泡」
+      pendingSearchRef.current = incoming;
     });
     return off;
   }, [chatType, chatId]);
@@ -1346,6 +1385,7 @@ export const ChatWindow: React.FC<{
     // 每轮发送都重新计数，确保同一聊天内重复发送也能按完成顺序逐步显示
     doneStreamIds.current.clear();
     seenSeqRef.current = {};
+    pendingSearchRef.current = null;
     let userSent = phase === 'ai';
     try {
       if (enableStreaming && phase === 'full') {
@@ -2021,35 +2061,78 @@ export const ChatWindow: React.FC<{
             <div>{t('chat.empty', { name })}</div>
           </div>
         )}
-        {allMessagesUnique.map((m, i) => (
-          <MessageRow
-            key={m.id}
-            msg={m}
-            onImage={setPreview}
-            prevTimestamp={i > 0 ? allMessagesUnique[i - 1].timestamp : undefined}
-            modelName={m.sender_type === 'ai' ? modelMap[m.sender_name] : undefined}
-            avatarPath={m.sender_type === 'ai' ? avatarMap[m.sender_name] : undefined}
-            userAvatarPath={userAvatarPath}
-            showTts={voiceCfg.tts && m.sender_type === 'ai' && !!m.content}
-            speaking={speakingId === m.id}
-            typing={m.sender_type === 'ai' && (m.id as number) < 0 && !m.content && !m.reasoning}
-            streaming={(m.id as number) < 0}
-            hideReasoning={hideReasoning}
-            onSpeak={() => speak(m)}
-            onReasoningCopied={() => showToast(t('toast.reasoningCopied'))}
-            onQuickMemory={(text) => handleQuickMemory(m, text)}
-            onSaveImageMemory={handleSaveImageMemory}
-            onViewPrompt={(p) => setPromptView(p)}
-            onForward={(msg) => openForwardPicker(msg)}
-            onEdit={(msg) => { setEditMsg(msg); setInput(msg.content); }}
-            onRollback={(msgId) => handleRollback(msgId)}
-            onRecall={(msgId) => handleRecall(msgId)}
-            onCopy={(text) => { navigator.clipboard.writeText(text); showToast(t('toast.copied')); }}
-            onTranslate={handleTranslate}
-            onMarkNode={storyOn ? markNode : undefined}
-            roleMood={chatType === 'group' && m.sender_type === 'ai' ? groupMoods[m.sender_name] : undefined}
-          />
-        ))}
+        {allMessagesUnique.map((m, i) => {
+          const sid = (m as any).streamId || streamMsgIdRef.current[String(m.id)];
+          const sr = sid ? searchResultsByStream[sid] : undefined;
+          return (
+            <Fragment key={m.id}>
+              <MessageRow
+                key={m.id}
+                msg={m}
+                onImage={setPreview}
+                prevTimestamp={i > 0 ? allMessagesUnique[i - 1].timestamp : undefined}
+                modelName={m.sender_type === 'ai' ? modelMap[m.sender_name] : undefined}
+                avatarPath={m.sender_type === 'ai' ? avatarMap[m.sender_name] : undefined}
+                userAvatarPath={userAvatarPath}
+                showTts={voiceCfg.tts && m.sender_type === 'ai' && !!m.content}
+                speaking={speakingId === m.id}
+                typing={m.sender_type === 'ai' && (m.id as number) < 0 && !m.content && !m.reasoning}
+                streaming={(m.id as number) < 0}
+                hideReasoning={hideReasoning}
+                onSpeak={() => speak(m)}
+                onReasoningCopied={() => showToast(t('toast.reasoningCopied'))}
+                onQuickMemory={(text) => handleQuickMemory(m, text)}
+                onSaveImageMemory={handleSaveImageMemory}
+                onViewPrompt={(p) => setPromptView(p)}
+                onForward={(msg) => openForwardPicker(msg)}
+                onEdit={(msg) => { setEditMsg(msg); setInput(msg.content); }}
+                onRollback={(msgId) => handleRollback(msgId)}
+                onRecall={(msgId) => handleRecall(msgId)}
+                onCopy={(text) => { navigator.clipboard.writeText(text); showToast(t('toast.copied')); }}
+                onTranslate={handleTranslate}
+                onMarkNode={storyOn ? markNode : undefined}
+                roleMood={chatType === 'group' && m.sender_type === 'ai' ? groupMoods[m.sender_name] : undefined}
+                searchResults={sr}
+              />
+              {sr && sr.length > 0 && (
+                <div className="search-result-bubble" key={`sr-${m.id}`}>
+                  <button
+                    type="button"
+                    className="srb-head"
+                    onClick={() => setExpandedStreams((v) => ({ ...v, [sid]: !v[sid] }))}
+                    title={t('chat.webSearchResultToggle')}
+                  >
+                    <span className="srb-icon">🌐</span>
+                    <span className="srb-title">{t('chat.webSearchResultTitle', { n: sr.length })}</span>
+                    <span className="srb-chevron">{expandedStreams[sid] ? '▾' : '▸'}</span>
+                  </button>
+                  {expandedStreams[sid] && (
+                    <div className="srb-list">
+                      {sr.map((r, i2) => (
+                        <div
+                          className="srb-item"
+                          key={i2}
+                          role="link"
+                          tabIndex={0}
+                          title={t('chat.webSearchResultToggle')}
+                          onClick={() => (api as any).openExternal?.(r.url)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') (api as any).openExternal?.(r.url); }}
+                        >
+                          <div className="srb-item-head">
+                            <span className="srb-item-idx">{i2 + 1}</span>
+                            <div className="srb-item-title">{r.title}</div>
+                          </div>
+                          {r.snippet && <div className="srb-item-snippet">{r.snippet}</div>}
+                          <div className="srb-item-url">{r.url}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </Fragment>
+          );
+        })}
         {genTyping && (
           <div className="msg-row ai" style={{ opacity: 0.85 }}>
             <div className="avatar">🤖</div>
@@ -2485,9 +2568,10 @@ const MessageRow: React.FC<{
   onTranslate?: (text: string) => void;
   onMarkNode?: (msg: ChatMessage) => void;
   roleMood?: string;
+  searchResults?: SearchResultItem[];
 }> = ({
   msg, onImage, prevTimestamp, modelName, avatarPath, userAvatarPath, showTts, speaking, typing, streaming, hideReasoning, onSpeak, onReasoningCopied,
-  onQuickMemory, onSaveImageMemory, onViewPrompt, onForward, onEdit, onRollback, onRecall, onCopy, onTranslate, onMarkNode, roleMood,
+  onQuickMemory, onSaveImageMemory, onViewPrompt, onForward, onEdit, onRollback, onRecall, onCopy, onTranslate, onMarkNode, roleMood, searchResults,
 }) => {
   const { t } = useI18n();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -2585,6 +2669,14 @@ const MessageRow: React.FC<{
   const imgs = msg.images && msg.images.length ? msg.images : msg.image_path ? [msg.image_path] : [];
   const hasText = !!(msg.content && msg.content.trim());
 
+  // 联网搜索内联引用：仅 AI 消息、且本消息对应 stream 有搜索结果时启用 [n] 可点击
+  const citeCitations = (!isUser && searchResults && searchResults.length)
+    ? Object.fromEntries(searchResults.map((r, idx) => [idx + 1, r.url]))
+    : undefined;
+  const citeOnClick = citeCitations
+    ? (url: string) => { try { api?.openExternal?.(url); } catch { /* web/Capacitor 构建无此接口时忽略 */ } }
+    : undefined;
+
   // 已撤回或失败消息特殊渲染
   if (recalled) {
     return (
@@ -2630,7 +2722,7 @@ const MessageRow: React.FC<{
                     onCopied={onReasoningCopied}
                   />
                 )}
-                {renderMarkdown(msg.content)}
+                {renderMarkdown(msg.content, { citations: citeCitations, onCite: citeOnClick })}
               </div>
             )}
             {imgs.length > 0 && <ImageGrid paths={imgs} onImage={onImage} failed={!!failed} />}

@@ -1313,76 +1313,59 @@ function decodeEntities(s: string): string {
 }
 
 // 按 provider 执行检索；DuckDuckGo HTML 免费无需 Key，其余需 Key
-async function searchWeb(provider: string, query: string, apiKey: string): Promise<SearchResult[]> {
-  const q = (query || '').trim().slice(0, 400);
-  if (!q) return [];
-  const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), 15000);
+// 单引擎免费直爬（无需 Key），返回前若干条结果
+async function searchOne(engine: string, q: string): Promise<SearchResult[]> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 8000);
   try {
-    if (provider === 'tavily') {
-      if (!apiKey) return [];
-      const r = await fetch('https://api.tavily.com/search', {
+    if (engine === 'baidu') {
+      const r = await fetch(`https://www.baidu.com/s?wd=${encodeURIComponent(q)}&rn=10`, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'zh-CN,zh;q=0.9',
+          Referer: 'https://www.baidu.com/',
+        },
+        signal: ac.signal,
+      });
+      if (!r.ok) return [];
+      const res = parseBaidu(await r.text());
+      console.log('[websearch] baidu results:', res.length);
+      return res;
+    }
+    if (engine === 'bing') {
+      const r = await fetch(`https://cn.bing.com/search?q=${encodeURIComponent(q)}&setlang=zh-CN&cc=CN`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept-Language': 'zh-CN,zh;q=0.9',
+        },
+        signal: ac.signal,
+      });
+      if (!r.ok) return [];
+      const res = parseBing(await r.text());
+      console.log('[websearch] bing results:', res.length);
+      return res;
+    }
+    // DuckDuckGo：优先 Lite（结构干净、更抗反爬），失败再试 HTML
+    try {
+      const lite = await fetch('https://lite.duckduckgo.com/lite/', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: apiKey, query: q, max_results: 5, search_depth: 'basic' }),
-        signal: abort.signal,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0' },
+        body: `q=${encodeURIComponent(q)}`,
+        signal: ac.signal,
       });
-      if (!r.ok) return [];
-      const j: any = await r.json();
-      const arr = Array.isArray(j?.results) ? j.results : [];
-      return arr
-        .slice(0, 5)
-        .map((x: any) => ({ title: String(x.title || ''), url: String(x.url || ''), snippet: String(x.content || x.snippet || '') }))
-        .filter((x: SearchResult) => x.url.startsWith('http'));
-    }
-    if (provider === 'bing') {
-      if (!apiKey) return [];
-      const r = await fetch(`https://api.bing.microsoft.com/v7.0/search?q=${encodeURIComponent(q)}&count=5`, {
-        headers: { 'Ocp-Apim-Subscription-Key': apiKey },
-        signal: abort.signal,
-      });
-      if (!r.ok) return [];
-      const j: any = await r.json();
-      const arr = j?.webPages?.value || [];
-      return arr
-        .slice(0, 5)
-        .map((x: any) => ({ title: String(x.name || ''), url: String(x.url || ''), snippet: String(x.snippet || '') }))
-        .filter((x: SearchResult) => x.url.startsWith('http'));
-    }
-    if (provider === 'serpapi') {
-      if (!apiKey) return [];
-      const r = await fetch(
-        `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q)}&api_key=${encodeURIComponent(apiKey)}`,
-        { signal: abort.signal }
-      );
-      if (!r.ok) return [];
-      const j: any = await r.json();
-      const arr = j?.organic_results || [];
-      return arr
-        .slice(0, 5)
-        .map((x: any) => ({ title: String(x.title || ''), url: String(x.link || ''), snippet: String(x.snippet || '') }))
-        .filter((x: SearchResult) => x.url.startsWith('http'));
-    }
-    // 默认：DuckDuckGo HTML（免费、无需 Key）
-    const r = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, {
+      if (lite.ok) {
+        const res = parseDdgLite(await lite.text());
+        if (res.length) return res;
+      }
+    } catch { /* fallthrough to html */ }
+    const html = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      signal: abort.signal,
+      signal: ac.signal,
     });
-    if (!r.ok) return [];
-    const html = await r.text();
-    const results: SearchResult[] = [];
-    const re =
-      /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(html)) !== null && results.length < 5) {
-      const href = m[1];
-      const title = decodeEntities(stripTags(m[2]));
-      const snippet = decodeEntities(stripTags(m[3]));
-      const uddg = /[?&]uddg=([^&]+)/.exec(href);
-      const url = uddg ? decodeURIComponent(uddg[1]) : href;
-      if (url && url.startsWith('http')) results.push({ title, url, snippet });
-    }
-    return results;
+    if (!html.ok) return [];
+    return parseDdgHtml(await html.text());
   } catch {
     return [];
   } finally {
@@ -1390,13 +1373,295 @@ async function searchWeb(provider: string, query: string, apiKey: string): Promi
   }
 }
 
-// 取检索结果拼成上下文文本（每聊一次只检索一次），并广播状态供前端提示
+// 按 provider 执行检索；auto=多引擎免费回退（国内可达），tavily/serpapi 需 Key
+async function searchWeb(provider: string, query: string, apiKey: string): Promise<SearchResult[]> {
+  const q = (query || '').trim().slice(0, 400);
+  if (!q) {
+    console.log('[websearch] empty query, skip');
+    return [];
+  }
+  let results: SearchResult[] = [];
+  if (provider === 'tavily') results = apiKey ? await searchTavily(q, apiKey) : [];
+  else if (provider === 'serpapi') results = apiKey ? await searchSerpapi(q, apiKey) : [];
+  else if (provider === 'auto') {
+    // 国内可达优先：Bing → 百度 → DuckDuckGo（DDG 在国内常被墙，放最后避免空等超时）
+    for (const e of ['bing', 'baidu', 'duckduckgo']) {
+      try {
+        const r = await searchOne(e, q);
+        if (r.length) {
+          results = r;
+          break;
+        }
+      } catch (err) {
+        console.log('[websearch] engine failed:', e, String(err).slice(0, 80));
+      }
+    }
+  } else {
+    results = await searchOne(provider, q);
+  }
+  console.log(`[websearch] provider=${provider} query=${q.slice(0, 40)} results=${results.length}`);
+  return results;
+}
+
+// —— 各引擎解析器（结果按 url 去重）——
+function parseBing(html: string): SearchResult[] {
+  const out: SearchResult[] = [];
+  const seen = new Set<string>();
+  const re = /<li class="b_algo"[^>]*>([\s\S]*?)<\/li>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null && out.length < 6) {
+    const block = m[1];
+    const a = /<h2>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/.exec(block);
+    if (!a) continue;
+    const url = a[1];
+    if (seen.has(url) || !url.startsWith('http')) continue;
+    seen.add(url);
+    const title = decodeEntities(stripTags(a[2])) || url;
+    const p = /<p[^>]*>([\s\S]*?)<\/p>/.exec(block);
+    const snippet = p ? decodeEntities(stripTags(p[1])) : '';
+    out.push({ title, url, snippet });
+  }
+  return out;
+}
+
+function parseBaidu(html: string): SearchResult[] {
+  const out: SearchResult[] = [];
+  const seen = new Set<string>();
+  // 兼容新旧两种结构：旧版 <h3 class="t">、新版 <h3 class="c-title t tttitle">
+  const re =
+    /<h3[^>]*class="[^"]*\b(?:t|c-title)\b[^"]*"[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null && out.length < 6) {
+    const url = m[1];
+    if (seen.has(url) || !url.startsWith('http')) continue;
+    seen.add(url);
+    const title = decodeEntities(stripTags(m[2])) || url;
+    const after = html.slice(m.index, m.index + 1500);
+    const snip =
+      /<div[^>]*class="[^"]*\bc-abstract\b[^"]*"[^>]*>([\s\S]*?)<\/div>/.exec(after) ||
+      /<span[^>]*class="[^"]*content-right[^"]*"[^>]*>([\s\S]*?)<\/span>/.exec(after) ||
+      /<div[^>]*class="[^"]*\bc-span[0-9][^"]*"[^>]*>([\s\S]*?)<\/div>/.exec(after);
+    const snippet = snip ? decodeEntities(stripTags(snip[1])) : '';
+    out.push({ title, url, snippet });
+  }
+  return out;
+}
+
+function parseDdgLite(html: string): SearchResult[] {
+  const out: SearchResult[] = [];
+  const seen = new Set<string>();
+  const re = /<a class="result-link"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<(?:td|div|span) class="result-snippet"[^>]*>([\s\S]*?)<\/(?:td|div|span)>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null && out.length < 6) {
+    const href = m[1];
+    const uddg = /[?&]uddg=([^&]+)/.exec(href);
+    const url = uddg ? decodeURIComponent(uddg[1]) : href;
+    if (seen.has(url) || !url.startsWith('http')) continue;
+    seen.add(url);
+    const title = decodeEntities(stripTags(m[2]));
+    const snippet = decodeEntities(stripTags(m[3]));
+    out.push({ title, url, snippet });
+  }
+  return out;
+}
+
+function parseDdgHtml(html: string): SearchResult[] {
+  const out: SearchResult[] = [];
+  const seen = new Set<string>();
+  const re = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null && out.length < 6) {
+    const href = m[1];
+    const uddg = /[?&]uddg=([^&]+)/.exec(href);
+    const url = uddg ? decodeURIComponent(uddg[1]) : href;
+    if (seen.has(url) || !url.startsWith('http')) continue;
+    seen.add(url);
+    const title = decodeEntities(stripTags(m[2]));
+    const snippet = decodeEntities(stripTags(m[3]));
+    out.push({ title, url, snippet });
+  }
+  return out;
+}
+
+// 需 Key 的搜索 API
+async function searchTavily(q: string, apiKey: string): Promise<SearchResult[]> {
+  try {
+    const r = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey, query: q, max_results: 5, search_depth: 'basic' }),
+    });
+    if (!r.ok) return [];
+    const j: any = await r.json();
+    const arr = Array.isArray(j?.results) ? j.results : [];
+    return arr
+      .slice(0, 5)
+      .map((x: any) => ({ title: String(x.title || ''), url: String(x.url || ''), snippet: String(x.content || x.snippet || '') }))
+      .filter((x: SearchResult) => x.url.startsWith('http'));
+  } catch {
+    return [];
+  }
+}
+
+async function searchSerpapi(q: string, apiKey: string): Promise<SearchResult[]> {
+  try {
+    const r = await fetch(`https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q)}&api_key=${encodeURIComponent(apiKey)}`);
+    if (!r.ok) return [];
+    const j: any = await r.json();
+    const arr = j?.organic_results || [];
+    return arr
+      .slice(0, 5)
+      .map((x: any) => ({ title: String(x.title || ''), url: String(x.link || ''), snippet: String(x.snippet || '') }))
+      .filter((x: SearchResult) => x.url.startsWith('http'));
+  } catch {
+    return [];
+  }
+}
+
+// —— 轻量网页正文提取（类 DeepSeek「只读纯文本正文，过滤广告/CSS/JS」）——
+const PAGE_TEXT_MAX = 2600; // 单页注入模型的最大字符数
+const PAGE_BYTES_MAX = 1_500_000; // 单页下载字节上限，防止大文件/内存爆炸
+const FETCH_PAGE_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
+
+// 抽取网页正文纯文本：优先 <article>/<main>，其次聚合 <p>，再退而聚合 <div>，最后全文去标签
+function extractArticleText(html: string): string {
+  if (!html) return '';
+  const cleaned = html
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(
+      /<(script|style|noscript|svg|head|meta|link|template|nav|footer|header|aside)[^>]*>[\s\S]*?<\/(script|style|noscript|svg|head|meta|link|template|nav|footer|header|aside)>/gi,
+      ' '
+    )
+    .replace(/<(script|style|noscript|svg|head|meta|link|template|nav|footer|header|aside|br|img|input|hr)[^>]*\/?>/gi, ' ');
+  const grab = (s: string) => decodeEntities(stripTags(s));
+  let body = '';
+  const articleMatch = /<(article|main)[^>]*>([\s\S]*?)<\/(article|main)>/i.exec(cleaned);
+  if (articleMatch) body = grab(articleMatch[2]);
+  if (body.length < 200) {
+    const ps = [...cleaned.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
+      .map((m) => grab(m[1]))
+      .filter((t) => t.length > 10);
+    const joined = ps.join('\n\n');
+    if (joined.length > body.length) body = joined;
+  }
+  // 退路：聚合内容较长的 <div>（很多中文资讯/官网页无 <p> 而用 <div> 排版）
+  if (body.length < 200) {
+    const divs = [...cleaned.matchAll(/<div[^>]*>([\s\S]*?)<\/div>/gi)]
+      .map((m) => grab(m[1]))
+      .filter((t) => t.length > 40);
+    divs.sort((a, b) => b.length - a.length);
+    const joined = divs.slice(0, 10).join('\n\n');
+    if (joined.length > body.length) body = joined;
+  }
+  if (body.length < 200) body = grab(cleaned); // 兜底：全文去标签
+  // 折叠空白：多空格→单空格，多空行→单空行
+  body = body.replace(/[ \t ]+/g, ' ').replace(/\n{2,}/g, '\n').replace(/[ \t]+\n/g, '\n').trim();
+  return body.slice(0, PAGE_TEXT_MAX);
+}
+
+// 抓取单篇网页正文（带超时 + 仅 text/html + 字节上限）
+async function fetchOnePage(
+  url: string,
+  timeoutMs: number
+): Promise<{ url: string; text: string } | null> {
+  if (!/^https?:\/\//i.test(url)) return null;
+  let referer = 'https://www.baidu.com/';
+  try {
+    referer = new URL(url).origin + '/';
+  } catch {
+    /* keep default */
+  }
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      headers: {
+        'User-Agent': FETCH_PAGE_UA,
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        Referer: referer,
+      },
+      signal: ac.signal,
+    });
+    if (!resp.ok) return null;
+    const ct = resp.headers.get('content-type') || '';
+    if (!/text\/html/i.test(ct)) return null; // 只处理网页，跳过 pdf/json/图片等
+    const html = await resp.text();
+    if (!html || html.length > PAGE_BYTES_MAX) return null;
+    const text = extractArticleText(html);
+    if (text.length < 120) return null; // 正文过短（JS 渲染页/反爬页），丢弃
+    return { url, text };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 并发抓取前 N 篇结果网页正文（Promise.allSettled 容错，单页失败不影响其余）
+// 返回 { context, pages }：context 为注入模型的带编号正文；pages 为展示用（标题/链接/摘要），
+// 二者顺序一致，编号 [1..N] 完全相同，确保模型引用的 [n] 能与前端气泡一一对应。
+async function fetchPageContext(
+  results: SearchResult[],
+  settings: AppSettings,
+  query: string
+): Promise<{ context: string; pages: SearchResult[] } | null> {
+  let sources = results.slice();
+  // 百度结果链接是加密跳转（/link?url=），目标页多为 JS 渲染/反爬（知道/百科/知乎），
+  // 直连抓取几乎必失败。改用 Bing 的真实直连 URL 作为抓取源，显著提升可用率；
+  // 同时保留原结果，合并去重后一起尝试，最大化拿到可读正文的机会。
+  if (settings.searchProvider === 'baidu') {
+    try {
+      const bing = await searchOne('bing', query);
+      if (bing.length) {
+        const seen = new Set(sources.map((r) => r.url));
+        for (const b of bing) {
+          if (!seen.has(b.url)) {
+            sources.push(b);
+            seen.add(b.url);
+          }
+        }
+        console.log(`[websearch] baidu→补充 ${bing.length} 条 Bing 直连 URL 用于抓取`);
+      }
+    } catch {
+      /* 忽略：Bing 不可达则仍用百度结果 */
+    }
+  }
+  const top = sources.slice(0, Math.min(Math.max(1, settings.webSearchFetchCount || 5), 6));
+  const timeout = Math.min(Math.max(2000, settings.webSearchFetchTimeout || 8000), 20000);
+  const settled = await Promise.allSettled(top.map((r) => fetchOnePage(r.url, timeout)));
+  const items: { result: SearchResult; text: string }[] = [];
+  settled.forEach((s, idx) => {
+    if (s.status === 'fulfilled' && s.value) {
+      items.push({ result: top[idx], text: s.value.text });
+    }
+  });
+  if (!items.length) return null;
+  console.log(`[websearch] fetched ${items.length}/${top.length} page texts`);
+  // 展示用：气泡只显示标题/链接/短摘要（正文太长不进气泡）
+  const pages = items.map((it) => ({
+    title: it.result.title,
+    url: it.result.url,
+    snippet: it.result.snippet || it.text.slice(0, 120),
+  }));
+  // 注入模型：带 [n] 编号与完整正文，供模型引用
+  const context = items
+    .map((it, i) => `[${i + 1}] 标题：${it.result.title}\n链接：${it.result.url}\n正文：${it.text}`)
+    .join('\n\n');
+  return { context, pages };
+}
+
+// 取检索结果拼成上下文文本（每聊一次只检索一次），并广播状态/结果供前端展示
+// 返回 { context, pages }：context 为注入模型的带编号资料；pages 为前端气泡展示用（顺序与编号一致）
 async function fetchSearchContext(
   chatType: string,
   chatId: string,
   query: string,
   settings: AppSettings
-): Promise<string | null> {
+): Promise<{ context: string; pages: SearchResult[] } | null> {
   if (!settings.webSearchChats?.[`${chatType}:${chatId}`]) return null;
   broadcast('search:status', { chatType, chatId, status: 'searching' });
   const results = await searchWeb(settings.searchProvider || 'duckduckgo', query, settings.searchApiKey || '');
@@ -1407,7 +1672,42 @@ async function fetchSearchContext(
     count: results.length,
   });
   if (!results.length) return null;
-  return results.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.snippet}`).join('\n\n');
+  // DeepSeek 式：检索拿到链接后，并发读取前 N 篇网页正文作为 grounding 注入
+  let payload: { context: string; pages: SearchResult[] } | null = null;
+  if (settings.webSearchFetchPages) {
+    const pageCtx = await fetchPageContext(results, settings, query);
+    if (pageCtx) payload = pageCtx;
+    else console.log('[websearch] page fetch empty, fallback to snippets');
+  }
+  // 抓取关闭或抓取全部失败时：用搜索摘要兜底（同样带 [n] 编号，保证引用一致）
+  if (!payload) {
+    const top = results.slice(0, Math.min(Math.max(1, settings.webSearchFetchCount || 5), 6));
+    const pages = top.map((r) => ({ title: r.title, url: r.url, snippet: r.snippet }));
+    const context = top
+      .map(
+        (r, i) =>
+          `[${i + 1}] 标题：${r.title}\n链接：${r.url}\n摘要：${(r.snippet || '').trim() || '(无摘要)'}`
+      )
+      .join('\n\n');
+    payload = { context, pages };
+  }
+  // 把检索结果（仅标题/链接/摘要，顺序与注入模型编号一致）广播给前端，用于折叠气泡展示
+  broadcast('search:results', { chatType, chatId, query, results: payload.pages });
+  return payload;
+}
+
+// 把额外上下文（联网搜索结果 / 插件指令）合并进「第一条」system 消息。
+// 关键：Anthropic 路径只读取第一条 system 消息（ai.ts 中 messages.find(role==='system')），
+// 多数 OpenAI 兼容端点也只认首条 system。若用 messages.push 追加到末尾，结果会被丢弃 / 降权，
+// 导致模型「裸答」、看不到检索结果。合并到首条 system 可保证所有 provider 都能读到。
+function appendToFirstSystem(messages: any[], content: string) {
+  if (!content) return;
+  const idx = messages.findIndex((m) => m.role === 'system');
+  if (idx >= 0) {
+    messages[idx] = { role: 'system', content: `${messages[idx].content}\n\n${content}` };
+  } else {
+    messages.unshift({ role: 'system', content });
+  }
 }
 
 
@@ -1915,7 +2215,8 @@ async function generateAIResponses(
   // 联网搜索：每个聊天每次只检索一次，结果作为上下文注入所有成员的回复
   let searchCtx: string | null = null;
   if (settings.webSearchChats?.[`${p.chatType}:${p.chatId}`]) {
-    searchCtx = await fetchSearchContext(p.chatType, p.chatId, p.content, settings);
+    const sp = await fetchSearchContext(p.chatType, p.chatId, p.content, settings);
+    searchCtx = sp?.context ?? null;
   }
   // 已启用插件的提示词片段（声明式，全局生效）
   const pluginCtx = getEnabledPluginContext();
@@ -1945,13 +2246,17 @@ async function generateAIResponses(
           vision
         );
     if (searchContext) {
-      messages.push({
-        role: 'system',
-        content: `【联网搜索结果（仅供回答参考，请自然地把信息融入回复，不要提及"我搜索了"之类的来源说明）】\n${searchContext}`,
-      });
+      appendToFirstSystem(
+        messages,
+        `【联网搜索结果 · 网页正文 · 必须依据】
+以下是实时联网检索并抓取网页正文得到的资料（已滤除广告/样式/脚本，仅保留正文），已按 [1]、[2]… 依次编号，与用户当前问题高度相关。你必须优先依据这些资料回答，不得凭空编造，也不得只依赖自身记忆；若资料中包含答案，请直接引用其中的关键信息并自然融入角色口吻的回复（可提及"据搜索/资料显示"，但严禁说"我搜索了"）。
+引用要求：当你在回复中使用了某条资料的信息时，请在对应内容的句末用其编号标注，例如「相关结论……[1]」；若同时参考了多条资料，可并列标注如「……[1][3]」；只标注你真正用到的编号，不得编造不存在的编号。资料确实与问题无关时才可不引用。
+${searchContext}`
+      );
+      console.log('[websearch] injected search ctx len=', searchContext.length, 'role=', role.name);
     }
     if (pluginCtx) {
-      messages.push({ role: 'system', content: `【已启用插件指令】\n${pluginCtx}` });
+      appendToFirstSystem(messages, `【已启用插件指令】\n${pluginCtx}`);
     }
     const streamId = `${p.chatId}:${role.id}`;
     // 每个成员完成时立即广播，前端按完成顺序逐步显示；即使关闭全局流式也生效。
@@ -2104,7 +2409,8 @@ async function handleStream(p: {
   // 联网搜索：每个聊天每次只检索一次，结果作为上下文注入所有成员的回复
   let searchCtx: string | null = null;
   if (settings.webSearchChats?.[`${p.chatType}:${p.chatId}`]) {
-    searchCtx = await fetchSearchContext(p.chatType, p.chatId, p.content, settings);
+    const sp = await fetchSearchContext(p.chatType, p.chatId, p.content, settings);
+    searchCtx = sp?.context ?? null;
   }
   // 已启用插件的提示词片段（声明式，全局生效）
   const pluginCtx = getEnabledPluginContext();
@@ -2153,13 +2459,17 @@ async function handleStream(p: {
           vision
         );
     if (searchContext) {
-      messages.push({
-        role: 'system',
-        content: `【联网搜索结果（仅供回答参考，请自然地把信息融入回复，不要提及"我搜索了"之类的来源说明）】\n${searchContext}`,
-      });
+      appendToFirstSystem(
+        messages,
+        `【联网搜索结果 · 网页正文 · 必须依据】
+以下是实时联网检索并抓取网页正文得到的资料（已滤除广告/样式/脚本，仅保留正文），已按 [1]、[2]… 依次编号，与用户当前问题高度相关。你必须优先依据这些资料回答，不得凭空编造，也不得只依赖自身记忆；若资料中包含答案，请直接引用其中的关键信息并自然融入角色口吻的回复（可提及"据搜索/资料显示"，但严禁说"我搜索了"）。
+引用要求：当你在回复中使用了某条资料的信息时，请在对应内容的句末用其编号标注，例如「相关结论……[1]」；若同时参考了多条资料，可并列标注如「……[1][3]」；只标注你真正用到的编号，不得编造不存在的编号。资料确实与问题无关时才可不引用。
+${searchContext}`
+      );
+      console.log('[websearch] injected search ctx len=', searchContext.length, 'role=', role.name);
     }
     if (pluginCtx) {
-      messages.push({ role: 'system', content: `【已启用插件指令】\n${pluginCtx}` });
+      appendToFirstSystem(messages, `【已启用插件指令】\n${pluginCtx}`);
     }
     sendStreamStart(streamId, role.id, role.name);
     // 中断时保留已生成的部分内容并落库（DeepSeek 风格的「打断生成」）
@@ -4046,6 +4356,15 @@ function registerIPC(): void {
     }
   });
   ipcMain.handle('main:show', () => showMainWindow());
+
+  // 打开外部网页（联网搜索结果点击编号）：仅允许 http/https，避免任意协议被拉起
+  // 注意：preload 端用 ipcRenderer.send 发送，故此处必须用 ipcMain.on 配对（handle 只响应 invoke）
+  ipcMain.on('app:openExternal', async (_e, url: string) => {
+    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+      const { shell } = await import('electron');
+      shell.openExternal(url);
+    }
+  });
 
   // ---------- 世界书 ----------
   ipcMain.handle('worldbooks:list', () => dm.listWorldBooks());

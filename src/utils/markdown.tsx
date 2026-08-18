@@ -1,8 +1,17 @@
 import React from 'react';
 
 // 轻量 Markdown 渲染：支持代码块、行内代码、粗体、换行
-export function renderMarkdown(text: string): React.ReactNode {
+export interface RenderOptions {
+  // 引用映射：序号 n -> 网页 URL；配合 onCite 将正文中的 [n] 渲染为可点击徽标
+  citations?: Record<number, string>;
+  // 点击引用徽标时的回调（通常拉起系统浏览器打开网页）
+  onCite?: (url: string) => void;
+}
+
+export function renderMarkdown(text: string, options?: RenderOptions): React.ReactNode {
   if (!text) return null;
+  const citations = options?.citations;
+  const onCite = options?.onCite;
   const lines = text.split('\n');
   const blocks: React.ReactNode[] = [];
   let i = 0;
@@ -42,28 +51,29 @@ export function renderMarkdown(text: string): React.ReactNode {
       continue;
     }
     // 普通段落（合并连续非空行）
-    blocks.push(<p key={key++} style={{ margin: '2px 0' }}>{inline(line)}</p>);
+    blocks.push(<p key={key++} style={{ margin: '2px 0' }}>{inline(line, citations, onCite)}</p>);
     i++;
   }
   return <>{blocks}</>;
 }
 
-function inline(line: string): React.ReactNode {
+function inline(line: string, citations?: Record<number, string>, onCite?: (url: string) => void): React.ReactNode {
   // 先按旁白分隔（（）与 “”/"" 包裹）切分，再对普通片段做行内代码/粗体处理
   const segments = splitNarration(line);
   const parts: React.ReactNode[] = [];
-  let k = 0;
+  const keyRef = { k: 0 };
   for (const seg of segments) {
     if (seg.narration) {
+      // 旁白（（）/「」/"" 内）里的 [n] 也解析为可点击引用，消除「有些不可点」的问题
+      const inner = withCitations(seg.text, keyRef, citations, onCite);
       parts.push(
-        <span key={k++} className="narration">
-          {seg.text}
+        <span key={keyRef.k++} className="narration">
+          {inner}
         </span>
       );
     } else {
-      const fmt = formatInline(seg.text, k);
+      const fmt = formatInline(seg.text, keyRef, citations, onCite);
       fmt.forEach((n) => parts.push(n));
-      k += fmt.length;
     }
   }
   return parts;
@@ -84,20 +94,19 @@ function splitNarration(text: string): { text: string; narration: boolean }[] {
   return out;
 }
 
-// 处理行内代码与粗体
-function formatInline(line: string, kStart: number): React.ReactNode[] {
+// 处理行内代码与粗体，并将 [n] 引用透传给 withCitations
+function formatInline(line: string, keyRef: { k: number }, citations?: Record<number, string>, onCite?: (url: string) => void): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
   const regex = /(`[^`]+`|\*\*[^*]+\*\*)/g;
   let last = 0;
   let m: RegExpExecArray | null;
-  let k = kStart;
   while ((m = regex.exec(line)) !== null) {
-    if (m.index > last) parts.push(line.slice(last, m.index));
+    if (m.index > last) parts.push(...withCitations(line.slice(last, m.index), keyRef, citations, onCite));
     const token = m[0];
     if (token.startsWith('`')) {
       parts.push(
         <code
-          key={k++}
+          key={keyRef.k++}
           style={{
             background: 'var(--color-panel-alt)',
             padding: '1px 5px',
@@ -110,13 +119,46 @@ function formatInline(line: string, kStart: number): React.ReactNode[] {
       );
     } else {
       parts.push(
-        <strong key={k++} style={{ fontWeight: 700 }}>
+        <strong key={keyRef.k++} style={{ fontWeight: 700 }}>
           {token.slice(2, -2)}
         </strong>
       );
     }
     last = m.index + token.length;
   }
-  if (last < line.length) parts.push(line.slice(last));
+  if (last < line.length) parts.push(...withCitations(line.slice(last), keyRef, citations, onCite));
+  return parts;
+}
+
+// 将正文中的 [n] 渲染为可点击引用徽标（n 对应 citations 中的序号）；无对应 URL 时保留原样文本
+function withCitations(text: string, keyRef: { k: number }, citations?: Record<number, string>, onCite?: (url: string) => void): React.ReactNode[] {
+  if (!citations || !onCite) return [text];
+  const parts: React.ReactNode[] = [];
+  const regex = /\[(\d+)\]/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  const pushText = (s: string) => { if (s) parts.push(s); };
+  while ((m = regex.exec(text)) !== null) {
+    if (m.index > last) pushText(text.slice(last, m.index));
+    const n = parseInt(m[1], 10);
+    const url = citations[n];
+    if (url) {
+      parts.push(
+        <span
+          key={keyRef.k++}
+          className="cite-badge"
+          role="button"
+          tabIndex={0}
+          title={url}
+          onClick={(e) => { e.stopPropagation(); onCite!(url); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onCite!(url); } }}
+        >[{n}]</span>
+      );
+    } else {
+      pushText('[' + n + ']');
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) pushText(text.slice(last));
   return parts;
 }
