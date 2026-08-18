@@ -141,6 +141,12 @@ export const ChatWindow: React.FC<{
   const [moreOpen, setMoreOpen] = useState(false);
   const [morePos, setMorePos] = useState({ right: 0, top: 0 });
   const [groupAutoChain, setGroupAutoChain] = useState(false);
+  const [groupSelectReply, setGroupSelectReply] = useState(false);
+  // 群聊选人回复：主进程广播「请选择下一位发言者」时弹出浮层
+  const [needSpeaker, setNeedSpeaker] = useState<{ chatId: string; members: { id: string; name: string; avatar?: string }[] } | null>(null);
+  // 群聊消息可见性 / 记忆开关（用户发出的消息与选人回复生成的 AI 消息共用）
+  const [replyVisible, setReplyVisible] = useState(true);
+  const [replyToMemory, setReplyToMemory] = useState(true);
   const [idleCountdown, setIdleCountdown] = useState(0); // 主动消息触发倒计时（秒）
   const idleSwitchActionRef = useRef<'pause' | 'reset' | 'continue'>('pause'); // 切换聊天时的计时模式
 
@@ -496,6 +502,7 @@ export const ChatWindow: React.FC<{
       idleSecondsRef.current = settings.idleInterval || 600;
       idleSwitchActionRef.current = settings.idleSwitchAction || 'pause';
       setGroupAutoChain(settings.groupAutoChain !== false);
+      setGroupSelectReply(!!settings.groupSelectReply);
       setVoiceCfg({
         asr: !!(settings.voice?.asrBaseUrl && settings.voice?.asrApiKey),
         tts: !!(settings.voice?.ttsBaseUrl && settings.voice?.ttsApiKey),
@@ -915,6 +922,15 @@ export const ChatWindow: React.FC<{
     return off;
   }, [chatId, chatType]);
 
+  // 群聊选人回复：主进程广播「请选择下一位发言者」，弹出选人浮层
+  useEffect(() => {
+    const off = api.onNeedSpeaker((data) => {
+      if (!data || data.chatId !== chatId) return;
+      setNeedSpeaker(data);
+    });
+    return off;
+  }, [chatId]);
+
   // 设置变更广播同步：主窗与小窗的世界书/身份/背景/开关保持一致
   // 统一重派生：任意设置变更都从最新 settings 重算所有本地开关，杜绝字段遗漏（如 groupAutoChain）
   useEffect(() => {
@@ -935,6 +951,7 @@ export const ChatWindow: React.FC<{
       idleSecondsRef.current = settings.idleInterval || 600;
       idleSwitchActionRef.current = settings.idleSwitchAction || 'pause';
       setGroupAutoChain(settings.groupAutoChain !== false);
+      setGroupSelectReply(!!settings.groupSelectReply);
       setVoiceCfg({
         asr: !!(settings.voice?.asrBaseUrl && settings.voice?.asrApiKey),
         tts: !!(settings.voice?.ttsBaseUrl && settings.voice?.ttsApiKey),
@@ -1149,6 +1166,47 @@ export const ChatWindow: React.FC<{
     } finally {
       setGenLoading(false);
       setGenTyping(false);
+    }
+  };
+
+  // F4：发送图片 + 文字提示词 → 据此生图 / 生视频（只发图片无提示词则无效）
+  const doGenerateFromImage = async (kind: 'image' | 'video') => {
+    const text = input.trim();
+    if (!text) {
+      showToast(t('chat.genNeedPrompt'));
+      return;
+    }
+    if (pendingImages.length === 0) return;
+    const img = pendingImages[0];
+    setPendingImages([]);
+    setInput('');
+    setGenLoading(true);
+    setGenTyping(true);
+    try {
+      const res = await api.generateImageFromImage(chatType, chatId, text, img, kind);
+      if (!res.ok) showToast(kind === 'video' ? t('chat.genVideoFailed') : t('chat.drawFailed'));
+    } catch (e: any) {
+      showToast(e?.message || (kind === 'video' ? t('chat.genVideoFailed') : t('chat.drawFailed')));
+    } finally {
+      setGenLoading(false);
+      setGenTyping(false);
+    }
+  };
+
+  // F1：群聊选人回复 —— 用户点击某成员，驱动该成员接话（可带可见性 / 记忆选项）
+  const pickSpeaker = async (roleId: string) => {
+    const data = needSpeaker;
+    setNeedSpeaker(null);
+    if (!data) return;
+    try {
+      await api.groupContinue({
+        chatId,
+        forceRoleId: roleId,
+        visibleToGroup: replyVisible,
+        toMemory: replyVisible ? replyToMemory : false,
+      });
+    } catch (e: any) {
+      showToast(e?.message || t('chat.genNeedPrompt'));
     }
   };
 
@@ -1394,17 +1452,36 @@ export const ChatWindow: React.FC<{
           chatId,
           content,
           imagePaths,
+          visibleToGroup: replyVisible,
+          toMemory: replyVisible ? replyToMemory : false,
         });
         setMessages((prev) => [...prev, userMessage]);
         // 用后端 streamId 立即落占位，保证气泡在首字到达前就出现
         const init: Record<string, ChatMessage> = {};
         for (const mb of streamMembers) init[mb.streamId] = makePlaceholder(mb.roleName);
         setStreamingMsgs((prev) => ({ ...prev, ...init }));
+        // 选人回复：后端 handleSend 已提前返回并广播 needSpeaker，此处同步弹出选人浮层
+        if (chatType === 'group' && groupSelectReply) {
+          setNeedSpeaker({ chatId, members: members.map((r) => ({ id: r.id, name: r.name, avatar: r.avatar_path })) });
+        }
       } else {
         if (phase === 'full') {
-          const userMessage = await api.sendUserMessage({ chatType, chatId, content, imagePaths });
+          const userMessage = await api.sendUserMessage({
+            chatType,
+            chatId,
+            content,
+            imagePaths,
+            visibleToGroup: replyVisible,
+            toMemory: replyVisible ? replyToMemory : false,
+          });
           setMessages((prev) => [...prev, userMessage]);
           userSent = true;
+          // 选人回复：不自动生成 AI 回复，交由前端弹窗选择下一位发言者
+          if (chatType === 'group' && groupSelectReply) {
+            setNeedSpeaker({ chatId, members: members.map((r) => ({ id: r.id, name: r.name, avatar: r.avatar_path })) });
+            onSent();
+            return;
+          }
         }
         // 非流式：后端按每个模型完成时机广播 stream:start/done，
         // 前端收到即创建占位并逐步显示，无需在此预置 local 占位（避免重复气泡）。
@@ -2302,6 +2379,39 @@ export const ChatWindow: React.FC<{
               </button>
             </span>
           )}
+          {/* F1：群聊消息可见性 / 记忆开关（仅群聊、非编辑态显示） */}
+          {chatType === 'group' && !editMsg && (
+            <span className="reply-flags">
+              <label title={t('chat.visibleToGroupHint')}>
+                <input
+                  type="checkbox"
+                  checked={replyVisible}
+                  onChange={(e) => { setReplyVisible(e.target.checked); if (!e.target.checked) setReplyToMemory(false); }}
+                />
+                {t('chat.visibleToGroup')}
+              </label>
+              <label title={t('chat.toMemoryHint')} style={{ opacity: replyVisible ? 1 : 0.4 }}>
+                <input
+                  type="checkbox"
+                  checked={replyToMemory}
+                  disabled={!replyVisible}
+                  onChange={(e) => setReplyToMemory(e.target.checked)}
+                />
+                {t('chat.toMemory')}
+              </label>
+            </span>
+          )}
+          {/* F4：发图生图 / 生视频（有附图且已输入提示词时显示） */}
+          {pendingImages.length > 0 && input.trim() && (
+            <span className="reply-flags">
+              <button className="btn-ghost" disabled={sending} onClick={() => doGenerateFromImage('image')}>
+                {t('chat.genImageFromImage')}
+              </button>
+              <button className="btn-ghost" disabled={sending} onClick={() => doGenerateFromImage('video')}>
+                {t('chat.genVideoFromImage')}
+              </button>
+            </span>
+          )}
           {isStreaming ? (
             <button
               className="btn-primary"
@@ -2346,6 +2456,23 @@ export const ChatWindow: React.FC<{
               >
                 {t('chat.drawImage')}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {needSpeaker && (
+        <div className="modal-mask" onClick={() => setNeedSpeaker(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
+            <div className="draw-title">{t('chat.needSpeaker')}</div>
+            <div className="draw-desc">{t('chat.selectReplyDesc')}</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 10 }}>
+              {needSpeaker.members.map((m) => (
+                <button key={m.id} className="speaker-item" onClick={() => pickSpeaker(m.id)}>
+                  {m.avatar ? <AvatarImg path={m.avatar} /> : '🤖'}
+                  <span>{m.name}</span>
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -2712,7 +2839,7 @@ const MessageRow: React.FC<{
           </div>
         ) : (
           <>
-            {hasText && (
+            {(!isUser && msg.reasoning) || hasText ? (
               <div className={`bubble ${failed ? 'bubble-failed' : ''}`} onMouseUp={handleMouseUp}>
                 {!isUser && msg.reasoning && (
                   <ReasoningBlock
@@ -2722,7 +2849,17 @@ const MessageRow: React.FC<{
                     onCopied={onReasoningCopied}
                   />
                 )}
-                {renderMarkdown(msg.content, { citations: citeCitations, onCite: citeOnClick })}
+                {hasText && renderMarkdown(msg.content, { citations: citeCitations, onCite: citeOnClick })}
+                {/* F6 修复：流式进行中始终在气泡内显示加载动画，避免「只有顶部横幅显示 AI 正在回复」 */}
+                {streaming && (
+                  <span className="typing-inline" aria-label={t('chat.replying')} />
+                )}
+              </div>
+            ) : (
+              <div className="bubble bubble-loading" onMouseUp={handleMouseUp}>
+                <div className="typing" aria-label={t('chat.replying')}>
+                  <span className="typing-bar" />
+                </div>
               </div>
             )}
             {imgs.length > 0 && <ImageGrid paths={imgs} onImage={onImage} failed={!!failed} />}

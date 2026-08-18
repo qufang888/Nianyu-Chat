@@ -113,6 +113,8 @@ export interface ChatMessage {
   status?: 'normal' | 'recalled' | 'failed'; // 消息状态：正常 / 已撤回 / 发送失败
   from_proactive?: boolean; // 是否由主动消息机制产生（用于记忆控制：空闲主动发消息时此字段为 true）
   genPrompt?: string; // 软件内生图时使用的提示词：仅 AI 生成的图片消息带此字段；手动发送的图片为空，用于右键「查看提示词」
+  visibleToGroup?: boolean; // 群聊消息是否全群可见（默认 true）；false=仅用户与指定 AI 可见的私密备注
+  toMemory?: boolean; // 群聊消息是否可被自动记忆提炼收录（仅当 visibleToGroup 为 true 时生效；默认 true）
 }
 
 export interface Group {
@@ -190,6 +192,19 @@ export interface ImageGenSettings {
   size: string; // 尺寸，如 1024x1024
 }
 
+// 生视频（专用视频生成 API）：使用方式与生图完全一致，调用 OpenAI 兼容 /videos/generations（依供应商支持）
+export interface VideoGenSettings {
+  enabled: boolean; // 总开关
+  baseUrl: string; // 视频生成 API baseUrl（手填到版本号，如 https://api.openai.com/v1），系统自动补全 /videos/generations
+  apiKey: string; // 视频生成 API 密钥
+  model: string; // 视频生成模型名，如 wan-2.1 / veo-2 / hunyuan-video
+  duration: string; // 时长（秒），如 5
+  size: string; // 尺寸，如 1280x720
+}
+
+// 深度思考等级：off=关闭；low/medium/high=不同强度（仅对支持深度思考的模型生效）
+export type DeepThinkLevel = 'off' | 'low' | 'medium' | 'high';
+
 // ===== 插件（声明式 / 受控 HTTP；可含沙箱化 JS，默认关）=====
 // 工具型插件：声明一个受主进程白名单管控的 HTTP 调用，不执行任意 JS（除非 pluginAllowJs 开启）
 export interface PluginTool {
@@ -254,6 +269,7 @@ export interface AppSettings {
   sharedRuleIds: string[]; // 共用规则（所有对话/模型遵守）
   enableAutoMemory: boolean; // AI 自动提炼记忆（默认关）
   hideReasoning: boolean; // 隐藏思维链（默认开=折叠显示，点击箭头展开）
+  deepThinkLevel: DeepThinkLevel; // 深度思考等级（off/low/medium/high）；仅对支持深度思考的模型生效，软件自动探测模型能力
   enableRandomEvents: boolean; // 随机事件：开启后聊天过程中会自动弹出随机事件（关闭则仅手动触发）
   // ===== 空闲主动回复 =====
   idleEnabled: boolean; // 全局主开关：关闭时所有按聊天的主动消息都失效（默认开）
@@ -280,6 +296,7 @@ export interface AppSettings {
   groupAutoRounds: number; // 自动接话轮数上限：0=无限，默认 6
   groupAutoChain: boolean; // 群聊发消息后，AI 是否主动按轮数上限多轮接话（无需手动点自动接话）
   groupMaxConsecutive: number; // 群聊自动接话时同一角色最多连续发言条数（1-20，默认 1）
+  groupSelectReply: boolean; // 群聊选人回复：开启后每次主动发送与 AI 回复后，由用户自由选择下一位发言者
   // ===== 音效设置 =====
   sound: {
     enabled: boolean; // 全局音效开关
@@ -317,10 +334,12 @@ export interface AppSettings {
   translationModelId?: string; // 翻译专用模型配置 id（空=使用默认模型）
   translationLang?: 'auto' | 'zh' | 'en'; // 翻译目标语言：auto=随软件语言
   imageGen?: ImageGenSettings; // 生图（专用图像生成 API）设置
+  videoGen?: VideoGenSettings; // 生视频（专用视频生成 API）设置
   // ===== 异步场景生图（后端按对话场景自动生图，节流 + 每对话开关）=====
   autoSceneImageChats: Record<string, boolean>; // 每对话独立开关：key="single:roleId"/"group:groupId" -> bool（主窗/小窗共用同一值，杜绝主关小开）
   sceneImageIntervalSec: number; // 两次生图最小间隔（秒），设置内可调节
   sceneImageJudge: 'llm' | 'heuristic'; // 场景判定方式：'llm'=轻量模型判定（最准，耗 token）；'heuristic'=关键词/情绪启发式（零成本）
+  asyncImageUseAvatar: boolean; // 异步生图时自动读取 AI 人物头像作为参考，使生成形象更贴近角色（无关内容时不影响图片）
   // ===== 插件系统 =====
   pluginAllowJs: boolean; // 允许本地 JS 插件（默认关；开启有 RCE 风险，需弹窗确认）
   // ===== 联网搜索（类 DeepSeek，上下文注入式）=====
@@ -428,10 +447,19 @@ export const DEFAULT_SETTINGS: AppSettings = {
     model: 'gpt-image-1',
     size: '1024x1024',
   },
+  videoGen: {
+    enabled: false,
+    baseUrl: '',
+    apiKey: '',
+    model: '',
+    duration: '5',
+    size: '1280x720',
+  },
   // ===== 异步场景生图默认值 =====
   autoSceneImageChats: {},
   sceneImageIntervalSec: 120,
   sceneImageJudge: 'llm',
+  asyncImageUseAvatar: true,
   // ===== 插件系统默认值 =====
   pluginAllowJs: false,
   // ===== 联网搜索默认值 =====
@@ -452,6 +480,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sharedRuleIds: [],
   enableAutoMemory: false,
   hideReasoning: true,
+  deepThinkLevel: 'off',
   enableRandomEvents: true,
   idleEnabled: true,
   chatIdleEnabled: {},
@@ -475,6 +504,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   groupAutoRounds: 6,
   groupAutoChain: true,
   groupMaxConsecutive: 1,
+  groupSelectReply: false,
   sound: {
     enabled: true,
     volume: 0.7,

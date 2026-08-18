@@ -12,6 +12,19 @@ export interface AIMessage {
   content: string | ContentPart[];
 }
 
+// ===== 深度思考等级（全局，由主进程在设置变更时同步，避免改动所有调用点）=====
+let deepThinkLevel: 'off' | 'low' | 'medium' | 'high' = 'off';
+export function setDeepThinkLevel(level: 'off' | 'low' | 'medium' | 'high'): void {
+  deepThinkLevel = level || 'off';
+}
+// 自动探测模型是否支持深度思考（实现移至 src/utils/modelFeatures，主/渲染共用）
+// 将当前深度思考等级写入请求体（仅 OpenAI 兼容接口、且等级非 off 时）
+function applyDeepThink(body: Record<string, any>): void {
+  if (deepThinkLevel && deepThinkLevel !== 'off') {
+    body.reasoning_effort = deepThinkLevel; // 'low' | 'medium' | 'high'
+  }
+}
+
 // Anthropic 接口：把 content 转为 Anthropic 的 content blocks（图片用 base64 source）
 function toAnthropicContent(content: string | ContentPart[]): any[] {
   if (typeof content === 'string') {
@@ -195,13 +208,17 @@ async function queryOpenAILike(
   const resp = await fetch(joinUrl(cfg.baseUrl, '/chat/completions'), {
     method: 'POST',
     headers: h,
-    body: JSON.stringify({
-      model: cfg.model,
-      messages,
-      max_tokens: maxTokens,
-      temperature: cfg.temperature,
-      stream: false,
-    }),
+    body: JSON.stringify((() => {
+      const b: Record<string, any> = {
+        model: cfg.model,
+        messages,
+        max_tokens: maxTokens,
+        temperature: cfg.temperature,
+        stream: false,
+      };
+      applyDeepThink(b);
+      return b;
+    })()),
     signal: controller.signal,
   });
   if (!resp.ok) {
@@ -241,13 +258,17 @@ export async function streamAI(
   const resp = await fetch(joinUrl(cfg.baseUrl, '/chat/completions'), {
     method: 'POST',
     headers: h,
-    body: JSON.stringify({
-      model: cfg.model,
-      messages,
-      max_tokens: maxTokens,
-      temperature: cfg.temperature,
-      stream: true,
-    }),
+    body: JSON.stringify((() => {
+      const b: Record<string, any> = {
+        model: cfg.model,
+        messages,
+        max_tokens: maxTokens,
+        temperature: cfg.temperature,
+        stream: true,
+      };
+      applyDeepThink(b);
+      return b;
+    })()),
     signal: controller.signal,
   });
   if (!resp.ok) {
@@ -527,23 +548,27 @@ export async function textToSpeech(
 }
 
 // 图像生成（OpenAI 兼容 /images/generations）：返回 base64 或图片 URL
+// referenceImages：参考图（base64 data URL 数组），如角色头像；仅在与生成内容相关时传入，无关时不要传以免影响生成
 export async function generateImage(
   cfg: { baseUrl: string; apiKey: string },
   prompt: string,
   model: string,
-  size: string
+  size: string,
+  referenceImages?: string[]
 ): Promise<{ b64?: string; url?: string }> {
   if (!cfg.apiKey) throw new Error('生图模型未配置 API Key');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120000);
   try {
+    const body: Record<string, any> = { model: model || 'gpt-image-1', prompt, n: 1, size: size || '1024x1024' };
+    if (referenceImages && referenceImages.length) body.image = referenceImages;
     const resp = await fetch(joinUrl(cfg.baseUrl, '/images/generations'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${cfg.apiKey}`,
       },
-      body: JSON.stringify({ model: model || 'gpt-image-1', prompt, n: 1, size: size || '1024x1024' }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
     if (!resp.ok) {
@@ -554,6 +579,53 @@ export async function generateImage(
     const item = data?.data?.[0];
     if (!item) throw new Error('生图接口未返回图片数据');
     return { b64: item.b64_json, url: item.url };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 视频生成（OpenAI 兼容 /videos/generations）：返回 base64 或视频 URL；使用方式与生图一致
+// referenceImages：参考图（base64 data URL 数组），如用户发送的图片；仅「图生视频」时传入（依供应商支持）
+export async function generateVideo(
+  cfg: { baseUrl: string; apiKey: string },
+  prompt: string,
+  model: string,
+  size: string,
+  duration: string,
+  referenceImages?: string[]
+): Promise<{ b64?: string; url?: string }> {
+  if (!cfg.apiKey) throw new Error('生视频模型未配置 API Key');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 300000);
+  try {
+    const body: Record<string, any> = {
+      model: model || '',
+      prompt,
+      n: 1,
+      size: size || '1280x720',
+      duration: Number(duration) || 5,
+    };
+    if (referenceImages && referenceImages.length) body.image = referenceImages;
+    const resp = await fetch(joinUrl(cfg.baseUrl, '/videos/generations'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`生视频失败 ${resp.status}: ${errText.slice(0, 300)}`);
+    }
+    const data = (await resp.json()) as any;
+    // 不同供应商返回结构不一：优先 data[0].url / video / b64_json
+    const item = data?.data?.[0] || data?.videos?.[0] || data;
+    const url = item?.url || item?.video?.url || item?.uri;
+    const b64 = item?.b64_json || item?.video?.b64_json;
+    if (!url && !b64) throw new Error('生视频接口未返回视频数据');
+    return { b64, url };
   } finally {
     clearTimeout(timer);
   }

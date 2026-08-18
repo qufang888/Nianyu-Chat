@@ -37,6 +37,8 @@ export interface NianyuAPI {
     content: string;
     imagePath?: string | null;
     imagePaths?: string[];
+    visibleToGroup?: boolean;
+    toMemory?: boolean;
   }) => Promise<ChatMessage>;
   sendAIMessages: (p: {
     chatType: string;
@@ -51,6 +53,8 @@ export interface NianyuAPI {
     content: string;
     imagePath?: string | null;
     imagePaths?: string[];
+    visibleToGroup?: boolean;
+    toMemory?: boolean;
   }) => Promise<{ userMessage: ChatMessage; members: { streamId: string; roleId: string; roleName: string }[] }>;
   // 请求限速（QPS）状态查询
   rateInfo: (modelId: string) => Promise<{ enabled: boolean; limit: number; waitMs: number }>;
@@ -62,6 +66,9 @@ export interface NianyuAPI {
   interruptStream: (chatId: string) => Promise<{ ok: boolean }>;
   groupContinue: (p: {
     chatId: string;
+    forceRoleId?: string;
+    visibleToGroup?: boolean;
+    toMemory?: boolean;
   }) => Promise<{ ok: boolean; roleId?: string; roleName?: string; error?: string }>;
   // ===== 空闲主动回复 =====
   proactive: (p: {
@@ -105,6 +112,8 @@ export interface NianyuAPI {
   }) => Promise<{ ok: boolean }>;
   onGroupObserver: (cb: (e: any, data: { groupId: string; observerMode: boolean; config?: any }) => void) => () => void;
   offGroupObserver: (cb: (e: any, data: any) => void) => void;
+  // 群聊选人回复：主进程广播「请选择下一位发言者」
+  onNeedSpeaker: (cb: (data: { chatId: string; members: { id: string; name: string; avatar?: string }[] }) => void) => () => void;
 
   // 消息操作
   recallMessage: (msgId: number) => Promise<{ ok: boolean; deletedMems: number }>;
@@ -166,6 +175,14 @@ export interface NianyuAPI {
   triggerRelationship: (chatType: string, chatId: string, roleId: string, withMoments?: boolean, doRelationship?: boolean) => Promise<{ ok: boolean; moments: number; relation?: string; error?: string; noNewContent?: boolean }>;
   adjustBond: (roleId: string, delta: number) => Promise<number>;
   generateImage: (chatType: string, chatId: string, prompt: string) => Promise<{ ok: boolean; imagePath: string }>;
+  generateVideo: (chatType: string, chatId: string, prompt: string) => Promise<{ ok: boolean; imagePath: string }>;
+  generateImageFromImage: (
+    chatType: string,
+    chatId: string,
+    prompt: string,
+    imagePath: string,
+    kind: 'image' | 'video'
+  ) => Promise<{ ok: boolean; imagePath: string }>;
   saveImageMemory: (p: { roleId: string; imagePath: string; note?: string }) => Promise<any>;
   clearChatMessages: (chatType: string, chatId: string, withMemories: boolean) => Promise<{ deletedMsgs: number; deletedMems: number }>;
   syncAutoChat: (p: { chatId: string; action: 'start' | 'stop' }) => Promise<void>;
@@ -335,6 +352,8 @@ export const api: NianyuAPI = {
   triggerRelationship: (chatType, chatId, roleId, withMoments, doRelationship) => raw.triggerRelationship(chatType, chatId, roleId, withMoments, doRelationship),
   adjustBond: (roleId, delta) => raw.adjustBond(roleId, delta),
   generateImage: (chatType, chatId, prompt) => raw.generateImage(chatType, chatId, prompt),
+  generateVideo: (chatType, chatId, prompt) => raw.generateVideo(chatType, chatId, prompt),
+  generateImageFromImage: (chatType, chatId, prompt, imagePath, kind) => raw.generateImageFromImage(chatType, chatId, prompt, imagePath, kind),
   saveImageMemory: (p) => raw.saveImageMemory(p),
   recallMessage: (msgId) => raw.recallMessage(msgId),
   rollbackMessages: (p) => raw.rollbackMessages(p),

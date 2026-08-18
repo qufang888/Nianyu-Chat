@@ -8,6 +8,8 @@ import {
   type ThemeName,
   type AppSettings,
   type ImageGenSettings,
+  type DeepThinkLevel,
+  type VideoGenSettings,
   type ModelConfig,
   type ChatListItem,
   type SelfRole,
@@ -21,6 +23,7 @@ import { SelfRoleSettings } from './SelfRoleSettings';
 import { useToast, ToastView } from './Toast';
 import SelectMenu from './SelectMenu';
 import { invalidateSoundCache, previewSound, type SoundType } from '../utils/sound';
+import { modelSupportsDeepThink } from '../utils/modelFeatures';
 import cursorPngUrl from '../assets/cursor/cursor.png';
 
 export const THEMES: { key: ThemeName; nameKey: string; swatch: string }[] = [
@@ -201,6 +204,14 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
     patch({ imageGen: next });
     api.saveSettings({ imageGen: next }).then(reloadSettings);
   };
+  const videoGen = { ...DEFAULT_SETTINGS.videoGen, ...(draft.videoGen || {}) } as VideoGenSettings;
+  const patchVideoGen = (p: Partial<typeof videoGen>) => {
+    const next = { ...videoGen, ...p } as VideoGenSettings;
+    patch({ videoGen: next });
+    api.saveSettings({ videoGen: next }).then(reloadSettings);
+  };
+  // 深度思考：自动判定当前默认模型是否支持（不支持时选择器禁用并提示）
+  const defaultModelSupports = modelSupportsDeepThink(draft.defaultModel || '');
   const patchMini = (p: Partial<typeof mini>) => {
     const next = { ...mini, ...p };
     patch({ miniWindow: next });
@@ -1156,12 +1167,25 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
           <input
             type="checkbox"
             checked={!!draft.groupAutoChain}
-            onChange={(e) => patch({ groupAutoChain: e.target.checked })}
+            onChange={(e) => patch({ groupAutoChain: e.target.checked, groupSelectReply: e.target.checked ? false : draft.groupSelectReply })}
           />
           <span>{t('settings.groupAutoChain')}</span>
         </label>
         <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
           {t('settings.groupAutoChainDesc')}
+        </div>
+
+        {/* 群聊选人回复：开启后每次发言与 AI 回复后由用户手动选择下一位发言者（与自动接话互斥） */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 12 }}>
+          <input
+            type="checkbox"
+            checked={!!draft.groupSelectReply}
+            onChange={(e) => patch({ groupSelectReply: e.target.checked, groupAutoChain: e.target.checked ? false : draft.groupAutoChain })}
+          />
+          <span>{t('settings.groupSelectReply')}</span>
+        </label>
+        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+          {t('settings.groupSelectReplyDesc')}
         </div>
 
         {/* 同角色连续发言上限（仅群聊自动接话生效） */}
@@ -1184,6 +1208,23 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
         <div className="section-title">{t('settings.modelManage')}</div>
         <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 10 }}>
           {t('settings.defaultModelHint')}
+        </div>
+
+        {/* 深度思考等级：自动判定默认模型是否支持，支持时可选 off/低/中/高 */}
+        <div style={{ fontSize: 13, fontWeight: 600, marginTop: 4 }}>{t('settings.deepThink')}</div>
+        <select
+          value={draft.deepThinkLevel || 'off'}
+          disabled={!defaultModelSupports}
+          onChange={(e) => patch({ deepThinkLevel: e.target.value as DeepThinkLevel })}
+          style={{ padding: '6px 8px', borderRadius: 8, width: 260, marginTop: 6 }}
+        >
+          <option value="off">{t('settings.deepThinkOff')}</option>
+          <option value="low">{t('settings.deepThinkLow')}</option>
+          <option value="medium">{t('settings.deepThinkMedium')}</option>
+          <option value="high">{t('settings.deepThinkHigh')}</option>
+        </select>
+        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+          {defaultModelSupports ? t('settings.deepThinkDesc') : t('settings.deepThinkUnsupported')}
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 8 }}>
           {(draft.models || []).map((m) => {
@@ -1801,6 +1842,97 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
           </div>
         </div>
 
+        {/* ===== 生视频（专用视频生成 API，使用方式与生图一致） ===== */}
+        <div className="section-title">{t('settings.videoGen')}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={!!videoGen.enabled}
+              onChange={(e) => patchVideoGen({ enabled: e.target.checked })}
+            />
+            <span style={{ fontSize: 13 }}>{t('settings.videoGenEnabled')}</span>
+          </label>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              {t('settings.videoGenApi')}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                placeholder="https://api.openai.com/v1"
+                value={videoGen.baseUrl}
+                style={{ flex: 1, minWidth: 200 }}
+                onChange={(e) => patchVideoGen({ baseUrl: e.target.value })}
+              />
+              <input
+                type="password"
+                placeholder={t('settings.apiKey')}
+                value={videoGen.apiKey}
+                style={{ width: 180 }}
+                onChange={(e) => patchVideoGen({ apiKey: e.target.value })}
+              />
+              <input
+                type="text"
+                placeholder={t('settings.imageGenModelPlaceholder')}
+                value={videoGen.model}
+                style={{ width: 150 }}
+                list="video-model-options"
+                onChange={(e) => patchVideoGen({ model: e.target.value })}
+              />
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <button
+                type="button"
+                className="btn-ghost"
+                style={{ padding: '3px 10px', fontSize: 12 }}
+                disabled={modelLoading.img}
+                onClick={() => refreshModelList('img', videoGen.baseUrl, videoGen.apiKey)}
+              >
+                {modelLoading.img ? t('model.refreshing') : t('model.refreshModels')}
+              </button>
+              <datalist id="video-model-options">
+                {imgModelList.map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+              {t('settings.videoGenDesc')}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              {t('settings.videoGenSize')}
+            </div>
+            <input
+              type="text"
+              placeholder="1280x720"
+              value={videoGen.size}
+              style={{ width: 150 }}
+              onChange={(e) => patchVideoGen({ size: e.target.value })}
+            />
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+              {t('settings.imageGenSizeDesc')}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              {t('settings.videoGenDuration')}
+            </div>
+            <input
+              type="text"
+              placeholder="5"
+              value={videoGen.duration}
+              style={{ width: 150 }}
+              onChange={(e) => patchVideoGen({ duration: e.target.value })}
+            />
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+              {t('settings.videoGenDesc')}
+            </div>
+          </div>
+        </div>
+
         {/* ===== 异步场景生图 ===== */}
         <div className="section-title">{t('settings.sceneImage')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
@@ -1845,6 +1977,17 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
               <option value="llm">{t('settings.sceneImageJudgeLLM')}</option>
               <option value="heuristic">{t('settings.sceneImageJudgeHeuristic')}</option>
             </select>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 4 }}>
+            <input
+              type="checkbox"
+              checked={!!draft.asyncImageUseAvatar}
+              onChange={(e) => patch({ asyncImageUseAvatar: e.target.checked })}
+            />
+            <span style={{ fontSize: 13 }}>{t('settings.asyncImageUseAvatar')}</span>
+          </label>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+            {t('settings.asyncImageUseAvatarDesc')}
           </div>
         </div>
 

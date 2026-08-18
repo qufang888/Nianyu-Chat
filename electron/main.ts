@@ -24,6 +24,8 @@ import {
   transcribeAudio,
   textToSpeech,
   generateImage,
+  generateVideo,
+  setDeepThinkLevel,
 } from './ai';
 import { createBackup, restoreBackup } from './backup';
 import { parseCharacterCard, parseCharacterCardText } from '../src/utils/characterCard';
@@ -1227,6 +1229,26 @@ function judgeSceneImageHeuristic(recent: string): { should: boolean; prompt: st
 }
 
 // 主入口：判定 + 生图 + 落库 + 双窗广播（只生一次，指令不写入聊天）
+// 读取本地图片为 data URL（用于把角色头像作为生图参考图传入）
+function readImageDataUrl(filePath: string): string | null {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return null;
+    const buf = fs.readFileSync(filePath);
+    const ext = (filePath.split('.').pop() || 'png').toLowerCase();
+    const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png';
+    return `data:${mime};base64,${buf.toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
+
+// 判断场景生图提示词是否涉及「人物/角色」（仅此时才把头像作为参考，避免无关场景被头像干扰）
+function scenePromptInvolvesPerson(prompt: string, roleName: string): boolean {
+  if (!prompt) return false;
+  if (roleName && prompt.includes(roleName)) return true;
+  return /(人|角色|他|她|我|你|们|脸|肖像|形象|自拍|合照|站|坐|走|看|笑|哭|抱|牵|亲)/.test(prompt);
+}
+
 async function triggerSceneImage(chatType: string, chatId: string, roleId: string): Promise<void> {
   const settings = dm.getSettings();
   if (!settings.autoSceneImageChats?.[`${chatType}:${chatId}`]) return; // 该对话未开启场景生图
@@ -1251,12 +1273,21 @@ async function triggerSceneImage(chatType: string, chatId: string, roleId: strin
   }
   if (!judge.should || !judge.prompt) return;
   lastSceneImageAt.set(key, now); // 先占位，避免并发重复生成
+  // 自动读取人物头像作为参考图（仅当开启且场景涉及人物时），使生成形象更贴近角色；无关场景不传，不影响内容
+  let referenceImages: string[] | undefined;
+  if (settings.asyncImageUseAvatar && role.avatar_path) {
+    const avatar = readImageDataUrl(role.avatar_path);
+    if (avatar && scenePromptInvolvesPerson(judge.prompt, role.name)) {
+      referenceImages = [avatar];
+    }
+  }
   try {
     const { b64, url } = await generateImage(
       { baseUrl: ig.baseUrl!, apiKey: ig.apiKey! },
       judge.prompt,
       ig.model || 'gpt-image-1',
-      ig.size || '1024x1024'
+      ig.size || '1024x1024',
+      referenceImages
     );
     let imagePath: string | null = null;
     if (b64) imagePath = saveGeneratedImage(b64);
@@ -1946,6 +1977,8 @@ async function handleSend(p: {
   content: string;
   imagePath?: string | null;
   imagePaths?: string[];
+  visibleToGroup?: boolean;
+  toMemory?: boolean;
 }): Promise<SendMessageResult> {
   const settings = dm.getSettings();
   const memberRoles = resolveMembers(p.chatType, p.chatId, p.content);
@@ -1955,6 +1988,16 @@ async function handleSend(p: {
   validateModels(memberRoles, settings);
 
   const userMsg = addUserMessage(p);
+
+  // 群聊选人回复：用户发消息后不直接生成，先广播「请选择下一位发言者」，由前端驱动后续生成
+  if (p.chatType === 'group' && settings.groupSelectReply) {
+    broadcast('group:needSpeaker', {
+      chatId: p.chatId,
+      members: memberRoles.map((r) => ({ id: r.id, name: r.name, avatar: r.avatar_path })),
+    });
+    return { userMessage: userMsg, aiMessages: [], affinityChanges: [], totalTokens: 0 };
+  }
+
   const result = await generateAIResponses(
     { ...p, imagePath: userMsg.image_path, imagePaths: userMsg.images },
     memberRoles,
@@ -2028,12 +2071,17 @@ function addUserMessage(p: {
   content: string;
   imagePath?: string | null;
   imagePaths?: string[];
+  visibleToGroup?: boolean;
+  toMemory?: boolean;
 }): ChatMessage {
   const settings = dm.getSettings();
   const selfRole = resolveActiveSelfRole(settings, p.chatType, p.chatId);
   // 多图优先：使用 imagePaths 数组；单图回退到 imagePath
   const multi = p.imagePaths && p.imagePaths.length ? copyImagesToStore(p.imagePaths) : null;
   const storedImage = multi ? multi[0] : copyImageToStore(p.imagePath || null);
+  // 群聊可见性 / 记忆收录：visibleToGroup 默认 true；toMemory 仅在可见时生效，默认 true
+  const visible = p.visibleToGroup !== false;
+  const toMem = visible && p.toMemory !== false;
   const msg = dm.addMessage({
     chat_type: p.chatType as any,
     chat_id: p.chatId,
@@ -2044,6 +2092,9 @@ function addUserMessage(p: {
     images: multi || null,
     token_used: 0,
     timestamp: new Date().toISOString(),
+    visibleToGroup: visible,
+    toMemory: toMem,
+    msg_kind: visible ? 'public' : 'private',
   });
   // 广播用户消息到所有窗口（让 MiniChat 发出的图片在小窗/主窗同步显示）
   broadcast('stream:user', msg);
@@ -2333,6 +2384,8 @@ async function handleSendUser(p: {
   content: string;
   imagePath?: string | null;
   imagePaths?: string[];
+  visibleToGroup?: boolean;
+  toMemory?: boolean;
 }): Promise<ChatMessage> {
   return addUserMessage(p);
 }
@@ -2386,6 +2439,8 @@ async function handleStream(p: {
   content: string;
   imagePath?: string | null;
   imagePaths?: string[];
+  visibleToGroup?: boolean;
+  toMemory?: boolean;
 }): Promise<{ userMessage: ChatMessage; members: { streamId: string; roleId: string; roleName: string }[] }> {
   const settings = dm.getSettings();
   const parallel = Math.max(1, Math.floor(settings.streamParallel) || 1);
@@ -2641,7 +2696,7 @@ function countConsecutiveByRole(history: ChatMessage[], roleName: string): numbe
 // 便于前端自动模式「一轮结束→隔一会儿→下一轮」串行驱动。
 async function handleGroupContinue(
   e: Electron.IpcMainInvokeEvent | null,
-  p: { chatId: string }
+  p: { chatId: string; forceRoleId?: string; visibleToGroup?: boolean; toMemory?: boolean }
 ): Promise<{ ok: boolean; roleId?: string; roleName?: string; error?: string }> {
   // 若该聊天已被另一个窗口认领为自动接话 driver,拒绝非 driver 窗口的调用,避免并发群聊生成冲突
   if (e) {
@@ -2664,7 +2719,12 @@ async function handleGroupContinue(
   }
 
   const history = dm.getMessages('group', p.chatId);
+  // 选人回复：若前端指定了下一位发言者，则优先使用（仍校验其为群成员）
   let role = await pickNextSpeaker(memberRoles, settings, history);
+  if (p.forceRoleId) {
+    const forced = memberRoles.find((r) => r.id === p.forceRoleId);
+    if (forced) role = forced;
+  }
 
   // 自动接话模式下限制同一角色连续发言条数（仅对群聊生效）
   const maxConsecutive = Math.max(1, Math.min(20, settings.groupMaxConsecutive ?? 1));
@@ -2723,6 +2783,8 @@ async function handleGroupContinue(
       tokens = res.promptTokens + res.completionTokens;
       reasoning = res.reasoning;
     }
+    const aiVisible = p.visibleToGroup !== false;
+    const aiToMem = aiVisible && p.toMemory !== false;
     const aiMsg = dm.addMessage({
       chat_type: 'group',
       chat_id: p.chatId,
@@ -2733,11 +2795,21 @@ async function handleGroupContinue(
       image_path: null,
       token_used: tokens,
       timestamp: new Date().toISOString(),
+      visibleToGroup: aiVisible,
+      toMemory: aiToMem,
+      msg_kind: aiVisible ? 'public' : 'private',
     });
     sendStreamDone(streamId, aiMsg);
     void requestMoodJudge('group', p.chatId, role.id);
     void requestRelationshipAndMoments('group', p.chatId, role.id);
     void triggerSceneImage('group', p.chatId, role.id);
+    // 选人回复：本轮结束后请用户选择下一位发言者（取代自动接话循环）
+    if (settings.groupSelectReply) {
+      broadcast('group:needSpeaker', {
+        chatId: p.chatId,
+        members: memberRoles.map((r) => ({ id: r.id, name: r.name, avatar: r.avatar_path })),
+      });
+    }
     return { ok: true, roleId: role.id, roleName: role.name };
   } catch (e: any) {
     emitChunk('', true, e?.message || String(e));
@@ -3511,9 +3583,11 @@ async function extractMemories(chatType: string, chatId: string): Promise<number
   if (!roleId) return 0;
   const existing = dm.listMemories(roleId).map((m) => m.content.trim());
   // 图片消息（生图结果/用户发图）不送入自动记忆提炼：AI 不会自动总结或保存图片记忆，仅可手动保存
+  // 群聊中标记为「不进入记忆」的消息也跳过（前提是消息全群可见）
   const convo = history
     .slice(-14)
     .filter((m) => !(m.images && m.images.length) && !m.image_path)
+    .filter((m) => m.toMemory !== false)
     .map((m) => `${m.sender_name}: ${m.content || ''}`)
     .join('\n');
   const cfg =
@@ -3876,6 +3950,8 @@ function registerIPC(): void {
       applyMiniSettings();
       if (patch.lang) buildTrayMenu(next.lang === 'en' ? 'en' : 'zh');
     }
+    // 深度思考等级同步给 AI 调用层（全局，避免改动所有调用点）
+    if (patch && patch.deepThinkLevel !== undefined) setDeepThinkLevel(next.deepThinkLevel);
     // 广播设置变更，让主窗与小窗同步刷新（世界书/身份/背景/开关等）
     broadcast('settings:changed', patch || {});
     // 缩放基准/上下限变更时，主窗与小窗立即按新参数重新缩放（两端同步显示）
@@ -3890,6 +3966,7 @@ function registerIPC(): void {
     // 语言/小窗设置即时生效
     applyMiniSettings();
     buildTrayMenu(next.lang === 'en' ? 'en' : 'zh');
+    setDeepThinkLevel(next.deepThinkLevel);
     broadcast('settings:changed', { reset: true });
     return next;
   });
@@ -4171,6 +4248,148 @@ function registerIPC(): void {
     broadcast('stream:user', aiMsg);
     return { ok: true, imagePath };
   });
+
+  // ---------- 生视频（专用视频生成 API，使用方式与生图一致） ----------
+  ipcMain.handle('video:generate', async (_e, chatType: string, chatId: string, prompt: string) => {
+    const s = dm.getSettings();
+    const vg = s.videoGen;
+    if (!vg || !vg.enabled || !vg.baseUrl || !vg.apiKey) {
+      throw new Error('未配置生视频 API，请在设置中开启「生视频」并填写独立的 Base URL 与 API Key');
+    }
+    const { url } = await generateVideo(
+      { baseUrl: vg.baseUrl, apiKey: vg.apiKey },
+      prompt,
+      vg.model || '',
+      vg.size || '1280x720',
+      vg.duration || '5'
+    );
+    let videoPath: string | null = null;
+    if (url) {
+      try {
+        const resp = await fetch(url);
+        const buf = Buffer.from(await resp.arrayBuffer());
+        const name = `gen_${Date.now()}_${Math.floor(Math.random() * 1e6)}.mp4`;
+        const dest = path.join(dm.imagesDir, name);
+        fs.writeFileSync(dest, buf);
+        videoPath = dest;
+      } catch (e) {
+        console.error('下载生视频失败', e);
+      }
+    }
+    if (!videoPath) throw new Error('生视频失败：未获取到视频数据');
+    const aiName =
+      chatType === 'single'
+        ? dm.getRole(dm.resolveSingleRoleId(chatType, chatId))?.name || 'AI'
+        : dm.getGroup(chatId)?.group_name || 'AI';
+    const aiMsg = dm.addMessage({
+      chat_type: chatType as any,
+      chat_id: chatId,
+      sender_type: 'ai',
+      sender_name: aiName,
+      content: '',
+      image_path: videoPath,
+      token_used: 0,
+      timestamp: new Date().toISOString(),
+      genPrompt: prompt,
+    });
+    broadcast('stream:user', aiMsg);
+    return { ok: true, imagePath: videoPath };
+  });
+
+  // ---------- 发图片生图 / 生视频：以用户发送的图片 + 文字提示词为输入 ----------
+  // 仅当 prompt 非空才生效（只发图片无提示词则无效，不生图/生视频）
+  ipcMain.handle(
+    'image:generateFromImage',
+    async (_e, chatType: string, chatId: string, prompt: string, imagePath: string, kind: 'image' | 'video') => {
+      if (!prompt || !prompt.trim()) {
+        throw new Error('请先输入文字提示词：仅发送图片不会生图/生视频');
+      }
+      if (!imagePath) throw new Error('未找到要参考的图片');
+      const dataUrl = readImageDataUrl(imagePath);
+      if (!dataUrl) throw new Error('参考图片读取失败');
+      if (kind === 'video') {
+        const vg = dm.getSettings().videoGen;
+        if (!vg || !vg.enabled || !vg.baseUrl || !vg.apiKey) {
+          throw new Error('未配置生视频 API，请在设置中开启「生视频」');
+        }
+        const { url } = await generateVideo(
+          { baseUrl: vg.baseUrl, apiKey: vg.apiKey },
+          prompt,
+          vg.model || '',
+          vg.size || '1280x720',
+          vg.duration || '5',
+          [dataUrl]
+        );
+        let videoPath: string | null = null;
+        if (url) {
+          try {
+            const resp = await fetch(url);
+            const buf = Buffer.from(await resp.arrayBuffer());
+            const name = `gen_${Date.now()}_${Math.floor(Math.random() * 1e6)}.mp4`;
+            const dest = path.join(dm.imagesDir, name);
+            fs.writeFileSync(dest, buf);
+            videoPath = dest;
+          } catch (e) {
+            console.error('下载生视频失败', e);
+          }
+        }
+        if (!videoPath) throw new Error('生视频失败：未获取到视频数据');
+        const aiMsg = dm.addMessage({
+          chat_type: chatType as any,
+          chat_id: chatId,
+          sender_type: 'ai',
+          sender_name: 'AI',
+          content: '',
+          image_path: videoPath,
+          token_used: 0,
+          timestamp: new Date().toISOString(),
+          genPrompt: prompt,
+        });
+        broadcast('stream:user', aiMsg);
+        return { ok: true, imagePath: videoPath };
+      }
+      // kind === 'image'
+      const ig = dm.getSettings().imageGen;
+      if (!ig || !ig.enabled || !ig.baseUrl || !ig.apiKey) {
+        throw new Error('未配置生图 API，请在设置中开启「生图」');
+      }
+      const { b64, url } = await generateImage(
+        { baseUrl: ig.baseUrl, apiKey: ig.apiKey },
+        prompt,
+        ig.model || 'gpt-image-1',
+        ig.size || '1024x1024',
+        [dataUrl]
+      );
+      let imagePathOut: string | null = null;
+      if (b64) imagePathOut = saveGeneratedImage(b64);
+      else if (url) {
+        try {
+          const resp = await fetch(url);
+          const buf = Buffer.from(await resp.arrayBuffer());
+          const name = `gen_${Date.now()}_${Math.floor(Math.random() * 1e6)}.png`;
+          const dest = path.join(dm.imagesDir, name);
+          fs.writeFileSync(dest, buf);
+          imagePathOut = dest;
+        } catch (e) {
+          console.error('下载生图失败', e);
+        }
+      }
+      if (!imagePathOut) throw new Error('生图失败：未获取到图片数据');
+      const aiMsg = dm.addMessage({
+        chat_type: chatType as any,
+        chat_id: chatId,
+        sender_type: 'ai',
+        sender_name: 'AI',
+        content: '',
+        image_path: imagePathOut,
+        token_used: 0,
+        timestamp: new Date().toISOString(),
+        genPrompt: prompt,
+      });
+      broadcast('stream:user', aiMsg);
+      return { ok: true, imagePath: imagePathOut };
+    }
+  );
 
   // 手动把一张图片存入角色记忆（AI 不会自动保存图片记忆）
   ipcMain.handle('memory:saveImage', (_e, p: { roleId: string; imagePath: string; note?: string }) => {
@@ -4565,6 +4784,7 @@ process.on('unhandledRejection', (reason) => {
 
 app.whenReady().then(() => {
   const settings = dm.getSettings();
+  setDeepThinkLevel(settings.deepThinkLevel);
   Menu.setApplicationMenu(buildMenu(settings.lang === 'en' ? 'en' : 'zh'));
   protocol.registerFileProtocol('nianyuimg', (request, callback) => {
     const url = request.url.replace('nianyuimg://', '');

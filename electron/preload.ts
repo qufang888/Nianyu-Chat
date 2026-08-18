@@ -37,6 +37,8 @@ export interface NianyuAPI {
     content: string;
     imagePath?: string | null;
     imagePaths?: string[];
+    visibleToGroup?: boolean;
+    toMemory?: boolean;
   }) => Promise<ChatMessage>;
   sendAIMessages: (p: {
     chatType: string;
@@ -51,6 +53,8 @@ export interface NianyuAPI {
     content: string;
     imagePath?: string | null;
     imagePaths?: string[];
+    visibleToGroup?: boolean;
+    toMemory?: boolean;
   }) => Promise<{ userMessage: ChatMessage; members: { streamId: string; roleId: string; roleName: string }[] }>;
   // 请求限速（QPS）状态查询
   rateInfo: (modelId: string) => Promise<{ enabled: boolean; limit: number; waitMs: number }>;
@@ -62,6 +66,9 @@ export interface NianyuAPI {
   interruptStream: (chatId: string) => Promise<{ ok: boolean }>;
   groupContinue: (p: {
     chatId: string;
+    forceRoleId?: string;
+    visibleToGroup?: boolean;
+    toMemory?: boolean;
   }) => Promise<{ ok: boolean; roleId?: string; roleName?: string; error?: string }>;
   // ===== 空闲主动回复 =====
   proactive: (p: {
@@ -102,6 +109,7 @@ export interface NianyuAPI {
   }) => Promise<{ ok: boolean }>;
   onGroupObserver: (cb: (e: any, data: { groupId: string; observerMode: boolean; config?: any }) => void) => () => void;
   offGroupObserver: (cb: (e: any, data: any) => void) => void;
+  onNeedSpeaker: (cb: (data: { chatId: string; members: { id: string; name: string; avatar?: string }[] }) => void) => () => void;
 
   onSettingsChanged: (cb: (e: any, data: any) => void) => () => void;
   offSettingsChanged: (cb: (e: any, data: any) => void) => void;
@@ -162,6 +170,14 @@ export interface NianyuAPI {
   triggerRelationship: (chatType: string, chatId: string, roleId: string, withMoments?: boolean, doRelationship?: boolean) => Promise<{ ok: boolean; moments: number; relation?: string; error?: string }>;
   adjustBond: (roleId: string, delta: number) => Promise<number>;
   generateImage: (chatType: string, chatId: string, prompt: string) => Promise<{ ok: boolean; imagePath: string }>;
+  generateVideo: (chatType: string, chatId: string, prompt: string) => Promise<{ ok: boolean; imagePath: string }>;
+  generateImageFromImage: (
+    chatType: string,
+    chatId: string,
+    prompt: string,
+    imagePath: string,
+    kind: 'image' | 'video'
+  ) => Promise<{ ok: boolean; imagePath: string }>;
   saveImageMemory: (p: { roleId: string; imagePath: string; note?: string }) => Promise<any>;
   clearChatMessages: (chatType: string, chatId: string, withMemories: boolean) => Promise<{ deletedMsgs: number; deletedMems: number }>;
   syncAutoChat: (p: { chatId: string; action: 'start' | 'stop' }) => Promise<void>;
@@ -344,6 +360,11 @@ const api: NianyuAPI = {
     return () => ipcRenderer.removeListener('group:observer', listener);
   },
   offGroupObserver: () => {},
+  onNeedSpeaker: (cb) => {
+    const listener = (_e: any, data: any) => cb(data);
+    ipcRenderer.on('group:needSpeaker', listener);
+    return () => ipcRenderer.removeListener('group:needSpeaker', listener);
+  },
 
   // 设置变更广播：主窗/小窗同步刷新（世界书/身份/背景/开关等）
   onSettingsChanged: (cb) => {
@@ -463,6 +484,9 @@ const api: NianyuAPI = {
   triggerRelationship: (chatType, chatId, roleId, withMoments, doRelationship) => ipcRenderer.invoke('relationship:trigger', chatType, chatId, roleId, withMoments, doRelationship),
   adjustBond: (roleId, delta) => ipcRenderer.invoke('role:adjustBond', roleId, delta),
   generateImage: (chatType, chatId, prompt) => ipcRenderer.invoke('image:generate', chatType, chatId, prompt),
+  generateVideo: (chatType, chatId, prompt) => ipcRenderer.invoke('video:generate', chatType, chatId, prompt),
+  generateImageFromImage: (chatType, chatId, prompt, imagePath, kind) =>
+    ipcRenderer.invoke('image:generateFromImage', chatType, chatId, prompt, imagePath, kind),
   saveImageMemory: (p) => ipcRenderer.invoke('memory:saveImage', p),
   clearChatMessages: (chatType, chatId, withMemories) => ipcRenderer.invoke('chats:clearMessages', chatType, chatId, withMemories),
   // 窗口间同步

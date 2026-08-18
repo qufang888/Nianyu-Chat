@@ -84,8 +84,15 @@ BrandingText "念语 Nianyu AI Chat"
   Section "-postuninstall"
     ${If} $deleteAppDataChecked == 1
       ; 杀进程释放文件锁，确保 AppData 目录可删
-      nsExec::Exec 'taskkill /f /im "nianyu-client.exe" 2>nul'
-      Sleep 500
+      ; 关键修复：exe 实际文件名取自 productName（念语），而非 package.json 的 name（nianyu-client）。
+      ; 此前误用 nianyu-client.exe 导致进程杀不掉 → 数据目录被锁 → RMDir 静默失败 → 重装后数据仍在。
+      nsExec::Exec 'taskkill /f /im "念语.exe" 2>nul'
+      Sleep 800
+      ; 多次尝试删除，规避文件锁残留（首轮失败后再杀一次并重试）
+      RMDir /r "$APPDATA\nianyu-client"
+      RMDir /r "$LOCALAPPDATA\nianyu-client"
+      nsExec::Exec 'taskkill /f /im "念语.exe" 2>nul'
+      Sleep 300
       RMDir /r "$APPDATA\nianyu-client"
       RMDir /r "$LOCALAPPDATA\nianyu-client"
       ; 删除自定义数据目录（路径存储在 custom-data-path.txt 中，每行一个路径）

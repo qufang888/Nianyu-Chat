@@ -77,6 +77,10 @@ export const MiniChat: React.FC = () => {
   // 已结束的 streamId 集合，防止同一 AI 消息被重复追加（与 ChatWindow 一致）
   const doneStreamIds = useRef<Set<string>>(new Set());
   const seenSeqRef = useRef<Record<string, number>>({});
+  // F1：群聊选人回复 —— 可见性 / 记忆开关 + 选人浮层状态
+  const [needSpeaker, setNeedSpeaker] = useState<{ chatId: string; members: { id: string; name: string; avatar?: string }[] } | null>(null);
+  const [replyVisible, setReplyVisible] = useState(true);
+  const [replyToMemory, setReplyToMemory] = useState(true);
   // 角色/成员删除后的提示
   const [roleMissing, setRoleMissing] = useState(false);
   const [membersMissing, setMembersMissing] = useState(0);
@@ -651,6 +655,11 @@ export const MiniChat: React.FC = () => {
         }
       }
     });
+    // F1：群聊选人回复 —— 主进程广播「请选择下一位发言者」，弹出选人浮层
+    const offNeedSpeaker = api.onNeedSpeaker((data) => {
+      if (!data || !current || data.chatId !== current.chat_id) return;
+      setNeedSpeaker(data);
+    });
     return () => {
       offChunk();
       offStart();
@@ -659,6 +668,7 @@ export const MiniChat: React.FC = () => {
       offUser();
       offEvent();
       offIdle();
+      offNeedSpeaker();
     };
   }, [current]);
 
@@ -954,17 +964,25 @@ export const MiniChat: React.FC = () => {
     let userSent = phase === 'ai';
     try {
       const s = await api.getSettings();
+      // F1：群聊选人回复 —— 仅在群聊且开启开关时生效
+      const selectReply = !!(s.groupSelectReply && current.chat_type === 'group');
       if (s.enableStreaming && phase === 'full') {
         const { userMessage, members: streamMembers } = await api.startStream({
           chatType: current.chat_type,
           chatId: current.chat_id,
           content,
           imagePaths,
+          visibleToGroup: replyVisible,
+          toMemory: replyVisible ? replyToMemory : false,
         });
         setMessages((prev) => [...prev.slice(-9), userMessage]);
         const init: Record<string, ChatMessage> = {};
         for (const mb of streamMembers) init[mb.streamId] = makePlaceholder(mb.roleName);
         setStreamingMsgs((prev) => ({ ...prev, ...init }));
+        // 选人回复：后端 handleSend 已提前返回并广播 needSpeaker，此处同步弹出选人浮层
+        if (selectReply) {
+          setNeedSpeaker({ chatId: current.chat_id, members: members.map((r) => ({ id: r.id, name: r.name, avatar: r.avatar_path })) });
+        }
       } else {
         if (phase === 'full') {
           const userMessage = await api.sendUserMessage({
@@ -972,9 +990,16 @@ export const MiniChat: React.FC = () => {
             chatId: current.chat_id,
             content,
             imagePaths,
+            visibleToGroup: replyVisible,
+            toMemory: replyVisible ? replyToMemory : false,
           });
           setMessages((prev) => [...prev.slice(-9), userMessage]);
           userSent = true;
+          // 选人回复：不自动生成 AI 回复，交由前端弹窗选择下一位发言者
+          if (selectReply) {
+            setNeedSpeaker({ chatId: current.chat_id, members: members.map((r) => ({ id: r.id, name: r.name, avatar: r.avatar_path })) });
+            return;
+          }
         }
         const res = await api.sendAIMessages({
           chatType: current.chat_type,
@@ -1242,6 +1267,46 @@ export const MiniChat: React.FC = () => {
     } finally {
       setGenLoading(false);
       setGenTyping(false);
+    }
+  };
+
+  // F1：群聊选人回复 —— 用户点击某成员，驱动该成员接话（可带可见性 / 记忆选项）
+  const pickSpeaker = async (roleId: string) => {
+    const data = needSpeaker;
+    setNeedSpeaker(null);
+    if (!data || !current) return;
+    try {
+      await api.groupContinue({
+        chatId: current.chat_id,
+        forceRoleId: roleId,
+        visibleToGroup: replyVisible,
+        toMemory: replyVisible ? replyToMemory : false,
+      });
+    } catch (e: any) {
+      showToast(e?.message || t('chat.genNeedPrompt'));
+    }
+  };
+
+  // F4：发图生图 / 生视频（取附图 + 输入框提示词，交给后端异步生成）
+  const doGenerateFromImage = async (kind: 'image' | 'video') => {
+    if (!current) return;
+    const text = input.trim();
+    if (!text) {
+      showToast(t('chat.genNeedPrompt'));
+      return;
+    }
+    if (pendingImages.length === 0) return;
+    const img = pendingImages[0];
+    setPendingImages([]);
+    setInput('');
+    setSending(true);
+    try {
+      const res = await api.generateImageFromImage(current.chat_type, current.chat_id, text, img, kind);
+      if (!res || !res.ok) showToast(kind === 'video' ? t('chat.genVideoFailed') : t('chat.drawFailed'));
+    } catch (e: any) {
+      showToast(e?.message || (kind === 'video' ? t('chat.genVideoFailed') : t('chat.drawFailed')));
+    } finally {
+      setSending(false);
     }
   };
 
@@ -1987,6 +2052,43 @@ export const MiniChat: React.FC = () => {
             </button>
           </div>
         )}
+        {/* F1：群聊消息可见性 / 记忆开关（仅群聊显示） */}
+        {current?.chat_type === 'group' && (
+          <div className="send-row">
+            <span className="reply-flags">
+              <label title={t('chat.visibleToGroupHint')}>
+                <input
+                  type="checkbox"
+                  checked={replyVisible}
+                  onChange={(e) => { setReplyVisible(e.target.checked); if (!e.target.checked) setReplyToMemory(false); }}
+                />
+                {t('chat.visibleToGroup')}
+              </label>
+              <label title={t('chat.toMemoryHint')} style={{ opacity: replyVisible ? 1 : 0.4 }}>
+                <input
+                  type="checkbox"
+                  checked={replyToMemory}
+                  disabled={!replyVisible}
+                  onChange={(e) => setReplyToMemory(e.target.checked)}
+                />
+                {t('chat.toMemory')}
+              </label>
+            </span>
+          </div>
+        )}
+        {/* F4：发图生图 / 生视频（有附图且已输入提示词时显示） */}
+        {pendingImages.length > 0 && input.trim() && (
+          <div className="send-row">
+            <span className="reply-flags">
+              <button className="btn-ghost" disabled={sending} onClick={() => doGenerateFromImage('image')}>
+                {t('chat.genImageFromImage')}
+              </button>
+              <button className="btn-ghost" disabled={sending} onClick={() => doGenerateFromImage('video')}>
+                {t('chat.genVideoFromImage')}
+              </button>
+            </span>
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 6, width: '100%' }} onClick={() => inputRef.current?.focus()}>
           <textarea
             key={current ? `${current.chat_type}:${current.chat_id}:${refreshNonce}` : `none:${refreshNonce}`}
@@ -2089,6 +2191,23 @@ export const MiniChat: React.FC = () => {
       {preview && (
         <div className="modal-mask" onClick={() => setPreview(null)}>
           <img className="image-preview" src={preview} alt={t('chat.preview')} />
+        </div>
+      )}
+
+      {needSpeaker && (
+        <div className="modal-mask" onClick={() => setNeedSpeaker(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
+            <div className="draw-title">{t('chat.needSpeaker')}</div>
+            <div className="draw-desc">{t('chat.selectReplyDesc')}</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 10 }}>
+              {needSpeaker.members.map((m) => (
+                <button key={m.id} className="speaker-item" onClick={() => pickSpeaker(m.id)}>
+                  {m.avatar ? <AvatarImg path={m.avatar} /> : '🤖'}
+                  <span>{m.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
       {translateModal && (
@@ -2380,7 +2499,7 @@ const MiniMessageRow: React.FC<{
           </div>
         ) : (
           <>
-            {hasText && (
+            {(!isUser && msg.reasoning) || hasText ? (
               <div className={`bubble ${failed ? 'bubble-failed' : ''}`} onMouseUp={handleMouseUp}>
                 {!isUser && msg.reasoning && (
                   <ReasoningBlock
@@ -2390,7 +2509,17 @@ const MiniMessageRow: React.FC<{
                     onCopied={onReasoningCopied}
                   />
                 )}
-                {renderMarkdown(msg.content, { citations: citeCitations, onCite: citeOnClick })}
+                {hasText && renderMarkdown(msg.content, { citations: citeCitations, onCite: citeOnClick })}
+                {/* F6 修复：流式进行中始终在气泡内显示加载动画 */}
+                {streaming && (
+                  <span className="typing-inline" aria-label={t('chat.replying')} />
+                )}
+              </div>
+            ) : (
+              <div className="bubble bubble-loading" onMouseUp={handleMouseUp}>
+                <div className="typing" aria-label={t('chat.replying')}>
+                  <span className="typing-bar" />
+                </div>
               </div>
             )}
             {imgs.length > 0 && <ImageGrid paths={imgs} onImage={onImage} failed={!!failed} />}
