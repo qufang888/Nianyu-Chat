@@ -40,6 +40,7 @@ interface Moment {
   roleId: string; // 发布者角色 id
   content: string; // 动态正文
   images: string[]; // 配图路径
+  videos?: string[]; // 视频路径（AI 生成视频动态；空/未设置=无视频）
   created_at: string; // 创建时间
   scheduledAt?: string | null; // 定时发布时间（ISO）；空/null=立即发布
   published: boolean; // 是否已发布（定时未到点时为 false，到点后转 true）
@@ -480,18 +481,24 @@ class DataManager {
   }
 
   // ===================== 记忆 =====================
-  listMemories(roleId?: string): MemoryEntry[] {
-    const list = roleId
+  // 记忆隔离：传入 chatId 时只返回「该聊天的记忆」+「角色级共享记忆(chatId 为空)」；
+  // 仅传 roleId（不传 chatId）时返回该角色全部记忆（记忆面板用）。
+  listMemories(roleId?: string, chatId?: string): MemoryEntry[] {
+    let list = roleId
       ? this.store.memories.filter((m) => m.roleId === roleId)
       : this.store.memories;
+    if (roleId && chatId) {
+      list = list.filter((m) => (m.chatId || '') === chatId || !m.chatId);
+    }
     return [...list].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
   }
 
-  addMemory(m: Omit<MemoryEntry, 'id' | 'created_at' | 'updated_at'> & Partial<Pick<MemoryEntry, 'id' | 'created_at' | 'updated_at' | 'sourceMsgId' | 'sourceMsgIds'>>): MemoryEntry {
+  addMemory(m: Omit<MemoryEntry, 'id' | 'created_at' | 'updated_at' | 'chatId'> & Partial<Pick<MemoryEntry, 'id' | 'created_at' | 'updated_at' | 'sourceMsgId' | 'sourceMsgIds' | 'chatId'>>): MemoryEntry {
     const now = new Date().toISOString();
     const full: MemoryEntry = {
       id: m.id || this.genId('mem'),
       roleId: m.roleId,
+      chatId: (m as any).chatId,
       content: m.content,
       source: m.source,
       sourceMsgId: (m as any).sourceMsgId,
@@ -789,6 +796,7 @@ class DataManager {
   }
 
   // 复制聊天：1:1 复制消息与卡片，新卡片名加「副本」后缀（group 复制整组，single 复制并与角色解绑为新卡片）
+  // 同时复制：① 本聊的隔离记忆（按 chatId）；② 每聊独立参数（worldBook/idle/sound/bg/selfRole/sceneImage/webSearch 的 key 重映射）
   copyChat(chatType: string, chatId: string): { chat_type: string; chat_id: string; name: string } {
     const now = new Date().toISOString();
     if (chatType === 'group') {
@@ -802,6 +810,11 @@ class DataManager {
       for (const m of msgs) {
         this.store.messages.push({ ...m, id: this.nextId(), chat_id: newId });
       }
+      // 复制本聊隔离记忆（按 group chatId）
+      for (const m of this.store.memories.filter((mm) => mm.chatId === chatId)) {
+        this.store.memories.push({ ...m, id: this.genId('mem'), chatId: newId, created_at: now, updated_at: now });
+      }
+      this.remapChatSettings(`group:${chatId}`, `group:${newId}`);
       this.store.chatSessions.push({ chat_type: 'group', chat_id: newId, last_time: now });
       this.saveStore();
       return { chat_type: 'group', chat_id: newId, name: newName };
@@ -816,6 +829,11 @@ class DataManager {
     for (const m of msgs) {
       this.store.messages.push({ ...m, id: this.nextId(), chat_id: newId });
     }
+    // 复制本聊隔离记忆（按 roleId + chatId）
+    for (const m of this.store.memories.filter((mm) => mm.roleId === roleId && mm.chatId === chatId)) {
+      this.store.memories.push({ ...m, id: this.genId('mem'), roleId, chatId: newId, created_at: now, updated_at: now });
+    }
+    this.remapChatSettings(`single:${chatId}`, `single:${newId}`);
     this.store.chatSessions.push({
       chat_type: 'single',
       chat_id: newId,
@@ -825,6 +843,73 @@ class DataManager {
     });
     this.saveStore();
     return { chat_type: 'single', chat_id: newId, name: newName };
+  }
+
+  // 按聊独立的设置 map 的 key 重映射（复制聊天后，把源聊的参数 key 重映射到新聊）
+  private remapChatSettings(srcKey: string, newKey: string): void {
+    const maps: Record<string, any>[] = [
+      this.settings.chatWorldBooks,
+      this.settings.chatIdleEnabled,
+      this.settings.chatSoundPaths,
+      this.settings.chatBackgrounds,
+      this.settings.chatSelfRoles,
+      this.settings.autoSceneImageChats,
+      this.settings.webSearchChats,
+    ];
+    for (const map of maps) {
+      if (map && Object.prototype.hasOwnProperty.call(map, srcKey)) {
+        map[newKey] = map[srcKey];
+        delete map[srcKey];
+      }
+    }
+    this.saveSettings({});
+  }
+
+  // 复制角色：连同记忆（含按聊隔离记忆）与该角色的全部单聊（消息 + 每聊参数 + 记忆 chatId 重映射）一并复制
+  copyRole(id: string, includeChats: boolean): { id: string; name: string } | undefined {
+    const src = this.getRole(id);
+    if (!src) return undefined;
+    const now = new Date().toISOString();
+    const newId = this.genId('role');
+    const copy: Role = { ...src, id: newId, name: `${src.name} 副本`, created_at: now, updated_at: now };
+    this.store.roles.push(copy);
+    // 复制记忆：包含按聊隔离的记忆（chatId 保留以延续隔离关系）；不复制聊天时把隔离记忆转角色级共享
+    const mems = this.store.memories.filter((m) => m.roleId === id);
+    for (const m of mems) {
+      this.store.memories.push({
+        ...m,
+        id: this.genId('mem'),
+        roleId: newId,
+        chatId: includeChats ? m.chatId : undefined,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+    if (includeChats) {
+      const sessions = this.store.chatSessions.filter(
+        (s) => s.chat_type === 'single' && s.role_id === id
+      );
+      for (const s of sessions) {
+        const newChatId = `single_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`;
+        const oldChatId = s.chat_id;
+        const msgs = this.store.messages.filter((m) => m.chat_type === 'single' && m.chat_id === oldChatId);
+        for (const m of msgs) this.store.messages.push({ ...m, id: this.nextId(), chat_id: newChatId });
+        this.store.chatSessions.push({
+          chat_type: 'single',
+          chat_id: newChatId,
+          role_id: newId,
+          chat_name: `${s.chat_name || src.name} 副本`,
+          last_time: now,
+        });
+        // 新复制记忆中指向旧聊的 chatId 重映射到新聊
+        for (const m of this.store.memories) {
+          if (m.roleId === newId && m.chatId === oldChatId) m.chatId = newChatId;
+        }
+        this.remapChatSettings(`single:${oldChatId}`, `single:${newChatId}`);
+      }
+    }
+    this.saveStore();
+    return { id: newId, name: copy.name };
   }
 
   // 重命名聊天卡片：写入 chat_name 覆盖显示名，不改动角色/群本身（非破坏式）

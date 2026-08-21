@@ -22,6 +22,10 @@ export const ModelEditor: React.FC<{
       model: '',
       maxContext: PROVIDER_DEFAULTS.openai.maxContext,
       temperature: 1.0,
+      topP: 1,
+      topK: 0,
+      memReadLimit: 0,
+      customParams: '',
       enabled: true,
     }
   );
@@ -89,6 +93,17 @@ export const ModelEditor: React.FC<{
     if (!cfg.name.trim()) return setMsg(t('model.needName'));
     if (!isHiddenBase && !cfg.baseUrl.trim()) return setMsg(t('model.needBaseUrl'));
     if (!cfg.model.trim()) return setMsg(t('model.needModelId'));
+    // 自定义参数：仅当非空时校验 JSON 合法性，非法则阻止保存并提示
+    if (cfg.customParams && cfg.customParams.trim()) {
+      try {
+        const parsed = JSON.parse(cfg.customParams);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          return setMsg(t('model.customParamsInvalid'));
+        }
+      } catch (e: any) {
+        return setMsg(t('model.customParamsInvalid') + `：${e?.message || String(e)}`);
+      }
+    }
     // OpenAI / DeepSeek / Anthropic 由各厂商官方 Base URL 直连，前端不暴露输入框，仅用默认地址
     const baseUrl = isHiddenBase ? PROVIDER_DEFAULTS[cfg.provider].baseUrl : cfg.baseUrl.trim();
     onSave({ ...cfg, name: cfg.name.trim(), model: cfg.model.trim(), baseUrl });
@@ -196,23 +211,83 @@ export const ModelEditor: React.FC<{
                 <div style={{ fontSize: 12, color: '#e06c75', marginTop: 4 }}>{listError}</div>
               )}
             </Field>
-            <Field label={t('model.maxContext')}>
+            <RangeField
+              label={t('model.maxContext')}
+              value={cfg.maxContext ?? 0}
+              min={0}
+              max={1000000}
+              step={1000}
+              onChange={(v) => set('maxContext', v)}
+              presets={[
+                { label: '不限制', value: 0 },
+                { label: '64K', value: 64000 },
+                { label: '128K', value: 128000 },
+                { label: '256K', value: 256000 },
+                { label: '512K', value: 512000 },
+                { label: '768K', value: 768000 },
+              ]}
+              format={(v) => (v === 0 ? t('model.unlimited') : v >= 1000 ? `${Math.round(v / 1000)}K` : `${v}`)}
+            />
+            <RangeField
+              label={t('model.temperature', { value: cfg.temperature.toFixed(2) })}
+              value={cfg.temperature}
+              min={0}
+              max={2}
+              step={0.01}
+              onChange={(v) => set('temperature', v)}
+            />
+            <div style={{ gridColumn: '1 / -1', fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4, marginBottom: 2 }}>
+              {t('model.advanced')}
+            </div>
+            <RangeField
+              label={t('model.topP')}
+              value={cfg.topP ?? 1}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={(v) => set('topP', v)}
+            />
+            <RangeField
+              label={t('model.topK')}
+              value={cfg.topK ?? 0}
+              min={0}
+              max={50}
+              step={1}
+              onChange={(v) => set('topK', v)}
+            />
+            <RangeField
+              label={t('model.memReadLimit')}
+              value={cfg.memReadLimit ?? 0}
+              min={0}
+              max={100}
+              step={1}
+              onChange={(v) => set('memReadLimit', v)}
+              format={(v) => (v === 0 ? t('model.unlimited') : t('model.lastN', { n: v }))}
+            />
+            <Field label={t('model.maxTokens')}>
               <input
                 type="number"
-                value={cfg.maxContext}
-                onChange={(e) => set('maxContext', Number(e.target.value) || 0)}
-              />
-            </Field>
-            <Field label={t('model.temperature', { value: cfg.temperature.toFixed(1) })}>
-              <input
-                type="range"
                 min={0}
-                max={2}
-                step={0.1}
-                value={cfg.temperature}
-                onChange={(e) => set('temperature', Number(e.target.value))}
-                style={{ width: '100%' }}
+                placeholder={t('model.maxTokensDesc')}
+                value={cfg.maxTokens ?? ''}
+                onChange={(e) => set('maxTokens', e.target.value === '' ? undefined : Number(e.target.value) || 0)}
               />
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                {t('model.maxTokensHint')}
+              </div>
+            </Field>
+            <Field label={t('model.customParams')} full>
+              <textarea
+                value={cfg.customParams ?? ''}
+                onChange={(e) => set('customParams', e.target.value)}
+                placeholder={t('model.customParamsPlaceholder')}
+                rows={4}
+                spellCheck={false}
+                style={{ fontFamily: 'monospace', fontSize: 12, resize: 'vertical' }}
+              />
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                {t('model.customParamsDesc')}
+              </div>
             </Field>
             <Field label={t('model.supportsImages')}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
@@ -297,4 +372,61 @@ const Field: React.FC<{ label: string; full?: boolean; children: React.ReactNode
     <label>{label}</label>
     {children}
   </div>
+);
+
+// 无极滑动 + 输入框直输：滑块与数字输入框双向同步；presets 提供快捷档位；format 自定义显示文案
+const RangeField: React.FC<{
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (v: number) => void;
+  presets?: { label: string; value: number }[];
+  format?: (v: number) => string;
+  full?: boolean;
+}> = ({ label, value, min, max, step, onChange, presets, format, full }) => (
+  <Field label={label} full={full}>
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{ flex: 1, minWidth: 0 }}
+      />
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => {
+          const v = Number(e.target.value);
+          if (!Number.isNaN(v)) onChange(Math.max(min, Math.min(max, v)));
+        }}
+        style={{ width: 92 }}
+      />
+    </div>
+    {presets && (
+      <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+        {presets.map((p) => (
+          <button
+            type="button"
+            key={p.label}
+            className="btn-ghost"
+            style={{ padding: '2px 8px', fontSize: 12 }}
+            onClick={() => onChange(p.value)}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+    )}
+    {format && (
+      <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>{format(value)}</div>
+    )}
+  </Field>
 );

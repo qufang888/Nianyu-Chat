@@ -160,6 +160,17 @@ export interface NianyuAPI {
   eventClosed: (p: { chatType: string; chatId: string }) => Promise<void>;
   deleteChat: (type: string, id: string) => Promise<void>;
   copyChat: (type: string, id: string) => Promise<ChatListItem>;
+  copyRole: (id: string, includeChats: boolean) => Promise<{ id: string; name: string } | undefined>;
+  compareStart: (p: { question: string; modelIds: string[]; compareId?: string }) => Promise<{
+    results: { modelId: string; modelName: string; content: string; promptTokens: number; completionTokens: number; elapsedMs: number; error: string }[];
+    judgments: Record<string, { score: number; comment: string }>;
+    totalMs: number;
+    judgeModel: string;
+  }>;
+  // 模型对比渐进式广播
+  onCompareResult: (cb: (_e: any, data: { compareId: string; modelId: string; modelName: string; content: string; promptTokens: number; completionTokens: number; elapsedMs: number; error: string }) => void) => () => void;
+  onCompareJudged: (cb: (_e: any, data: { compareId: string; judgments: Record<string, { score: number; comment: string }>; judgeModel: string }) => void) => () => void;
+  onCompareDone: (cb: (_e: any, data: { compareId: string; totalMs: number }) => void) => () => void;
   renameChat: (type: string, id: string, name: string) => Promise<void>;
   resolveRoleId: (chatType: string, chatId: string) => Promise<string>;
   setStoryEnabled: (chatType: string, chatId: string, enabled: boolean) => Promise<void>;
@@ -175,14 +186,17 @@ export interface NianyuAPI {
   triggerRelationship: (chatType: string, chatId: string, roleId: string, withMoments?: boolean, doRelationship?: boolean) => Promise<{ ok: boolean; moments: number; relation?: string; error?: string; noNewContent?: boolean }>;
   adjustBond: (roleId: string, delta: number) => Promise<number>;
   generateImage: (chatType: string, chatId: string, prompt: string) => Promise<{ ok: boolean; imagePath: string }>;
-  generateVideo: (chatType: string, chatId: string, prompt: string) => Promise<{ ok: boolean; imagePath: string }>;
+  generateVideo: (chatType: string, chatId: string, prompt: string) => Promise<{ ok: boolean; started: boolean }>;
   generateImageFromImage: (
     chatType: string,
     chatId: string,
     prompt: string,
     imagePath: string,
     kind: 'image' | 'video'
-  ) => Promise<{ ok: boolean; imagePath: string }>;
+  ) => Promise<{ ok: boolean; started?: boolean; imagePath?: string }>;
+  // 生视频进度/完成广播（主窗 + 小窗悬浮气泡订阅）
+  onVideoProgress: (cb: (e: any, data: { chatType: string; chatId: string; prompt: string; percent: number; status?: string }) => void) => () => void;
+  onVideoDone: (cb: (e: any, data: { chatType: string; chatId: string; prompt: string; ok: boolean; imagePath?: string; error?: string }) => void) => () => void;
   saveImageMemory: (p: { roleId: string; imagePath: string; note?: string }) => Promise<any>;
   clearChatMessages: (chatType: string, chatId: string, withMemories: boolean) => Promise<{ deletedMsgs: number; deletedMems: number }>;
   syncAutoChat: (p: { chatId: string; action: 'start' | 'stop' }) => Promise<void>;
@@ -337,6 +351,11 @@ export const api: NianyuAPI = {
   translate: (text) => raw.translate(text),
   interruptStream: (chatId) => raw.interruptStream(chatId),
   copyChat: (type, id) => raw.copyChat(type, id),
+  copyRole: (id, includeChats) => raw.copyRole(id, includeChats),
+  compareStart: (p) => raw.compareStart(p),
+  onCompareResult: (cb) => raw.onCompareResult(cb),
+  onCompareJudged: (cb) => raw.onCompareJudged(cb),
+  onCompareDone: (cb) => raw.onCompareDone(cb),
   renameChat: (type, id, name) => raw.renameChat(type, id, name),
   resolveRoleId: (chatType, chatId) => raw.resolveRoleId(chatType, chatId),
   setStoryEnabled: (chatType, chatId, enabled) => raw.setStoryEnabled(chatType, chatId, enabled),

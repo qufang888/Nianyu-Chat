@@ -40,6 +40,7 @@ const ImageCell: React.FC<{ path: string; onImage: (src: string) => void; single
   loadingText,
 }) => {
   const [src, setSrc] = useState<string | null>(null);
+  const isVideo = /\.(mp4|webm|mov)(\?|$)/i.test(path);
   useEffect(() => {
     let alive = true;
     api.getImage(path).then((s) => {
@@ -50,6 +51,17 @@ const ImageCell: React.FC<{ path: string; onImage: (src: string) => void; single
     };
   }, [path]);
   if (!src) return <span className="img-loading">{loadingText}</span>;
+  if (isVideo) {
+    return (
+      <video
+        className={`img-cell ${single ? 'img-cell-single' : ''}`}
+        src={src}
+        controls
+        playsInline
+        preload="metadata"
+      />
+    );
+  }
   return (
     <img
       className={`img-cell ${single ? 'img-cell-single' : ''}`}

@@ -23,18 +23,16 @@ export const RoleList: React.FC<{ onStartChat: (role: Role) => void }> = ({ onSt
     refresh();
   }, []);
 
-  // 复制数字人：克隆全部配置，生成新 ID 并加「副本」后缀
+  // 复制数字人：克隆全部配置（角色状态、记忆参数）并生成新 ID 加「副本」后缀；
+  // 同时复制全部相关聊天记录与聊天隔离记忆（chatId 随新聊天重映射），行为与「复制聊天」一致
   const duplicateRole = async (r: Role) => {
-    const now = new Date().toISOString();
-    const copy: Role = {
-      ...r,
-      id: crypto.randomUUID(),
-      name: `${r.name}${t('contacts.copySuffix')}`,
-      created_at: now,
-      updated_at: now,
-    };
-    await api.saveRole(copy);
-    refresh();
+    try {
+      const res = await api.copyRole(r.id, true);
+      if (!res) return;
+      refresh();
+    } catch (e: any) {
+      console.error('复制角色失败', e);
+    }
   };
 
   return (

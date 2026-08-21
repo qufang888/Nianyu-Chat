@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
-import type { MemoryEntry } from '../types';
+import type { MemoryEntry, ChatListItem } from '../types';
 import { useToast, ToastView } from './Toast';
 
 // 记忆面板：展示并手动编辑某角色的记忆（AI 自动提炼的记忆也会出现在列表中，可手动修改/删除）
@@ -11,8 +11,19 @@ export const MemoryPanel: React.FC<{ roleId: string }> = ({ roleId }) => {
   const [mems, setMems] = useState<MemoryEntry[]>([]);
   const [editing, setEditing] = useState<MemoryEntry | null>(null);
   const [draft, setDraft] = useState('');
+  const [chatNames, setChatNames] = useState<Record<string, string>>({});
 
-  const load = () => api.listMemories(roleId).then(setMems);
+  const load = () => {
+    api.listMemories(roleId).then(setMems);
+    api
+      .getChatList()
+      .then((list: ChatListItem[]) => {
+        const map: Record<string, string> = {};
+        for (const c of list) map[c.chat_id] = c.chat_name || c.name;
+        setChatNames(map);
+      })
+      .catch(() => {});
+  };
   useEffect(() => {
     setEditing(null);
     setDraft('');
@@ -90,6 +101,13 @@ export const MemoryPanel: React.FC<{ roleId: string }> = ({ roleId }) => {
                 <span className={`badge ${m.source === 'auto' ? 'auto' : 'manual'}`}>
                   {m.source === 'auto' ? t('library.auto') : t('library.manual')}
                 </span>
+                {m.chatId ? (
+                  <span className="badge chat" title={m.chatId}>
+                    {t('memory.chatSpecific', { name: chatNames[m.chatId] || m.chatId })}
+                  </span>
+                ) : (
+                  <span className="badge shared">{t('memory.shared')}</span>
+                )}
                 <div>
                   <button className="btn-ghost" onClick={() => edit(m)}>
                     {t('memory.edit')}

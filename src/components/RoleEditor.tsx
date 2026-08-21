@@ -31,6 +31,7 @@ function emptyRole(): Role {
     affinity_factor: 1.0,
     worldBookId: '',
     ruleIds: [],
+    memoryIsolation: true, // 记忆隔离默认开启
     created_at: now,
     updated_at: now,
   };
@@ -339,6 +340,16 @@ export const RoleEditor: React.FC<{
                   ))
                 )}
               </div>
+            </Field>
+            <Field label={t('role.memoryIsolation')} hint={t('role.memoryIsolationHint')}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={role.memoryIsolation ?? true}
+                  onChange={(e) => set('memoryIsolation', e.target.checked)}
+                />
+                {(role.memoryIsolation ?? true) ? t('role.enabledOn') : t('role.enabledOff')}
+              </label>
             </Field>
             <Field label={t('role.sound')} full>
               <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 8 }}>

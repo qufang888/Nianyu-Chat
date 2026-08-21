@@ -17,6 +17,15 @@ export interface ModelConfig {
   enabled: boolean;
   supportsImages?: boolean; // 是否支持图片输入（多模态视觉）：开启后用户发送的图片才会作为 image_url 内容块发给模型；关闭则图片仅作占位文本，绝不报错
   qps?: number; // 每分钟请求上限，0 或未设置=无限制；超出后请求延迟，限制解除后自动发送排队消息
+  // ===== 采样与上下文高级参数（无极滑动 + 输入框直输）=====
+  topP?: number; // 核采样 top-p（0~1），不设置=使用模型默认
+  topK?: number; // 核采样 top-k（0~50），0=关闭
+  maxTokens?: number; // 单次输出最大 token 数，不设置=使用软件内置兜底(1024)
+  memReadLimit?: number; // 短期记忆：发送给模型的最近对话条数上限（0=不限制）
+  // ===== 自定义请求参数（JSON 文本）=====
+  // 用户在模型编辑器输入的合法 JSON 对象，会在发送请求时合并进请求体（覆盖同名内置参数，但 messages/model/stream 受保护不被覆盖）。
+  // 用于传入厂商特有、UI 未单独暴露的参数（如 stop / frequency_penalty / extra_body 等）。
+  customParams?: string;
 }
 
 export interface Role {
@@ -48,6 +57,7 @@ export interface Role {
   relation?: string; // 人物养成：AI 判定的关系类别（如 恋人/朋友/……），纯展示
   bondSnapshot?: string; // 关系值判定时的聊天内容快照：用于判断「自上次判定后是否有新聊天内容」，无变化则跳过重新判定
   momentDailyLimit?: number; // 朋友圈：单人物每日自动发送上限（留空用全局 dailyMomentLimit 兜底）；与手动触发无关
+  memoryIsolation?: boolean; // 记忆隔离（默认开）：开启后同一人物在不同聊天的记忆互相独立；缺省视为 true
   created_at: string;
   updated_at: string;
 }
@@ -85,6 +95,7 @@ export interface Rule {
 export interface MemoryEntry {
   id: string;
   roleId: string;
+  chatId?: string; // 记忆归属的聊天 id（记忆隔离开启时填写）；空=角色级共享记忆（跨聊天共享）
   content: string;
   source: 'manual' | 'auto'; // 手动添加 / AI 自动提炼
   sourceMsgId?: number; // 来源消息 ID（自动记忆关联，用于回滚/撤回时精准删除）
@@ -282,6 +293,7 @@ export interface AppSettings {
   autoRelationship: boolean; // AI 依据聊天内容自动判定关系值/关系类别（关闭则不更新，纯展示）
   autoMoments: boolean; // AI 依据聊天内容自动发朋友圈动态（关闭则仅手动发）
   dailyMomentLimit: number; // 朋友圈每日上限：每个（角色 + 自我身份）每天自动发条数，0 表示不限制
+  momentsVideoEnabled?: boolean; // 朋友圈：AI 自动生成视频动态（需配置视频生成模型，否则默认关闭）
   // ===== 情绪与事件（高级可调）=====
   moodJudgeCooldownMs: number; // 心情判定冷却（毫秒）：防止每轮都调用 AI 判定，节省调用
   moodJudgeHistory: number; // 心情判定回顾的最近消息条数：AI 据此判断角色此刻心情
@@ -493,6 +505,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoRelationship: true,
   autoMoments: true,
   dailyMomentLimit: 5,
+  momentsVideoEnabled: false, // 朋友圈视频动态：默认关；未配置视频生成模型时即使开启也不生效
   moodJudgeHistory: 10,
   moodSmoothing: 0.5, // 心情过渡指数：默认 0.5，平滑过渡，避免忽喜忽悲
   momentsSensitivity: 0.5, // 朋友圈敏感程度：默认 0.5，中等，普通唠嗑不发、聊到尽兴才发

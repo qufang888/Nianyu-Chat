@@ -663,6 +663,27 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
             {t('settings.autoMomentsDesc')}
           </div>
 
+          {/* 朋友圈视频生成开关（独立开关，需配置生视频模型） */}
+          <label
+            style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
+          >
+            <input
+              type="checkbox"
+              checked={draft.momentsVideoEnabled === true}
+              onChange={(e) => {
+                patch({ momentsVideoEnabled: e.target.checked });
+                api.saveSettings({ momentsVideoEnabled: e.target.checked });
+              }}
+            />
+            <span>{t('settings.momentsVideo')}</span>
+          </label>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+            {t('settings.momentsVideoDesc')}
+            {!(draft.videoGen && draft.videoGen.enabled && draft.videoGen.baseUrl && draft.videoGen.apiKey) && (
+              <span style={{ color: '#e6a23c' }}> {t('settings.momentsVideoNoModel')}</span>
+            )}
+          </div>
+
           {/* 朋友圈每日上限 */}
           <div style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>

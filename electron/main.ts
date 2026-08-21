@@ -1094,7 +1094,7 @@ async function judgeAndPostMoments(
     `{`,
     `  "postMoments": true或false，表示角色此刻是否真的想发朋友圈。仅当对话中出现了角色有冲动分享的内容（真实情绪起伏、重要事件、用户说了特别的话、关系进展、有趣的梗等）才为 true；日常寒暄、礼节性回复、无明显可分享点时必须为 false。不要因为被要求就发。`,
     `  "shareUrge": 0到100的整数，表示此刻想发朋友圈的强烈程度；聊到尽兴、有共鸣、有有趣梗或重要情绪起伏时更高，普通寒暄、礼节性回复时很低（接近0）。`,
-    `  "moments": [ { "content": "角色视角的朋友圈文案，第一人称，自然口语化，不超过60字", "needImage": true或false, "imagePrompt": "若需要配图，这里是英文生图提示词，否则空串" } ]`,
+    `  "moments": [ { "content": "角色视角的朋友圈文案，第一人称，自然口语化，不超过60字", "needImage": true或false, "imagePrompt": "若需要配图，这里是英文生图提示词，否则空串", "needVideo": true或false, "videoPrompt": "若需要视频，这里是英文视频生成提示词（画面描述，含镜头/氛围/风格），否则空串" } ]`,
     `}`,
     `只有当 postMoments 为 true 时才给出 moments，最多2条；否则 moments 给空数组。发朋友圈应当是低频、有质感的，不要每条对话都发。`,
   ].join('\n');
@@ -1161,9 +1161,18 @@ async function judgeAndPostMoments(
         // 配图失败则降级为纯文字动态，不阻塞
       }
     }
-    dm.addMoment(role.id, mm.content.trim(), images, undefined, selfRoleId);
+    const momentId = dm.addMoment(role.id, mm.content.trim(), images, undefined, selfRoleId);
     added++;
     todayCount++;
+    // 朋友圈视频：独立开关 momentsVideoEnabled + 已配置视频模型时才生成（后台任务，进度走全局气泡）
+    const vg = settings.videoGen;
+    if (
+      settings.momentsVideoEnabled &&
+      vg && vg.enabled && vg.baseUrl && vg.apiKey &&
+      mm.needVideo && String(mm.videoPrompt || '').trim()
+    ) {
+      void runMomentVideoJob(role.id, momentId, String(mm.videoPrompt || mm.content).slice(0, 400));
+    }
   }
   if (added > 0) {
     broadcast('moments:changed', { roleId: role.id, selfRoleId });
@@ -1742,7 +1751,7 @@ function appendToFirstSystem(messages: any[], content: string) {
 }
 
 
-function buildSystemPrompt(role: Role, freezeMemory = false): string {
+function buildSystemPrompt(role: Role, freezeMemory = false, chatId?: string): string {
   const parts: string[] = [];
   parts.push(`你是数字人「${role.name}」。`);
   if (role.gender) parts.push(`性别：${role.gender}。`);
@@ -1772,7 +1781,9 @@ function buildSystemPrompt(role: Role, freezeMemory = false): string {
   }
   // ===== 记忆注入（观察者模式「记忆冻结」时跳过外部历史记忆）=====
   if (!freezeMemory) {
-    const memories = dm.listMemories(role.id);
+    // 记忆隔离：开启时只取该聊天的记忆 + 角色级共享记忆（chatId 为空）；关闭则取角色全部记忆
+    const iso = role.memoryIsolation ?? true;
+    const memories = dm.listMemories(role.id, iso ? chatId : undefined);
     if (memories.length > 0) {
       parts.push(`【关于你与用户的记忆】\n${memories.map((m) => `- ${m.content}`).join('\n')}`);
     }
@@ -1919,6 +1930,62 @@ function historyToMessages(history: ChatMessage[], vision = false): AIMessage[] 
       content: buildUserContent(base, images, vision),
     };
   });
+}
+
+// ===== 上下文 / 短期记忆控制 =====
+// 轻量 token 估算（启发式，非精确）：CJK/全角约 1 token/字符，其它约 4 字符 1 token。
+// 用于「上下文限制(maxContext)」裁剪，避免超大历史超出模型上下文窗口；估算偏差不影响功能正确性。
+function estimateTokens(s: string): number {
+  if (!s) return 0;
+  let t = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c > 0x2e80) t += 1;
+    else if (c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d) t += 0;
+    else t += 0.25;
+  }
+  return Math.ceil(t);
+}
+
+function messageTokens(m: any): number {
+  if (!m) return 0;
+  if (typeof m.content === 'string') return estimateTokens(m.content);
+  if (Array.isArray(m.content)) {
+    return m.content.reduce(
+      (sum: number, part: any) => sum + (part?.type === 'text' ? estimateTokens(part.text || '') : 256),
+      0
+    );
+  }
+  return 0;
+}
+
+// 上下文裁剪：maxContext>0 时，保留 system(首条) 并从最新消息向前保留，直到估算 token <= maxContext（至少保留 1 条最新消息）。
+function trimToContext(messages: any[], maxContext: number): void {
+  if (!maxContext || maxContext <= 0 || messages.length <= 1) return;
+  const sys = messages[0];
+  const rest = messages.slice(1);
+  const sysTok = messageTokens(sys);
+  const total0 = sysTok + rest.reduce((s, m) => s + messageTokens(m), 0);
+  if (total0 <= maxContext) return;
+  const kept: any[] = [];
+  let running = sysTok;
+  for (let i = rest.length - 1; i >= 0; i--) {
+    const t = messageTokens(rest[i]);
+    if (kept.length === 0 || running + t <= maxContext) {
+      kept.unshift(rest[i]);
+      running += t;
+    } else {
+      break;
+    }
+  }
+  messages.length = 0;
+  messages.push(sys, ...kept);
+}
+
+// 短期记忆条数上限：memReadLimit>0 时生效，否则回退默认窗口（群 24 / 单 16）。
+function effectiveHistoryCap(cfg?: ModelConfig, isGroup = false): number {
+  if (cfg && cfg.memReadLimit && cfg.memReadLimit > 0) return cfg.memReadLimit;
+  return isGroup ? 24 : 16;
 }
 
 // ===== 请求限速（QPS）：每模型每分钟最多 N 次请求 =====
@@ -2121,9 +2188,10 @@ function buildMessagesForRole(
   freezeMemory = false,
   privateObserver = false,
   storedImages?: string[] | null,
-  vision = false
+  vision = false,
+  chatId?: string
 ): AIMessage[] {
-  const parts: string[] = [buildSystemPrompt({ ...role, affinity: affinityTotal }, freezeMemory)];
+  const parts: string[] = [buildSystemPrompt({ ...role, affinity: affinityTotal }, freezeMemory, chatId)];
   // 观察者私密小窗：告知 AI 这是完全私密的一对一，可袒露内心推演
   if (privateObserver) {
     parts.push(
@@ -2174,7 +2242,7 @@ function buildGroupMessages(
   groupId?: string,
   vision = false
 ): AIMessage[] {
-  const parts: string[] = [buildSystemPrompt({ ...role, affinity: affinityTotal }, freezeMemory)];
+  const parts: string[] = [buildSystemPrompt({ ...role, affinity: affinityTotal }, freezeMemory, groupId)];
   if (worldBook && worldBook.trim()) {
     parts.push(`【世界书 / 共享世界观】\n${worldBook.trim()}`);
   }
@@ -2254,7 +2322,7 @@ async function generateAIResponses(
 ): Promise<Omit<SendMessageResult, 'userMessage'>> {
   const storedImage = p.imagePath || null;
   const storedImages = p.imagePaths && p.imagePaths.length ? p.imagePaths : (p.imagePath ? [p.imagePath] : []);
-  const history = dm.getMessages(p.chatType, p.chatId).slice(-16);
+  const history = dm.getMessages(p.chatType, p.chatId);
   const resolveModel = (role: Role): ModelConfig | undefined => resolveRoleModel(role, settings);
   const selfRole = resolveActiveSelfRole(settings, p.chatType, p.chatId);
   const isGroup = p.chatType === 'group';
@@ -2275,6 +2343,8 @@ async function generateAIResponses(
   const runOne = async (role: Role, hist: ChatMessage[], searchContext?: string | null) => {
     const cfg = resolveModel(role) as ModelConfig;
     const vision = !!cfg?.supportsImages;
+    // 短期记忆条数上限：按模型 memReadLimit 裁剪最近对话（隔离于每个角色配置）
+    hist = hist.slice(-effectiveHistoryCap(cfg, isGroup));
     // 私密小窗：若关闭「影响情绪好感」，则不因该对话改变好感度
     const isPrivate = !isGroup && p.chatId.startsWith('obs:');
     const allowEmotion = !isPrivate || !!obs?.privateAffectsEmotion;
@@ -2294,7 +2364,8 @@ async function generateAIResponses(
           obs?.freezeMemory,
           isPrivate,
           storedImages,
-          vision
+          vision,
+          p.chatId
         );
     if (searchContext) {
       appendToFirstSystem(
@@ -2309,6 +2380,8 @@ ${searchContext}`
     if (pluginCtx) {
       appendToFirstSystem(messages, `【已启用插件指令】\n${pluginCtx}`);
     }
+    // 上下文限制裁剪（maxContext>0 时按 token 预算丢弃最旧非 system 消息）
+    trimToContext(messages, (cfg as ModelConfig)?.maxContext ?? 0);
     const streamId = `${p.chatId}:${role.id}`;
     // 每个成员完成时立即广播，前端按完成顺序逐步显示；即使关闭全局流式也生效。
     sendStreamStart(streamId, role.id, role.name);
@@ -2359,7 +2432,7 @@ ${searchContext}`
     // 串行轮流发言：每位成员生成后立即落库，下一位重新读取最新历史（含前一位的发言）
     results = [];
     for (const role of memberRoles) {
-      const hist = dm.getMessages(p.chatType, p.chatId).slice(-24);
+      const hist = dm.getMessages(p.chatType, p.chatId).slice(-effectiveHistoryCap(resolveModel(role), true));
       results.push(await runOne(role, hist, searchCtx));
     }
   } else {
@@ -2453,7 +2526,7 @@ async function handleStream(p: {
   const userMsg = addUserMessage(p);
   const storedImage = userMsg.image_path;
   const storedImages = userMsg.images || (userMsg.image_path ? [userMsg.image_path] : []);
-  const history = dm.getMessages(p.chatType, p.chatId).slice(-16);
+  const history = dm.getMessages(p.chatType, p.chatId);
   const selfRole = resolveActiveSelfRole(settings, p.chatType, p.chatId);
   const isGroup = p.chatType === 'group';
   // 观察者模式「记忆冻结」：对局内不读取外部世界书
@@ -2496,7 +2569,7 @@ async function handleStream(p: {
     const allowEmotion = !isPrivate || !!obs?.privateAffectsEmotion;
     const total = allowEmotion ? applyAffinityChange(role, p.content, storedImage) : role.affinity;
     // 群聊：每位成员发言前重新读取最新历史（含前面成员刚说的话），并用带发言人标注的构建器
-    const hist = isGroup ? dm.getMessages(p.chatType, p.chatId).slice(-24) : history;
+    const hist = isGroup ? dm.getMessages(p.chatType, p.chatId).slice(-effectiveHistoryCap(cfg, true)) : history.slice(-effectiveHistoryCap(cfg, false));
     const messages = isGroup
       ? buildGroupMessages(role, groupNames, hist, total, selfRole, worldBook, undefined, obs?.freezeMemory, p.chatId, vision)
       : buildMessagesForRole(
@@ -2511,7 +2584,8 @@ async function handleStream(p: {
           obs?.freezeMemory,
           isPrivate,
           storedImages,
-          vision
+          vision,
+          p.chatId
         );
     if (searchContext) {
       appendToFirstSystem(
@@ -2878,17 +2952,20 @@ async function handleProactive(p: {
         obs?.freezeMemory,
         p.chatId
       )
-    : buildMessagesForRole(
-        role,
-        '',
-        null,
-        history,
-        role.affinity,
-        selfRole,
-        worldBook,
-        instruction,
-        obs?.freezeMemory,
-        isPrivate
+      : buildMessagesForRole(
+          role,
+          '',
+          null,
+          history,
+          role.affinity,
+          selfRole,
+          worldBook,
+          instruction,
+          obs?.freezeMemory,
+          isPrivate,
+          undefined,
+          false,
+          p.chatId
       );
 
   const cfg = resolveRoleModel(role, settings) as ModelConfig;
@@ -3581,7 +3658,10 @@ async function extractMemories(chatType: string, chatId: string): Promise<number
     roleId = lastAi ? dm.getRoleByName(lastAi.sender_name)?.id : undefined;
   }
   if (!roleId) return 0;
-  const existing = dm.listMemories(roleId).map((m) => m.content.trim());
+  const role = dm.getRole(roleId);
+  const iso = role?.memoryIsolation ?? true;
+  // 记忆隔离：仅与该聊天/角色级共享记忆去重，避免不同聊天的记忆互相抑制
+  const existing = dm.listMemories(roleId, iso ? chatId : undefined).map((m) => m.content.trim());
   // 图片消息（生图结果/用户发图）不送入自动记忆提炼：AI 不会自动总结或保存图片记忆，仅可手动保存
   // 群聊中标记为「不进入记忆」的消息也跳过（前提是消息全群可见）
   const convo = history
@@ -3610,7 +3690,7 @@ async function extractMemories(chatType: string, chatId: string): Promise<number
     const userMsgId = lastUserMsg ? lastUserMsg.id : undefined;
     const sourceMsgIds = [lastMsgId, userMsgId].filter((x): x is number => x !== undefined);
     for (const l of lines) {
-      dm.addMemory({ roleId, content: l, source: 'auto', sourceMsgIds } as any);
+      dm.addMemory({ roleId, chatId: iso ? chatId : undefined, content: l, source: 'auto', sourceMsgIds } as any);
       n += 1;
     }
     return n;
@@ -3642,6 +3722,107 @@ function broadcast(channel: string, payload: unknown): void {
     }
   } catch (e) {
     console.warn('[nianyu] broadcast skip:', channel, (e as Error)?.message);
+  }
+}
+
+// ===== 生视频后台任务 =====
+// 非阻塞执行：校验配置 → 调用 generateVideo（内部含任务式轮询）→ 下载到本地 → 写 AI 视频消息。
+// 全程广播 video:progress（0~100 进度）与 video:done（成功携带 imagePath / 失败携带 error）。
+async function runVideoGenJob(chatType: string, chatId: string, prompt: string, refDataUrl?: string): Promise<void> {
+  try {
+    const vg = dm.getSettings().videoGen;
+    if (!vg || !vg.enabled || !vg.baseUrl || !vg.apiKey) {
+      throw new Error('未配置生视频 API，请在设置中开启「生视频」并填写独立的 Base URL 与 API Key');
+    }
+    broadcast('video:progress', { chatType, chatId, prompt, percent: 0, status: 'queued' });
+    const { url } = await generateVideo(
+      { baseUrl: vg.baseUrl, apiKey: vg.apiKey },
+      prompt,
+      vg.model || '',
+      vg.size || '1280x720',
+      vg.duration || '5',
+      refDataUrl ? [refDataUrl] : undefined,
+      (percent, status) =>
+        broadcast('video:progress', { chatType, chatId, prompt, percent, status: status || 'generating' })
+    );
+    let videoPath: string | null = null;
+    if (url) {
+      try {
+        const resp = await fetch(url);
+        const buf = Buffer.from(await resp.arrayBuffer());
+        const name = `gen_${Date.now()}_${Math.floor(Math.random() * 1e6)}.mp4`;
+        const dest = path.join(dm.imagesDir, name);
+        fs.writeFileSync(dest, buf);
+        videoPath = dest;
+      } catch (e) {
+        console.error('下载生视频失败', e);
+      }
+    }
+    if (!videoPath) throw new Error('生视频失败：未获取到视频数据');
+    const aiName =
+      chatType === 'single'
+        ? dm.getRole(dm.resolveSingleRoleId(chatType, chatId))?.name || 'AI'
+        : dm.getGroup(chatId)?.group_name || 'AI';
+    const aiMsg = dm.addMessage({
+      chat_type: chatType as any,
+      chat_id: chatId,
+      sender_type: 'ai',
+      sender_name: aiName,
+      content: '',
+      image_path: videoPath,
+      token_used: 0,
+      timestamp: new Date().toISOString(),
+      genPrompt: prompt,
+    });
+    broadcast('stream:user', aiMsg);
+    broadcast('video:done', { chatType, chatId, prompt, ok: true, imagePath: videoPath });
+  } catch (e: any) {
+    console.error('[nianyu] 生视频失败', e?.message || e);
+    broadcast('video:done', { chatType, chatId, prompt, ok: false, error: e?.message || String(e) });
+  }
+}
+
+// 朋友圈视频生成后台任务：进度走全局气泡（key: moments|<roleId>|<prompt>），完成写入 moment.videos
+async function runMomentVideoJob(roleId: string, momentId: number, prompt: string): Promise<void> {
+  const s = dm.getSettings();
+  const vg = s.videoGen;
+  if (!s.momentsVideoEnabled || !vg || !vg.enabled || !vg.baseUrl || !vg.apiKey) return;
+  try {
+    broadcast('video:progress', { chatType: 'moments', chatId: roleId, prompt, percent: 0, status: 'queued' });
+    const { url } = await generateVideo(
+      { baseUrl: vg.baseUrl, apiKey: vg.apiKey },
+      prompt,
+      vg.model || '',
+      vg.size || '1280x720',
+      vg.duration || '5',
+      undefined,
+      (percent, status) =>
+        broadcast('video:progress', { chatType: 'moments', chatId: roleId, prompt, percent, status: status || 'generating' })
+    );
+    let videoPath: string | null = null;
+    if (url) {
+      try {
+        const resp = await fetch(url);
+        const buf = Buffer.from(await resp.arrayBuffer());
+        const name = `moment_${Date.now()}_${Math.floor(Math.random() * 1e6)}.mp4`;
+        const dest = path.join(dm.imagesDir, name);
+        fs.writeFileSync(dest, buf);
+        videoPath = dest;
+      } catch (e) {
+        console.error('下载朋友圈视频失败', e);
+      }
+    }
+    if (videoPath) {
+      const m = dm.listMoments(roleId, true).find((x) => x.id === momentId);
+      if (m) dm.updateMoment(momentId, { videos: [...(m.videos || []), videoPath] });
+      broadcast('moments:changed', { roleId });
+      broadcast('video:done', { chatType: 'moments', chatId: roleId, prompt, ok: true, imagePath: videoPath });
+    } else {
+      broadcast('video:done', { chatType: 'moments', chatId: roleId, prompt, ok: false, error: '生视频失败：未获取到视频数据' });
+    }
+  } catch (e: any) {
+    console.error('[nianyu] 朋友圈视频失败', e?.message || e);
+    broadcast('video:done', { chatType: 'moments', chatId: roleId, prompt, ok: false, error: e?.message || String(e) });
   }
 }
 
@@ -3758,6 +3939,92 @@ function registerIPC(): void {
   });
   // 复制聊天：1:1 复制消息与卡片，新卡片名加「副本」后缀
   ipcMain.handle('chats:copy', (_e, chatType: string, chatId: string) => dm.copyChat(chatType, chatId));
+  // 复制数字人：克隆角色状态 + 记忆参数；includeChats 为 true 时一并复制聊天记录与聊天隔离记忆（chatId 重映射）
+  ipcMain.handle('roles:copy', (_e, id: string, includeChats: boolean) => dm.copyRole(id, !!includeChats));
+  // ===== 模型对比（测试窗口，与角色记忆完全无关）=====
+  // 同一问题同时发给 ≤3 个模型；返回每模型耗时/token；随后用默认模型对输出质量打分
+  // 模型对比：同一问题并发发给 ≤3 个模型；每个模型完成后立即广播 compare:result，
+  // 评分完成广播 compare:judged，全部结束广播 compare:done。前端据此为每个窗口独立计时、独立展示。
+  ipcMain.handle('compare:start', async (_e, p: { question: string; modelIds: string[]; compareId?: string }) => {
+    const settings = dm.getSettings();
+    const ids = (Array.isArray(p?.modelIds) ? p.modelIds : []).slice(0, 3);
+    const question = String(p?.question || '').trim();
+    const compareId = String(p?.compareId || `cmp_${Date.now()}`);
+    if (!question) throw new Error('请输入要对比的问题');
+    if (!ids.length) throw new Error('请至少选择一个模型');
+    const cfgMap = new Map(settings.models.filter((m) => m.enabled).map((m) => [m.id, m]));
+    const startedAt = Date.now();
+    const jobs = ids.map(async (id) => {
+      const cfg = cfgMap.get(id);
+      const base = { modelId: id, modelName: cfg?.name || id };
+      if (!cfg) {
+        const r = { ...base, content: '', promptTokens: 0, completionTokens: 0, elapsedMs: 0, error: '模型未启用或不存在' };
+        broadcast('compare:result', { compareId, ...r });
+        return r;
+      }
+      const t0 = Date.now();
+      try {
+        const res = await queryAI(
+          cfg,
+          [
+            { role: 'system', content: '你是一个 AI 能力测试助手。请直接、完整地回答用户的问题，不要提及测试、对比、评分或任何角色设定。' },
+            { role: 'user', content: question },
+          ],
+          2048
+        );
+        const r = {
+          ...base,
+          content: res.content,
+          promptTokens: res.promptTokens,
+          completionTokens: res.completionTokens,
+          elapsedMs: Date.now() - t0,
+          error: '',
+        };
+        broadcast('compare:result', { compareId, ...r });
+        return r;
+      } catch (e: any) {
+        const r = { ...base, content: '', promptTokens: 0, completionTokens: 0, elapsedMs: Date.now() - t0, error: e?.message || String(e) };
+        broadcast('compare:result', { compareId, ...r });
+        return r;
+      }
+    });
+    const results = await Promise.all(jobs);
+    // 默认模型质量评判（失败不阻塞结果展示）
+    const judgments: Record<string, { score: number; comment: string }> = {};
+    const judgeCfg = settings.models.find((m) => m.id === settings.defaultModel && m.enabled);
+    if (judgeCfg && results.some((r) => !r.error)) {
+      try {
+        const list = results
+          .map((r, i) => `【${i + 1}. ${r.modelName}】\n${(r.content || '(无输出)').slice(0, 1500)}`)
+          .join('\n\n');
+        const res = await queryAI(
+          judgeCfg,
+          [
+            {
+              role: 'system',
+              content: '你是 AI 输出质量评测员。请从准确度、完整性、逻辑、可读性四方面为下面的若干 AI 回答打分（0-100 整数），并给每条不超过 30 字的中文评语。严格输出 JSON：{"scores":[{"index":1,"score":88,"comment":"评语"}]}，不要输出任何其他内容。',
+            },
+            { role: 'user', content: list },
+          ],
+          1024
+        );
+        const parsed = parseFirstJson(res.content);
+        if (parsed && Array.isArray(parsed.scores)) {
+          for (const s of parsed.scores) {
+            const idx = Number(s?.index) - 1;
+            if (results[idx] && !results[idx].error) {
+              judgments[results[idx].modelId] = { score: Math.max(0, Math.min(100, Number(s?.score) || 0)), comment: String(s?.comment || '') };
+            }
+          }
+        }
+      } catch (e) {
+        console.error('[nianyu] 对比质量评判失败', e);
+      }
+    }
+    broadcast('compare:judged', { compareId, judgments, judgeModel: judgeCfg?.name || '' });
+    broadcast('compare:done', { compareId, totalMs: Date.now() - startedAt });
+    return { results, judgments, totalMs: Date.now() - startedAt, judgeModel: judgeCfg?.name || '' };
+  });
   // 重命名聊天卡片：写入 chat_name 覆盖显示名，不改动角色/群本身
   ipcMain.handle('chats:rename', (_e, chatType: string, chatId: string, name: string) =>
     dm.renameChat(chatType, chatId, name)
@@ -4176,6 +4443,7 @@ function registerIPC(): void {
       const mime: Record<string, string> = {
         '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
         '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
+        '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
       };
       const b64 = fs.readFileSync(p).toString('base64');
       return `data:${mime[ext] || 'image/png'};base64,${b64}`;
@@ -4250,53 +4518,13 @@ function registerIPC(): void {
   });
 
   // ---------- 生视频（专用视频生成 API，使用方式与生图一致） ----------
+  // 非阻塞：handler 立即返回 started，生成在后台运行，进度经 video:progress / video:done 广播，
+  // 完成时自动写入一条 AI 视频消息（broadcast stream:user）并广播 video:done；失败只广播 video:done。
   ipcMain.handle('video:generate', async (_e, chatType: string, chatId: string, prompt: string) => {
-    const s = dm.getSettings();
-    const vg = s.videoGen;
-    if (!vg || !vg.enabled || !vg.baseUrl || !vg.apiKey) {
-      throw new Error('未配置生视频 API，请在设置中开启「生视频」并填写独立的 Base URL 与 API Key');
-    }
-    const { url } = await generateVideo(
-      { baseUrl: vg.baseUrl, apiKey: vg.apiKey },
-      prompt,
-      vg.model || '',
-      vg.size || '1280x720',
-      vg.duration || '5'
-    );
-    let videoPath: string | null = null;
-    if (url) {
-      try {
-        const resp = await fetch(url);
-        const buf = Buffer.from(await resp.arrayBuffer());
-        const name = `gen_${Date.now()}_${Math.floor(Math.random() * 1e6)}.mp4`;
-        const dest = path.join(dm.imagesDir, name);
-        fs.writeFileSync(dest, buf);
-        videoPath = dest;
-      } catch (e) {
-        console.error('下载生视频失败', e);
-      }
-    }
-    if (!videoPath) throw new Error('生视频失败：未获取到视频数据');
-    const aiName =
-      chatType === 'single'
-        ? dm.getRole(dm.resolveSingleRoleId(chatType, chatId))?.name || 'AI'
-        : dm.getGroup(chatId)?.group_name || 'AI';
-    const aiMsg = dm.addMessage({
-      chat_type: chatType as any,
-      chat_id: chatId,
-      sender_type: 'ai',
-      sender_name: aiName,
-      content: '',
-      image_path: videoPath,
-      token_used: 0,
-      timestamp: new Date().toISOString(),
-      genPrompt: prompt,
-    });
-    broadcast('stream:user', aiMsg);
-    return { ok: true, imagePath: videoPath };
+    void runVideoGenJob(chatType, chatId, prompt);
+    return { ok: true, started: true };
   });
-
-  // ---------- 发图片生图 / 生视频：以用户发送的图片 + 文字提示词为输入 ----------
+  // 发图片生图 / 生视频：以用户发送的图片 + 文字提示词为输入
   // 仅当 prompt 非空才生效（只发图片无提示词则无效，不生图/生视频）
   ipcMain.handle(
     'image:generateFromImage',
@@ -4308,45 +4536,9 @@ function registerIPC(): void {
       const dataUrl = readImageDataUrl(imagePath);
       if (!dataUrl) throw new Error('参考图片读取失败');
       if (kind === 'video') {
-        const vg = dm.getSettings().videoGen;
-        if (!vg || !vg.enabled || !vg.baseUrl || !vg.apiKey) {
-          throw new Error('未配置生视频 API，请在设置中开启「生视频」');
-        }
-        const { url } = await generateVideo(
-          { baseUrl: vg.baseUrl, apiKey: vg.apiKey },
-          prompt,
-          vg.model || '',
-          vg.size || '1280x720',
-          vg.duration || '5',
-          [dataUrl]
-        );
-        let videoPath: string | null = null;
-        if (url) {
-          try {
-            const resp = await fetch(url);
-            const buf = Buffer.from(await resp.arrayBuffer());
-            const name = `gen_${Date.now()}_${Math.floor(Math.random() * 1e6)}.mp4`;
-            const dest = path.join(dm.imagesDir, name);
-            fs.writeFileSync(dest, buf);
-            videoPath = dest;
-          } catch (e) {
-            console.error('下载生视频失败', e);
-          }
-        }
-        if (!videoPath) throw new Error('生视频失败：未获取到视频数据');
-        const aiMsg = dm.addMessage({
-          chat_type: chatType as any,
-          chat_id: chatId,
-          sender_type: 'ai',
-          sender_name: 'AI',
-          content: '',
-          image_path: videoPath,
-          token_used: 0,
-          timestamp: new Date().toISOString(),
-          genPrompt: prompt,
-        });
-        broadcast('stream:user', aiMsg);
-        return { ok: true, imagePath: videoPath };
+        // 非阻塞：图生视频同样走后台任务 + 进度气泡
+        void runVideoGenJob(chatType, chatId, prompt, dataUrl);
+        return { ok: true, started: true };
       }
       // kind === 'image'
       const ig = dm.getSettings().imageGen;

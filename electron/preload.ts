@@ -155,6 +155,18 @@ export interface NianyuAPI {
   eventClosed: (p: { chatType: string; chatId: string }) => Promise<void>;
   deleteChat: (type: string, id: string) => Promise<void>;
   copyChat: (type: string, id: string) => Promise<ChatListItem>;
+  copyRole: (id: string, includeChats: boolean) => Promise<{ id: string; name: string } | undefined>;
+  // 模型对比：同一问题并发发给 ≤3 个模型，返回耗时/token + 默认模型质量评分
+  compareStart: (p: { question: string; modelIds: string[]; compareId?: string }) => Promise<{
+    results: { modelId: string; modelName: string; content: string; promptTokens: number; completionTokens: number; elapsedMs: number; error: string }[];
+    judgments: Record<string, { score: number; comment: string }>;
+    totalMs: number;
+    judgeModel: string;
+  }>;
+  // 模型对比渐进式广播（每个模型完成即推送结果，与角色记忆无关）
+  onCompareResult: (cb: (_e: any, data: { compareId: string; modelId: string; modelName: string; content: string; promptTokens: number; completionTokens: number; elapsedMs: number; error: string }) => void) => () => void;
+  onCompareJudged: (cb: (_e: any, data: { compareId: string; judgments: Record<string, { score: number; comment: string }>; judgeModel: string }) => void) => () => void;
+  onCompareDone: (cb: (_e: any, data: { compareId: string; totalMs: number }) => void) => () => void;
   renameChat: (type: string, id: string, name: string) => Promise<void>;
   resolveRoleId: (chatType: string, chatId: string) => Promise<string>;
   setStoryEnabled: (chatType: string, chatId: string, enabled: boolean) => Promise<void>;
@@ -170,14 +182,19 @@ export interface NianyuAPI {
   triggerRelationship: (chatType: string, chatId: string, roleId: string, withMoments?: boolean, doRelationship?: boolean) => Promise<{ ok: boolean; moments: number; relation?: string; error?: string }>;
   adjustBond: (roleId: string, delta: number) => Promise<number>;
   generateImage: (chatType: string, chatId: string, prompt: string) => Promise<{ ok: boolean; imagePath: string }>;
-  generateVideo: (chatType: string, chatId: string, prompt: string) => Promise<{ ok: boolean; imagePath: string }>;
+  generateVideo: (chatType: string, chatId: string, prompt: string) => Promise<{ ok: boolean; started: boolean }>;
   generateImageFromImage: (
     chatType: string,
     chatId: string,
     prompt: string,
     imagePath: string,
     kind: 'image' | 'video'
-  ) => Promise<{ ok: boolean; imagePath: string }>;
+  ) => Promise<{ ok: boolean; started?: boolean; imagePath?: string }>;
+  // 生视频进度/完成广播（主窗 + 小窗悬浮气泡订阅）
+  onVideoProgress: (cb: (e: any, data: { chatType: string; chatId: string; prompt: string; percent: number; status?: string }) => void) => () => void;
+  offVideoProgress: (cb: (e: any, data: any) => void) => void;
+  onVideoDone: (cb: (e: any, data: { chatType: string; chatId: string; prompt: string; ok: boolean; imagePath?: string; error?: string }) => void) => () => void;
+  offVideoDone: (cb: (e: any, data: any) => void) => void;
   saveImageMemory: (p: { roleId: string; imagePath: string; note?: string }) => Promise<any>;
   clearChatMessages: (chatType: string, chatId: string, withMemories: boolean) => Promise<{ deletedMsgs: number; deletedMems: number }>;
   syncAutoChat: (p: { chatId: string; action: 'start' | 'stop' }) => Promise<void>;
@@ -416,6 +433,18 @@ const api: NianyuAPI = {
     return () => ipcRenderer.removeListener('stream:user', listener);
   },
   offStreamUser: () => {},
+  onVideoProgress: (cb) => {
+    const listener = (e: any, data: any) => cb(e, data);
+    ipcRenderer.on('video:progress', listener);
+    return () => ipcRenderer.removeListener('video:progress', listener);
+  },
+  offVideoProgress: () => {},
+  onVideoDone: (cb) => {
+    const listener = (e: any, data: any) => cb(e, data);
+    ipcRenderer.on('video:done', listener);
+    return () => ipcRenderer.removeListener('video:done', listener);
+  },
+  offVideoDone: () => {},
   onEventChosen: (cb) => {
     const listener = (e: any, data: any) => cb(e, data);
     ipcRenderer.on('event:chosen', listener);
@@ -469,6 +498,11 @@ const api: NianyuAPI = {
   eventClosed: (p) => ipcRenderer.invoke('chats:eventClosed', p),
   deleteChat: (type, id) => ipcRenderer.invoke('chats:delete', type, id),
   copyChat: (type, id) => ipcRenderer.invoke('chats:copy', type, id),
+  copyRole: (id, includeChats) => ipcRenderer.invoke('roles:copy', id, includeChats),
+  compareStart: (p) => ipcRenderer.invoke('compare:start', p),
+  onCompareResult: (cb) => { const l = (_e: any, d: any) => cb(_e, d); ipcRenderer.on('compare:result', l); return () => ipcRenderer.removeListener('compare:result', l); },
+  onCompareJudged: (cb) => { const l = (_e: any, d: any) => cb(_e, d); ipcRenderer.on('compare:judged', l); return () => ipcRenderer.removeListener('compare:judged', l); },
+  onCompareDone: (cb) => { const l = (_e: any, d: any) => cb(_e, d); ipcRenderer.on('compare:done', l); return () => ipcRenderer.removeListener('compare:done', l); },
   renameChat: (type, id, name) => ipcRenderer.invoke('chats:rename', type, id, name),
   resolveRoleId: (chatType, chatId) => ipcRenderer.invoke('chats:resolveRole', chatType, chatId),
   setStoryEnabled: (chatType, chatId, enabled) => ipcRenderer.invoke('chats:setStory', chatType, chatId, enabled),

@@ -1,12 +1,13 @@
 import React from 'react';
 import { useI18n } from '../i18n/I18nContext';
 
-type View = 'chats' | 'contacts' | 'settings' | 'stats' | 'library' | 'moments';
+type View = 'chats' | 'contacts' | 'compare' | 'settings' | 'stats' | 'library' | 'moments';
 
 const items: { key: View; icon: string; labelKey: string }[] = [
   { key: 'chats', icon: '💬', labelKey: 'nav.chats' },
   { key: 'contacts', icon: '👥', labelKey: 'nav.contacts' },
   { key: 'moments', icon: '🌟', labelKey: 'nav.moments' },
+  { key: 'compare', icon: '⚔️', labelKey: 'nav.compare' },
   { key: 'stats', icon: '📊', labelKey: 'nav.stats' },
   { key: 'library', icon: '📚', labelKey: 'library.title' },
   { key: 'settings', icon: '⚙️', labelKey: 'nav.settings' },

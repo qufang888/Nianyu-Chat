@@ -385,9 +385,13 @@ export const MomentsView: React.FC = () => {
                   </button>
                 </div>
                 {m.content && <div className="moment-content">{m.content}</div>}
-                {m.images && m.images.length > 0 && (
-                  <ImageGrid paths={m.images} onImage={(src) => setPreviewImg(src)} failed={false} />
-                )}
+                {(m.images && m.images.length > 0) || (m.videos && m.videos.length > 0) ? (
+                  <ImageGrid
+                    paths={[...(m.images || []), ...(m.videos || [])]}
+                    onImage={(src) => setPreviewImg(src)}
+                    failed={false}
+                  />
+                ) : null}
                 <div className="moment-actions">
                   <button
                     className={`moment-act ${m.liked ? 'on' : ''}`}

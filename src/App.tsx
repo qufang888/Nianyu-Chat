@@ -14,12 +14,14 @@ import { SplashScreen } from './components/SplashScreen';
 import { AboutModal } from './components/AboutModal';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { Library } from './components/Library';
+import { ModelCompare } from './components/ModelCompare';
 import { MomentsView } from './components/MomentsView';
 import { useToast, ToastView } from './components/Toast';
 import CustomCursor from './components/CustomCursor';
+import VideoBubble from './components/VideoBubble';
 import type { Role } from './types';
 
-type View = 'chats' | 'contacts' | 'settings' | 'stats' | 'library' | 'moments';
+type View = 'chats' | 'contacts' | 'compare' | 'settings' | 'stats' | 'library' | 'moments';
 interface Selected {
   type: string;
   id: string;
@@ -139,6 +141,7 @@ export default function App() {
   const title = (() => {
     if (view === 'chats' && selected) return selected.name;
   if (view === 'contacts') return t('nav.contacts');
+  if (view === 'compare') return t('nav.compare');
   if (view === 'settings') return t('nav.settings');
   if (view === 'moments') return t('nav.moments');
   return t('app.name');
@@ -181,6 +184,7 @@ export default function App() {
       )}
 
       {view === 'contacts' && <RoleList onStartChat={onStartChat} />}
+      {view === 'compare' && <ModelCompare />}
       {view === 'settings' && (
         <Settings onRerunWizard={() => { setView('chats'); setShowOnboarding(true); }} />
       )}
@@ -203,6 +207,7 @@ export default function App() {
       )}
       <ToastView toast={toast} />
       <CustomCursor />
+      <VideoBubble />
       </div>
     </div>
   );

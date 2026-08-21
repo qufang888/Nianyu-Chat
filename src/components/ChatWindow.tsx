@@ -54,6 +54,8 @@ export const ChatWindow: React.FC<{
   const [genText, setGenText] = useState('');
   const [genLoading, setGenLoading] = useState(false);
   const [genTyping, setGenTyping] = useState(false); // 生图期间在聊天框显示「AI 正在回复」动画（用户不会看到自己的生图指令）
+  const [genVideoOpen, setGenVideoOpen] = useState(false); // 生视频弹窗
+  const [genVideoText, setGenVideoText] = useState('');
   const [promptView, setPromptView] = useState<string | null>(null); // 查看提示词弹窗
   const [showMention, setShowMention] = useState(false);
   // 消息查找（🔍）与关系值（💞）面板开关
@@ -1169,6 +1171,19 @@ export const ChatWindow: React.FC<{
     }
   };
 
+  // 生视频：非阻塞——立即返回，进度由全局悬浮气泡（video:progress/video:done）展示，完成后自动插入 AI 视频消息
+  const doGenerateVideo = async () => {
+    const prompt = genVideoText.trim();
+    if (!prompt) return;
+    setGenVideoOpen(false);
+    setGenVideoText('');
+    try {
+      await api.generateVideo(chatType, chatId, prompt);
+    } catch (e: any) {
+      showToast(e?.message || t('chat.genVideoFailed'));
+    }
+  };
+
   // F4：发送图片 + 文字提示词 → 据此生图 / 生视频（只发图片无提示词则无效）
   const doGenerateFromImage = async (kind: 'image' | 'video') => {
     const text = input.trim();
@@ -1180,13 +1195,22 @@ export const ChatWindow: React.FC<{
     const img = pendingImages[0];
     setPendingImages([]);
     setInput('');
+    if (kind === 'video') {
+      // 非阻塞：生成在后台进行，进度由悬浮气泡展示，无需等待
+      try {
+        await api.generateImageFromImage(chatType, chatId, text, img, kind);
+      } catch (e: any) {
+        showToast(e?.message || t('chat.genVideoFailed'));
+      }
+      return;
+    }
     setGenLoading(true);
     setGenTyping(true);
     try {
       const res = await api.generateImageFromImage(chatType, chatId, text, img, kind);
-      if (!res.ok) showToast(kind === 'video' ? t('chat.genVideoFailed') : t('chat.drawFailed'));
+      if (!res.ok) showToast(t('chat.drawFailed'));
     } catch (e: any) {
-      showToast(e?.message || (kind === 'video' ? t('chat.genVideoFailed') : t('chat.drawFailed')));
+      showToast(e?.message || t('chat.drawFailed'));
     } finally {
       setGenLoading(false);
       setGenTyping(false);
@@ -2306,6 +2330,9 @@ export const ChatWindow: React.FC<{
           <button className="tool-btn" title={t('chat.drawImage')} onClick={() => setGenOpen(true)}>
             🎨
           </button>
+          <button className="tool-btn" title={t('chat.drawVideo')} onClick={() => setGenVideoOpen(true)}>
+            🎬
+          </button>
           <button
             className={`tool-btn${sceneImageOn ? ' active' : ''}`}
             title={t('chat.sceneImageToggle')}
@@ -2455,6 +2482,36 @@ export const ChatWindow: React.FC<{
                 onClick={doGenerate}
               >
                 {t('chat.drawImage')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {genVideoOpen && (
+        <div className="modal-mask" onClick={() => setGenVideoOpen(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480, width: '90%' }}>
+            <div className="draw-input-panel">
+              <div className="draw-title">{t('chat.drawVideo')}</div>
+              <div className="draw-desc">{t('chat.drawVideoDesc')}</div>
+              <textarea
+                value={genVideoText}
+                onChange={(e) => setGenVideoText(e.target.value)}
+                placeholder={t('chat.drawVideoPlaceholder')}
+                rows={4}
+                autoFocus
+              />
+            </div>
+            <div style={{ textAlign: 'right', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn-ghost" onClick={() => setGenVideoOpen(false)}>
+                {t('msg.editCancel')}
+              </button>
+              <button
+                className="btn-primary"
+                disabled={!genVideoText.trim()}
+                onClick={doGenerateVideo}
+              >
+                {t('chat.drawVideo')}
               </button>
             </div>
           </div>

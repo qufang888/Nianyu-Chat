@@ -25,6 +25,26 @@ function applyDeepThink(body: Record<string, any>): void {
   }
 }
 
+// 合并模型「自定义参数」JSON 到请求体：覆盖同名内置参数，但保护 messages/model/stream 三个关键字段不被覆盖。
+// 返回合并后的 body；若 customParams 为空则不改动；若非法 JSON / 非对象则抛错，由上层 queryAI 捕获为明确错误提示。
+function applyCustomParams(body: Record<string, any>, cfg: ModelConfig): Record<string, any> {
+  if (!cfg.customParams || !cfg.customParams.trim()) return body;
+  let custom: any;
+  try {
+    custom = JSON.parse(cfg.customParams);
+  } catch (e) {
+    throw new Error(`自定义参数 JSON 解析失败：${(e as Error).message}`);
+  }
+  if (!custom || typeof custom !== 'object' || Array.isArray(custom)) {
+    throw new Error('自定义参数必须是 JSON 对象（例如 {"stop": "\\n", "frequency_penalty": 0.5}）');
+  }
+  const protectedKeys = new Set(['messages', 'model', 'stream']);
+  for (const k of Object.keys(custom)) {
+    if (!protectedKeys.has(k)) body[k] = custom[k];
+  }
+  return body;
+}
+
 // Anthropic 接口：把 content 转为 Anthropic 的 content blocks（图片用 base64 source）
 function toAnthropicContent(content: string | ContentPart[]): any[] {
   if (typeof content === 'string') {
@@ -212,11 +232,14 @@ async function queryOpenAILike(
       const b: Record<string, any> = {
         model: cfg.model,
         messages,
-        max_tokens: maxTokens,
+        max_tokens: cfg.maxTokens ?? maxTokens,
         temperature: cfg.temperature,
         stream: false,
       };
+      if (cfg.topP !== undefined) b.top_p = cfg.topP;
+      if (cfg.topK !== undefined && cfg.topK > 0) b.top_k = cfg.topK;
       applyDeepThink(b);
+      applyCustomParams(b, cfg);
       return b;
     })()),
     signal: controller.signal,
@@ -262,11 +285,14 @@ export async function streamAI(
       const b: Record<string, any> = {
         model: cfg.model,
         messages,
-        max_tokens: maxTokens,
+        max_tokens: cfg.maxTokens ?? maxTokens,
         temperature: cfg.temperature,
         stream: true,
       };
+      if (cfg.topP !== undefined) b.top_p = cfg.topP;
+      if (cfg.topK !== undefined && cfg.topK > 0) b.top_k = cfg.topK;
       applyDeepThink(b);
+      applyCustomParams(b, cfg);
       return b;
     })()),
     signal: controller.signal,
@@ -380,13 +406,19 @@ async function queryAnthropic(
       'x-api-key': cfg.apiKey,
       'anthropic-version': '2023-06-01',
     },
-    body: JSON.stringify({
-      model: cfg.model,
-      max_tokens: maxTokens,
-      temperature: Math.min(cfg.temperature, 1),
-      system,
-      messages: turns,
-    }),
+    body: JSON.stringify((() => {
+      const b: Record<string, any> = {
+        model: cfg.model,
+        max_tokens: cfg.maxTokens ?? maxTokens,
+        temperature: Math.min(cfg.temperature, 1),
+        system,
+        messages: turns,
+      };
+      if (cfg.topP !== undefined) b.top_p = cfg.topP;
+      if (cfg.topK !== undefined && cfg.topK > 0) b.top_k = cfg.topK;
+      applyCustomParams(b, cfg);
+      return b;
+    })()),
     signal: controller.signal,
   });
   if (!resp.ok) {
@@ -586,17 +618,20 @@ export async function generateImage(
 
 // 视频生成（OpenAI 兼容 /videos/generations）：返回 base64 或视频 URL；使用方式与生图一致
 // referenceImages：参考图（base64 data URL 数组），如用户发送的图片；仅「图生视频」时传入（依供应商支持）
+// onProgress：任务式生成时的进度回调 (0~100)；即时返回型端点会在拿到结果后回调一次 100
 export async function generateVideo(
   cfg: { baseUrl: string; apiKey: string },
   prompt: string,
   model: string,
   size: string,
   duration: string,
-  referenceImages?: string[]
+  referenceImages?: string[],
+  onProgress?: (percent: number, statusText?: string) => void
 ): Promise<{ b64?: string; url?: string }> {
   if (!cfg.apiKey) throw new Error('生视频模型未配置 API Key');
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 300000);
+  // 总超时：同步端点 5 分钟，任务式轮询上限 10 分钟（由 pollVideoTask 内部再细化）
+  const timer = setTimeout(() => controller.abort(), 600000);
   try {
     const body: Record<string, any> = {
       model: model || '',
@@ -620,14 +655,99 @@ export async function generateVideo(
       throw new Error(`生视频失败 ${resp.status}: ${errText.slice(0, 300)}`);
     }
     const data = (await resp.json()) as any;
+    // 任务式端点会返回任务 ID（随后需轮询），即时型端点直接返回结果
+    const taskId = data?.id || data?.task_id || data?.data?.[0]?.id || data?.data?.[0]?.task_id;
     // 不同供应商返回结构不一：优先 data[0].url / video / b64_json
     const item = data?.data?.[0] || data?.videos?.[0] || data;
     const url = item?.url || item?.video?.url || item?.uri;
     const b64 = item?.b64_json || item?.video?.b64_json;
-    if (!url && !b64) throw new Error('生视频接口未返回视频数据');
-    return { b64, url };
+    if (url || b64) {
+      onProgress?.(100, 'done');
+      return { b64, url };
+    }
+    if (taskId) {
+      const result = await pollVideoTask(cfg, taskId, controller, onProgress);
+      onProgress?.(100, 'done');
+      return result;
+    }
+    throw new Error('生视频接口未返回视频数据（无任务 ID 也无结果）');
   } finally {
     clearTimeout(timer);
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// 在任意嵌套结构里找第一个 mp4/webm/mov 直链（部分供应商把结果藏在深层字段）
+function findFirstVideoUrl(obj: any): string | null {
+  if (!obj || typeof obj !== 'object') return null;
+  for (const k of Object.keys(obj)) {
+    const v = obj[k];
+    if (typeof v === 'string' && /\.(mp4|webm|mov)(\?|$)/i.test(v)) return v;
+    const r = findFirstVideoUrl(v);
+    if (r) return r;
+  }
+  return null;
+}
+
+// 任务式生视频轮询：常见端点 /videos/generations/tasks/{id}，备选 /videos/generations/{id}
+async function pollVideoTask(
+  cfg: { baseUrl: string; apiKey: string },
+  taskId: string,
+  controller: AbortController,
+  onProgress?: (percent: number, statusText?: string) => void
+): Promise<{ b64?: string; url?: string }> {
+  const base = joinUrl(cfg.baseUrl, '/videos/generations');
+  const endpoints = [`${base}/tasks/${taskId}`, `${base}/${taskId}`];
+  const started = Date.now();
+  const MAX_WAIT = 9 * 60 * 1000; // 轮询上限 9 分钟
+  const INTERVAL = 3000; // 每 3 秒查一次
+  for (;;) {
+    if (Date.now() - started > MAX_WAIT) {
+      throw new Error(`生视频任务超时（${Math.round(MAX_WAIT / 60000)} 分钟未完成）：${taskId}`);
+    }
+    let taskData: any = null;
+    for (const ep of endpoints) {
+      try {
+        const r = await fetch(ep, {
+          headers: { Authorization: `Bearer ${cfg.apiKey}` },
+          signal: controller.signal,
+        });
+        if (r.ok) {
+          taskData = await r.json();
+          break;
+        }
+      } catch {
+        /* 端点不可用则尝试下一个 */
+      }
+    }
+    if (!taskData) {
+      await sleep(INTERVAL);
+      continue;
+    }
+    const status = String(taskData?.status || taskData?.state || '').toLowerCase();
+    let pct = taskData?.progress;
+    if (typeof pct === 'number' && pct > 0 && pct <= 1) pct = Math.round(pct * 100);
+    if (typeof pct !== 'number' || Number.isNaN(pct)) {
+      pct = Math.min(90, Math.round(((Date.now() - started) / MAX_WAIT) * 100));
+    }
+    onProgress?.(Math.max(0, Math.min(99, Math.round(pct))), status);
+    if (status === 'succeeded' || status === 'completed' || status === 'success' || status === 'done') {
+      const item = taskData?.data?.[0] || taskData?.video || taskData?.result || taskData;
+      const url = item?.url || item?.video?.url || item?.uri || taskData?.url || taskData?.uri;
+      const b64 = item?.b64_json || item?.video?.b64_json || taskData?.b64_json;
+      if (url || b64) return { b64, url };
+      const nested = findFirstVideoUrl(taskData);
+      if (nested) return { url: nested };
+      throw new Error('生视频任务已完成但未返回视频地址');
+    }
+    if (status === 'failed' || status === 'error' || status === 'cancelled') {
+      const msg = taskData?.error?.message || taskData?.message || status;
+      throw new Error(`生视频任务失败：${msg}`);
+    }
+    await sleep(INTERVAL);
   }
 }
 
