@@ -14,6 +14,7 @@ interface SearchResultItem {
 import { renderMarkdown } from '../utils/markdown';
 import { CustomTitleBar } from './CustomTitleBar';
 import CustomCursor from './CustomCursor';
+import ErrorBubble from './ErrorBubble';
 import { AvatarImg } from './ChatList';
 import { playSoundSync } from '../utils/sound';
 import CustomScrollArea from './CustomScrollArea';
@@ -2093,6 +2094,7 @@ export const MiniChat: React.FC = () => {
           <textarea
             key={current ? `${current.chat_type}:${current.chat_id}:${refreshNonce}` : `none:${refreshNonce}`}
             ref={inputRef}
+            className="chat-input"
             value={input}
             placeholder={current?.chat_type === 'group' ? t('chat.placeholder') + ' · ' + t('chat.mentionHint') : t('chat.placeholder')}
             readOnly={!current || roleMissing}
@@ -2320,6 +2322,7 @@ export const MiniChat: React.FC = () => {
       )}
       <ToastView toast={toast} />
       <CustomCursor />
+      <ErrorBubble />
       <ClearChatModal
         open={clearOpen}
         onCancel={() => setClearOpen(false)}

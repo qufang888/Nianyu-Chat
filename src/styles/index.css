@@ -56,6 +56,18 @@ textarea::placeholder {
   opacity: 0.85;
 }
 
+/* 聊天输入框：背景/文字色可被设置中的「输入框外观」覆盖（--input-bg/--input-fg），
+   默认浅灰底 + 深字，保证任意主题下清晰可读；仅作用于聊天输入，不影响其它表单控件 */
+.chat-input {
+  background: var(--input-bg, #f2f3f5) !important;
+  color: var(--input-fg, #1f2329) !important;
+  caret-color: var(--input-fg, #1f2329);
+}
+.chat-input::placeholder {
+  color: var(--color-text-secondary);
+  opacity: 0.7;
+}
+
 /* 下拉框与展开列表随主题同步（避免原生弹层白底白字） */
 select {
   background: var(--color-select-bg);
@@ -3259,4 +3271,90 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   font-size: 13px;
   background: var(--color-bg, #fff);
   color: var(--color-text, #222);
+}
+
+/* ===== 模型回复错误气泡（非模态）=====
+   外层容器 pointer-events:none，仅卡片本体 pointer-events:auto，
+   因此空区域点击穿透到下层 UI，绝不会遮挡/阻断聊天输入框（避免图层冲突与输入失效）。 */
+.error-bubble-layer {
+  position: fixed;
+  top: 64px;
+  right: 16px;
+  z-index: 12000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+  max-width: 360px;
+}
+.error-bubble {
+  pointer-events: auto;
+  background: var(--color-bg-card, #2a2a32);
+  border: 1px solid #d9534f;
+  border-left: 4px solid #d9534f;
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  color: var(--color-text, #eee);
+  cursor: pointer;
+  animation: errorBubbleIn 0.22s ease-out;
+  user-select: none;
+}
+@keyframes errorBubbleIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.error-bubble-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.error-bubble-icon { font-size: 14px; flex-shrink: 0; }
+.error-bubble-title {
+  font-size: 12px;
+  font-weight: 600;
+  flex: 1;
+  color: #ff6b6b;
+}
+.error-bubble-close {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary, #aaa);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+.error-bubble-close:hover { color: #fff; }
+.error-bubble-msg {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.error-bubble-detail {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--color-border, #444);
+  font-size: 12px;
+  line-height: 1.55;
+  cursor: default;
+}
+.error-bubble-row { margin-bottom: 6px; }
+.error-bubble-row b { color: #ffd479; }
+.error-bubble-row p { margin: 2px 0 0; }
+.error-bubble-code {
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: 0.6;
+  word-break: break-all;
+}
+.error-bubble-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  text-align: right;
+  color: var(--color-text-secondary, #999);
+  opacity: 0.8;
 }

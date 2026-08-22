@@ -26,6 +26,8 @@ import {
   generateImage,
   generateVideo,
   setDeepThinkLevel,
+  ModelErrorInfo,
+  ModelApiError,
 } from './ai';
 import { createBackup, restoreBackup } from './backup';
 import { parseCharacterCard, parseCharacterCardText } from '../src/utils/characterCard';
@@ -2391,6 +2393,12 @@ ${searchContext}`
       if (wait > 0) await sleep(wait);
       rateMark(cfg.id);
       const res = await queryAI(cfg, messages, 1024, controller?.signal);
+      if (res.error) {
+        // 模型回复错误：不进聊天框、不进记忆；用气泡通知用户（前端据此显示重发面板）
+        notifyModelError(res.error, role.name);
+        sendStreamChunk(streamId, { content: '', done: true, error: res.error.message, seq: 1 });
+        return { aiMsg: null as any, roleId: role.id, total, tokens: 0, error: res.error.message };
+      }
       const aiMsg = dm.addMessage({
         chat_type: p.chatType as any,
         chat_id: p.chatId,
@@ -2408,26 +2416,30 @@ ${searchContext}`
       void triggerSceneImage(p.chatType, p.chatId, role.id);
       return { aiMsg, roleId: role.id, total, tokens: aiMsg.token_used };
     } catch (e: any) {
-      // 被打断时保留头像/名称/气泡，用省略号占位；其他异常仍显示错误信息
+      // 被打断：保留头像/名称/气泡，用省略号占位；其他异常用气泡通知，不把错误文本写进聊天框
       const interrupted = controller ? controller.signal.aborted : false;
-      const content = interrupted ? '...' : `⚠️ ${e?.message || String(e)}`;
-      if (!interrupted) dm.logError('model', `AI 回复生成失败：${e?.message || String(e)}`, e?.stack);
-      const msg = dm.addMessage({
-        chat_type: p.chatType as any,
-        chat_id: p.chatId,
-        sender_type: 'ai',
-        sender_name: role.name,
-        content,
-        image_path: null,
-        token_used: 0,
-        timestamp: new Date().toISOString(),
-      });
-      sendStreamDone(streamId, msg);
-      return { aiMsg: msg, roleId: role.id, total, tokens: 0 };
+      if (interrupted) {
+        const msg = dm.addMessage({
+          chat_type: p.chatType as any,
+          chat_id: p.chatId,
+          sender_type: 'ai',
+          sender_name: role.name,
+          content: '...',
+          image_path: null,
+          token_used: 0,
+          timestamp: new Date().toISOString(),
+        });
+        sendStreamDone(streamId, msg);
+        return { aiMsg: msg, roleId: role.id, total, tokens: 0 };
+      }
+      const info: ModelErrorInfo = { code: 'exception', message: e?.message || String(e), detail: e?.stack };
+      notifyModelError(info, role.name);
+      sendStreamChunk(streamId, { content: '', done: true, error: info.message, seq: 1 });
+      return { aiMsg: null as any, roleId: role.id, total, tokens: 0, error: info.message };
     }
   };
 
-  let results: { aiMsg: ChatMessage; roleId: string; total: number; tokens: number }[];
+  let results: { aiMsg: ChatMessage | null; roleId: string; total: number; tokens: number; error?: string }[];
   if (isGroup) {
     // 串行轮流发言：每位成员生成后立即落库，下一位重新读取最新历史（含前一位的发言）
     results = [];
@@ -2443,6 +2455,7 @@ ${searchContext}`
   const affinityChanges: { role_id: string; change: number; total: number }[] = [];
   let totalTokens = 0;
   for (const r of results) {
+    if (!r.aiMsg) continue; // 模型回复错误：仅气泡通知，不写入聊天（前端已显示重发面板）
     aiMessages.push(r.aiMsg);
     const original = memberRoles.find((role) => role.id === r.roleId)?.affinity || r.total;
     affinityChanges.push({ role_id: r.roleId, change: r.total - original, total: r.total });
@@ -2636,6 +2649,12 @@ ${searchContext}`
       // Anthropic 不支持流式，回退到非流式（一次性整段）
       if (cfg.provider === 'anthropic') {
         const res = await queryAI(cfg, messages, 1024);
+        if (res.error) {
+          // 模型回复错误：不进聊天框、不进记忆；用气泡通知用户
+          notifyModelError(res.error, role.name);
+          emitChunk('', true, res.error.message);
+          return;
+        }
         if (controller.signal.aborted) {
           finalizeRole(res.content || '', res.reasoning || '', true);
           return;
@@ -2667,7 +2686,12 @@ ${searchContext}`
         finalizeRole(full || '', reasoningAcc || '', true);
         return;
       }
-      emitChunk('', true, e?.message || String(e));
+      // 模型流式错误：诊断 + 气泡通知（前端据此显示重发面板），不把错误文本写进聊天框
+      const info: ModelErrorInfo = e instanceof ModelApiError
+        ? { status: e.status, code: e.code, message: e.message, detail: e.detail }
+        : { code: 'exception', message: e?.message || String(e), detail: e?.stack };
+      notifyModelError(info, role.name);
+      emitChunk('', true, info.message);
     }
   };
 
@@ -2836,13 +2860,19 @@ async function handleGroupContinue(
     let full = '';
     let tokens = 0;
     let reasoning: string | undefined;
-    if (cfg.provider === 'anthropic') {
-      const res = await queryAI(cfg, messages, 1024);
-      full = res.content;
-      tokens = res.promptTokens + res.completionTokens;
-      reasoning = res.reasoning;
-      emitChunk(full, true, '', res.reasoning || '');
-    } else {
+      if (cfg.provider === 'anthropic') {
+        const res = await queryAI(cfg, messages, 1024);
+        if (res.error) {
+          // 模型回复错误：不进聊天框、不进记忆；用气泡通知用户
+          notifyModelError(res.error, role.name);
+          emitChunk('', true, res.error.message);
+          return { ok: false, roleId: role.id, roleName: role.name, error: res.error.message };
+        }
+        full = res.content;
+        tokens = res.promptTokens + res.completionTokens;
+        reasoning = res.reasoning;
+        emitChunk(full, true, '', res.reasoning || '');
+      } else {
       const res = await streamAI(
         cfg,
         messages,
@@ -2885,10 +2915,14 @@ async function handleGroupContinue(
       });
     }
     return { ok: true, roleId: role.id, roleName: role.name };
-  } catch (e: any) {
-    emitChunk('', true, e?.message || String(e));
-    return { ok: false, roleId: role.id, roleName: role.name, error: e?.message || String(e) };
-  } finally {
+    } catch (e: any) {
+      const info: ModelErrorInfo = e instanceof ModelApiError
+        ? { status: e.status, code: e.code, message: e.message, detail: e.detail }
+        : { code: 'exception', message: e?.message || String(e), detail: e?.stack };
+      notifyModelError(info, role.name);
+      emitChunk('', true, info.message);
+      return { ok: false, roleId: role.id, roleName: role.name, error: info.message };
+    } finally {
     clearTimeout(timer);
     unregisterStream(p.chatId, controller);
   }
@@ -2975,6 +3009,12 @@ async function handleProactive(p: {
   registerStream(p.chatId, controller);
   try {
     const res = await queryAI(cfg, messages, 1024);
+    if (res.error) {
+      // 模型回复错误：不进聊天框、不进记忆；用气泡通知用户（主动消息无需重发面板，仅移除占位）
+      notifyModelError(res.error, role.name);
+      sendStreamChunk(streamId, { content: '', done: true, error: res.error.message, seq: 1 });
+      return { ok: false, roleId: role.id, roleName: role.name, error: res.error.message };
+    }
     if (controller.signal.aborted) return { ok: false, roleId: role.id, roleName: role.name };
     const aiMsg = dm.addMessage({
       chat_type: p.chatType as any,
@@ -3725,6 +3765,24 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
+// 模型回复错误：记录到错误日志 + 自动诊断原因/解决方案 + 广播给前端非模态气泡。
+// 错误信息不进入聊天框、不写入记忆；用软件当前设置的语言告诉用户「发生了什么、该怎么办」。
+function notifyModelError(err: ModelErrorInfo, roleName?: string): void {
+  dm.logError('model', `[${err.code}] ${err.message}`, err.detail);
+  const diag = diagnoseError(err.message || err.code);
+  const settings = dm.getSettings();
+  const lang: 'zh' | 'en' = settings.lang === 'en' ? 'en' : 'zh';
+  broadcast('app:modelError', {
+    code: err.code,
+    message: err.message,
+    detail: err.detail,
+    cause: diag.cause[lang],
+    solution: diag.solution[lang],
+    lang,
+    roleName,
+  });
+}
+
 // ===== 生视频后台任务 =====
 // 非阻塞执行：校验配置 → 调用 generateVideo（内部含任务式轮询）→ 下载到本地 → 写 AI 视频消息。
 // 全程广播 video:progress（0~100 进度）与 video:done（成功携带 imagePath / 失败携带 error）。
@@ -3945,7 +4003,7 @@ function registerIPC(): void {
   // 同一问题同时发给 ≤3 个模型；返回每模型耗时/token；随后用默认模型对输出质量打分
   // 模型对比：同一问题并发发给 ≤3 个模型；每个模型完成后立即广播 compare:result，
   // 评分完成广播 compare:judged，全部结束广播 compare:done。前端据此为每个窗口独立计时、独立展示。
-  ipcMain.handle('compare:start', async (_e, p: { question: string; modelIds: string[]; compareId?: string }) => {
+  ipcMain.handle('compare:start', async (_e, p: { question: string; modelIds: string[]; compareId?: string; judgeModelId?: string }) => {
     const settings = dm.getSettings();
     const ids = (Array.isArray(p?.modelIds) ? p.modelIds : []).slice(0, 3);
     const question = String(p?.question || '').trim();
@@ -3972,6 +4030,11 @@ function registerIPC(): void {
           ],
           2048
         );
+        if (res.error) {
+          const r = { ...base, content: '', promptTokens: 0, completionTokens: 0, elapsedMs: Date.now() - t0, error: res.error.message };
+          broadcast('compare:result', { compareId, ...r });
+          return r;
+        }
         const r = {
           ...base,
           content: res.content,
@@ -3989,10 +4052,15 @@ function registerIPC(): void {
       }
     });
     const results = await Promise.all(jobs);
-    // 默认模型质量评判（失败不阻塞结果展示）
+    // 质量评判：评测模型可由界面临时指定（judgeModelId），否则回退默认模型。
+    // 若评测模型本身是被测模型之一（互评），则不评判其自身输出，仅评判其它被测模型。
     const judgments: Record<string, { score: number; comment: string }> = {};
-    const judgeCfg = settings.models.find((m) => m.id === settings.defaultModel && m.enabled);
+    let judgeError: string | undefined;
+    const judgeCfg =
+      (p.judgeModelId && cfgMap.get(p.judgeModelId)) ||
+      settings.models.find((m) => m.id === settings.defaultModel && m.enabled);
     if (judgeCfg && results.some((r) => !r.error)) {
+      const judgeIsCompared = ids.includes(judgeCfg.id);
       try {
         const list = results
           .map((r, i) => `【${i + 1}. ${r.modelName}】\n${(r.content || '(无输出)').slice(0, 1500)}`)
@@ -4008,20 +4076,27 @@ function registerIPC(): void {
           ],
           1024
         );
-        const parsed = parseFirstJson(res.content);
-        if (parsed && Array.isArray(parsed.scores)) {
-          for (const s of parsed.scores) {
-            const idx = Number(s?.index) - 1;
-            if (results[idx] && !results[idx].error) {
-              judgments[results[idx].modelId] = { score: Math.max(0, Math.min(100, Number(s?.score) || 0)), comment: String(s?.comment || '') };
+        if (res.error) {
+          judgeError = res.error.message;
+        } else {
+          const parsed = parseFirstJson(res.content);
+          if (parsed && Array.isArray(parsed.scores)) {
+            for (const s of parsed.scores) {
+              const idx = Number(s?.index) - 1;
+              if (results[idx] && !results[idx].error && !(judgeIsCompared && results[idx].modelId === judgeCfg.id)) {
+                judgments[results[idx].modelId] = { score: Math.max(0, Math.min(100, Number(s?.score) || 0)), comment: String(s?.comment || '') };
+              }
             }
+          } else {
+            judgeError = '评分结果解析失败（模型未返回合法 JSON）';
           }
         }
-      } catch (e) {
-        console.error('[nianyu] 对比质量评判失败', e);
+      } catch (e: any) {
+        judgeError = e?.message || String(e);
       }
+      if (judgeError) dm.logError('model', `对比质量评判失败：${judgeError}`);
     }
-    broadcast('compare:judged', { compareId, judgments, judgeModel: judgeCfg?.name || '' });
+    broadcast('compare:judged', { compareId, judgments, judgeModel: judgeCfg?.name || '', judgeError });
     broadcast('compare:done', { compareId, totalMs: Date.now() - startedAt });
     return { results, judgments, totalMs: Date.now() - startedAt, judgeModel: judgeCfg?.name || '' };
   });

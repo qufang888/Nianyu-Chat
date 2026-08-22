@@ -302,6 +302,19 @@ export const ModelEditor: React.FC<{
                 {t('model.supportsImagesDesc')}
               </div>
             </Field>
+            <Field label={t('model.supportsReasoning')}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={!!cfg.supportsReasoning}
+                  onChange={(e) => set('supportsReasoning', e.target.checked)}
+                />
+                {cfg.supportsReasoning ? t('model.enabledOn') : t('model.enabledOff')}
+              </label>
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                {t('model.supportsReasoningDesc')}
+              </div>
+            </Field>
             <Field label={t('model.qps')}>
               <input
                 type="number"

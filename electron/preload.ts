@@ -332,6 +332,9 @@ export interface NianyuAPI {
   // ===== 主进程错误推送 =====
   onAppError: (cb: (data: { message: string; cause: string; solution: string; lang: string }) => void) => () => void;
   offAppError: (cb: (data: any) => void) => void;
+  // 模型回复错误（非致命）：推送一个非模态气泡，由 ErrorBubble 组件接收
+  onModelError: (cb: (data: { code: string; message: string; detail?: string; cause: string; solution: string; lang: string; roleName?: string }) => void) => () => void;
+  offModelError: (cb: (data: any) => void) => void;
 
   // ===== 打开外部网页（点击联网搜索结果编号） =====
   openExternal: (url: string) => void;
@@ -708,6 +711,14 @@ const api: NianyuAPI = {
   },
   offAppError: (cb: (data: any) => void) => {
     ipcRenderer.off('app:error', cb);
+  },
+  onModelError: (cb: (data: { code: string; message: string; detail?: string; cause: string; solution: string; lang: string; roleName?: string }) => void) => {
+    const listener = (_e: any, data: any) => cb(data);
+    ipcRenderer.on('app:modelError', listener);
+    return () => ipcRenderer.removeListener('app:modelError', listener);
+  },
+  offModelError: (cb: (data: any) => void) => {
+    ipcRenderer.off('app:modelError', cb);
   },
 
   // ===== 打开外部网页（点击联网搜索结果编号） =====

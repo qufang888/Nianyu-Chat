@@ -19,6 +19,7 @@ import { MomentsView } from './components/MomentsView';
 import { useToast, ToastView } from './components/Toast';
 import CustomCursor from './components/CustomCursor';
 import VideoBubble from './components/VideoBubble';
+import ErrorBubble from './components/ErrorBubble';
 import type { Role } from './types';
 
 type View = 'chats' | 'contacts' | 'compare' | 'settings' | 'stats' | 'library' | 'moments';
@@ -208,6 +209,7 @@ export default function App() {
       <ToastView toast={toast} />
       <CustomCursor />
       <VideoBubble />
+      <ErrorBubble />
       </div>
     </div>
   );

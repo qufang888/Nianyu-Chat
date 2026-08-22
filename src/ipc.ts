@@ -161,7 +161,7 @@ export interface NianyuAPI {
   deleteChat: (type: string, id: string) => Promise<void>;
   copyChat: (type: string, id: string) => Promise<ChatListItem>;
   copyRole: (id: string, includeChats: boolean) => Promise<{ id: string; name: string } | undefined>;
-  compareStart: (p: { question: string; modelIds: string[]; compareId?: string }) => Promise<{
+  compareStart: (p: { question: string; modelIds: string[]; compareId?: string; judgeModelId?: string }) => Promise<{
     results: { modelId: string; modelName: string; content: string; promptTokens: number; completionTokens: number; elapsedMs: number; error: string }[];
     judgments: Record<string, { score: number; comment: string }>;
     totalMs: number;
@@ -169,7 +169,7 @@ export interface NianyuAPI {
   }>;
   // 模型对比渐进式广播
   onCompareResult: (cb: (_e: any, data: { compareId: string; modelId: string; modelName: string; content: string; promptTokens: number; completionTokens: number; elapsedMs: number; error: string }) => void) => () => void;
-  onCompareJudged: (cb: (_e: any, data: { compareId: string; judgments: Record<string, { score: number; comment: string }>; judgeModel: string }) => void) => () => void;
+  onCompareJudged: (cb: (_e: any, data: { compareId: string; judgments: Record<string, { score: number; comment: string }>; judgeModel: string; judgeError?: string }) => void) => () => void;
   onCompareDone: (cb: (_e: any, data: { compareId: string; totalMs: number }) => void) => () => void;
   renameChat: (type: string, id: string, name: string) => Promise<void>;
   resolveRoleId: (chatType: string, chatId: string) => Promise<string>;
@@ -321,6 +321,9 @@ export interface NianyuAPI {
   // ===== 主进程错误推送 =====
   onAppError?: (cb: (data: { message: string; cause: string; solution: string; lang: string }) => void) => () => void;
   offAppError?: (cb: (data: any) => void) => void;
+  // 模型回复错误（非致命）：非模态气泡，由 ErrorBubble 组件接收
+  onModelError?: (cb: (data: { code: string; message: string; detail?: string; cause: string; solution: string; lang: string; roleName?: string }) => void) => () => void;
+  offModelError?: (cb: (data: any) => void) => void;
 
   // ===== 应用数据保存路径（正在使用的实时数据，非备份）=====
   getDataPath: () => Promise<{ current: string; custom: string | null; def: string }>;
@@ -394,4 +397,6 @@ export const api: NianyuAPI = {
   logAppError: (category, message, detail) => raw.logAppError(category, message, detail),
   getErrorLog: () => raw.getErrorLog(),
   clearErrorLog: () => raw.clearErrorLog(),
+  onModelError: (cb) => raw.onModelError!(cb),
+  offModelError: (cb) => raw.offModelError?.(cb),
 };

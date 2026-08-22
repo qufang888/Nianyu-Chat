@@ -2384,6 +2384,7 @@ export const ChatWindow: React.FC<{
         <textarea
           key={`${chatType}:${chatId}:${refreshNonce}`}
           ref={inputRef}
+          className="chat-input"
           value={input}
           placeholder={t('chat.placeholder')}
           readOnly={roleMissing}

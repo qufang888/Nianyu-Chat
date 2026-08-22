@@ -30,6 +30,8 @@ export const ModelCompare: React.FC = () => {
   // 以 modelId 为键，结果/评分渐进写入（某模型完成即写入，不等待其他模型）
   const [results, setResults] = useState<Record<string, CmpResult>>({});
   const [judgments, setJudgments] = useState<Record<string, { score: number; comment: string }>>({});
+  const [judgeError, setJudgeError] = useState('');
+  const [judgeModelId, setJudgeModelId] = useState(''); // '' = 使用默认模型；可选任意已启用模型（含被测模型=互评）
   const [runStart, setRunStart] = useState(0);
   const [now, setNow] = useState(0);
   const [judgeModel, setJudgeModel] = useState('');
@@ -73,6 +75,7 @@ export const ModelCompare: React.FC = () => {
       if (data.compareId !== compareId) return;
       setJudgments(data.judgments);
       setJudgeModel(data.judgeModel);
+      setJudgeError(data.judgeError || '');
     });
     const offDone = api.onCompareDone((_e, data) => {
       if (data.compareId !== compareId) return;
@@ -106,9 +109,10 @@ export const ModelCompare: React.FC = () => {
     setRunning(true);
     setLastQ(q);
     setJudgeModel('');
+    setJudgeError('');
     setTotalMs(0);
     try {
-      await api.compareStart({ question: q, modelIds: activeIds, compareId: cid });
+      await api.compareStart({ question: q, modelIds: activeIds, compareId: cid, judgeModelId: judgeModelId || undefined });
     } catch (e: any) {
       showToast(e?.message || String(e));
     } finally {
@@ -175,6 +179,20 @@ export const ModelCompare: React.FC = () => {
           rows={2}
           style={{ flex: 1, minWidth: 220, resize: 'vertical' }}
         />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, whiteSpace: 'nowrap' }}>
+          <span style={{ color: 'var(--color-text-secondary)' }}>{t('compare.judgeModel')}</span>
+          <select
+            value={judgeModelId}
+            onChange={(e) => setJudgeModelId(e.target.value)}
+            style={{ padding: '6px 8px', borderRadius: 8, minWidth: 130 }}
+            title={t('compare.judgeModelTip')}
+          >
+            <option value="">{t('compare.judgeDefault')}</option>
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>{m.name}</option>
+            ))}
+          </select>
+        </label>
         <button className="btn-primary" disabled={running} onClick={run}>
           {running ? t('compare.running') : t('compare.start')}
         </button>
@@ -254,12 +272,15 @@ export const ModelCompare: React.FC = () => {
                     <span style={{ marginLeft: 8 }}>{t('compare.chars', { n: res.content.length })}</span>
                   </div>
                   {judge && (
-                    <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 14 }}>{judge.score >= 85 ? '🟢' : judge.score >= 60 ? '🟡' : '🔴'}</span>
-                      <span style={{ fontWeight: 600, color: judge.score >= 85 ? '#2e7d32' : judge.score >= 60 ? '#b26a00' : '#d32f2f' }}>
-                        {judge.score}
-                      </span>
-                      <span>{judge.comment}</span>
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 4 }}>{t('compare.qualityTitle')}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 14 }}>{judge.score >= 85 ? '🟢' : judge.score >= 60 ? '🟡' : '🔴'}</span>
+                        <span style={{ fontWeight: 600, color: judge.score >= 85 ? '#2e7d32' : judge.score >= 60 ? '#b26a00' : '#d32f2f' }}>
+                          {judge.score}
+                        </span>
+                        <span>{judge.comment}</span>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -269,6 +290,11 @@ export const ModelCompare: React.FC = () => {
         })}
       </div>
 
+      {judgeError && (
+        <div style={{ padding: '8px 16px', borderTop: '1px solid rgba(217,83,79,.4)', fontSize: 12, color: '#d9534f' }}>
+          ⚠️ {t('compare.judgeFailed', { msg: judgeError })}
+        </div>
+      )}
       {judgeModel && (
         <div style={{ padding: '8px 16px', borderTop: '1px solid var(--color-border, #333)', fontSize: 12, color: 'var(--color-text-secondary, #999)' }}>
           {t('compare.judgeBy', { model: judgeModel, total: (totalMs / 1000).toFixed(1) })}

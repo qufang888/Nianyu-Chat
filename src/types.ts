@@ -16,6 +16,7 @@ export interface ModelConfig {
   temperature: number; // 0 - 2
   enabled: boolean;
   supportsImages?: boolean; // 是否支持图片输入（多模态视觉）：开启后用户发送的图片才会作为 image_url 内容块发给模型；关闭则图片仅作占位文本，绝不报错
+  supportsReasoning?: boolean; // 是否标记该模型支持深度思考/推理（手动标记，替代早期「按模型名关键字猜测」）；开启且全局深度思考档位非 off 时，请求体写入 reasoning_effort
   qps?: number; // 每分钟请求上限，0 或未设置=无限制；超出后请求延迟，限制解除后自动发送排队消息
   // ===== 采样与上下文高级参数（无极滑动 + 输入框直输）=====
   topP?: number; // 核采样 top-p（0~1），不设置=使用模型默认
@@ -281,6 +282,9 @@ export interface AppSettings {
   enableAutoMemory: boolean; // AI 自动提炼记忆（默认关）
   hideReasoning: boolean; // 隐藏思维链（默认开=折叠显示，点击箭头展开）
   deepThinkLevel: DeepThinkLevel; // 深度思考等级（off/low/medium/high）；仅对支持深度思考的模型生效，软件自动探测模型能力
+  // ===== 输入框外观（自定义文字色 / 内部背景色，防止文字与背景相近看不清）=====
+  inputTextColor?: string; // 输入框文字颜色（CSS 颜色），空=跟随主题
+  inputBgColor?: string; // 输入框内部背景色（CSS 颜色），空=跟随主题（默认浅灰/白）
   enableRandomEvents: boolean; // 随机事件：开启后聊天过程中会自动弹出随机事件（关闭则仅手动触发）
   // ===== 空闲主动回复 =====
   idleEnabled: boolean; // 全局主开关：关闭时所有按聊天的主动消息都失效（默认开）
@@ -493,6 +497,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   enableAutoMemory: false,
   hideReasoning: true,
   deepThinkLevel: 'off',
+  inputTextColor: '',
+  inputBgColor: '',
   enableRandomEvents: true,
   idleEnabled: true,
   chatIdleEnabled: {},

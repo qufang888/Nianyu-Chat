@@ -60,7 +60,7 @@ BrandingText "念语 Nianyu AI Chat"
     ${If} $R0 == error
       Abort
     ${EndIf}
-    ${NSD_CreateLabel} 0 0 100% 42u "卸载 念语 时，是否一并删除所有使用数据？$\n（聊天记录、记忆、设置、自定义音效等，位于 AppData 目录）$\n默认不删除，你可稍后手动清理。"
+    ${NSD_CreateLabel} 0 0 100% 42u "卸载 念语 时，是否一并删除所有使用数据？$\n（聊天记录、记忆、设置、自定义音效等，位于 AppData 或「文档\念语数据」目录）$\n默认不删除，你可稍后手动清理。"
     Pop $R1
     ${NSD_CreateCheckBox} 0 54u 100% 16u "删除所有使用数据（不可恢复）"
     Pop $chkDeleteData
@@ -91,10 +91,14 @@ BrandingText "念语 Nianyu AI Chat"
       ; 多次尝试删除，规避文件锁残留（首轮失败后再杀一次并重试）
       RMDir /r "$APPDATA\nianyu-client"
       RMDir /r "$LOCALAPPDATA\nianyu-client"
+      ; 默认数据目录「文档\念语数据」：早期版本数据存于 AppData，现版本默认存于文档目录，
+      ; 此前未删此目录是「勾选删除数据但数据仍保留」的根因。$DOCUMENTS 自动适配系统语言。
+      RMDir /r "$DOCUMENTS\念语数据"
       nsExec::Exec 'taskkill /f /im "念语.exe" 2>nul'
       Sleep 300
       RMDir /r "$APPDATA\nianyu-client"
       RMDir /r "$LOCALAPPDATA\nianyu-client"
+      RMDir /r "$DOCUMENTS\念语数据"
       ; 删除自定义数据目录（路径存储在 custom-data-path.txt 中，每行一个路径）
       ${If} ${FileExists} "$APPDATA\nianyu-client\custom-data-path.txt"
         ; NSIS 3.x 可用 FileRead 逐行读取并删除

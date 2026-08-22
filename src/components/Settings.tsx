@@ -23,7 +23,6 @@ import { SelfRoleSettings } from './SelfRoleSettings';
 import { useToast, ToastView } from './Toast';
 import SelectMenu from './SelectMenu';
 import { invalidateSoundCache, previewSound, type SoundType } from '../utils/sound';
-import { modelSupportsDeepThink } from '../utils/modelFeatures';
 import cursorPngUrl from '../assets/cursor/cursor.png';
 
 export const THEMES: { key: ThemeName; nameKey: string; swatch: string }[] = [
@@ -210,8 +209,6 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
     patch({ videoGen: next });
     api.saveSettings({ videoGen: next }).then(reloadSettings);
   };
-  // 深度思考：自动判定当前默认模型是否支持（不支持时选择器禁用并提示）
-  const defaultModelSupports = modelSupportsDeepThink(draft.defaultModel || '');
   const patchMini = (p: Partial<typeof mini>) => {
     const next = { ...mini, ...p };
     patch({ miniWindow: next });
@@ -1231,11 +1228,10 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
           {t('settings.defaultModelHint')}
         </div>
 
-        {/* 深度思考等级：自动判定默认模型是否支持，支持时可选 off/低/中/高 */}
+        {/* 深度思考等级：全局档位，实际仅对「模型管理」中标记为支持推理的模型生效 */}
         <div style={{ fontSize: 13, fontWeight: 600, marginTop: 4 }}>{t('settings.deepThink')}</div>
         <select
           value={draft.deepThinkLevel || 'off'}
-          disabled={!defaultModelSupports}
           onChange={(e) => patch({ deepThinkLevel: e.target.value as DeepThinkLevel })}
           style={{ padding: '6px 8px', borderRadius: 8, width: 260, marginTop: 6 }}
         >
@@ -1245,7 +1241,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
           <option value="high">{t('settings.deepThinkHigh')}</option>
         </select>
         <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-          {defaultModelSupports ? t('settings.deepThinkDesc') : t('settings.deepThinkUnsupported')}
+          {t('settings.deepThinkDesc')}
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 8 }}>
           {(draft.models || []).map((m) => {
@@ -1493,6 +1489,52 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
               </>
             );
           })()}
+        </div>
+
+        {/* ===== 输入框外观（文字色 / 背景色）===== */}
+        <div className="section-title">{t('settings.inputAppearance')}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 2 }}>
+            {t('settings.inputColorDesc')}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13 }}>{t('settings.inputBgColor')}</span>
+              <input
+                type="color"
+                value={draft.inputBgColor || '#f2f3f5'}
+                onChange={(e) => patch({ inputBgColor: e.target.value })}
+                style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
+              />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13 }}>{t('settings.inputTextColor')}</span>
+              <input
+                type="color"
+                value={draft.inputTextColor || '#1f2329'}
+                onChange={(e) => patch({ inputTextColor: e.target.value })}
+                style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
+              />
+            </label>
+            <button type="button" className="btn-ghost" onClick={() => patch({ inputBgColor: '', inputTextColor: '' })}>
+              {t('settings.resetColor')}
+            </button>
+          </div>
+          {/* 预览：实时反映当前配色下的对比度，便于判断文字是否清晰 */}
+          <div
+            style={{
+              marginTop: 4,
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid var(--color-border)',
+              background: draft.inputBgColor || '#f2f3f5',
+              color: draft.inputTextColor || '#1f2329',
+              fontSize: 13,
+              lineHeight: 1.6,
+            }}
+          >
+            {t('settings.inputPreview')}
+          </div>
         </div>
 
         {/* ===== 动态 Canvas 光标 ===== */}

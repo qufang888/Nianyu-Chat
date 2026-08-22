@@ -72,6 +72,11 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // 字体样式（按 key 取 CSS 字体栈；缺省回退系统默认）
     const ff = FONT_FAMILIES[settings.fontFamily] || FONT_FAMILIES.system;
     if (ff) root.style.setProperty('--font-family', ff);
+    // 输入框文字色 / 内部背景色（留空跟随主题；默认浅灰底 + 深字）
+    if (settings.inputBgColor) root.style.setProperty('--input-bg', settings.inputBgColor);
+    else root.style.removeProperty('--input-bg');
+    if (settings.inputTextColor) root.style.setProperty('--input-fg', settings.inputTextColor);
+    else root.style.removeProperty('--input-fg');
     // 全局动效总开关：低配电脑关闭以省性能
     root.classList.toggle('anim-off', !settings.enableAnimations);
   }, [settings]);

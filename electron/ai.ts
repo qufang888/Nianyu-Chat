@@ -12,15 +12,51 @@ export interface AIMessage {
   content: string | ContentPart[];
 }
 
+// 模型调用错误结构化信息：携带 HTTP 状态码与软件可识别的 code，供前端错误气泡分类展示
+export interface ModelErrorInfo {
+  status?: number;
+  code: string; // auth | notFound | rateLimit | badRequest | timeout | serverError | clientError | noApiKey | exception
+  message: string;
+  detail?: string;
+}
+
+// 模型 API 调用失败（HTTP 非 2xx 或网络异常）时抛出的结构化错误
+export class ModelApiError extends Error {
+  status?: number;
+  code: string;
+  detail?: string;
+  constructor(status: number | undefined, message: string, detail?: string) {
+    super(message);
+    this.name = 'ModelApiError';
+    this.status = status;
+    this.detail = detail;
+    this.code = httpStatusToCode(status);
+  }
+}
+
+// 将 HTTP 状态码映射为软件可识别的错误 code
+export function httpStatusToCode(status?: number): string {
+  if (!status) return 'exception';
+  if (status === 401 || status === 403) return 'auth';
+  if (status === 404) return 'notFound';
+  if (status === 429) return 'rateLimit';
+  if (status === 400) return 'badRequest';
+  if (status === 408) return 'timeout';
+  if (status === 500 || status === 502 || status === 503 || status === 504) return 'serverError';
+  if (status >= 400 && status < 500) return 'clientError';
+  if (status >= 500) return 'serverError';
+  return 'exception';
+}
+
 // ===== 深度思考等级（全局，由主进程在设置变更时同步，避免改动所有调用点）=====
 let deepThinkLevel: 'off' | 'low' | 'medium' | 'high' = 'off';
 export function setDeepThinkLevel(level: 'off' | 'low' | 'medium' | 'high'): void {
   deepThinkLevel = level || 'off';
 }
 // 自动探测模型是否支持深度思考（实现移至 src/utils/modelFeatures，主/渲染共用）
-// 将当前深度思考等级写入请求体（仅 OpenAI 兼容接口、且等级非 off 时）
-function applyDeepThink(body: Record<string, any>): void {
-  if (deepThinkLevel && deepThinkLevel !== 'off') {
+// 将当前深度思考等级写入请求体（仅 OpenAI 兼容接口、全局档位非 off、且该模型被标记为支持推理时）
+function applyDeepThink(body: Record<string, any>, cfg?: ModelConfig): void {
+  if (deepThinkLevel && deepThinkLevel !== 'off' && cfg?.supportsReasoning) {
     body.reasoning_effort = deepThinkLevel; // 'low' | 'medium' | 'high'
   }
 }
@@ -77,6 +113,7 @@ export interface AIResult {
   reasoning?: string; // 思维链（推理模型的思考过程），不进入上下文与记忆
   promptTokens: number;
   completionTokens: number;
+  error?: ModelErrorInfo; // 模型调用失败时携带结构化错误（不抛异常，由调用方决定如何处理）
 }
 
 export interface StreamChunk {
@@ -184,9 +221,10 @@ export async function queryAI(
 ): Promise<AIResult> {
   if (!cfg.apiKey && cfg.provider !== 'openai-compatible') {
     return {
-      content: `（模型「${cfg.name}」未配置 API Key，请在设置-模型管理中填写）`,
+      content: '',
       promptTokens: 0,
       completionTokens: 0,
+      error: { code: 'noApiKey', message: `模型「${cfg.name}」未配置 API Key，请在设置-模型管理中填写` },
     };
   }
 
@@ -204,10 +242,20 @@ export async function queryAI(
     }
     return await queryOpenAILike(cfg, messages, maxTokens, controller);
   } catch (e: any) {
+    if (e instanceof ModelApiError) {
+      return {
+        content: '',
+        promptTokens: 0,
+        completionTokens: 0,
+        error: { status: e.status, code: e.code, message: e.message, detail: e.detail },
+      };
+    }
+    const message = `请求异常：${e?.message || String(e)}`;
     return {
-      content: `（请求异常：${e?.message || String(e)}）`,
+      content: '',
       promptTokens: 0,
       completionTokens: 0,
+      error: { code: 'exception', message, detail: e?.stack },
     };
   } finally {
     clearTimeout(timer);
@@ -238,7 +286,7 @@ async function queryOpenAILike(
       };
       if (cfg.topP !== undefined) b.top_p = cfg.topP;
       if (cfg.topK !== undefined && cfg.topK > 0) b.top_k = cfg.topK;
-      applyDeepThink(b);
+      applyDeepThink(b, cfg);
       applyCustomParams(b, cfg);
       return b;
     })()),
@@ -246,11 +294,7 @@ async function queryOpenAILike(
   });
   if (!resp.ok) {
     const errText = await resp.text();
-    return {
-      content: `（API 请求失败 ${resp.status}: ${errText.slice(0, 300)}）`,
-      promptTokens: 0,
-      completionTokens: 0,
-    };
+    throw new ModelApiError(resp.status, `API 请求失败 ${resp.status}: ${errText.slice(0, 300)}`, errText.slice(0, 2000));
   }
   const data = (await resp.json()) as any;
   const msg = data?.choices?.[0]?.message ?? {};
@@ -291,7 +335,7 @@ export async function streamAI(
       };
       if (cfg.topP !== undefined) b.top_p = cfg.topP;
       if (cfg.topK !== undefined && cfg.topK > 0) b.top_k = cfg.topK;
-      applyDeepThink(b);
+      applyDeepThink(b, cfg);
       applyCustomParams(b, cfg);
       return b;
     })()),
@@ -299,11 +343,7 @@ export async function streamAI(
   });
   if (!resp.ok) {
     const errText = await resp.text();
-    return {
-      content: `（API 请求失败 ${resp.status}: ${errText.slice(0, 300)}）`,
-      promptTokens: 0,
-      completionTokens: 0,
-    };
+    throw new ModelApiError(resp.status, `API 请求失败 ${resp.status}: ${errText.slice(0, 300)}`, errText.slice(0, 2000));
   }
 
   let rawFull = ''; // 原始正文累积（可能含 <think> 标签）
@@ -423,11 +463,7 @@ async function queryAnthropic(
   });
   if (!resp.ok) {
     const errText = await resp.text();
-    return {
-      content: `（Anthropic 请求失败 ${resp.status}: ${errText.slice(0, 300)}）`,
-      promptTokens: 0,
-      completionTokens: 0,
-    };
+    throw new ModelApiError(resp.status, `Anthropic 请求失败 ${resp.status}: ${errText.slice(0, 300)}`, errText.slice(0, 2000));
   }
   const data = (await resp.json()) as any;
   const blocks: any[] = Array.isArray(data?.content) ? data.content : [];
