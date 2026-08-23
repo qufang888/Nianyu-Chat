@@ -13,11 +13,9 @@ const items: { key: View; icon: string; labelKey: string }[] = [
   { key: 'settings', icon: '⚙️', labelKey: 'nav.settings' },
 ];
 
-export const Sidebar: React.FC<{ view: View; onChange: (v: View) => void; onAbout?: () => void; onRefresh?: () => void }> = ({
+export const Sidebar: React.FC<{ view: View; onChange: (v: View) => void }> = ({
   view,
   onChange,
-  onAbout,
-  onRefresh,
 }) => {
   const { t } = useI18n();
   return (
@@ -34,23 +32,6 @@ export const Sidebar: React.FC<{ view: View; onChange: (v: View) => void; onAbou
           {it.icon}
         </div>
       ))}
-      <div style={{ flex: 1 }} />
-      <div
-        className="nav-item"
-        role="button"
-        title={t('nav.refreshUI')}
-        onClick={() => onRefresh?.()}
-      >
-        🔄
-      </div>
-      <div
-        className="nav-item"
-        role="button"
-        title={t('about.open')}
-        onClick={() => onAbout?.()}
-      >
-        ℹ️
-      </div>
     </div>
   );
 };

@@ -40,13 +40,6 @@ export default function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
-
-  const refreshUI = useCallback(() => {
-    setRefreshKey((k) => k + 1);
-    const c = document.querySelector('.app-root');
-    c?.dispatchEvent(new CustomEvent('refresh'));
-  }, []);
 
   // 首次启动向导：未走过初始设置 或 没有配置模型时弹出，添加模型为必填。
   useEffect(() => {
@@ -151,8 +144,8 @@ export default function App() {
   return (
     <div className="app-root">
       <CustomTitleBar title={title} />
-      <div className="app-shell" data-refresh={refreshKey}>
-        <Sidebar view={view} onChange={setView} onAbout={() => setAboutOpen(true)} onRefresh={refreshUI} />
+      <div className="app-shell">
+        <Sidebar view={view} onChange={setView} />
       {view === 'chats' && (
         <>
           <ChatList
@@ -187,7 +180,10 @@ export default function App() {
       {view === 'contacts' && <RoleList onStartChat={onStartChat} />}
       {view === 'compare' && <ModelCompare />}
       {view === 'settings' && (
-        <Settings onRerunWizard={() => { setView('chats'); setShowOnboarding(true); }} />
+        <Settings
+          onRerunWizard={() => { setView('chats'); setShowOnboarding(true); }}
+          onAbout={() => setAboutOpen(true)}
+        />
       )}
       {view === 'stats' && <StatsView />}
       {view === 'moments' && <MomentsView />}

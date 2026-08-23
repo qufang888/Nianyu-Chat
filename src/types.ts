@@ -285,6 +285,9 @@ export interface AppSettings {
   // ===== 输入框外观（自定义文字色 / 内部背景色，防止文字与背景相近看不清）=====
   inputTextColor?: string; // 输入框文字颜色（CSS 颜色），空=跟随主题
   inputBgColor?: string; // 输入框内部背景色（CSS 颜色），空=跟随主题（默认浅灰/白）
+  // ===== 毛玻璃主题背景（仅 glass/frost 主题生效；设置毛玻璃专属，未开启毛玻璃主题时隐藏）=====
+  glassBgColor?: string; // 毛玻璃主题自定义背景色（CSS 颜色），空=跟随主题默认渐变
+  glassBgImage?: string; // 毛玻璃主题自定义背景图（data URL），空=无；设置后毛玻璃磨砂效果仍保留
   enableRandomEvents: boolean; // 随机事件：开启后聊天过程中会自动弹出随机事件（关闭则仅手动触发）
   // ===== 空闲主动回复 =====
   idleEnabled: boolean; // 全局主开关：关闭时所有按聊天的主动消息都失效（默认开）
@@ -499,6 +502,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   deepThinkLevel: 'off',
   inputTextColor: '',
   inputBgColor: '',
+  glassBgColor: '',
+  glassBgImage: '',
   enableRandomEvents: true,
   idleEnabled: true,
   chatIdleEnabled: {},

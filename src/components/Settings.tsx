@@ -42,6 +42,16 @@ export const THEMES: { key: ThemeName; nameKey: string; swatch: string }[] = [
   { key: 'sand', nameKey: 'theme.sand', swatch: 'linear-gradient(135deg,#a16f49,#c89468)' },
 ];
 
+// 设置分类区块（左侧导航 + 右侧分组），顺序即展示顺序
+const SETTING_CATS: { id: string; labelKey: string }[] = [
+  { id: 'cat-general', labelKey: 'settings.catGeneral' },
+  { id: 'cat-models', labelKey: 'settings.catModels' },
+  { id: 'cat-appearance', labelKey: 'settings.catAppearance' },
+  { id: 'cat-generation', labelKey: 'settings.catGeneration' },
+  { id: 'cat-translation', labelKey: 'settings.catTranslation' },
+  { id: 'cat-window', labelKey: 'settings.catWindow' },
+];
+
 const SOUND_ROWS: { type: SoundType; labelKey: string }[] = [
   { type: 'error', labelKey: 'settings.soundError' },
   { type: 'click', labelKey: 'settings.soundClick' },
@@ -124,10 +134,45 @@ function CursorHotspotPreview({
   );
 }
 
-export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWizard }) => {
+export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => void }> = ({
+  onRerunWizard,
+  onAbout,
+}) => {
   const { toast, showToast } = useToast();
   const { theme, setTheme, settings, reloadSettings } = useTheme();
   const { t, lang, setLang } = useI18n();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const catRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [activeCat, setActiveCat] = useState(SETTING_CATS[0].id);
+  const scrollToCat = (id: string) => {
+    catRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setActiveCat(id);
+  };
+  const onPanelScroll = () => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const top = panel.getBoundingClientRect().top;
+    let current = SETTING_CATS[0].id;
+    for (const c of SETTING_CATS) {
+      const el = catRefs.current[c.id];
+      if (el && el.getBoundingClientRect().top - top <= 90) current = c.id;
+    }
+    setActiveCat(current);
+  };
+  // 导入图片作为毛玻璃背景（读取为 data URL 存入设置）
+  const importGlassBg = () => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/*';
+    inp.onchange = () => {
+      const f = inp.files?.[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => patch({ glassBgImage: String(reader.result), glassBgColor: '' });
+      reader.readAsDataURL(f);
+    };
+    inp.click();
+  };
   const [draft, setDraft] = useState<AppSettings | null>(settings);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
@@ -489,7 +534,22 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
               : t('settings.title')}
         </span>
       </div>
-      <div className="panel" style={{ overflowY: 'auto' }}>
+      <div className="settings-layout">
+        {sub === 'main' && (
+          <nav className="settings-nav">
+            {SETTING_CATS.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                className={`settings-nav-item ${activeCat === c.id ? 'active' : ''}`}
+                onClick={() => scrollToCat(c.id)}
+              >
+                {t(c.labelKey)}
+              </button>
+            ))}
+          </nav>
+        )}
+        <div className="panel" style={{ overflowY: 'auto' }} ref={panelRef} onScroll={onPanelScroll}>
         {sub === 'self' ? (
           <SelfRoleSettings
             selfRoles={draft.selfRoles || []}
@@ -508,6 +568,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
         )}
 
         {/* ===== 语言 ===== */}
+        <div id="cat-general" ref={(el) => { catRefs.current['cat-general'] = el; }} className="settings-category">
         <div className="section-title">{t('settings.language')}</div>
         <div className="field" style={{ maxWidth: 240 }}>
           <SelectMenu
@@ -1122,7 +1183,9 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
             </div>
           </div>
 
-          {/* ===== 群聊互聊（流式并行 / 调度 / 自动接话 / 主动续聊） ===== */}
+          </div>{/* end cat-general */}
+        {/* ===== 群聊互聊（流式并行 / 调度 / 自动接话 / 主动续聊） ===== */}
+        <div id="cat-models" ref={(el) => { catRefs.current['cat-models'] = el; }} className="settings-category">
         <div className="section-title" style={{ marginTop: 16 }}>{t('settings.groupChat')}</div>
 
         {/* 群聊流式并行数量 */}
@@ -1346,6 +1409,8 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
           {t('settings.addModel')}
         </button>
 
+        </div>{/* end cat-models */}
+        <div id="cat-appearance" ref={(el) => { catRefs.current['cat-appearance'] = el; }} className="settings-category">
         <div className="section-title">{t('settings.theme')}</div>
         <div className="theme-options">
           {THEMES.map((titem) => (
@@ -1704,7 +1769,50 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
           )}
         </div>
 
+        {/* ===== 毛玻璃主题背景（仅 glass/frost 主题生效，未开启时隐藏） ===== */}
+        {(theme === 'glass' || theme === 'frost') && (
+          <>
+            <div className="section-title" style={{ marginTop: 16 }}>{t('settings.glassBg')}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 2 }}>
+                {t('settings.glassBgDesc')}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13 }}>{t('settings.glassBgColor')}</span>
+                  <input
+                    type="color"
+                    value={draft.glassBgColor || '#6a3aa8'}
+                    onChange={(e) => patch({ glassBgColor: e.target.value, glassBgImage: '' })}
+                    style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
+                  />
+                </label>
+                <button type="button" className="btn-ghost" onClick={importGlassBg}>{t('settings.glassBgImport')}</button>
+                <button type="button" className="btn-ghost" onClick={() => patch({ glassBgColor: '', glassBgImage: '' })}>{t('settings.glassBgReset')}</button>
+              </div>
+              {/* 预览：实时反映当前毛玻璃背景（颜色或图片） */}
+              <div
+                style={{
+                  marginTop: 4,
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid var(--color-border)',
+                  background: draft.glassBgImage
+                    ? `center/cover no-repeat url("${draft.glassBgImage}")`
+                    : draft.glassBgColor || 'linear-gradient(135deg,#1e2a78,#6a3aa8,#a1429c)',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                  minHeight: 48,
+                }}
+              >
+                {t('settings.glassBgPreview')}
+              </div>
+            </div>
+          </>
+        )}
+        </div>{/* end cat-appearance */}
         {/* ===== 语音功能（ASR + TTS） ===== */}
+        <div id="cat-generation" ref={(el) => { catRefs.current['cat-generation'] = el; }} className="settings-category">
         <div className="section-title">{t('settings.voice')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
           <div>
@@ -2249,7 +2357,9 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
           )}
         </div>
 
+        </div>{/* end cat-generation */}
         {/* ===== 翻译（右键消息翻译文本） ===== */}
+        <div id="cat-translation" ref={(el) => { catRefs.current['cat-translation'] = el; }} className="settings-category">
         <div className="section-title">{t('settings.translation')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
@@ -2371,7 +2481,9 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
           {t('settings.soundCustomTip')}
         </div>
 
+        </div>{/* end cat-translation */}
         {/* ===== 快捷聊天小窗 ===== */}
+        <div id="cat-window" ref={(el) => { catRefs.current['cat-window'] = el; }} className="settings-category">
         <div className="section-title">{t('settings.mini')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
@@ -2571,7 +2683,13 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
             </button>
           )}
         </div>
-        </>
+        <div className="settings-about-row">
+          <button type="button" className="btn-ghost" onClick={() => onAbout?.()}>
+            {t('about.open')} · 念语
+          </button>
+        </div>
+      </div>{/* end cat-window */}
+      </>
         )}
       </div>
 
@@ -2776,6 +2894,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void }> = ({ onRerunWiza
       )}
 
       <ToastView toast={toast} />
+      </div>
     </div>
   );
 };

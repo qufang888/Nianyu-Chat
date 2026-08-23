@@ -79,7 +79,14 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     else root.style.removeProperty('--input-fg');
     // 全局动效总开关：低配电脑关闭以省性能
     root.classList.toggle('anim-off', !settings.enableAnimations);
-  }, [settings]);
+    // 毛玻璃主题背景（仅 glass/frost 主题生效）：自定义背景色或图片，磨砂效果由主题 CSS 的 backdrop-filter 保留
+    const isGlass = theme === 'glass' || theme === 'frost';
+    const glassBg = settings.glassBgImage
+      ? `url("${settings.glassBgImage}") center/cover no-repeat`
+      : settings.glassBgColor || '';
+    if (isGlass && glassBg) root.style.setProperty('--app-bg', glassBg);
+    else root.style.removeProperty('--app-bg');
+  }, [settings, theme]);
 
   const setTheme = (t: ThemeName) => {
     setThemeState(t);
