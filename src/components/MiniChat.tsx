@@ -1610,7 +1610,7 @@ export const MiniChat: React.FC = () => {
       audioRef.current?.pause();
       setSpeakingId(msg.id);
       showToast(t('chat.toastSpeaking'));
-      const src = await api.textToSpeech(msg.content);
+      const src = await api.textToSpeech(msg.content, msg.role_id);
       const audio = new Audio(src);
       audioRef.current = audio;
       audio.onended = () => setSpeakingId((id) => (id === msg.id ? null : id));

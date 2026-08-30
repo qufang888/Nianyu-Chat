@@ -548,20 +548,35 @@ export async function testConnection(
 }
 
 // 语音转文字（OpenAI 兼容 /audio/transcriptions，multipart 上传）
+// format: 上传容器格式（wav/mp3/m4a/flac/webm），决定扩展名与 Content-Type；多数服务端只接受特定格式。
+// language: 可选强制识别语言（如 zh / en），空=服务端自动检测。
 export async function transcribeAudio(
   cfg: { baseUrl: string; apiKey: string },
   audio: Buffer,
   model: string,
-  fileName = 'audio.webm'
+  format: 'wav' | 'mp3' | 'm4a' | 'flac' | 'webm' = 'wav',
+  language?: string
 ): Promise<string> {
   if (!cfg.apiKey) throw new Error('ASR 模型未配置 API Key');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 60000);
   try {
+    // 依据目标格式决定扩展名与 MIME（修复：硬编码 audio/webm 导致多数第三方 ASR 返回 400）
+    const extMap: Record<string, { ext: string; mime: string }> = {
+      wav: { ext: 'audio.wav', mime: 'audio/wav' },
+      mp3: { ext: 'audio.mp3', mime: 'audio/mpeg' },
+      m4a: { ext: 'audio.m4a', mime: 'audio/mp4' },
+      flac: { ext: 'audio.flac', mime: 'audio/flac' },
+      webm: { ext: 'audio.webm', mime: 'audio/webm' },
+    };
+    const fm = extMap[format] || extMap.wav;
     const form = new FormData();
-    const blob = new Blob([new Uint8Array(audio)], { type: 'audio/webm' });
-    form.append('file', blob, fileName);
+    const blob = new Blob([new Uint8Array(audio)], { type: fm.mime });
+    form.append('file', blob, fm.ext);
     form.append('model', model || 'whisper-1');
+    // 显式声明返回 JSON，规避个别服务端默认返回 text/verbose_json 造成的解析歧义
+    form.append('response_format', 'json');
+    if (language && language.trim()) form.append('language', language.trim());
     const resp = await fetch(joinUrl(cfg.baseUrl, '/audio/transcriptions'), {
       method: 'POST',
       headers: { Authorization: `Bearer ${cfg.apiKey}` },

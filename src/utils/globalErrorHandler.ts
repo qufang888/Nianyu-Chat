@@ -61,41 +61,41 @@ export function showErrorDialog(options: ShowErrorOptions) {
   container.style.display = 'flex'; // 真正报错时才显示遮罩（默认 none）
   container.innerHTML = `
     <div style="
-      background: #fff; border-radius: 12px; padding: 28px 32px;
-      max-width: 520px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+      background: var(--color-panel, #fff); border: 1px solid var(--color-border, #d9d9d9); border-radius: 12px; padding: 28px 32px;
+      max-width: 520px; width: 90%; box-shadow: var(--shadow-panel, 0 8px 32px rgba(0,0,0,0.2));
       animation: nianyuErrorFadeIn 0.25s ease;
-      color: #333; pointer-events: auto;
+      color: var(--color-text, #333); pointer-events: auto;
     ">
       <div style="font-size: 20px; font-weight: 600; margin-bottom: 16px;">
         ⚠️ ${title}
       </div>
       <div style="margin-bottom: 16px;">
-        <div style="font-size: 13px; color: #666; margin-bottom: 4px;">${errorTitle}:</div>
-        <div style="font-size: 13px; color: #e74c3c; background: #fef0ef; padding: 8px 12px; border-radius: 6px; word-break: break-word; margin-bottom: 12px;">
+        <div style="font-size: 13px; color: var(--color-text-muted, #666); margin-bottom: 4px;">${errorTitle}:</div>
+        <div style="font-size: 13px; color: var(--color-danger, #e74c3c); background: color-mix(in srgb, var(--color-danger, #e74c3c) 10%, transparent); padding: 8px 12px; border-radius: 6px; word-break: break-word; margin-bottom: 12px;">
           ${escapeHtml(message)}
         </div>
-        ${sourceText ? `<div style="font-size: 12px; color: #999; margin-bottom: 8px;">${sourceText}</div>` : ''}
-        <div style="font-size: 13px; color: #666; margin-bottom: 4px;">${causeLabel}:</div>
-        <div style="font-size: 14px; color: #d97706; background: #fffbeb; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px;">
+        ${sourceText ? `<div style="font-size: 12px; color: var(--color-text-muted, #999); margin-bottom: 8px;">${sourceText}</div>` : ''}
+        <div style="font-size: 13px; color: var(--color-text-muted, #666); margin-bottom: 4px;">${causeLabel}:</div>
+        <div style="font-size: 14px; color: var(--color-warn, #d97706); background: color-mix(in srgb, var(--color-warn, #d97706) 10%, transparent); padding: 8px 12px; border-radius: 6px; margin-bottom: 12px;">
           ${escapeHtml(diagnosis.cause[lang])}
         </div>
-        <div style="font-size: 13px; color: #666; margin-bottom: 4px;">${solutionLabel}:</div>
-        <div style="font-size: 14px; color: #059669; background: #ecfdf5; padding: 8px 12px; border-radius: 6px;">
+        <div style="font-size: 13px; color: var(--color-text-muted, #666); margin-bottom: 4px;">${solutionLabel}:</div>
+        <div style="font-size: 14px; color: var(--color-success, #059669); background: color-mix(in srgb, var(--color-success, #059669) 10%, transparent); padding: 8px 12px; border-radius: 6px;">
           ${escapeHtml(diagnosis.solution[lang])}
         </div>
       </div>
       <div style="display: flex; gap: 8px; justify-content: flex-end;">
         <button id="nianyu-error-copy" style="
-          padding: 8px 16px; font-size: 13px; border: 1px solid #d9d9d9;
-          border-radius: 6px; background: #fff; color: #333; cursor: pointer;
+          padding: 8px 16px; font-size: 13px; border: 1px solid var(--color-border, #d9d9d9);
+          border-radius: 6px; background: var(--color-panel, #fff); color: var(--color-text, #333); cursor: pointer;
         ">${copyBtn}</button>
         ${fatal ? `<button id="nianyu-error-reload" style="
           padding: 8px 16px; font-size: 13px; border: none;
-          border-radius: 6px; background: #1677ff; color: #fff; cursor: pointer;
+          border-radius: 6px; background: var(--color-primary, #1677ff); color: var(--color-primary-text, #fff); cursor: pointer;
         ">${reloadBtn}</button>` : ''}
         <button id="nianyu-error-close" style="
           padding: 8px 16px; font-size: 13px; border: none;
-          border-radius: 6px; background: #e8e8e8; color: #333; cursor: pointer;
+          border-radius: 6px; background: var(--color-hover, #e8e8e8); color: var(--color-text, #333); cursor: pointer;
         ">${closeBtn}</button>
       </div>
     </div>

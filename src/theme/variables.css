@@ -27,6 +27,13 @@
   --titlebar-close-hover-icon: #ffffff;
   --titlebar-border: #e3e3e3;
   --titlebar-blur: 0px;
+  /* 语义化辅助色（可被具体主题覆盖） */
+  --color-text-muted: #8a8a8a;
+  --color-danger: #ff4d4f;
+  --color-danger-text: #ffffff;
+  --color-success: #10b981;
+  --color-warn: #f59e0b;
+  --color-info: #3b82f6;
 }
 
 /* 经典微信风格 */
@@ -53,6 +60,7 @@
   --color-system-msg: #999999;
   --color-select-bg: #ffffff;
   --color-select-text: #1a1a1a;
+  --color-text-muted: #888888;
   /* 经典微信：标题栏浅色，关闭悬停微信红 */
   --app-bg: #ededed;
   --titlebar-bg: #ededed;
@@ -90,6 +98,7 @@
   --color-system-msg: rgba(255, 255, 255, 0.6);
   --color-select-bg: #241b45;
   --color-select-text: #f4f4ff;
+  --color-text-muted: rgba(255, 255, 255, 0.5);
   /* 毛玻璃：标题栏半透明 + 磨砂；根容器半透明可透出桌面 */
   --app-bg: linear-gradient(135deg, rgba(30,42,120,0.55) 0%, rgba(106,58,168,0.55) 55%, rgba(161,66,156,0.55) 100%);
   --window-bg-blur: 40px;
@@ -127,6 +136,7 @@
   --color-system-msg: #666666;
   --color-select-bg: #1f1f1f;
   --color-select-text: #e6e6e6;
+  --color-text-muted: #777777;
   /* 极简暗色：标题栏深色，关闭悬停红，按钮悬停亮 */
   --app-bg: #0d0d0d;
   --titlebar-bg: #1a1a1a;
@@ -165,6 +175,7 @@
   --color-system-msg: #b08aa0;
   --color-select-bg: #ffffff;
   --color-select-text: #3a2b34;
+  --color-text-muted: #a08090;
   /* 活力多彩：标题栏粉橙渐变，关闭悬停白底红字 */
   --app-bg: linear-gradient(135deg, #ffd1e8 0%, #d6e4ff 100%);
   --titlebar-bg: linear-gradient(135deg, #ff8fb1, #ffb86c);
@@ -203,6 +214,7 @@
   --color-system-msg: #a3adbf;
   --color-select-bg: #1c212e;
   --color-select-text: #f0f2f7;
+  --color-text-muted: #8a96ad;
   --app-bg: #151923;
   --titlebar-bg: #1c212e;
   --titlebar-text: #f0f2f7;
@@ -238,6 +250,7 @@
   --color-system-msg: #a8a1bc;
   --color-select-bg: #211f2e;
   --color-select-text: #eae6f0;
+  --color-text-muted: #9289a8;
   --app-bg: #191724;
   --titlebar-bg: #211f2e;
   --titlebar-text: #eae6f0;
@@ -273,6 +286,7 @@
   --color-system-msg: #9bb3af;
   --color-select-bg: #1a2422;
   --color-select-text: #e6edeb;
+  --color-text-muted: #82a09c;
   --app-bg: #141c1b;
   --titlebar-bg: #1a2422;
   --titlebar-text: #e6edeb;
@@ -308,6 +322,7 @@
   --color-system-msg: #b4a99f;
   --color-select-bg: #23201e;
   --color-select-text: #f3efeb;
+  --color-text-muted: #9a8f85;
   --app-bg: #1a1817;
   --titlebar-bg: #23201e;
   --titlebar-text: #f3efeb;
@@ -343,6 +358,7 @@
   --color-system-msg: #64748b;
   --color-select-bg: #ffffff;
   --color-select-text: #1e293b;
+  --color-text-muted: #7a879a;
   --app-bg: #f7f8fa;
   --titlebar-bg: #edeff3;
   --titlebar-text: #1e293b;
@@ -378,6 +394,7 @@
   --color-system-msg: #bca4ab;
   --color-select-bg: #291f23;
   --color-select-text: #f3e9ec;
+  --color-text-muted: #a58c94;
   --app-bg: #20191c;
   --titlebar-bg: #291f23;
   --titlebar-text: #f3e9ec;
@@ -413,6 +430,7 @@
   --color-system-msg: #88b8a3;
   --color-select-bg: #171f1b;
   --color-select-text: #e4fff2;
+  --color-text-muted: #70a08c;
   --app-bg: #0f1412;
   --titlebar-bg: #171f1b;
   --titlebar-text: #e4fff2;
@@ -448,6 +466,7 @@
   --color-system-msg: #9ca3af;
   --color-select-bg: #1e2023;
   --color-select-text: #e5e7eb;
+  --color-text-muted: #838a96;
   --app-bg: #17181a;
   --titlebar-bg: #1e2023;
   --titlebar-text: #e5e7eb;
@@ -483,6 +502,7 @@
   --color-system-msg: #8fa3c2;
   --color-select-bg: #161e2d;
   --color-select-text: #e6edf7;
+  --color-text-muted: #768caa;
   --app-bg: #101620;
   --titlebar-bg: #161e2d;
   --titlebar-text: #e6edf7;
@@ -518,6 +538,7 @@
   --color-system-msg: #8a7866;
   --color-select-bg: #ffffff;
   --color-select-text: #3e3228;
+  --color-text-muted: #746657;
   --app-bg: #f6f1e9;
   --titlebar-bg: #ebe3d6;
   --titlebar-text: #3e3228;

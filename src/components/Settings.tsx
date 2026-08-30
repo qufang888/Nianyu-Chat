@@ -19,6 +19,7 @@ import {
 } from '../types';
 import { ModelEditor } from './ModelEditor';
 import { FontSettings } from './FontSettings';
+import { GuideView } from './GuideView';
 import { SelfRoleSettings } from './SelfRoleSettings';
 import { useToast, ToastView } from './Toast';
 import SelectMenu from './SelectMenu';
@@ -50,6 +51,47 @@ const SETTING_CATS: { id: string; labelKey: string }[] = [
   { id: 'cat-generation', labelKey: 'settings.catGeneration' },
   { id: 'cat-translation', labelKey: 'settings.catTranslation' },
   { id: 'cat-window', labelKey: 'settings.catWindow' },
+];
+
+// 设置搜索索引：每项含锚点 id、i18n 键、中英文关键词；搜索框据此给出「百度建议」式候选
+type SettingSearchItem = { id: string; key: string; kw: string[] };
+const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
+  { id: 'cat-general', key: 'settings.catGeneral', kw: ['通用', '常规', '基础', 'general', 'basic'] },
+  { id: 'cat-models', key: 'settings.catModels', kw: ['模型', 'model', '模型配置'] },
+  { id: 'cat-appearance', key: 'settings.catAppearance', kw: ['外观', '主题', '界面', 'appearance', 'theme'] },
+  { id: 'cat-generation', key: 'settings.catGeneration', kw: ['生成', '生图', '生视频', 'generation', 'image', 'video'] },
+  { id: 'cat-translation', key: 'settings.catTranslation', kw: ['翻译', 'translation'] },
+  { id: 'cat-window', key: 'settings.catWindow', kw: ['窗口', '小窗', '悬浮球', 'window', '迷你'] },
+  { id: 'sec-language', key: 'settings.language', kw: ['语言', 'language', '界面语言', '中文', '英文'] },
+  { id: 'sec-streaming', key: 'settings.enableStreaming', kw: ['流式', 'stream', '打字机'] },
+  { id: 'sec-animations', key: 'settings.animations', kw: ['动画', 'animation', '动效'] },
+  { id: 'sec-font', key: 'settings.font', kw: ['字体', 'font', '字号'] },
+  { id: 'sec-self', key: 'self.title', kw: ['自我', '身份', 'self', '角色'] },
+  { id: 'sec-worldbook', key: 'worldbook.title', kw: ['世界书', 'worldbook', '背景设定'] },
+  { id: 'sec-groupchat', key: 'settings.groupChat', kw: ['群聊', 'group', '多人', '群组'] },
+  { id: 'sec-modelmanage', key: 'settings.modelManage', kw: ['模型管理', 'model manage', '添加模型'] },
+  { id: 'sec-theme', key: 'settings.theme', kw: ['主题', 'theme', '配色', '皮肤'] },
+  { id: 'sec-radius', key: 'settings.radius', kw: ['圆角', 'radius', '边角'] },
+  { id: 'sec-uizoom', key: 'settings.uiZoom', kw: ['缩放', 'zoom', '等比', '基准尺寸', '上下限'] },
+  { id: 'sec-emoevent', key: 'settings.emoEventAdvanced', kw: ['情绪', '事件', 'emotion', 'event', '高级'] },
+  { id: 'sec-inputappearance', key: 'settings.inputAppearance', kw: ['输入框', 'input', '输入栏', '外观'] },
+  { id: 'sec-cursor', key: 'settings.cursor', kw: ['光标', 'cursor', '鼠标指针', '自定义光标'] },
+  { id: 'sec-glassbg', key: 'settings.glassBg', kw: ['毛玻璃', 'glass', '背景', '虚化'] },
+  { id: 'sec-voice', key: 'settings.voice', kw: ['语音', 'voice', 'tts', '朗读', '播报', 'asr', '识别', '语音输入'] },
+  { id: 'sec-imagegen', key: 'settings.imageGen', kw: ['生图', '画图', 'image', '图像生成', '文生图'] },
+  { id: 'sec-videogen', key: 'settings.videoGen', kw: ['视频', 'video', '生视频', '文生视频'] },
+  { id: 'sec-sceneimage', key: 'settings.sceneImage', kw: ['场景图', 'scene', '配图'] },
+  { id: 'sec-websearch', key: 'settings.webSearch', kw: ['联网', '搜索', 'web', 'search', '联网搜索'] },
+  { id: 'sec-plugins', key: 'settings.plugins', kw: ['插件', 'plugin', '扩展'] },
+  { id: 'sec-translation', key: 'settings.translation', kw: ['翻译', 'translation', '译文'] },
+  { id: 'sec-sound', key: 'settings.sound', kw: ['音效', 'sound', '提示音', '通知音', '声音'] },
+  { id: 'sec-mini', key: 'settings.mini', kw: ['小窗', '迷你', 'mini', '快捷'] },
+  { id: 'sec-floatingball', key: 'settings.floatingBall', kw: ['悬浮球', '浮动球', '球', 'floating', '桌面'] },
+  { id: 'sec-datapath', key: 'settings.dataPath', kw: ['数据', '路径', 'data', 'path', '存储'] },
+  { id: 'sec-closebehavior', key: 'settings.closeBehavior', kw: ['关闭', '退出', 'close', '退出行为'] },
+  { id: 'sec-errorlog', key: 'settings.errorLog', kw: ['错误', '日志', 'error', 'log', '报错'] },
+  { id: 'sec-backup', key: 'settings.backup', kw: ['备份', 'backup', '恢复'] },
+  { id: 'sec-reset', key: 'settings.resetSettings', kw: ['重置', 'reset', '恢复默认', '清空'] },
 ];
 
 const SOUND_ROWS: { type: SoundType; labelKey: string }[] = [
@@ -220,6 +262,186 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
     });
   }, []);
 
+  // TTS 按角色音色：加载角色（含群成员）清单与可选音色列表
+  const [roleVoiceList, setRoleVoiceList] = useState<{ roleId: string; name: string }[]>([]);
+  const [voiceOptions, setVoiceOptions] = useState<string[]>([]);
+
+  // ===== 设置搜索框（百度建议式候选） =====
+  const [searchQ, setSearchQ] = useState('');
+  const [showSuggest, setShowSuggest] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
+  // 搜索索引：基础为静态分区/分类（含中英文关键词），再于挂载后运行时补全所有
+  // 具体控件（勾选框 / 滑块 / 下拉 / 各分区标题），保证「所有设置项」均可被搜到并跳转。
+  const [searchIndex, setSearchIndex] = useState<SettingSearchItem[]>(SETTING_SEARCH_INDEX);
+  const draftReady = !!draft;
+  React.useEffect(() => {
+    const root = panelRef.current;
+    if (!root || !draftReady) return;
+    const dyn: SettingSearchItem[] = [];
+    const seen = new Set<string>();
+    const clean = (s: string) => s.replace(/\s+/g, ' ').trim();
+    // 取「设置名」：优先直接 label → .field 内 label → 父容器内首个 fontSize:13 标题 div → 父容器文本
+    const nameOf = (el: HTMLElement): string => {
+      const lbl = el.closest('label');
+      if (lbl) {
+        const t = clean(lbl.textContent || '');
+        if (t) return t;
+      }
+      const field = el.closest('.field');
+      if (field) {
+        const fl = field.querySelector('label');
+        if (fl) {
+          const t = clean(fl.textContent || '');
+          if (t) return t;
+        }
+      }
+      const p = el.parentElement;
+      if (p) {
+        const titleDiv = Array.from(p.querySelectorAll('div')).find((d) =>
+          /font-size:\s*13px/i.test(d.getAttribute('style') || '')
+        );
+        if (titleDiv) {
+          const t = clean(titleDiv.textContent || '');
+          if (t) return t;
+        }
+        const t = clean(p.textContent || '');
+        if (t) return t;
+      }
+      return '';
+    };
+    const add = (el: HTMLElement, prefix: string) => {
+      const label = nameOf(el);
+      const norm = label.toLowerCase();
+      if (!label || seen.has(norm)) return;
+      seen.add(norm);
+      const id = `${prefix}-${seen.size}`;
+      el.id = id;
+      dyn.push({ id, key: label, kw: [] });
+    };
+    // 1) 所有勾选框（兼容 label 包裹与 div 包裹两种写法）
+    root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach((el) => {
+      add((el.closest('label') as HTMLElement) || (el.parentElement as HTMLElement) || el, 'set-chk');
+    });
+    // 2) 所有滑块
+    root.querySelectorAll<HTMLInputElement>('input[type="range"]').forEach((el) => {
+      add((el.closest('div') as HTMLElement) || (el.parentElement as HTMLElement) || el, 'set-rng');
+    });
+    // 3) 下拉 / 文本框 / 文本域（排除搜索框）
+    root
+      .querySelectorAll<HTMLElement>(
+        'select, input:not([type="checkbox"]):not([type="range"]):not([type="search"]), textarea'
+      )
+      .forEach((el) => {
+        add(
+          (el.closest('.field') as HTMLElement) ||
+            (el.closest('label') as HTMLElement) ||
+            (el.parentElement as HTMLElement) ||
+            el,
+          'set-ctl'
+        );
+      });
+    // 4) 分段选项组（btn-primary / btn-ghost 按钮组）：取其上方设置名 div
+    const grpSeen = new Set<HTMLElement>();
+    root
+      .querySelectorAll<HTMLButtonElement>('button.btn-primary, button.btn-ghost')
+      .forEach((btn) => {
+        let block: HTMLElement | null = btn;
+        while (block && block !== root) {
+          const prev = block.previousElementSibling as HTMLElement | null;
+          if (prev && /font-size:\s*13px/i.test(prev.getAttribute?.('style') || '')) {
+            if (!grpSeen.has(prev)) {
+              grpSeen.add(prev);
+              add(prev, 'set-grp');
+            }
+            return;
+          }
+          block = block.parentElement;
+        }
+      });
+    setSearchIndex([...SETTING_SEARCH_INDEX, ...dyn]);
+  }, [lang, draftReady]);
+  const searchResults = React.useMemo<SettingSearchItem[]>(() => {
+    const raw = searchQ.toLowerCase().trim();
+    if (!raw) return [];
+    // 拆词：支持「语音 输入」式多关键字，每个词都需在标题或关键词中出现才算命中
+    const tokens = raw.split(/\s+/).filter(Boolean);
+    const scored = searchIndex.map((item) => {
+      const label = t(item.key).toLowerCase();
+      const hay = label + ' ' + item.kw.join(' ').toLowerCase();
+      let score = -1;
+      if (label.startsWith(raw)) score = 100;
+      else if (label.includes(raw)) score = 80;
+      else if (hay.includes(raw)) score = 50;
+      // 多词匹配：全部 token 命中（标题内命中优先）
+      if (score < 0 && tokens.length > 0) {
+        const allHit = tokens.every((tk) => hay.includes(tk));
+        if (allHit) score = tokens.every((tk) => label.includes(tk)) ? 70 : 40;
+      }
+      return { item, score };
+    })
+      .filter((x) => x.score >= 0)
+      .sort((a, b) => b.score - a.score || a.item.key.length - b.item.key.length);
+    return scored.slice(0, 5).map((x) => x.item);
+  }, [searchQ, lang, searchIndex]);
+
+  // 按关键字（多词）高亮标题
+  const renderSearchHL = (label: string, q: string): React.ReactNode => {
+    const tokens = q.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return label;
+    const escaped = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const re = new RegExp(`(${escaped.join('|')})`, 'gi');
+    return label.split(re).map((part, i) =>
+      tokens.includes(part.toLowerCase()) ? (
+        <mark key={i} className="search-hl">{part}</mark>
+      ) : (
+        <span key={i}>{part}</span>
+      )
+    );
+  };
+  const goToSetting = (id: string) => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.remove('setting-flash');
+      void el.offsetWidth; // 触发重排以重启动画
+      el.classList.add('setting-flash');
+      window.setTimeout(() => el.classList.remove('setting-flash'), 5000);
+    }
+    setShowSuggest(false);
+    setSearchQ('');
+  };
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const roles: any[] = (await api.getRoles()) || [];
+        const groups: any[] = (await api.getGroups()) || [];
+        const list: { roleId: string; name: string }[] = [];
+        roles.forEach((r) => list.push({ roleId: r.id, name: r.name }));
+        groups.forEach((g) => {
+          const ids = (g.member_ids || '').split(',').filter(Boolean);
+          ids.forEach((id: string) => {
+            if (list.some((l) => l.roleId === id)) return;
+            const r = roles.find((x: any) => x.id === id);
+            list.push({ roleId: id, name: r ? `${r.name}（${g.group_name}）` : `${id}（${g.group_name}）` });
+          });
+        });
+        if (!cancelled) setRoleVoiceList(list);
+      } catch {
+        /* 忽略：未导入角色时为空 */
+      }
+      try {
+        const voices = await api.listVoices();
+        if (!cancelled) setVoiceOptions(voices || []);
+      } catch {
+        /* 忽略 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   if (!draft) return <div className="panel">{t('common.loading')}</div>;
 
   const loc = lang === 'en' ? 'en-US' : 'zh-CN';
@@ -236,6 +458,8 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
   const mini = { ...DEFAULT_SETTINGS.miniWindow, ...(draft.miniWindow || {}) };
   const sound = { ...DEFAULT_SETTINGS.sound, ...(draft.sound || {}) };
   const cursor = { ...DEFAULT_SETTINGS.customCursor, ...(draft.customCursor || {}) };
+  const floating =
+    draft.floatingBall || { enabled: true, x: 0, y: 0, alwaysOnTop: true, autoHideInFullscreen: true };
   // 语音 / 生图 / 小窗 此前只改本地 draft，必须点底部「保存」才生效，与其他即时保存的开关不一致，
   // 容易让用户误以为设置没生效。改为与全页一致：改动即时落盘并触发 reloadSettings。
   const patchVoice = (p: Partial<typeof voice>) => {
@@ -261,6 +485,15 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
   };
   const patchSound = (p: Partial<typeof sound>) => patch({ sound: { ...sound, ...p } });
   const patchCursor = (p: Partial<typeof cursor>) => patch({ customCursor: { ...cursor, ...p } });
+
+  // TTS 按角色音色：key=角色 id，value=音色名；空字符串表示回退全局默认（存于 voice 子对象）
+  const ttsVoices = voice.ttsVoices || {};
+  const patchTtsVoice = (roleId: string, voiceName: string) => {
+    const next = { ...ttsVoices };
+    if (voiceName) next[roleId] = voiceName;
+    else delete next[roleId];
+    patchVoice({ ttsVoices: next });
+  };
   // 光标子设置必须落盘并触发 reloadSettings，否则 ThemeContext.settings 不会更新，
   // CustomCursor 读取不到变化（patch 只改本地 draft）。与 enabled 开关保持一致。
   const saveCursor = (p: Partial<typeof cursor>) =>
@@ -533,6 +766,60 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               ? t('self.title')
               : t('settings.title')}
         </span>
+        {sub === 'main' && (
+          <div className="settings-header-search">
+            <div style={{ position: 'relative', width: 220 }}>
+              <input
+                type="text"
+                className="settings-search-input"
+                placeholder={t('settings.searchPlaceholder')}
+                value={searchQ}
+                onChange={(e) => {
+                  setSearchQ(e.target.value);
+                  setShowSuggest(true);
+                }}
+                onFocus={() => setShowSuggest(true)}
+                onBlur={() => window.setTimeout(() => setShowSuggest(false), 150)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    if (searchResults[0]) goToSetting(searchResults[0].id);
+                  } else if (e.key === 'Escape') {
+                    setShowSuggest(false);
+                  }
+                }}
+              />
+              {showSuggest && searchResults.length > 0 && (
+                <div className="settings-suggest">
+                  {searchResults.map((r) => (
+                    <div
+                      key={r.id}
+                      className="settings-suggest-item"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        goToSetting(r.id);
+                      }}
+                    >
+                      {renderSearchHL(t(r.key), searchQ)}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {showSuggest && searchQ.trim() && searchResults.length === 0 && (
+                <div className="settings-suggest">
+                  <div className="settings-suggest-empty">{t('settings.searchEmpty')}</div>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              className="btn-ghost"
+              style={{ flex: '0 0 auto', padding: '8px 12px', fontSize: 13, whiteSpace: 'nowrap' }}
+              onClick={() => setGuideOpen(true)}
+            >
+              {t('settings.openGuide')}
+            </button>
+          </div>
+        )}
       </div>
       <div className="settings-layout">
         {sub === 'main' && (
@@ -569,7 +856,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
 
         {/* ===== 语言 ===== */}
         <div id="cat-general" ref={(el) => { catRefs.current['cat-general'] = el; }} className="settings-category">
-        <div className="section-title">{t('settings.language')}</div>
+        <div id="sec-language" className="section-title">{t('settings.language')}</div>
         <div className="field" style={{ maxWidth: 240 }}>
           <SelectMenu
             value={lang}
@@ -596,7 +883,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 界面动效 ===== */}
-        <div className="section-title" style={{ marginTop: 16 }}>{t('settings.animations')}</div>
+        <div id="sec-animations" className="section-title" style={{ marginTop: 16 }}>{t('settings.animations')}</div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
           <input
             type="checkbox"
@@ -610,7 +897,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 字体（子页面入口） ===== */}
-        <div className="section-title" style={{ marginTop: 16 }}>{t('settings.font')}</div>
+        <div id="sec-font" className="section-title" style={{ marginTop: 16 }}>{t('settings.font')}</div>
         <div
           className="theme-card"
           style={{ cursor: 'pointer', maxWidth: 420 }}
@@ -629,7 +916,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           </div>
 
           {/* ===== 我的角色卡（自我身份） ===== */}
-          <div className="section-title" style={{ marginTop: 16 }}>{t('self.title')}</div>
+          <div id="sec-self" className="section-title" style={{ marginTop: 16 }}>{t('self.title')}</div>
           <div
             className="theme-card"
             style={{ cursor: 'pointer', maxWidth: 420 }}
@@ -648,7 +935,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           </div>
 
           {/* ===== 世界书 / 记忆（全局默认 + 自动记忆） ===== */}
-          <div className="section-title" style={{ marginTop: 16 }}>{t('worldbook.title')}</div>
+          <div id="sec-worldbook" className="section-title" style={{ marginTop: 16 }}>{t('worldbook.title')}</div>
           <div className="field" style={{ maxWidth: 340 }}>
             <label>{t('settings.defaultWorldbook')}</label>
             <SelectMenu
@@ -1035,7 +1322,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           )}
 
           {/* ===== 情绪与事件（高级可调） ===== */}
-          <div className="section-title" style={{ marginTop: 16 }}>
+          <div id="sec-emoevent" className="section-title" style={{ marginTop: 16 }}>
             {t('settings.emoEventAdvanced')}
           </div>
 
@@ -1186,7 +1473,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           </div>{/* end cat-general */}
         {/* ===== 群聊互聊（流式并行 / 调度 / 自动接话 / 主动续聊） ===== */}
         <div id="cat-models" ref={(el) => { catRefs.current['cat-models'] = el; }} className="settings-category">
-        <div className="section-title" style={{ marginTop: 16 }}>{t('settings.groupChat')}</div>
+        <div id="sec-groupchat" className="section-title" style={{ marginTop: 16 }}>{t('settings.groupChat')}</div>
 
         {/* 群聊流式并行数量 */}
         <div className="field" style={{ maxWidth: 300 }}>
@@ -1286,7 +1573,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 模型管理（含默认模型） ===== */}
-        <div className="section-title">{t('settings.modelManage')}</div>
+        <div id="sec-modelmanage" className="section-title">{t('settings.modelManage')}</div>
         <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 10 }}>
           {t('settings.defaultModelHint')}
         </div>
@@ -1411,7 +1698,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
 
         </div>{/* end cat-models */}
         <div id="cat-appearance" ref={(el) => { catRefs.current['cat-appearance'] = el; }} className="settings-category">
-        <div className="section-title">{t('settings.theme')}</div>
+        <div id="sec-theme" className="section-title">{t('settings.theme')}</div>
         <div className="theme-options">
           {THEMES.map((titem) => (
             <div
@@ -1434,7 +1721,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== UI 圆角 ===== */}
-        <div className="section-title">{t('settings.radius')}</div>
+        <div id="sec-radius" className="section-title">{t('settings.radius')}</div>
         <div style={{ maxWidth: 420 }}>
           <div style={{ fontSize: 13, marginBottom: 4 }}>
             {t('settings.uiRadius', { n: draft.uiRadius ?? 10 })}
@@ -1498,7 +1785,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 窗口整体等比缩放：基准尺寸 + 上下限（主窗/小窗分别配置） ===== */}
-        <div className="section-title" style={{ marginTop: 16 }}>
+        <div id="sec-uizoom" className="section-title" style={{ marginTop: 16 }}>
           {t('settings.uiZoom')}
         </div>
         <div style={{ maxWidth: 480 }}>
@@ -1557,7 +1844,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 输入框外观（文字色 / 背景色）===== */}
-        <div className="section-title">{t('settings.inputAppearance')}</div>
+        <div id="sec-inputappearance" className="section-title">{t('settings.inputAppearance')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
           <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 2 }}>
             {t('settings.inputColorDesc')}
@@ -1603,7 +1890,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 动态 Canvas 光标 ===== */}
-        <div className="section-title">{t('settings.cursor')}</div>
+        <div id="sec-cursor" className="section-title">{t('settings.cursor')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
           <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 4 }}>
             {t('settings.cursorDesc')}
@@ -1772,7 +2059,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         {/* ===== 毛玻璃主题背景（仅 glass/frost 主题生效，未开启时隐藏） ===== */}
         {(theme === 'glass' || theme === 'frost') && (
           <>
-            <div className="section-title" style={{ marginTop: 16 }}>{t('settings.glassBg')}</div>
+            <div id="sec-glassbg" className="section-title" style={{ marginTop: 16 }}>{t('settings.glassBg')}</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
               <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 2 }}>
                 {t('settings.glassBgDesc')}
@@ -1813,7 +2100,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>{/* end cat-appearance */}
         {/* ===== 语音功能（ASR + TTS） ===== */}
         <div id="cat-generation" ref={(el) => { catRefs.current['cat-generation'] = el; }} className="settings-category">
-        <div className="section-title">{t('settings.voice')}</div>
+        <div id="sec-voice" className="section-title">{t('settings.voice')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
@@ -1934,11 +2221,58 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
               {t('settings.ttsDesc')}
             </div>
+
+            {/* 按数字人角色分别配置 TTS 音色 */}
+            <div style={{ marginTop: 12, borderTop: '1px solid var(--color-border, rgba(128,128,128,.18))', paddingTop: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('settings.ttsVoicePerRole')}</div>
+              {roleVoiceList.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{t('settings.ttsNoRoles')}</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto', paddingRight: 4 }}>
+                  {roleVoiceList.map((r) => (
+                    <div key={r.roleId} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span
+                        style={{ fontSize: 12, flex: '0 0 150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        title={r.name}
+                      >
+                        {r.name}
+                      </span>
+                      <input
+                        type="text"
+                        list="tts-voice-options"
+                        placeholder={voice.ttsVoice || 'alloy'}
+                        value={ttsVoices[r.roleId] || ''}
+                        style={{ flex: 1, minWidth: 120 }}
+                        onChange={(e) => patchTtsVoice(r.roleId, e.target.value)}
+                      />
+                      {ttsVoices[r.roleId] ? (
+                        <button
+                          type="button"
+                          className="btn-ghost"
+                          style={{ padding: '2px 8px', fontSize: 12 }}
+                          onClick={() => patchTtsVoice(r.roleId, '')}
+                        >
+                          {t('settings.ttsVoiceClear')}
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                  <datalist id="tts-voice-options">
+                    {voiceOptions.map((v) => (
+                      <option key={v} value={v} />
+                    ))}
+                  </datalist>
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 6 }}>
+                {t('settings.ttsVoicePerRoleDesc')}
+              </div>
+            </div>
           </div>
         </div>
 
         {/* ===== 生图（专用图像生成 API） ===== */}
-        <div className="section-title">{t('settings.imageGen')}</div>
+        <div id="sec-imagegen" className="section-title">{t('settings.imageGen')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
             <input
@@ -2014,7 +2348,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 生视频（专用视频生成 API，使用方式与生图一致） ===== */}
-        <div className="section-title">{t('settings.videoGen')}</div>
+        <div id="sec-videogen" className="section-title">{t('settings.videoGen')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
             <input
@@ -2105,7 +2439,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 异步场景生图 ===== */}
-        <div className="section-title">{t('settings.sceneImage')}</div>
+        <div id="sec-sceneimage" className="section-title">{t('settings.sceneImage')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
           <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
             {t('settings.sceneImageDesc')}
@@ -2163,7 +2497,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 联网搜索 ===== */}
-        <div className="section-title">{t('settings.webSearch')}</div>
+        <div id="sec-websearch" className="section-title">{t('settings.webSearch')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
           <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
             {t('settings.webSearchDesc')}
@@ -2266,7 +2600,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 插件 ===== */}
-        <div className="section-title">{t('settings.plugins')}</div>
+        <div id="sec-plugins" className="section-title">{t('settings.plugins')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 560 }}>
           <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
             {t('settings.pluginsDesc')}
@@ -2360,7 +2694,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>{/* end cat-generation */}
         {/* ===== 翻译（右键消息翻译文本） ===== */}
         <div id="cat-translation" ref={(el) => { catRefs.current['cat-translation'] = el; }} className="settings-category">
-        <div className="section-title">{t('settings.translation')}</div>
+        <div id="sec-translation" className="section-title">{t('settings.translation')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
             <input
@@ -2408,7 +2742,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 音效 ===== */}
-        <div className="section-title">{t('settings.sound')}</div>
+        <div id="sec-sound" className="section-title">{t('settings.sound')}</div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
           <input
             type="checkbox"
@@ -2484,7 +2818,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>{/* end cat-translation */}
         {/* ===== 快捷聊天小窗 ===== */}
         <div id="cat-window" ref={(el) => { catRefs.current['cat-window'] = el; }} className="settings-category">
-        <div className="section-title">{t('settings.mini')}</div>
+        <div id="sec-mini" className="section-title">{t('settings.mini')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
             <input
@@ -2545,8 +2879,78 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           </div>
         </div>
 
+        {/* ===== 桌面悬浮球 ===== */}
+        <div id="sec-floatingball" className="section-title" style={{ marginTop: 24 }}>{t('settings.floatingBall')}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={!!floating.enabled}
+              onChange={(e) => {
+                const enabled = e.target.checked;
+                patch({ floatingBall: { enabled, x: floating.x, y: floating.y } });
+                if (api?.ballSetEnabled) api.ballSetEnabled(enabled);
+              }}
+            />
+            <span style={{ fontSize: 13 }}>{t('settings.floatingBallEnable')}</span>
+          </label>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+            {t('settings.floatingBallDesc')}
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: 4 }}>
+            <input
+              type="checkbox"
+              checked={floating.alwaysOnTop !== false}
+              onChange={(e) => {
+                const v = e.target.checked;
+                patch({
+                  floatingBall: {
+                    enabled: floating.enabled,
+                    x: floating.x,
+                    y: floating.y,
+                    alwaysOnTop: v,
+                    autoHideInFullscreen: floating.autoHideInFullscreen !== false,
+                  },
+                });
+                if (api?.ballSetAlwaysOnTop) api.ballSetAlwaysOnTop(v);
+              }}
+            />
+            <span style={{ fontSize: 13 }}>{t('settings.floatingBallAlwaysOnTop')}</span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: 4 }}>
+            <input
+              type="checkbox"
+              checked={floating.autoHideInFullscreen !== false}
+              onChange={(e) => {
+                const v = e.target.checked;
+                patch({
+                  floatingBall: {
+                    enabled: floating.enabled,
+                    x: floating.x,
+                    y: floating.y,
+                    alwaysOnTop: floating.alwaysOnTop !== false,
+                    autoHideInFullscreen: v,
+                  },
+                });
+              }}
+            />
+            <span style={{ fontSize: 13 }}>{t('settings.floatingBallAutoHideFullscreen')}</span>
+          </label>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+            {t('settings.floatingBallAutoHideDesc')}
+          </div>
+          <button
+            type="button"
+            className="btn-ghost"
+            style={{ marginTop: 10, padding: '4px 12px', fontSize: 12 }}
+            onClick={() => setGuideOpen(true)}
+          >
+            {t('settings.openGuide')}
+          </button>
+        </div>
+
         {/* ===== 应用数据保存路径（实时数据，非备份） ===== */}
-        <div className="section-title" style={{ marginTop: 24 }}>{t('settings.dataPath')}</div>
+        <div id="sec-datapath" className="section-title" style={{ marginTop: 24 }}>{t('settings.dataPath')}</div>
         <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 10 }}>
           {t('settings.dataPathDesc')}
         </div>
@@ -2574,7 +2978,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         )}
 
         {/* ===== 关闭主界面行为 ===== */}
-        <div className="section-title" style={{ marginTop: 24 }}>{t('settings.closeBehavior')}</div>
+        <div id="sec-closebehavior" className="section-title" style={{ marginTop: 24 }}>{t('settings.closeBehavior')}</div>
         <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 10 }}>
           {t('settings.closeBehaviorDesc')}
         </div>
@@ -2598,7 +3002,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 错误日志 ===== */}
-        <div className="section-title" style={{ marginTop: 24 }}>{t('settings.errorLog')}</div>
+        <div id="sec-errorlog" className="section-title" style={{ marginTop: 24 }}>{t('settings.errorLog')}</div>
         <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 10 }}>
           {t('settings.errorLogDesc')}
         </div>
@@ -2610,7 +3014,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </button>
 
         {/* ===== 数据备份与还原 ===== */}
-        <div className="section-title" style={{ marginTop: 24 }}>{t('settings.backup')}</div>
+        <div id="sec-backup" className="section-title" style={{ marginTop: 24 }}>{t('settings.backup')}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, maxWidth: 560 }}>
           <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>{t('settings.backupDir')}</span>
           <input
@@ -2652,7 +3056,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 一键恢复初始设置 ===== */}
-        <div className="section-title" style={{ marginTop: 24 }}>{t('settings.resetSettings')}</div>
+        <div id="sec-reset" className="section-title" style={{ marginTop: 24 }}>{t('settings.resetSettings')}</div>
         <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 10 }}>
           {t('settings.resetSettingsDesc')}
         </div>
@@ -2700,6 +3104,8 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           onSave={onModelSave}
         />
       )}
+
+      <GuideView open={guideOpen} onClose={() => setGuideOpen(false)} />
 
       {resetOpen && (
         <div
@@ -2834,8 +3240,8 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              background: 'var(--color-bg-elevated, #1e1e1e)',
-              color: 'var(--color-text, #eee)',
+              background: '#1e1e1e',
+              color: '#f0f0f0',
               borderRadius: 14,
               padding: '22px 24px',
               maxWidth: 680,
@@ -2847,7 +3253,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>{t('settings.errorLog')}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#f0f0f0' }}>{t('settings.errorLog')}</div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn-ghost" onClick={clearErrorLogAll} disabled={errorLog.length === 0}>
                   {t('settings.errorLogClear')}
@@ -2859,12 +3265,12 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             </div>
             <div style={{ overflowY: 'auto', flex: 1, fontSize: 12.5 }}>
               {errorLog.length === 0 ? (
-                <div style={{ color: 'var(--color-text-secondary, #999)', padding: '16px 4px' }}>
+                <div style={{ color: '#bbb', padding: '16px 4px' }}>
                   {t('settings.errorLogEmpty')}
                 </div>
               ) : (
                 [...errorLog].reverse().map((e) => (
-                  <div key={e.id} style={{ borderBottom: '1px solid var(--color-border, #333)', padding: '10px 4px' }}>
+                  <div key={e.id} style={{ borderBottom: '1px solid #333', padding: '10px 4px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                       <span
                         style={{
@@ -2877,11 +3283,11 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                       >
                         {errorCategoryLabel(e.category)}
                       </span>
-                      <span style={{ color: 'var(--color-text-secondary, #999)' }}>{new Date(e.time).toLocaleString(loc)}</span>
+                      <span style={{ color: '#aaa' }}>{new Date(e.time).toLocaleString(loc)}</span>
                     </div>
-                    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginBottom: e.detail ? 4 : 0 }}>{e.message}</div>
+                    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginBottom: e.detail ? 4 : 0, color: '#f0f0f0' }}>{e.message}</div>
                     {e.detail && (
-                      <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--color-text-secondary, #999)', fontSize: 11.5 }}>
+                      <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#999', fontSize: 11.5 }}>
                         {e.detail}
                       </div>
                     )}

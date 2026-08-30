@@ -20,7 +20,6 @@ export const Sidebar: React.FC<{ view: View; onChange: (v: View) => void }> = ({
   const { t } = useI18n();
   return (
     <div className="sidebar">
-      <div className="nav-logo">念</div>
       {items.map((it) => (
         <div
           key={it.key}

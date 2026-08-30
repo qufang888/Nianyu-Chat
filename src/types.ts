@@ -193,6 +193,11 @@ export interface VoiceSettings {
   ttsModel: string; // TTS 模型名，如 tts-1
   ttsVoice: string; // 音色，如 alloy
   ttsAutoPlay: boolean; // 全局自动播报 AI 回复
+  // ===== ASR 上传格式（修复第三方 ASR 返回 400 的核心配置）=====
+  asrFormat?: 'wav' | 'mp3' | 'webm' | 'm4a' | 'flac'; // 上传给服务器的音频容器格式；默认 wav（兼容性最好）
+  asrLanguage?: string; // 可选：强制识别语言（如 zh / en），空=自动检测
+  // ===== 数字人角色独立音色（按角色配置 TTS 输出音色）=====
+  ttsVoices?: Record<string, string>; // key=数字人角色 id（roleId），value=音色名；按角色分别配置 TTS 音色，缺省回退到 ttsVoice
 }
 
 // 生图（专用图像生成 API）：拥有独立的 baseUrl/apiKey，与「模型配置中心」完全解耦，调用 OpenAI 兼容 /images/generations
@@ -334,6 +339,16 @@ export interface AppSettings {
   // ===== 关闭主界面行为 =====
   closeToTray: boolean; // 关闭主界面时：true=最小化到托盘继续运行；false=直接退出程序。设置内即时生效
   closeConfirmDone: boolean; // 是否已走过「首次关闭提示」并勾选「不再提示」；false 时首次点关闭会弹提示框
+  // ===== 开屏动画（仅首次启动展示一次）=====
+  hasShownSplash?: boolean; // 为 true 后，之后启动不再展示开屏动画
+  // ===== 桌面悬浮球 =====
+  floatingBall?: {
+    enabled: boolean; // 是否启用悬浮球（默认开）
+    x: number; // 上次停留的屏幕逻辑坐标 X
+    y: number; // 上次停留的屏幕逻辑坐标 Y
+    alwaysOnTop?: boolean; // 悬浮球是否始终置顶（默认开；关闭后会被其它窗口覆盖）
+    autoHideInFullscreen?: boolean; // 主窗口全屏时自动关闭悬浮球（默认开）
+  };
   // ===== 自定义 Canvas 光标 =====
   customCursor: {
     enabled: boolean; // 总开关：false=系统原生光标，true=动态Canvas光标
@@ -451,6 +466,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     ttsModel: 'tts-1',
     ttsVoice: 'alloy',
     ttsAutoPlay: false,
+    asrFormat: 'wav',
+    asrLanguage: '',
+    ttsVoices: {},
   },
   miniWindow: {
     enabled: true,
@@ -544,6 +562,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   silent: false,
   closeToTray: true,
   closeConfirmDone: false,
+  hasShownSplash: false,
+  floatingBall: { enabled: true, x: 0, y: 0, alwaysOnTop: true, autoHideInFullscreen: true },
   customCursor: {
     enabled: false,
     lerpSpeed: 0.25,

@@ -256,8 +256,9 @@ export interface NianyuAPI {
   listModels: (cfg: ModelConfig) => Promise<string[]>;
   testModel: (cfg: ModelConfig) => Promise<{ ok: boolean; message: string }>;
 
-  transcribeAudio: (data: Uint8Array) => Promise<string>;
-  textToSpeech: (text: string) => Promise<string>;
+  transcribeAudio: (data: Uint8Array, format?: string, language?: string) => Promise<string>;
+  textToSpeech: (text: string, roleId?: string) => Promise<string>;
+  listVoices: () => Promise<string[]>;
 
   miniOpen: (p?: {
     initialChat?: { chatType: string; chatId: string; isObserverPrivate?: boolean };
@@ -317,6 +318,10 @@ export interface NianyuAPI {
   notifyClose: () => Promise<void>;
   notifyIgnoreMouse: (ignore: boolean) => Promise<void>;
   onAppOpenChat: (cb: (e: any, data: any) => void) => () => void;
+  ballSetEnabled: (enabled: boolean) => void;
+  ballSetAlwaysOnTop: (v: boolean) => void; // 切换悬浮球置顶
+  ballCloseSession: () => void; // 本次关闭悬浮球（不持久化，重启恢复）
+  setActiveChat: (type: string, id: string) => void; // 通知主进程当前聊天（主动消息未读判断）
 
   // ===== 主进程错误推送 =====
   onAppError?: (cb: (data: { message: string; cause: string; solution: string; lang: string }) => void) => () => void;

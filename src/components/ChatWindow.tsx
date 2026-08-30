@@ -1737,7 +1737,7 @@ export const ChatWindow: React.FC<{
       audioRef.current?.pause();
       setSpeakingId(msg.id);
       showToast(t('chat.toastSpeaking'));
-      const src = await api.textToSpeech(msg.content);
+      const src = await api.textToSpeech(msg.content, msg.role_id);
       const audio = new Audio(src);
       audioRef.current = audio;
       audio.onended = () => setSpeakingId((id) => (id === msg.id ? null : id));
@@ -2028,7 +2028,7 @@ export const ChatWindow: React.FC<{
                 style={{
                   position: 'fixed', right: morePos.right, top: morePos.top,
                   zIndex: 2147483645,
-                  background: 'var(--color-panel)', color: 'var(--color-text)',
+                  color: 'var(--color-text)',
                   border: '1px solid var(--color-border)', borderRadius: 8,
                   boxShadow: '0 8px 24px rgba(0,0,0,0.18)', padding: 6, minWidth: 200,
                 }}

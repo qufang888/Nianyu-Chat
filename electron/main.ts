@@ -48,6 +48,44 @@ import type {
 } from '../src/types';
 import { normalizeRelation } from '../src/types';
 import { RELATION_TYPES, RELATION_LABELS } from '../src/types';
+import {
+  createFloatingBall,
+  destroyFloatingBall,
+  registerBallIPC,
+  setBallMainShow,
+  setBallMainWindow,
+  pushUnread,
+  clearAllUnread,
+  clearUnreadForChat,
+  showFloatingBall,
+  hideFloatingBall,
+  setActiveChat,
+} from './floatingBall';
+
+// 媒体生成（生图/生视频）完成写入 AI 消息后补未读：仅主窗不可见 / 未正盯该聊天时计入，
+// 防止「结果已生成但悬浮球未读清单没显示」。头像按聊天类型解析（单聊取角色，群聊无头像留空）。
+// 内容用占位文案，渲染端点击未读项跳回对应聊天即可看到实际图片/视频。
+function pushMediaUnread(chatType: string, chatId: string, aiName: string, kind: 'image' | 'video'): void {
+  const settings = dm.getSettings();
+  if (settings.floatingBall?.enabled === false) return;
+  const content = kind === 'image' ? '[图片]' : '[视频]';
+  let avatar = '';
+  if (chatType === 'single') {
+    const rid = dm.resolveSingleRoleId(chatType, chatId);
+    avatar = (rid && dm.getRole(rid)?.avatar_path) || '';
+  }
+  pushUnread(chatType, chatId, aiName, content, avatar, true);
+  // 后台消息提醒卡片：主窗/小窗均隐藏时由 showNotifyCard 内部判断并弹出（与渲染端互补，覆盖未挂载聊天）
+  try {
+    const name =
+      chatType === 'group'
+        ? ((dm.getGroup(chatId)?.group_name as string) || chatId)
+        : ((dm.getRole(chatId)?.name as string) || chatId);
+    showNotifyCard({ chatType, chatId, name, roleName: aiName, content });
+  } catch {
+    /* 通知卡片失败不影响消息下发 */
+  }
+}
 
 // 自定义音效协议：用于播放用户选择的 MP3/WAV（映射到 userData/custom-sounds）
 // 必须在 app ready 之前注册为特权协议，才能被 <audio> 正常加载。
@@ -73,6 +111,19 @@ let miniWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
 const dm = getDataManager();
+
+// ===== 单实例锁：保证念语全局只有一个客户端在运行 =====
+// 已有一个实例时，重复点击启动文件/快捷方式只会把已有窗口聚焦到前台，而不是再开一个新进程。
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  // 未取得锁：说明已有实例在运行，本进程直接退出，由已有实例接管。
+  app.quit();
+} else {
+  app.on('second-instance', (_e, _argv) => {
+    // 已有实例收到二次启动：把主窗口唤到前台并聚焦（若已最小化则还原）。
+    showMainWindow();
+  });
+}
 
 // 后台消息提醒（Steam 风格卡片）相关状态
 let notifyWindow: BrowserWindow | null = null;
@@ -285,7 +336,12 @@ function scheduleWindowZoom(win: BrowserWindow | null, isMini: boolean): void {
   );
 }
 
-function createWindow(): void {
+// 仅进程冷启动播放开屏；窗口被销毁后由 showMainWindow 重建时（托盘/悬浮球唤出）带 ?nosplash=1，不重播。
+let firstWindowEver = true;
+
+function createWindow(opts?: { coldStart?: boolean }): void {
+  const coldStart = opts?.coldStart ?? firstWindowEver;
+  firstWindowEver = false;
   const saved = dm.getSettings();
   const b = saved.windowBounds || { x: 0, y: 0, width: 1200, height: 800 };
   // 解构出 isMaximized（不传给 BrowserWindow 构造选项，避免无关参数），其余作为窗口位置/尺寸
@@ -307,14 +363,21 @@ function createWindow(): void {
       nodeIntegration: false,
       sandbox: false,
       autoplayPolicy: 'no-user-gesture-required',
+      backgroundThrottling: false, // 托盘/隐藏状态下仍需保持主动消息定时器运行
     },
   });
 
+  const splashQuery = coldStart ? '' : '?nosplash=1';
   if (process.env.NIANYU_DEV === '1') {
-    mainWindow.loadURL(DEV_SERVER);
+    mainWindow.loadURL(`${DEV_SERVER}${splashQuery}`);
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'));
+    mainWindow.loadFile(
+      path.join(__dirname, '../../dist/index.html'),
+      splashQuery ? { search: splashQuery } : {}
+    );
   }
+  // 同步悬浮球模块持有的主窗引用（主窗可能被 recreate，需刷新）
+  setBallMainWindow(mainWindow);
 
   // 关闭默认不退出：隐藏到托盘；仅 quitting 时真正关闭
   mainWindow.on('close', (e) => {
@@ -363,6 +426,15 @@ function createWindow(): void {
   mainWindow.on('unmaximize', pushWindowState);
   mainWindow.on('resize', scheduleSaveBounds);
   mainWindow.on('move', scheduleSaveBounds);
+  // 主窗口全屏：按设置自动隐藏/恢复悬浮球（避免遮挡全屏内容）
+  mainWindow.on('enter-full-screen', () => {
+    const s = dm.getSettings();
+    if (s.floatingBall?.autoHideInFullscreen !== false) hideFloatingBall();
+  });
+  mainWindow.on('leave-full-screen', () => {
+    const s = dm.getSettings();
+    if (s.floatingBall?.autoHideInFullscreen !== false) showFloatingBall();
+  });
   // 主窗整体 UI 随窗口尺寸等比缩放（字体/间距/图标一并缩放），适配不同窗口大小
   mainWindow.on('resize', () => scheduleWindowZoom(mainWindow, false));
   // 注意:'closed' 事件触发时 BrowserWindow 已被销毁,访问 webContents 会抛 "Object has been destroyed"。
@@ -418,6 +490,7 @@ function createMiniWindow(): void {
       nodeIntegration: false,
       sandbox: false,
       autoplayPolicy: 'no-user-gesture-required',
+      backgroundThrottling: false, // 隐藏/后台状态下保持主动消息与随机事件定时器运行
     },
   });
 
@@ -499,6 +572,8 @@ function showMainWindow(): void {
     mainWindow.show();
     mainWindow.focus();
   }
+  // 回到主界面即视为已读：清空悬浮球未读（面板与主界面数据实时一致）
+  clearAllUnread();
 }
 
 // ---------- 后台消息提醒（Steam 风格卡片） ----------
@@ -606,6 +681,8 @@ function processNotifyQueue(): void {
 
 // 点击卡片：打开对应会话（主窗置前并切换到该聊天）
 function openNotifyChat(chat: any): void {
+  // 点击通知卡片打开会话，同步清除悬浮球未读
+  if (chat && chat.chatType && chat.chatId) clearUnreadForChat(chat.chatType, chat.chatId);
   if (notifyTimer) {
     clearTimeout(notifyTimer);
     notifyTimer = null;
@@ -1328,6 +1405,7 @@ async function triggerSceneImage(chatType: string, chatId: string, roleId: strin
       genPrompt: judge.prompt,
     });
     broadcast('stream:user', aiMsg); // 主窗/小窗同时收到，只生一次
+    pushMediaUnread(chatType, chatId, aiName, 'image'); // 主窗不可见/未盯该聊天则补未读
   } catch (e) {
     console.error('[nianyu] 场景生图失败', e);
     lastSceneImageAt.delete(key); // 失败则回退节流，允许下次重试
@@ -3834,6 +3912,7 @@ async function runVideoGenJob(chatType: string, chatId: string, prompt: string, 
     });
     broadcast('stream:user', aiMsg);
     broadcast('video:done', { chatType, chatId, prompt, ok: true, imagePath: videoPath });
+    pushMediaUnread(chatType, chatId, aiName, 'video'); // 主窗不可见/未盯该聊天则补未读
   } catch (e: any) {
     console.error('[nianyu] 生视频失败', e?.message || e);
     broadcast('video:done', { chatType, chatId, prompt, ok: false, error: e?.message || String(e) });
@@ -3924,6 +4003,27 @@ function sendStreamStart(streamId: string, roleId: string, roleName: string): vo
 
 function sendStreamDone(streamId: string, message: ChatMessage): void {
   broadcast('stream:done', { streamId, message });
+  // 悬浮球未读同步：主窗隐藏时，把本次 AI 回复计入未读并实时广播给悬浮球
+  try {
+    const idx = streamId.indexOf(':');
+    const chatId = idx >= 0 ? streamId.slice(0, idx) : streamId;
+    const roleId = idx >= 0 ? streamId.slice(idx + 1) : '';
+    const chatType = dm.getGroup(chatId) ? 'group' : 'single';
+    const role = dm.getRole(roleId) || (chatType === 'single' ? dm.getRole(chatId) : undefined);
+    const avatar = role?.avatar_path || '';
+    pushUnread(chatType, chatId, message.sender_name, message.content, avatar, message.from_proactive === true);
+    // 后台消息提醒卡片：主窗/小窗均隐藏时由 showNotifyCard 内部判断并弹出；
+    // 与渲染端 onDone 触发的 notifyCard 互补，覆盖当前未挂载聊天的场景（避免卡片消失）
+    if (message.sender_type === 'ai' && message.content) {
+      const name =
+        chatType === 'group'
+          ? ((dm.getGroup(chatId)?.group_name as string) || chatId)
+          : ((role?.name as string) || chatId);
+      showNotifyCard({ chatType, chatId, name, roleName: message.sender_name, content: message.content });
+    }
+  } catch {
+    /* 未读统计/通知卡片失败时静默，不影响消息下发 */
+  }
 }
 
 // ---------- IPC 注册 ----------
@@ -4589,6 +4689,7 @@ function registerIPC(): void {
       genPrompt: prompt,
     });
     broadcast('stream:user', aiMsg);
+    pushMediaUnread(chatType, chatId, aiName, 'image'); // 主窗不可见/未盯该聊天则补未读
     return { ok: true, imagePath };
   });
 
@@ -4654,6 +4755,7 @@ function registerIPC(): void {
         genPrompt: prompt,
       });
       broadcast('stream:user', aiMsg);
+      pushMediaUnread(chatType, chatId, 'AI', 'image'); // 主窗不可见/未盯该聊天则补未读
       return { ok: true, imagePath: imagePathOut };
     }
   );
@@ -4762,25 +4864,54 @@ function registerIPC(): void {
     const s = dm.getSettings();
     const v = s.voice;
     if (!v?.asrBaseUrl || !v?.asrApiKey) throw new Error('未配置语音输入 API（请在设置中填写 ASR 专用 Base URL 与 API Key）');
+    const fmt = (v.asrFormat || 'wav') as 'wav' | 'mp3' | 'm4a' | 'flac' | 'webm';
     return transcribeAudio(
       { baseUrl: v.asrBaseUrl, apiKey: v.asrApiKey },
       Buffer.from(data),
-      v.asrModel || 'whisper-1'
+      v.asrModel || 'whisper-1',
+      fmt,
+      v.asrLanguage || undefined
     );
   });
 
   // ---------- 语音：TTS 合成，返回 base64 mp3 ----------
-  ipcMain.handle('audio:tts', async (_e, text: string) => {
+  // roleId 可选：按数字人角色分别解析音色（ttsVoices[roleId] 优先，缺省回退全局 ttsVoice）
+  ipcMain.handle('audio:tts', async (_e, text: string, roleId?: string) => {
     const s = dm.getSettings();
     const v = s.voice;
     if (!v?.ttsBaseUrl || !v?.ttsApiKey) throw new Error('未配置 TTS 专用 API，请在设置中填写独立的 Base URL 与 API Key');
+    const voiceName = (roleId && v.ttsVoices && v.ttsVoices[roleId]) || v.ttsVoice || 'alloy';
     const buf = await textToSpeech(
       { baseUrl: v.ttsBaseUrl, apiKey: v.ttsApiKey },
       text,
       v.ttsModel || 'tts-1',
-      v.ttsVoice || 'alloy'
+      voiceName
     );
     return `data:audio/mpeg;base64,${buf.toString('base64')}`;
+  });
+
+  // ---------- 语音：拉取 TTS 可用音色列表（服务端优先，失败回退内置清单） ----------
+  ipcMain.handle('audio:listVoices', async () => {
+    const DEFAULT_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
+    const v = dm.getSettings().voice;
+    if (!v?.ttsBaseUrl || !v?.ttsApiKey) return DEFAULT_VOICES;
+    try {
+      const url = `${v.ttsBaseUrl.replace(/\/+$/, '')}/audio/voices`;
+      const resp = await fetch(url, { headers: { Authorization: `Bearer ${v.ttsApiKey}` } });
+      if (resp.ok) {
+        const data: any = await resp.json().catch(() => null);
+        const arr: any[] = Array.isArray(data) ? data : data?.voices ?? data?.data ?? [];
+        if (Array.isArray(arr) && arr.length) {
+          const names = arr
+            .map((x) => (typeof x === 'string' ? x : x?.id || x?.name || x?.voice || ''))
+            .filter((x) => !!x);
+          if (names.length) return names;
+        }
+      }
+    } catch {
+      /* 服务端不支持列接口时回退内置清单 */
+    }
+    return DEFAULT_VOICES;
   });
 
   // ---------- 快捷小窗 ----------
@@ -5002,6 +5133,18 @@ function registerIPC(): void {
       notifyWindow.setIgnoreMouseEvents(!!ignore, { forward: !!ignore });
     }
   });
+
+  // ===== 桌面悬浮球 IPC =====
+  registerBallIPC();
+  // 渲染端切换当前聊天时回传，供悬浮球未读判断「主动消息」是否计入
+  ipcMain.on('app:active-chat', (_e, p: { type: string; id: string }) => {
+    if (p && typeof p.type === 'string' && typeof p.id === 'string') setActiveChat(p.type, p.id);
+  });
+  // 设置中切换悬浮球开关：启用则创建、关闭则销毁
+  ipcMain.on('ball:set-enabled', (_e, enabled: boolean) => {
+    if (enabled) createFloatingBall();
+    else destroyFloatingBall();
+  });
 }
 
 // ===== 全局错误监听（主进程） =====
@@ -5079,6 +5222,15 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   applyMiniSettings();
+  // 桌面悬浮球：注入主窗引用/唤出函数，并按设置创建悬浮球窗口
+  setBallMainShow(showMainWindow);
+  setBallMainWindow(mainWindow);
+  createFloatingBall();
+  // 启动即处于全屏时，按设置隐藏悬浮球
+  if (mainWindow && mainWindow.isFullScreen()) {
+    const s = dm.getSettings();
+    if (s.floatingBall?.autoHideInFullscreen !== false) hideFloatingBall();
+  }
   // 朋友圈：启动时发布已到点的定时动态，并每 60 秒轮询一次，实现「定时发动态」
   dm.publishDueMoments();
   setInterval(() => { try { dm.publishDueMoments(); } catch { /* 忽略：数据异常不影响主流程 */ } }, 60 * 1000);

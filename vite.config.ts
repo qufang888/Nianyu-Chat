@@ -25,6 +25,7 @@ export default defineConfig({
       input: {
         main: path.resolve(__dirname, 'index.html'),
         notify: path.resolve(__dirname, 'notify.html'),
+        'floating-ball': path.resolve(__dirname, 'floating-ball.html'),
       },
     },
   },

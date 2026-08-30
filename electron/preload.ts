@@ -16,6 +16,18 @@ import type {
 } from '../src/types';
 import type { ImportCharacterResult } from '../src/utils/characterCard';
 
+// 悬浮球未读条目（与主进程 UnreadItem 结构一致）
+type BallUnreadItem = {
+  key: string;
+  chatType: string;
+  chatId: string;
+  roleName: string;
+  content: string;
+  avatar: string;
+  count: number;
+  ts: number;
+};
+
 export interface NianyuAPI {
   getRoles: () => Promise<Role[]>;
   getRole: (id: string) => Promise<Role | undefined>;
@@ -266,7 +278,8 @@ export interface NianyuAPI {
   testModel: (cfg: ModelConfig) => Promise<{ ok: boolean; message: string }>;
 
   transcribeAudio: (data: Uint8Array) => Promise<string>;
-  textToSpeech: (text: string) => Promise<string>;
+  textToSpeech: (text: string, roleId?: string) => Promise<string>;
+  listVoices: () => Promise<string[]>;
 
   miniOpen: (p?: {
     initialChat?: { chatType: string; chatId: string; isObserverPrivate?: boolean };
@@ -285,6 +298,24 @@ export interface NianyuAPI {
   offWindowStateChange: (cb: (isMaximized: boolean) => void) => void;
   onShowAbout: (cb: () => void) => void;
   offShowAbout: (cb: () => void) => void;
+
+  // ===== 桌面悬浮球 =====
+  ballDragStart: (gx: number, gy: number) => void;
+  ballDragEnd: () => Promise<boolean>;
+  // 切换鼠标穿透：true=透明区穿透到下层窗口（仅球/面板可交互），false=整体可交互
+  ballSetIgnore: (ignore: boolean) => void;
+  ballActivate: () => void;
+  ballQuit: () => void;
+  ballSetEnabled: (enabled: boolean) => void;
+  ballSetAlwaysOnTop: (v: boolean) => void; // 切换悬浮球置顶
+  ballCloseSession: () => void; // 本次关闭悬浮球（不持久化，重启恢复）
+  setActiveChat: (type: string, id: string) => void; // 通知主进程当前聊天（主动消息未读判断）
+  ballOpenChat: (chat: { chatType: string; chatId: string; name: string }) => void;
+  ballGetUnread: () => Promise<{ count: number; items: BallUnreadItem[] }>;
+  onBallUnread: (cb: (data: { count: number; items: BallUnreadItem[] }) => void) => () => void;
+  offBallUnread: (cb: (data: any) => void) => void;
+  onBallBlur: (cb: () => void) => () => void;
+  offBallBlur: (cb: () => void) => void;
 
   // ===== 世界书 =====
   listWorldBooks: () => Promise<WorldBook[]>;
@@ -618,7 +649,8 @@ const api: NianyuAPI = {
   testModel: (cfg) => ipcRenderer.invoke('models:test', cfg),
 
   transcribeAudio: (data) => ipcRenderer.invoke('audio:transcribe', data),
-  textToSpeech: (text) => ipcRenderer.invoke('audio:tts', text),
+  textToSpeech: (text, roleId) => ipcRenderer.invoke('audio:tts', text, roleId),
+  listVoices: () => ipcRenderer.invoke('audio:listVoices'),
 
   miniOpen: (p) => ipcRenderer.invoke('mini:open', p),
   miniGetInitial: () => ipcRenderer.invoke('mini:getInitial'),
@@ -649,6 +681,31 @@ const api: NianyuAPI = {
   },
   onShowAbout: (cb) => ipcRenderer.on('app:showAbout', cb),
   offShowAbout: (cb) => ipcRenderer.off('app:showAbout', cb),
+
+  // ===== 桌面悬浮球 =====
+  ballDragStart: (gx, gy) => ipcRenderer.send('ball:drag-start', gx, gy),
+  ballDragEnd: () => ipcRenderer.invoke('ball:drag-end'),
+  ballSetIgnore: (ignore) => ipcRenderer.send('ball:ignore', ignore),
+  ballActivate: () => ipcRenderer.send('ball:activate'),
+  ballQuit: () => ipcRenderer.send('ball:quit'),
+  ballSetEnabled: (enabled) => ipcRenderer.send('ball:set-enabled', enabled),
+  ballSetAlwaysOnTop: (v) => ipcRenderer.send('ball:set-always-on-top', v),
+  ballCloseSession: () => ipcRenderer.send('ball:close-session'),
+  setActiveChat: (type, id) => ipcRenderer.send('app:active-chat', { type, id }),
+  ballOpenChat: (chat) => ipcRenderer.send('ball:open-chat', chat),
+  ballGetUnread: () => ipcRenderer.invoke('ball:get-unread'),
+  onBallUnread: (cb) => {
+    const listener = (_e: any, data: any) => cb(data);
+    ipcRenderer.on('ball:unread', listener);
+    return () => ipcRenderer.removeListener('ball:unread', listener);
+  },
+  offBallUnread: () => {},
+  onBallBlur: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('ball:blur', listener);
+    return () => ipcRenderer.removeListener('ball:blur', listener);
+  },
+  offBallBlur: () => {},
 
   // ===== 世界书 =====
   listWorldBooks: () => ipcRenderer.invoke('worldbooks:list'),

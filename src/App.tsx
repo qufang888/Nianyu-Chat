@@ -37,7 +37,12 @@ export default function App() {
   const [view, setView] = useState<View>('chats');
   const [selected, setSelected] = useState<Selected | null>(null);
   const [showGroup, setShowGroup] = useState(false);
-  const [showSplash, setShowSplash] = useState(true);
+  // 开屏动画：仅「进程冷启动」（双击 exe / 开始菜单 / 命令行）播放一次；
+  // 从托盘或悬浮球唤出已隐藏窗口时，主进程会带 ?nosplash=1 重建渲染进程，不再重播。
+  // hasShownSplash 仅作历史记录，不参与展示判定。
+  const [showSplash, setShowSplash] = useState<boolean>(
+    () => !new URLSearchParams(window.location.search).has('nosplash')
+  );
   const [aboutOpen, setAboutOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
 
@@ -45,6 +50,12 @@ export default function App() {
   useEffect(() => {
     if (!showSplash && settings && (!settings.firstRunDone || !settings.models?.length)) setShowOnboarding(true);
   }, [showSplash, settings]);
+
+  // 开屏动画每次启动都展示；此处仅把 hasShownSplash 写入设置做历史记录，不作为展示门槛。
+  useEffect(() => {
+    if (!showSplash) return;
+    api.saveSettings({ hasShownSplash: true }).catch(() => {});
+  }, [showSplash]);
 
   // 原生菜单「帮助 → 关于念语」打开关于弹窗
   useEffect(() => {
@@ -83,6 +94,8 @@ export default function App() {
   const openChat = async (type: string, id: string, name: string) => {
     const members = await loadMembers(type, id);
     setSelected({ type, id, name, members });
+    // 通知主进程当前聊天，供悬浮球判断「主动消息」是否计入未读
+    api.setActiveChat(type, id);
   };
 
   const onSelectChat = (item: { chat_type: string; chat_id: string; name: string }) => {
