@@ -48,6 +48,14 @@ export function httpStatusToCode(status?: number): string {
   return 'exception';
 }
 
+// ===== AI 自动补全提示词（生图 / 生视频）系统提示词与输出上限 =====
+// 调用默认模型，把用户的简短想法扩展成完整可用的英文提示词；受 QPS 限速约束（见 main.ts prompts:autocomplete）
+export const AUTOCOMPLETE_SYS_PROMPT_IMAGE =
+  '你是图像生成提示词专家。把用户的简短想法扩展为一段详细、富有画面感、适合文生图模型的英文提示词（含主体、环境、光影、风格）。只输出提示词本身，不要解释、不要引号、不要前缀。';
+export const AUTOCOMPLETE_SYS_PROMPT_VIDEO =
+  '你是视频生成提示词专家。把用户的简短想法扩展为一段详细、富有镜头感、适合文生视频模型的英文提示词（含画面、运镜、氛围）。只输出提示词本身，不要解释、不要引号、不要前缀。';
+export const AUTOCOMPLETE_MAX_TOKENS = 400;
+
 // ===== 深度思考等级（全局，由主进程在设置变更时同步，避免改动所有调用点）=====
 let deepThinkLevel: 'off' | 'low' | 'medium' | 'high' = 'off';
 export function setDeepThinkLevel(level: 'off' | 'low' | 'medium' | 'high'): void {

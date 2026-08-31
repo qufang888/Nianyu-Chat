@@ -291,10 +291,9 @@ export function registerBallIPC(): void {
     }
   });
 
-  // 左键点击：呼出主界面
+  // 左键点击：呼出主界面（不清未读；未读只在该聊天被真正打开时清除）
   ipcMain.on('ball:activate', () => {
     mainShowFn?.();
-    clearAllUnread();
   });
 
   // 右键退出：安全销毁所有窗口并退出

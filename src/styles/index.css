@@ -3501,6 +3501,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 [data-theme='glass'] .mention-pop,
 [data-theme='glass'] .mini-drawer,
 [data-theme='glass'] .modal-card,
+[data-theme='glass'] .modal,
 [data-theme='glass'] .error-bubble,
 [data-theme='glass'] .reasoning-block,
 [data-theme='glass'] .qps-queue,

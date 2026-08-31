@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback, Fragment } from 'react';
+import React, { useEffect, useRef, useState, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
@@ -63,6 +63,7 @@ export const MiniChat: React.FC = () => {
   const [genText, setGenText] = useState('');
   const [genLoading, setGenLoading] = useState(false);
   const [genTyping, setGenTyping] = useState(false); // 生图期间在聊天框显示「AI 正在回复」动画（与主界面一致，用户不会看到自己的生图指令）
+  const [aiCompleteLoading, setAiCompleteLoading] = useState(false); // AI 补全提示词中
   const [promptView, setPromptView] = useState<string | null>(null); // 查看提示词弹窗
   const [pinned, setPinned] = useState(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
@@ -193,7 +194,6 @@ export const MiniChat: React.FC = () => {
   const [idleCountdown, setIdleCountdown] = useState(0);
   const idleSwitchActionRef = useRef<'pause' | 'reset' | 'continue'>('pause');
   const lastActivityRef = useRef(Date.now()); // 最近一次用户操作时间
-  const proactiveBusyRef = useRef(false); // 正在生成主动消息，防止重复触发
   const idleReplyOnRef = useRef(true);
   const idleSecondsRef = useRef(60);
   const sendingRef = useRef(false); // 与 setSending 同步，供轮询读取
@@ -781,6 +781,13 @@ export const MiniChat: React.FC = () => {
     return () => { alive = false; };
   }, [current]);
 
+  // 切换会话时上报当前聊天：主进程据此决定对哪个聊天触发主动消息，
+  // 并用于悬浮球判断「用户正盯着该聊天」时不计入未读
+  useEffect(() => {
+    if (!current) return;
+    api.setActiveChat(current.chat_type, current.chat_id);
+  }, [current]);
+
   // 窗口间同步：消息变更（清空/撤回/回滚后重载）
   useEffect(() => {
     const off = api.onMessagesSync((data) => {
@@ -1094,29 +1101,12 @@ export const MiniChat: React.FC = () => {
     membersMissingRef.current = membersMissing;
   }, [membersMissing]);
 
-  // 空闲主动回复：用户在线但一段时间无操作时，角色主动发一条贴合语境与心情的消息
-  const triggerProactive = useCallback(async () => {
-    if (!current || proactiveBusyRef.current) return;
-    if (roleMissingRef.current || membersMissingRef.current > 0) return;
-    proactiveBusyRef.current = true;
-    try {
-      const res = await api.proactive({ chatType: current.chat_type, chatId: current.chat_id });
-      if (!res.ok && res.error) showToast(t('chat.proactiveError', { error: res.error }));
-    } catch (e: any) {
-      showToast(t('chat.proactiveError', { error: e?.message || String(e) }));
-    } finally {
-      proactiveBusyRef.current = false;
-      const now = Date.now();
-      lastActivityRef.current = now;
-      api.idleSet(`${current.chat_type}:${current.chat_id}`, now);
-    }
-  }, [current, t, showToast]);
-
+  // 主动消息计时基准：进入聊天时初始化/继承，计时与触发统一交给主进程。
+  // 小窗同样受渲染进程定时器节流影响，触发交给主进程才能保证后台/托盘状态下按时送达。
   useEffect(() => {
     if (!current) return;
     const curKey = `${current.chat_type}:${current.chat_id}`;
     let cancelled = false;
-    // 进入聊天时，从主进程读取全局权威计时基准（跨窗口唯一数据源）
     (async () => {
       let initTime: number;
       if (idleSwitchActionRef.current === 'reset') {
@@ -1135,24 +1125,11 @@ export const MiniChat: React.FC = () => {
       }
       if (!cancelled) lastActivityRef.current = initTime;
     })();
-
-    const iv = setInterval(() => {
-      if (!idleReplyOnRef.current) return;
-      if (proactiveBusyRef.current) return;
-      if (sendingRef.current || streamingCountRef.current > 0) return;
-      if (roleMissingRef.current || membersMissingRef.current > 0) return;
-      const msgs = messagesRef.current;
-      if (!msgs || msgs.length === 0) return;
-      const idleMs = (idleSecondsRef.current || 60) * 1000;
-      if (Date.now() - lastActivityRef.current < idleMs) return;
-      triggerProactive();
-    }, 3000);
     return () => {
       cancelled = true;
-      clearInterval(iv);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, triggerProactive]);
+  }, [current]);
 
   // 主动消息倒计时：订阅主进程每秒广播的 elapsed，保证多窗口完全一致
   useEffect(() => {
@@ -1268,6 +1245,32 @@ export const MiniChat: React.FC = () => {
     } finally {
       setGenLoading(false);
       setGenTyping(false);
+    }
+  };
+
+  // AI 自动补全提示词（生图）：把用户写的粗略想法交给默认模型扩展成完整提示词
+  const doAutocomplete = async () => {
+    if (!current) return;
+    if (!genText.trim()) {
+      showToast(t('chat.genNeedPrompt'));
+      return;
+    }
+    setAiCompleteLoading(true);
+    try {
+      const r = await api.autocompletePrompt('image', genText);
+      if (r.rateLimited) {
+        showToast(t('chat.aiCompleteRateLimited'));
+        return;
+      }
+      if (!r.ok || !r.prompt) {
+        showToast(r.error || t('chat.aiCompleteFailed'));
+        return;
+      }
+      setGenText(r.prompt);
+    } catch (e: any) {
+      showToast(e?.message || t('chat.aiCompleteFailed'));
+    } finally {
+      setAiCompleteLoading(false);
     }
   };
 
@@ -2253,13 +2256,22 @@ export const MiniChat: React.FC = () => {
               />
             </div>
             {genLoading && <div style={{ padding: '8px 0', color: 'var(--color-text-secondary)' }}>{t('chat.generating')}</div>}
-            <div style={{ textAlign: 'right', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button className="btn-ghost" disabled={genLoading} onClick={() => setGenOpen(false)}>
-                {t('msg.editCancel')}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', alignItems: 'center', marginTop: genLoading ? 0 : 8 }}>
+              <button
+                className="btn-ghost"
+                disabled={genLoading || aiCompleteLoading || !genText.trim()}
+                onClick={doAutocomplete}
+              >
+                {aiCompleteLoading ? t('chat.aiCompleting') : t('chat.aiCompletePrompt')}
               </button>
-              <button className="btn-primary" disabled={genLoading || !genText.trim()} onClick={doGenerate}>
-                {t('chat.drawImage')}
-              </button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn-ghost" disabled={genLoading} onClick={() => setGenOpen(false)}>
+                  {t('msg.editCancel')}
+                </button>
+                <button className="btn-primary" disabled={genLoading || !genText.trim()} onClick={doGenerate}>
+                  {t('chat.drawImage')}
+                </button>
+              </div>
             </div>
           </div>
         </div>

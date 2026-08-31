@@ -124,6 +124,7 @@ export interface ChatMessage {
   msg_kind?: 'public' | 'private'; // 观察者模式：公屏 / 私密小窗对话（默认 public）
   status?: 'normal' | 'recalled' | 'failed'; // 消息状态：正常 / 已撤回 / 发送失败
   from_proactive?: boolean; // 是否由主动消息机制产生（用于记忆控制：空闲主动发消息时此字段为 true）
+  from_auto?: boolean; // 是否由「自动接话 / 续聊」产生：非用户直接请求的 AI 自发消息，仅用于悬浮球未读判定，不参与记忆控制
   genPrompt?: string; // 软件内生图时使用的提示词：仅 AI 生成的图片消息带此字段；手动发送的图片为空，用于右键「查看提示词」
   visibleToGroup?: boolean; // 群聊消息是否全群可见（默认 true）；false=仅用户与指定 AI 可见的私密备注
   toMemory?: boolean; // 群聊消息是否可被自动记忆提炼收录（仅当 visibleToGroup 为 true 时生效；默认 true）

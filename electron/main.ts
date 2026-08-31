@@ -26,6 +26,9 @@ import {
   generateImage,
   generateVideo,
   setDeepThinkLevel,
+  AUTOCOMPLETE_SYS_PROMPT_IMAGE,
+  AUTOCOMPLETE_SYS_PROMPT_VIDEO,
+  AUTOCOMPLETE_MAX_TOKENS,
   ModelErrorInfo,
   ModelApiError,
 } from './ai';
@@ -55,7 +58,6 @@ import {
   setBallMainShow,
   setBallMainWindow,
   pushUnread,
-  clearAllUnread,
   clearUnreadForChat,
   showFloatingBall,
   hideFloatingBall,
@@ -572,8 +574,8 @@ function showMainWindow(): void {
     mainWindow.show();
     mainWindow.focus();
   }
-  // 回到主界面即视为已读：清空悬浮球未读（面板与主界面数据实时一致）
-  clearAllUnread();
+  // 注意：呼出主界面本身不算已读。未读只在该聊天被真正打开（setActiveChat → clearUnreadForChat）时清除，
+  // 避免「一进主界面就把所有未读清空、却没看到具体消息」导致漏看。
 }
 
 // ---------- 后台消息提醒（Steam 风格卡片） ----------
@@ -2980,6 +2982,8 @@ async function handleGroupContinue(
       visibleToGroup: aiVisible,
       toMemory: aiToMem,
       msg_kind: aiVisible ? 'public' : 'private',
+      // 自动接话/续聊产生的消息：记 from_auto，供悬浮球按「用户没正盯着该聊天就计入未读」处理
+      from_auto: true,
     });
     sendStreamDone(streamId, aiMsg);
     void requestMoodJudge('group', p.chatId, role.id);
@@ -4011,7 +4015,10 @@ function sendStreamDone(streamId: string, message: ChatMessage): void {
     const chatType = dm.getGroup(chatId) ? 'group' : 'single';
     const role = dm.getRole(roleId) || (chatType === 'single' ? dm.getRole(chatId) : undefined);
     const avatar = role?.avatar_path || '';
-    pushUnread(chatType, chatId, message.sender_name, message.content, avatar, message.from_proactive === true);
+    // from_proactive=空闲主动消息；from_auto=群聊自动接话/续聊。
+    // 二者同属「非用户直接请求」的 AI 自发消息，只要用户没正盯着该聊天就计入悬浮球未读。
+    const aiInitiated = message.from_proactive === true || message.from_auto === true;
+    pushUnread(chatType, chatId, message.sender_name, message.content, avatar, aiInitiated);
     // 后台消息提醒卡片：主窗/小窗均隐藏时由 showNotifyCard 内部判断并弹出；
     // 与渲染端 onDone 触发的 notifyCard 互补，覆盖当前未挂载聊天的场景（避免卡片消失）
     if (message.sender_type === 'ai' && message.content) {
@@ -4064,6 +4071,32 @@ function registerIPC(): void {
       return '';
     }
     return settings.models.find((m) => m.id === settings.defaultModel && m.enabled)?.id || '';
+  });
+  // 生图 / 生视频提示词 AI 自动补全：调用默认模型，受 QPS 限速约束。
+  // 超限速则直接返回 rateLimited（不消耗请求额度），由前端提示「暂时不可用」；成功才 rateMark。
+  ipcMain.handle('prompts:autocomplete', async (_e, p: { type: 'image' | 'video'; text: string }) => {
+    const settings = dm.getSettings();
+    const cfg =
+      settings.models.find((m) => m.id === settings.defaultModel && m.enabled) ||
+      settings.models.find((m) => m.enabled);
+    if (!cfg) return { ok: false, error: '（请先在设置-模型管理中添加并启用一个模型配置）' };
+    const wait = rateWaitMs(cfg.id);
+    if (wait > 0) return { ok: false, rateLimited: true, waitMs: wait };
+    const isVideo = p.type === 'video';
+    const sys = isVideo ? AUTOCOMPLETE_SYS_PROMPT_VIDEO : AUTOCOMPLETE_SYS_PROMPT_IMAGE;
+    const res = await queryAI(
+      cfg,
+      [
+        { role: 'system', content: sys },
+        { role: 'user', content: p.text || '' },
+      ],
+      AUTOCOMPLETE_MAX_TOKENS
+    );
+    if (res.error) return { ok: false, error: res.error.message };
+    rateMark(cfg.id);
+    const prompt = (res.content || '').trim();
+    if (!prompt) return { ok: false, error: '模型未返回有效提示词' };
+    return { ok: true, prompt };
   });
   // 翻译文本（右键菜单"翻译文本"）：未设翻译专用模型则用默认模型
   ipcMain.handle('chats:translate', async (_e, text: string) => {
@@ -4949,6 +4982,9 @@ function registerIPC(): void {
   // 两窗口各自渲染进程独立，无法共享模块变量，因此由主进程统一持有 lastActivity
   // 并每秒广播 elapsed，渲染进程只负责显示，杜绝相位差与初始化差。
   const idleState = new Map<string, number>(); // chatKey -> lastActivityTs
+  // 渲染端当前查看的聊天（`${chatType}:${chatId}`）。窗口隐藏/托盘后仍保留，
+  // 供主动消息调度器判断该对哪个聊天开口（与悬浮球未读判定共用同一来源）。
+  let activeChatKeyMain = '';
   ipcMain.handle('idle:get', (_e, chatKey: string) => {
     return idleState.get(chatKey) ?? null;
   });
@@ -4967,6 +5003,62 @@ function registerIPC(): void {
     for (const [k, ts] of idleState) payload[k] = now - ts;
     broadcast('idle:tick', payload);
   }, 250);
+
+  // ===== 主动消息：主进程统一调度 =====
+  // 原先由渲染进程用 setInterval 自行判断并调用 chats:proactive。主界面关闭到托盘时窗口仅 hide，
+  // 渲染进程的定时器会被 Chromium 节流乃至冻结，于是主动消息不触发，直到重新打开窗口才「姗姗来迟」。
+  // 改由主进程以 idleState（全局权威计时基准）驱动：窗口隐藏、最小化、托盘常驻都不影响计时与触发。
+  // 渲染端只保留倒计时显示，不再自行触发，避免双触发。
+  const proactiveBusyKeys = new Set<string>(); // 正在生成主动消息的 chatKey，防重入
+  setInterval(() => {
+    if (quitting) return;
+    if (proactiveBusyKeys.size > 0) return; // 串行：同一时刻只生成一条，避免并发刷屏
+    const s = dm.getSettings();
+    if (s.idleEnabled === false) return;
+    // 优先用渲染端回传的「当前查看的聊天」；缺失时兜底取最近有活动记录的聊天
+    let key = activeChatKeyMain;
+    if (!key || idleState.get(key) == null) {
+      let newest = -1;
+      for (const [k, t] of idleState) {
+        if (t > newest) {
+          newest = t;
+          key = k;
+        }
+      }
+    }
+    if (!key) return;
+    const perChat = (s.chatIdleEnabled || {})[key];
+    if (perChat === false) return; // 该聊天单独关闭了主动消息
+    const ts = idleState.get(key);
+    if (ts == null) return;
+    const idleMs = (s.idleInterval || 600) * 1000;
+    if (Date.now() - ts < idleMs) return;
+    const sep = key.indexOf(':');
+    if (sep <= 0) return;
+    const chatType = key.slice(0, sep);
+    const chatId = key.slice(sep + 1);
+    if (!chatId) return;
+    // 该聊天还没有任何消息则不主动开口（与旧渲染端逻辑一致）
+    if (dm.getMessages(chatType, chatId).length === 0) return;
+    // 正在生成其它内容（用户发消息 / AI 回复 / 自动接话）时让路，下轮再判
+    if (streamControllers.has(chatId)) return;
+    proactiveBusyKeys.add(key);
+    // 先重置计时再发请求，杜绝并发重复触发与「窗口恢复后补触发」
+    const startedAt = Date.now();
+    idleState.set(key, startedAt);
+    broadcast('idle:activity', { chatKey: key, timestamp: startedAt });
+    void handleProactive({ chatType, chatId })
+      .catch(() => {
+        /* 生成失败已由 handleProactive 内部落库/气泡处理，此处仅防 unhandledrejection */
+      })
+      .finally(() => {
+        proactiveBusyKeys.delete(key);
+        // 一条主动消息后需再次静默整段时长才会触发下一条（避免连续刷屏）
+        const finishedAt = Date.now();
+        idleState.set(key, finishedAt);
+        broadcast('idle:activity', { chatKey: key, timestamp: finishedAt });
+      });
+  }, 3000);
   ipcMain.handle('mini:setOpacity', (_e, v: number) => {
     if (miniWindow && !miniWindow.isDestroyed()) {
       miniWindow.setOpacity(Math.max(0.4, Math.min(1, Number(v) || 1)));
@@ -5136,9 +5228,13 @@ function registerIPC(): void {
 
   // ===== 桌面悬浮球 IPC =====
   registerBallIPC();
-  // 渲染端切换当前聊天时回传，供悬浮球未读判断「主动消息」是否计入
+  // 渲染端切换当前聊天时回传，供悬浮球未读判断「主动消息」是否计入，
+  // 同时作为主进程主动消息调度器的目标聊天（窗口隐藏后仍有效）
   ipcMain.on('app:active-chat', (_e, p: { type: string; id: string }) => {
-    if (p && typeof p.type === 'string' && typeof p.id === 'string') setActiveChat(p.type, p.id);
+    if (p && typeof p.type === 'string' && typeof p.id === 'string') {
+      setActiveChat(p.type, p.id);
+      activeChatKeyMain = `${p.type}:${p.id}`;
+    }
   });
   // 设置中切换悬浮球开关：启用则创建、关闭则销毁
   ipcMain.on('ball:set-enabled', (_e, enabled: boolean) => {

@@ -194,6 +194,8 @@ export interface NianyuAPI {
     imagePath: string,
     kind: 'image' | 'video'
   ) => Promise<{ ok: boolean; started?: boolean; imagePath?: string }>;
+  // AI 自动补全提示词（生图/生视频），调用默认模型，受 QPS 限速约束
+  autocompletePrompt: (type: 'image' | 'video', text: string) => Promise<{ ok: boolean; prompt?: string; error?: string; rateLimited?: boolean; waitMs?: number }>;
   // 生视频进度/完成广播（主窗 + 小窗悬浮气泡订阅）
   onVideoProgress: (cb: (e: any, data: { chatType: string; chatId: string; prompt: string; percent: number; status?: string }) => void) => () => void;
   onVideoDone: (cb: (e: any, data: { chatType: string; chatId: string; prompt: string; ok: boolean; imagePath?: string; error?: string }) => void) => () => void;
@@ -381,6 +383,7 @@ export const api: NianyuAPI = {
   generateImage: (chatType, chatId, prompt) => raw.generateImage(chatType, chatId, prompt),
   generateVideo: (chatType, chatId, prompt) => raw.generateVideo(chatType, chatId, prompt),
   generateImageFromImage: (chatType, chatId, prompt, imagePath, kind) => raw.generateImageFromImage(chatType, chatId, prompt, imagePath, kind),
+  autocompletePrompt: (type, text) => raw.autocompletePrompt(type, text),
   saveImageMemory: (p) => raw.saveImageMemory(p),
   recallMessage: (msgId) => raw.recallMessage(msgId),
   rollbackMessages: (p) => raw.rollbackMessages(p),

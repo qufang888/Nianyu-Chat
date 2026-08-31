@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback, Fragment } from 'react';
+import React, { useEffect, useRef, useState, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
@@ -56,6 +56,7 @@ export const ChatWindow: React.FC<{
   const [genTyping, setGenTyping] = useState(false); // 生图期间在聊天框显示「AI 正在回复」动画（用户不会看到自己的生图指令）
   const [genVideoOpen, setGenVideoOpen] = useState(false); // 生视频弹窗
   const [genVideoText, setGenVideoText] = useState('');
+  const [aiCompleteLoading, setAiCompleteLoading] = useState(false); // AI 补全提示词中
   const [promptView, setPromptView] = useState<string | null>(null); // 查看提示词弹窗
   const [showMention, setShowMention] = useState(false);
   // 消息查找（🔍）与关系值（💞）面板开关
@@ -348,29 +349,11 @@ export const ChatWindow: React.FC<{
     };
   }, [moreOpen]);
 
-  // 空闲主动回复：用户在线但一段时间无操作时，角色主动发一条贴合语境与心情的消息
-  const triggerProactive = useCallback(async () => {
-    if (proactiveBusyRef.current) return;
-    if (roleMissingRef.current || membersMissingRef.current > 0) return;
-    proactiveBusyRef.current = true;
-    try {
-      const res = await api.proactive({ chatType, chatId });
-      if (!res.ok && res.error) showToast(t('chat.proactiveError', { error: res.error }));
-    } catch (e: any) {
-      showToast(t('chat.proactiveError', { error: e?.message || String(e) }));
-    } finally {
-      proactiveBusyRef.current = false;
-      // 一条主动消息后，需再次静默整段时长才会触发下一条（避免连续刷屏）
-      const now = Date.now();
-      lastActivityRef.current = now;
-      api.idleSet(chatKey, now);
-    }
-  }, [chatType, chatId, t, showToast]);
-
-  // 主动消息空闲检测：基于消息发送时间，而非鼠标/键盘事件
+  // 主动消息计时基准：进入聊天时初始化/继承，计时与触发统一交给主进程。
+  // 主界面关闭到托盘时窗口仅 hide，渲染进程的 setInterval 会被浏览器节流乃至冻结，
+  // 过去由渲染端触发会出现「不打开窗口就不来消息、一打开才姗姗来迟」。现在渲染端只负责显示。
   useEffect(() => {
     let cancelled = false;
-    // 进入聊天时，从主进程读取全局权威计时基准（跨窗口唯一数据源）
     (async () => {
       const saved = await api.idleGet(chatKey);
       if (cancelled) return;
@@ -389,25 +372,11 @@ export const ChatWindow: React.FC<{
       }
       lastActivityRef.current = initTime;
     })();
-
-    const iv = setInterval(() => {
-      if (!idleReplyOnRef.current) return;
-      if (proactiveBusyRef.current) return;
-      if (sendingRef.current || streamingCountRef.current > 0) return;
-      if (roleMissingRef.current || membersMissingRef.current > 0) return;
-      const msgs = messagesRef.current;
-      if (!msgs || msgs.length === 0) return;
-      const idleMs = (idleSecondsRef.current || 60) * 1000;
-      if (Date.now() - lastActivityRef.current < idleMs) return;
-      triggerProactive();
-    }, 3000);
-
     return () => {
       cancelled = true;
-      clearInterval(iv);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatType, chatId, triggerProactive]);
+  }, [chatType, chatId]);
 
   // 主动消息倒计时：订阅主进程每秒广播的 elapsed，保证多窗口完全一致
   useEffect(() => {
@@ -458,7 +427,6 @@ export const ChatWindow: React.FC<{
   const bgKey = `${chatType}:${chatId}`;
   // 空闲主动回复：refs 供定时轮询读取最新值，避免每次渲染都重建监听器
   const lastActivityRef = useRef(Date.now()); // 最近一次用户操作时间
-  const proactiveBusyRef = useRef(false); // 正在生成主动消息，防止重复触发
   const idleReplyOnRef = useRef(true);
   const idleSecondsRef = useRef(60);
   const sendingRef = useRef(false); // 与 setSending 同步，供轮询读取
@@ -1168,6 +1136,33 @@ export const ChatWindow: React.FC<{
     } finally {
       setGenLoading(false);
       setGenTyping(false);
+    }
+  };
+
+  // AI 自动补全提示词：把用户在生图/生视频弹窗里写的粗略想法，交给默认模型扩展成完整提示词
+  const doAutocomplete = async (type: 'image' | 'video') => {
+    const base = type === 'image' ? genText : genVideoText;
+    if (!base.trim()) {
+      showToast(t('chat.genNeedPrompt'));
+      return;
+    }
+    setAiCompleteLoading(true);
+    try {
+      const r = await api.autocompletePrompt(type, base);
+      if (r.rateLimited) {
+        showToast(t('chat.aiCompleteRateLimited'));
+        return;
+      }
+      if (!r.ok || !r.prompt) {
+        showToast(r.error || t('chat.aiCompleteFailed'));
+        return;
+      }
+      if (type === 'image') setGenText(r.prompt);
+      else setGenVideoText(r.prompt);
+    } catch (e: any) {
+      showToast(e?.message || t('chat.aiCompleteFailed'));
+    } finally {
+      setAiCompleteLoading(false);
     }
   };
 
@@ -2473,17 +2468,26 @@ export const ChatWindow: React.FC<{
               />
             </div>
             {genLoading && <div style={{ padding: '8px 0', color: 'var(--color-text-secondary)' }}>{t('chat.generating')}</div>}
-            <div style={{ textAlign: 'right', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button className="btn-ghost" disabled={genLoading} onClick={() => setGenOpen(false)}>
-                {t('msg.editCancel')}
-              </button>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', alignItems: 'center', marginTop: genLoading ? 0 : 8 }}>
               <button
-                className="btn-primary"
-                disabled={genLoading || !genText.trim()}
-                onClick={doGenerate}
+                className="btn-ghost"
+                disabled={genLoading || aiCompleteLoading || !genText.trim()}
+                onClick={() => doAutocomplete('image')}
               >
-                {t('chat.drawImage')}
+                {aiCompleteLoading ? t('chat.aiCompleting') : t('chat.aiCompletePrompt')}
               </button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn-ghost" disabled={genLoading} onClick={() => setGenOpen(false)}>
+                  {t('msg.editCancel')}
+                </button>
+                <button
+                  className="btn-primary"
+                  disabled={genLoading || !genText.trim()}
+                  onClick={doGenerate}
+                >
+                  {t('chat.drawImage')}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2503,17 +2507,26 @@ export const ChatWindow: React.FC<{
                 autoFocus
               />
             </div>
-            <div style={{ textAlign: 'right', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button className="btn-ghost" onClick={() => setGenVideoOpen(false)}>
-                {t('msg.editCancel')}
-              </button>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
               <button
-                className="btn-primary"
-                disabled={!genVideoText.trim()}
-                onClick={doGenerateVideo}
+                className="btn-ghost"
+                disabled={aiCompleteLoading || !genVideoText.trim()}
+                onClick={() => doAutocomplete('video')}
               >
-                {t('chat.drawVideo')}
+                {aiCompleteLoading ? t('chat.aiCompleting') : t('chat.aiCompletePrompt')}
               </button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn-ghost" onClick={() => setGenVideoOpen(false)}>
+                  {t('msg.editCancel')}
+                </button>
+                <button
+                  className="btn-primary"
+                  disabled={!genVideoText.trim()}
+                  onClick={doGenerateVideo}
+                >
+                  {t('chat.drawVideo')}
+                </button>
+              </div>
             </div>
           </div>
         </div>
