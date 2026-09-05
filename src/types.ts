@@ -2,7 +2,7 @@
 
 export type Gender = 'male' | 'female' | 'other' | 'unknown';
 
-export type Provider = 'openai' | 'deepseek' | 'anthropic' | 'custom' | 'openai-compatible';
+export type Provider = 'openai' | 'deepseek' | 'anthropic' | 'custom' | 'openai-compatible' | 'local';
 
 // 模型配置（保存在 settings.json 的 models 数组）
 export interface ModelConfig {
@@ -17,7 +17,10 @@ export interface ModelConfig {
   enabled: boolean;
   supportsImages?: boolean; // 是否支持图片输入（多模态视觉）：开启后用户发送的图片才会作为 image_url 内容块发给模型；关闭则图片仅作占位文本，绝不报错
   supportsReasoning?: boolean; // 是否标记该模型支持深度思考/推理（手动标记，替代早期「按模型名关键字猜测」）；开启且全局深度思考档位非 off 时，请求体写入 reasoning_effort
-  qps?: number; // 每分钟请求上限，0 或未设置=无限制；超出后请求延迟，限制解除后自动发送排队消息
+  supportsTools?: boolean; // 能力探针结果：是否支持工具调用（function calling / tool_calls）；开启后请求体可带 tools，AI 可触发工具
+  supportsJson?: boolean; // 能力探针结果：是否支持 JSON 模式（response_format={"type":"json_object"}）；开启后可用于需要结构化输出的场景
+  lastDetectedAt?: number | null; // 最近一次能力探针时间戳（ms），null=从未检测；用于设置页展示「上次检测」
+  qps?: number; // 每分钟请求上限，支持小数（如 0.5=每 120 秒 1 次）；0 或未设置=无限制；超出后请求延迟，限制解除后自动发送排队消息
   // ===== 采样与上下文高级参数（无极滑动 + 输入框直输）=====
   topP?: number; // 核采样 top-p（0~1），不设置=使用模型默认
   topK?: number; // 核采样 top-k（0~50），0=关闭
@@ -27,6 +30,43 @@ export interface ModelConfig {
   // 用户在模型编辑器输入的合法 JSON 对象，会在发送请求时合并进请求体（覆盖同名内置参数，但 messages/model/stream 受保护不被覆盖）。
   // 用于传入厂商特有、UI 未单独暴露的参数（如 stop / frequency_penalty / extra_body 等）。
   customParams?: string;
+  supportsNsfw?: boolean; // 是否可输出 NSFW（成人）内容。由「检测能力」的 NSFW 探针自动判定，也可手动开启/关闭。仅作标记展示，不影响任何请求体、不绕过模型自身安全策略
+  // ===== 分组与标签（手动归类，用于设置页快速筛选）=====
+  // groupIds 指向 settings.modelGroups 中的分组（大归类，一个模型可属于多个分组，分组可改名/改色/删除）
+  // tags 为自由文本标签（细标记，如「便宜」「快」），与分组同属「分类维度」，筛选时组内 OR
+  groupIds?: string[];
+  tags?: string[];
+}
+
+// 模型分组（全局实体，保存在 settings.modelGroups，可被多个模型引用）
+export interface ModelGroup {
+  id: string;
+  name: string; // 分组名，长度上限 MODEL_GROUP_NAME_MAX（12 字符）
+  color: string; // CSS 颜色，取自 MODEL_GROUP_COLORS 调色板
+}
+
+// ===== 分组与标签的硬编码上限（改动这些值需同步告知用户）=====
+export const MODEL_GROUP_COLORS: string[] = [
+  '#5b8def',
+  '#4caf72',
+  '#e0a33e',
+  '#e06c75',
+  '#9b7ee0',
+  '#3fb0b5',
+  '#d2695a',
+  '#7a8a99',
+];
+export const MODEL_GROUP_NAME_MAX = 12; // 分组名单条长度上限
+export const MODEL_GROUP_MAX = 20; // 分组数量上限
+export const MODEL_TAG_LEN_MAX = 16; // 单个标签长度上限
+export const MODEL_TAG_MAX = 12; // 每个模型的标签数量上限
+
+// 模型能力探针的探测项开关（主进程与渲染进程共用；未传=全跑）
+export interface ProbeOptions {
+  images?: boolean;
+  tools?: boolean;
+  json?: boolean;
+  nsfw?: boolean;
 }
 
 export interface Role {
@@ -259,6 +299,7 @@ export interface AppSettings {
   apiKeys: ApiKeys;
   defaultModel: string;
   models: ModelConfig[]; // 模型配置中心
+  modelGroups: ModelGroup[]; // 模型分组（全局实体，ModelConfig.groupIds 引用其中的 id）
   theme: ThemeName;
   lang: 'zh' | 'en';
   windowBounds: { x: number; y: number; width: number; height: number; isMaximized?: boolean };
@@ -286,6 +327,9 @@ export interface AppSettings {
   chatWorldBooks: Record<string, string>; // 按聊天覆盖：key="single:roleId"/"group:groupId" -> worldBookId（''=继承角色/默认）
   sharedRuleIds: string[]; // 共用规则（所有对话/模型遵守）
   enableAutoMemory: boolean; // AI 自动提炼记忆（默认关）
+  longMemory: Record<string, boolean>; // 长记忆独立开关：key="single:roleId"/"group:groupId"，每聊天独立；开启后该聊天启用「手动让 AI 总结记忆」按钮（仅长记忆开时可用）
+  readWatermark: Record<string, number>; // 已读水位线：key="single:roleId"/"group:groupId"，value=该聊天最后已读消息 id；消息 id 大于该值视为未读（未加入该 key=全部未读）
+  autoMemRoundCount: Record<string, number>; // 长记忆自动提炼轮数计数器：key="single:roleId"/"group:groupId"，value=累计用户消息轮数；满 10 触发一次 10 轮自动提炼并归零
   hideReasoning: boolean; // 隐藏思维链（默认开=折叠显示，点击箭头展开）
   deepThinkLevel: DeepThinkLevel; // 深度思考等级（off/low/medium/high）；仅对支持深度思考的模型生效，软件自动探测模型能力
   // ===== 输入框外观（自定义文字色 / 内部背景色，防止文字与背景相近看不清）=====
@@ -294,11 +338,19 @@ export interface AppSettings {
   // ===== 毛玻璃主题背景（仅 glass/frost 主题生效；设置毛玻璃专属，未开启毛玻璃主题时隐藏）=====
   glassBgColor?: string; // 毛玻璃主题自定义背景色（CSS 颜色），空=跟随主题默认渐变
   glassBgImage?: string; // 毛玻璃主题自定义背景图（data URL），空=无；设置后毛玻璃磨砂效果仍保留
+  glassTokenText?: string; // 毛玻璃主题：Token 栏字体色（空=跟随主题主色）
+  glassTokenBorder?: string; // 毛玻璃主题：Token 栏边框色/椭圆（空=跟随主题主色）
+  glassBubbleUserText?: string; // 毛玻璃主题：用户气泡文字色（空=跟随主题）
+  glassBubbleAiText?: string; // 毛玻璃主题：AI 气泡文字色（空=跟随主题）
+  glassBubbleBorder?: string; // 毛玻璃主题：气泡边框色（空=透明/无）
   enableRandomEvents: boolean; // 随机事件：开启后聊天过程中会自动弹出随机事件（关闭则仅手动触发）
   // ===== 空闲主动回复 =====
   idleEnabled: boolean; // 全局主开关：关闭时所有按聊天的主动消息都失效（默认开）
   chatIdleEnabled: Record<string, boolean>; // 按聊天覆盖：key="single:roleId"/"group:groupId"；缺省视为 true
   idleInterval: number; // 触发主动消息前的静默时长（秒）：从离散选项中选择（默认 600s=10min）
+  idleTimingMode?: 'fixed' | 'random'; // 触发时机模式：fixed=固定间隔（idleInterval）；random=每次在 [min,max] 内随机抽取（默认 fixed）
+  idleRandomMinSec?: number; // 随机模式最小静默时长（秒）：钳制 1~86400（1 秒 ~ 24 小时），默认 60
+  idleRandomMaxSec?: number; // 随机模式最大静默时长（秒）：钳制 1~86400 且 ≥ 最小值，默认 1800
   idleWriteMemory: boolean; // 主动消息是否参与 AI 自动记忆提炼（默认 false）
   idleSwitchAction: 'pause' | 'reset' | 'continue'; // 切换聊天时主动消息计时行为：暂停/重置/继续（全局，默认 pause）
   eventMoodImpact: number; // 随机事件影响心情的程度（0~1）：0=事件只改好感度，1=事件必按所选心情改变角色心情
@@ -434,6 +486,12 @@ export const PROVIDER_DEFAULTS: Record<
     maxContext: 128000,
     label: 'OpenAI 兼容',
   },
+  local: {
+    baseUrl: 'http://localhost:11434/v1',
+    model: '',
+    maxContext: 8192,
+    label: '本地模型',
+  },
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -444,6 +502,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   defaultModel: '',
   models: [],
+  modelGroups: [],
   theme: 'wechat',
   lang: 'zh',
   windowBounds: { x: 0, y: 0, width: 1200, height: 800 },
@@ -517,16 +576,27 @@ export const DEFAULT_SETTINGS: AppSettings = {
   chatWorldBooks: {},
   sharedRuleIds: [],
   enableAutoMemory: false,
+  longMemory: {},
+  readWatermark: {},
+  autoMemRoundCount: {},
   hideReasoning: true,
   deepThinkLevel: 'off',
   inputTextColor: '',
   inputBgColor: '',
   glassBgColor: '',
   glassBgImage: '',
+  glassTokenText: '',
+  glassTokenBorder: '',
+  glassBubbleUserText: '',
+  glassBubbleAiText: '',
+  glassBubbleBorder: '',
   enableRandomEvents: true,
   idleEnabled: true,
   chatIdleEnabled: {},
   idleInterval: 600,
+  idleTimingMode: 'fixed',
+  idleRandomMinSec: 60,
+  idleRandomMaxSec: 1800,
   idleWriteMemory: false,
   idleSwitchAction: 'pause',
   eventMoodImpact: 1,

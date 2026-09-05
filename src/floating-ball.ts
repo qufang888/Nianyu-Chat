@@ -23,6 +23,16 @@ type UnreadItem = {
   ts: number;
 };
 
+type ChatItem = {
+  chat_type: string;
+  chat_id: string;
+  name: string;
+  chat_name?: string;
+  avatar_path: string;
+  last_message: string;
+  member_count?: number;
+};
+
 function baseCSS(): string {
   return `
   html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden;
@@ -84,13 +94,13 @@ function baseCSS(): string {
   .fb-ctx-item:hover{background:var(--color-hover);}
   .fb-ctx-aot-row{justify-content:flex-start;}
   .fb-ctx-aot-row input{accent-color:var(--color-primary);cursor:pointer;width:15px;height:15px;margin:0;}
-  [data-theme='glass'] .fb-ctx{ background:rgba(18,16,38,0.72); border-color:rgba(255,255,255,0.28); }
+  [data-theme='glass'] .fb-ctx{ background:rgba(18,16,38,0.88); border-color:rgba(255,255,255,0.28); }
 
   /* 毛玻璃主题：原面板背景为浅白低不透明（rgba(255,255,255,0.22)）+白字，
      在亮桌面下对比不足、字被吃掉。改用深暗半透明磨砂底，保证浅色文字始终可读。
      （这里"降不透明度"指降低亮色覆盖、提高暗色对比，而非单纯调低 alpha 导致透出桌面） */
   [data-theme='glass'] .fb-panel{
-    background:rgba(18,16,38,0.62);
+    background:rgba(18,16,38,0.88);
     border-color:rgba(255,255,255,0.28);
   }
   [data-theme='glass'] .fb-row:hover{ background:rgba(255,255,255,0.10); }
@@ -113,6 +123,12 @@ function mount(): void {
   styleEl.textContent = baseCSS();
 
   const root = document.getElementById('root') as HTMLElement;
+
+  // 面板状态（提升到 mount 顶部，避免被闭包在 TDZ 期间引用）
+  let unreadCount = 0;
+  let panelOpen = false;
+  let dragging = false;
+  let chatList: ChatItem[] = [];
 
   const ball = document.createElement('div');
   ball.className = 'fb-ball';
@@ -142,7 +158,7 @@ function mount(): void {
     api.onSettingsChanged(() => refreshTheme());
   }
 
-  // ===== 未读数据 =====
+  // ===== 未读角标（保留：后台来消息仍给角标提示）=====
   function renderBadge(): void {
     if (unreadCount > 0) {
       badge.style.display = 'block';
@@ -152,32 +168,44 @@ function mount(): void {
     }
   }
 
+  // ===== 拉取聊天列表（单聊 + 群聊）=====
+  function fetchChats(): void {
+    if (api && api.getChatList) {
+      api.getChatList().then((list: ChatItem[]) => {
+        chatList = list || [];
+        if (panelOpen) renderPanel();
+      }).catch(() => {});
+    }
+  }
+
   function renderPanel(): void {
-    if (unreadItems.length === 0) {
-      panel.innerHTML = `<div class="fb-panel-h"><span>未读消息</span></div>
-        <div class="fb-empty">暂无未读消息</div>
-        <div class="fb-foot">右键悬浮球可退出念语</div>`;
+    if (chatList.length === 0) {
+      panel.innerHTML = `<div class="fb-panel-h"><span>快捷聊天</span></div>
+        <div class="fb-empty">暂无可切换的聊天</div>
+        <div class="fb-foot">滚轮可滚动查看更多 · 右键悬浮球可退出念语</div>`;
       return;
     }
-    const rows = unreadItems
-      .map(
-        (it) => `<div class="fb-row" data-chat='${JSON.stringify({
-          chatType: it.chatType,
-          chatId: it.chatId,
-          name: it.roleName,
+    const rows = chatList
+      .map((it) => {
+        const isGroup = it.chat_type === 'group';
+        const name = it.chat_name || it.name;
+        const tag = isGroup ? '群聊' : '单聊';
+        return `<div class="fb-row" data-chat='${JSON.stringify({
+          chatType: it.chat_type,
+          chatId: it.chat_id,
+          name,
         }).replace(/'/g, '&#39;')}'>
-          <div class="fb-av" data-av="${it.avatar || ''}">${(it.roleName || '?').trim().charAt(0) || '?'}</div>
+          <div class="fb-av" data-av="${it.avatar_path || ''}">${(name || '?').trim().charAt(0) || '?'}</div>
           <div class="fb-row-body">
-            <div class="fb-row-name">${escapeHTML(it.roleName)}</div>
-            <div class="fb-row-content">${escapeHTML(it.content || '')}</div>
+            <div class="fb-row-name">${escapeHTML(name)}</div>
+            <div class="fb-row-content">${isGroup ? '👥 ' : '💬 '}${escapeHTML(tag)}${it.last_message ? ' · ' + escapeHTML(it.last_message) : ''}</div>
           </div>
-          <div class="fb-row-cnt">${it.count > 99 ? '99+' : it.count}</div>
-        </div>`
-      )
+        </div>`;
+      })
       .join('');
-    panel.innerHTML = `<div class="fb-panel-h"><span>未读消息</span><span class="cnt">${unreadCount}</span></div>
+    panel.innerHTML = `<div class="fb-panel-h"><span>快捷聊天</span><span class="cnt">${chatList.length}</span></div>
       <div class="fb-list">${rows}</div>
-      <div class="fb-foot">右键悬浮球可退出念语</div>`;
+      <div class="fb-foot">滚轮可滚动查看更多 · 右键悬浮球可退出念语</div>`;
 
     panel.querySelectorAll<HTMLElement>('.fb-av').forEach((el) => {
       const p = el.getAttribute('data-av');
@@ -213,6 +241,7 @@ function mount(): void {
   function showPanel(): void {
     if (panelOpen) return;
     panelOpen = true;
+    fetchChats(); // 每次展开都拉取最新聊天列表
     renderPanel();
     requestAnimationFrame(() => panel.classList.add('show'));
     setInteractive(true);
@@ -227,25 +256,20 @@ function mount(): void {
     if (api?.ballSetIgnore) api.ballSetIgnore(!on);
   }
 
-  function onData(data: { count: number; items: UnreadItem[] }): void {
-    unreadItems = data.items || [];
+  // 未读仅用于角标提示（保留原有后台消息提示能力），不再渲染未读列表
+  function onUnread(data: { count: number; items: UnreadItem[] }): void {
     unreadCount = data.count || 0;
     renderBadge();
-    if (panelOpen) renderPanel();
   }
 
-  if (api && api.onBallUnread) api.onBallUnread((_e: any, data: any) => onData(data));
+  if (api && api.onBallUnread) api.onBallUnread((_e: any, data: any) => onUnread(data));
   if (api && api.onBallBlur) api.onBallBlur(() => { hidePanel(); closeCtxMenu(); });
   if (api && api.ballGetUnread) {
-    api.ballGetUnread().then((d: any) => onData(d)).catch(() => {});
+    api.ballGetUnread().then((d: any) => onUnread(d)).catch(() => {});
   }
+  fetchChats(); // 首屏拉取一次，保证首次 hover 即有数据
 
   // ===== 拖拽 + 点击 + 右键 =====
-  let unreadItems: UnreadItem[] = [];
-  let unreadCount = 0;
-  let panelOpen = false;
-  let dragging = false;
-
   ball.addEventListener('mouseenter', () => {
     setInteractive(true);
     showPanel();

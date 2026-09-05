@@ -5,6 +5,7 @@ export interface SelectOption {
   value: string;
   label: React.ReactNode;
   disabled?: boolean;
+  tooltip?: React.ReactNode; // 悬停该选项时显示的说明（如模型能力）
 }
 
 interface SelectMenuProps {
@@ -39,6 +40,7 @@ const SelectMenu: React.FC<SelectMenuProps> = ({
   const [rect, setRect] = useState<{ top: number; left: number; width: number; below: boolean }>({
     top: 0, left: 0, width: 0, below: true,
   });
+  const [tip, setTip] = useState<{ node: React.ReactNode; x: number; y: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -63,7 +65,7 @@ const SelectMenu: React.FC<SelectMenuProps> = ({
     setOpen(true);
   }, [disabled, options, value, reposition]);
 
-  const close = useCallback(() => setOpen(false), []);
+  const close = useCallback(() => { setOpen(false); setTip(null); }, []);
 
   const choose = useCallback((opt: SelectOption) => {
     if (opt.disabled) return;
@@ -170,12 +172,29 @@ const SelectMenu: React.FC<SelectMenuProps> = ({
                 (opt.value === value ? ' selected' : '') +
                 (opt.disabled ? ' disabled' : '')
               }
-              onMouseEnter={() => !opt.disabled && setActiveIndex(i)}
+              onMouseEnter={(e) => {
+                if (!opt.disabled) setActiveIndex(i);
+                if (opt.tooltip) {
+                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  const toRight = r.right + 230 < window.innerWidth;
+                  setTip({ node: opt.tooltip, x: toRight ? r.right + 6 : r.left - 236, y: r.top });
+                } else {
+                  setTip(null);
+                }
+              }}
+              onMouseLeave={() => setTip(null)}
               onMouseDown={(e) => { e.preventDefault(); if (!opt.disabled) choose(opt); }}
             >
               {opt.label}
             </div>
           ))}
+        </div>,
+        document.body,
+      )}
+
+      {tip && createPortal(
+        <div className="select-menu-tip" style={{ top: tip.y, left: tip.x }} role="tooltip">
+          {tip.node}
         </div>,
         document.body,
       )}

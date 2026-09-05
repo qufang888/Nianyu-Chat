@@ -16,6 +16,9 @@ import {
   type WorldBook,
   type ErrorLogEntry,
   type Plugin,
+  MODEL_GROUP_COLORS,
+  MODEL_GROUP_NAME_MAX,
+  MODEL_GROUP_MAX,
 } from '../types';
 import { ModelEditor } from './ModelEditor';
 import { FontSettings } from './FontSettings';
@@ -70,13 +73,14 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-worldbook', key: 'worldbook.title', kw: ['世界书', 'worldbook', '背景设定'] },
   { id: 'sec-groupchat', key: 'settings.groupChat', kw: ['群聊', 'group', '多人', '群组'] },
   { id: 'sec-modelmanage', key: 'settings.modelManage', kw: ['模型管理', 'model manage', '添加模型'] },
+  { id: 'sec-modeldetect', key: 'settings.detectAllModels', kw: ['检测', '能力', '模型能力', 'detect', 'capability', '探针', 'probe', '视觉', '工具', 'json', '上下文窗口'] },
   { id: 'sec-theme', key: 'settings.theme', kw: ['主题', 'theme', '配色', '皮肤'] },
   { id: 'sec-radius', key: 'settings.radius', kw: ['圆角', 'radius', '边角'] },
   { id: 'sec-uizoom', key: 'settings.uiZoom', kw: ['缩放', 'zoom', '等比', '基准尺寸', '上下限'] },
   { id: 'sec-emoevent', key: 'settings.emoEventAdvanced', kw: ['情绪', '事件', 'emotion', 'event', '高级'] },
   { id: 'sec-inputappearance', key: 'settings.inputAppearance', kw: ['输入框', 'input', '输入栏', '外观'] },
   { id: 'sec-cursor', key: 'settings.cursor', kw: ['光标', 'cursor', '鼠标指针', '自定义光标'] },
-  { id: 'sec-glassbg', key: 'settings.glassBg', kw: ['毛玻璃', 'glass', '背景', '虚化'] },
+  { id: 'sec-glassbg', key: 'settings.glassBg', kw: ['毛玻璃', 'glass', '背景', '虚化', '颜色', '字体', '边框', '气泡', '透明', 'frost', 'blur', 'color', 'border', 'bubble', 'font'] },
   { id: 'sec-voice', key: 'settings.voice', kw: ['语音', 'voice', 'tts', '朗读', '播报', 'asr', '识别', '语音输入'] },
   { id: 'sec-imagegen', key: 'settings.imageGen', kw: ['生图', '画图', 'image', '图像生成', '文生图'] },
   { id: 'sec-videogen', key: 'settings.videoGen', kw: ['视频', 'video', '生视频', '文生视频'] },
@@ -216,10 +220,100 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
     inp.click();
   };
   const [draft, setDraft] = useState<AppSettings | null>(settings);
+  const [detectingAll, setDetectingAll] = useState(false);
   const [status, setStatus] = useState('');
+
+  // 一键检测所有模型能力：逐个发送探针请求，探测视觉/工具/JSON 支持与上下文窗口
+  const detectAllModels = async (opts?: { images: boolean; tools: boolean; json: boolean; nsfw: boolean }) => {
+    if (detectingAll) return;
+    setDetectingAll(true);
+    try {
+      const res = await api.detectAllModels(opts);
+      const lines = (res.results || [])
+        .map((r: any) => {
+          const caps = [
+            `${t('model.capImages')}:${r.supportsImages === null ? t('model.capUnknown') : r.supportsImages ? t('model.capYes') : t('model.capNo')}`,
+            `${t('model.capTools')}:${r.supportsTools === null ? t('model.capUnknown') : r.supportsTools ? t('model.capYes') : t('model.capNo')}`,
+            `${t('model.capJson')}:${r.supportsJson === null ? t('model.capUnknown') : r.supportsJson ? t('model.capYes') : t('model.capNo')}`,
+          ];
+          if (opts?.nsfw) {
+            caps.push(
+              `${t('model.capNsfw')}:${r.supportsNsfw === null ? t('model.capUnknown') : r.supportsNsfw ? t('model.capYes') : t('model.capNo')}`
+            );
+          }
+          return `· ${r.name}（${caps.join(' ')}）`;
+        })
+        .join('\n');
+      showToast(`${t('settings.detectAllDone', { count: (res.results || []).length })}\n${lines}`);
+    } catch (e: any) {
+      showToast(t('settings.detectAllFail', { msg: e?.message || String(e) }), true);
+    } finally {
+      setDetectingAll(false);
+    }
+  };
+
   const [busy, setBusy] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorInitial, setEditorInitial] = useState<ModelConfig | undefined>(undefined);
+  // 模型能力筛选：选中的能力键集合（视觉/工具/JSON/推理/NSFW），空集合=不过滤
+  const [modelFilter, setModelFilter] = useState<Set<string>>(new Set());
+  // 分组 / 标签筛选：各自内部 OR；与能力筛选 AND；「未分组」为虚拟分组项
+  const [groupFilter, setGroupFilter] = useState<Set<string>>(new Set());
+  const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
+  // 探测项选择弹窗（一键检测全部前让用户勾选，NSFW 默认不勾）
+  const [detectOptsOpen, setDetectOptsOpen] = useState(false);
+  const [detectOpts, setDetectOpts] = useState<{ images: boolean; tools: boolean; json: boolean; nsfw: boolean }>({
+    images: true,
+    tools: true,
+    json: true,
+    nsfw: false,
+  });
+
+  // 全部模型用到的标签（去重），用于标签筛选胶囊与编辑器联想
+  const allTags = Array.from(
+    new Set((draft?.models || []).flatMap((m) => (Array.isArray(m.tags) ? m.tags : [])))
+  ).sort();
+  const modelGroups = draft?.modelGroups || [];
+
+  const toggleSet =
+    (setter: React.Dispatch<React.SetStateAction<Set<string>>>) => (key: string) =>
+      setter((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return next;
+      });
+
+  const filteredModels = (() => {
+    const all = draft?.models || [];
+    return all.filter((m) => {
+      // 能力维度（AND）
+      if (modelFilter.has('vision') && !m.supportsImages) return false;
+      if (modelFilter.has('tools') && !m.supportsTools) return false;
+      if (modelFilter.has('json') && !m.supportsJson) return false;
+      if (modelFilter.has('reasoning') && !m.supportsReasoning) return false;
+      if (modelFilter.has('nsfw') && !m.supportsNsfw) return false;
+      // 分组维度（内部 OR）：选中「未分组」= 无 groupIds；选中具体分组=命中其一
+      if (groupFilter.size > 0) {
+        const gids = m.groupIds || [];
+        const ungrouped = groupFilter.has('__ungrouped__');
+        const hitGroup = Array.from(groupFilter).some((g) => g !== '__ungrouped__' && gids.includes(g));
+        if (ungrouped && gids.length === 0) {
+          // 命中未分组项，允许
+        } else if (hitGroup) {
+          // 命中具体分组，允许
+        } else {
+          return false;
+        }
+      }
+      // 标签维度（内部 OR）
+      if (tagFilter.size > 0) {
+        const tags = m.tags || [];
+        if (!Array.from(tagFilter).some((t) => tags.includes(t))) return false;
+      }
+      return true;
+    });
+  })();
   const [chatList, setChatList] = useState<ChatListItem[]>([]);
   const [sub, setSub] = useState<'main' | 'font' | 'self'>('main');
   const [worldBooks, setWorldBooks] = useState<WorldBook[]>([]);
@@ -442,6 +536,13 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
     };
   }, []);
 
+  // 模型名拉取相关 state：必须置于「加载中」提前 return 之前，否则 draft 由 null 变为有值时的
+  // 二次渲染会多调用 hook，触发 Rules of Hooks 崩溃（生产环境表现为 Minified React error #301）
+  const [asrModelList, setAsrModelList] = useState<string[]>([]);
+  const [ttsModelList, setTtsModelList] = useState<string[]>([]);
+  const [imgModelList, setImgModelList] = useState<string[]>([]);
+  const [modelLoading, setModelLoading] = useState<{ asr?: boolean; tts?: boolean; img?: boolean }>({});
+
   if (!draft) return <div className="panel">{t('common.loading')}</div>;
 
   const loc = lang === 'en' ? 'en-US' : 'zh-CN';
@@ -452,6 +553,14 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
   const patch = (p: Partial<AppSettings>) => {
     setDraft((d) => ({ ...(d as AppSettings), ...p }));
     api.saveSettings(p).then(reloadSettings);
+  };
+  // 随机触发范围保存：钳制 1~86400 秒（1 秒 ~ 24 小时，边界为硬编码），并保证 min <= max
+  const saveRandomRange = (rawMin: number, rawMax: number) => {
+    const clamp = (v: number) => Math.max(1, Math.min(86400, Math.round(v)));
+    let min = clamp(rawMin);
+    let max = clamp(rawMax);
+    if (min > max) { const t = min; min = max; max = t; }
+    patch({ idleRandomMinSec: min, idleRandomMaxSec: max });
   };
   const voice = { ...DEFAULT_SETTINGS.voice, ...(draft.voice || {}) };
   const imageGen = { ...DEFAULT_SETTINGS.imageGen, ...(draft.imageGen || {}) } as ImageGenSettings;
@@ -501,11 +610,6 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
 
   // 生图 / TTS / ASR 模型名拉取：复用 OpenAI 兼容 /models，按类型关键字过滤后填入 datalist，
   // 用户既能从下拉选也能手填。过滤为空时回退全部列表，避免第三方平台命名不标准时漏掉可用模型。
-  const [asrModelList, setAsrModelList] = useState<string[]>([]);
-  const [ttsModelList, setTtsModelList] = useState<string[]>([]);
-  const [imgModelList, setImgModelList] = useState<string[]>([]);
-  const [modelLoading, setModelLoading] = useState<{ asr?: boolean; tts?: boolean; img?: boolean }>({});
-
   const filterModelsByKind = (list: string[], kind: 'asr' | 'tts' | 'img'): string[] => {
     const test = (id: string) => {
       const s = id.toLowerCase();
@@ -628,6 +732,60 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
     const next = [...(draft?.models || []), copy];
     setDraft((d) => (d ? { ...d, models: next } : d));
     persistModels(next);
+  };
+
+  // ===== 模型分组管理（全局实体，可被多模型引用）=====
+  const addGroup = () => {
+    const groups = draft?.modelGroups || [];
+    if (groups.length >= MODEL_GROUP_MAX) {
+      showToast(t('settings.groupLimitReached', { n: MODEL_GROUP_MAX }), true);
+      return;
+    }
+    // 名称去重：从「分组 1」递增，跳过已存在的同名项
+    let idx = 1;
+    let name = `分组 ${idx}`;
+    while (groups.some((g) => g.name === name)) {
+      idx += 1;
+      name = `分组 ${idx}`;
+    }
+    const color = MODEL_GROUP_COLORS[groups.length % MODEL_GROUP_COLORS.length];
+    const next = [...groups, { id: crypto.randomUUID(), name, color }];
+    patch({ modelGroups: next });
+  };
+  const renameGroup = (id: string, rawName: string) => {
+    const name = rawName.trim();
+    if (!name) {
+      showToast(t('settings.groupNameEmpty'), true);
+      return;
+    }
+    if (name.length > MODEL_GROUP_NAME_MAX) {
+      showToast(t('settings.groupNameTooLong', { n: MODEL_GROUP_NAME_MAX }), true);
+      return;
+    }
+    const groups = draft?.modelGroups || [];
+    if (groups.some((g) => g.id !== id && g.name === name)) {
+      showToast(t('settings.groupNameExists'), true);
+      return;
+    }
+    patch({ modelGroups: groups.map((g) => (g.id === id ? { ...g, name } : g)) });
+  };
+  const recolorGroup = (id: string, color: string) => {
+    const groups = draft?.modelGroups || [];
+    patch({ modelGroups: groups.map((g) => (g.id === id ? { ...g, color } : g)) });
+  };
+  const deleteGroup = async (id: string) => {
+    const groups = draft?.modelGroups || [];
+    const target = groups.find((g) => g.id === id);
+    if (!target) return;
+    if (!(await api.showConfirm!(t('settings.groupDeleteConfirm', { name: target.name })))) return;
+    const nextGroups = groups.filter((g) => g.id !== id);
+    // 孤儿清理：从所有模型的 groupIds 中移除该分组 id
+    const nextModels = (draft?.models || []).map((m) =>
+      (m.groupIds || []).includes(id) ? { ...m, groupIds: (m.groupIds || []).filter((x) => x !== id) } : m
+    );
+    setDraft((d) => (d ? { ...d, modelGroups: nextGroups, models: nextModels } : d));
+    if (draft) api.saveSettings({ ...draft, modelGroups: nextGroups, models: nextModels }).then(reloadSettings);
+    window.dispatchEvent(new CustomEvent('nianyu:restore-focus'));
   };
 
   const toggleDefault = (id: string) => {
@@ -1202,6 +1360,35 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             </div>
           </div>
 
+          {/* 触发时机模式：固定间隔 / 随机时间 */}
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 13, marginBottom: 6 }}>{t('settings.idleMode')}</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {(
+                [
+                  { v: 'fixed', l: t('settings.idleModeFixed') },
+                  { v: 'random', l: t('settings.idleModeRandom') },
+                ] as const
+              ).map((opt) => {
+                const active = (draft.idleTimingMode ?? 'fixed') === opt.v;
+                return (
+                  <button
+                    key={opt.v}
+                    className={active ? 'btn-primary' : 'btn-ghost'}
+                    style={{ padding: '4px 10px', fontSize: 12 }}
+                    onClick={() => {
+                      patch({ idleTimingMode: opt.v });
+                    }}
+                  >
+                    {opt.l}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {(draft.idleTimingMode ?? 'fixed') === 'fixed' && (
+          <>
           {/* 触发时长：离散选项 */}
           <div style={{ marginTop: 12 }}>
             <div style={{ fontSize: 13, marginBottom: 6 }}>{t('settings.idleInterval')}</div>
@@ -1234,6 +1421,49 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               {t('settings.idleIntervalDesc')}
             </div>
           </div>
+          </>
+          )}
+
+          {(draft.idleTimingMode ?? 'fixed') === 'random' && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 13, marginBottom: 6 }}>{t('settings.idleRandomTitle')}</div>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                {t('settings.idleRandomMin')}
+                <input
+                  type="number"
+                  min={1}
+                  max={86400}
+                  step={1}
+                  style={{ width: 90 }}
+                  value={draft.idleRandomMinSec ?? 60}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (Number.isFinite(v) && v > 0) saveRandomRange(v, draft.idleRandomMaxSec ?? 1800);
+                  }}
+                />
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                {t('settings.idleRandomMax')}
+                <input
+                  type="number"
+                  min={1}
+                  max={86400}
+                  step={1}
+                  style={{ width: 90 }}
+                  value={draft.idleRandomMaxSec ?? 1800}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (Number.isFinite(v) && v > 0) saveRandomRange(draft.idleRandomMinSec ?? 60, v);
+                  }}
+                />
+              </label>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+              {t('settings.idleRandomDesc')}
+            </div>
+          </div>
+          )}
 
           {/* 切换聊天时的计时行为 */}
           <div style={{ marginTop: 12 }}>
@@ -1593,8 +1823,143 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
           {t('settings.deepThinkDesc')}
         </div>
+
+        {/* 模型筛选：能力维度（视觉/工具/JSON/推理/NSFW）+ 分类维度（分组/标签），组内 OR、维度间 AND */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.modelFilter')}</span>
+            {[
+              { key: 'vision', label: t('model.capImages') },
+              { key: 'tools', label: t('model.capTools') },
+              { key: 'json', label: t('model.capJson') },
+              { key: 'reasoning', label: t('model.supportsReasoning') },
+              { key: 'nsfw', label: t('model.capNsfw') },
+            ].map((f) => {
+              const active = modelFilter.has(f.key);
+              return (
+                <button
+                  key={f.key}
+                  type="button"
+                  onClick={() =>
+                    setModelFilter((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(f.key)) next.delete(f.key);
+                      else next.add(f.key);
+                      return next;
+                    })
+                  }
+                  style={{
+                    padding: '3px 12px',
+                    fontSize: 12,
+                    borderRadius: 14,
+                    cursor: 'pointer',
+                    border: active ? '1px solid var(--color-primary)' : '1px solid var(--color-border)',
+                    background: active ? 'var(--color-primary)' : 'var(--color-panel-alt)',
+                    color: active ? 'var(--color-primary-text)' : 'var(--color-text)',
+                  }}
+                >
+                  {f.label}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.filterByGroup')}</span>
+            {modelGroups.length === 0 ? (
+              <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{t('settings.groupEmpty')}</span>
+            ) : (
+              modelGroups.map((g) => {
+                const active = groupFilter.has(g.id);
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => toggleSet(setGroupFilter)(g.id)}
+                    style={{
+                      padding: '3px 12px',
+                      fontSize: 12,
+                      borderRadius: 14,
+                      cursor: 'pointer',
+                      border: `1px solid ${active ? g.color : 'var(--color-border)'}`,
+                      background: active ? g.color : 'var(--color-panel-alt)',
+                      color: active ? '#fff' : 'var(--color-text)',
+                    }}
+                  >
+                    {g.name}
+                  </button>
+                );
+              })
+            )}
+            <button
+              type="button"
+              onClick={() => toggleSet(setGroupFilter)('__ungrouped__')}
+              style={{
+                padding: '3px 12px',
+                fontSize: 12,
+                borderRadius: 14,
+                cursor: 'pointer',
+                border: groupFilter.has('__ungrouped__') ? '1px solid var(--color-primary)' : '1px solid var(--color-border)',
+                background: groupFilter.has('__ungrouped__') ? 'var(--color-primary)' : 'var(--color-panel-alt)',
+                color: groupFilter.has('__ungrouped__') ? 'var(--color-primary-text)' : 'var(--color-text)',
+              }}
+            >
+              {t('settings.ungrouped')}
+            </button>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.filterByTag')}</span>
+            {allTags.length === 0 ? (
+              <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{t('settings.noTags')}</span>
+            ) : (
+              allTags.map((tg) => {
+                const active = tagFilter.has(tg);
+                return (
+                  <button
+                    key={tg}
+                    type="button"
+                    onClick={() => toggleSet(setTagFilter)(tg)}
+                    style={{
+                      padding: '3px 12px',
+                      fontSize: 12,
+                      borderRadius: 14,
+                      cursor: 'pointer',
+                      border: active ? '1px solid var(--color-primary)' : '1px solid var(--color-border)',
+                      background: active ? 'var(--color-primary)' : 'var(--color-panel-alt)',
+                      color: active ? 'var(--color-primary-text)' : 'var(--color-text)',
+                    }}
+                  >
+                    {tg}
+                  </button>
+                );
+              })
+            )}
+          </div>
+          {(modelFilter.size > 0 || groupFilter.size > 0 || tagFilter.size > 0) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button
+                type="button"
+                className="btn-ghost"
+                style={{ padding: '3px 10px', fontSize: 12 }}
+                onClick={() => {
+                  setModelFilter(new Set());
+                  setGroupFilter(new Set());
+                  setTagFilter(new Set());
+                }}
+              >
+                {t('settings.filterClear')}
+              </button>
+              <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                {t('settings.filterMatch', {
+                  n: filteredModels.length,
+                  total: (draft.models || []).length,
+                })}
+              </span>
+            </div>
+          )}
+        </div>
+
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 8 }}>
-          {(draft.models || []).map((m) => {
+          {filteredModels.map((m) => {
             const isDefault = draft.defaultModel === m.id;
             return (
               <div
@@ -1639,6 +2004,41 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
                   {providerLabel(m.provider)} · {m.model}
                 </div>
+                {((m.groupIds && m.groupIds.length > 0) || (m.tags && m.tags.length > 0)) && (
+                  <div style={{ marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                    {(m.groupIds || [])
+                      .map((gid) => modelGroups.find((g) => g.id === gid))
+                      .filter((g): g is NonNullable<typeof g> => !!g)
+                      .map((g) => (
+                        <span
+                          key={g.id}
+                          style={{
+                            fontSize: 11,
+                            padding: '1px 7px',
+                            borderRadius: 8,
+                            color: '#fff',
+                            background: g.color,
+                          }}
+                        >
+                          {g.name}
+                        </span>
+                      ))}
+                    {(m.tags || []).map((tg) => (
+                      <span
+                        key={tg}
+                        style={{
+                          fontSize: 11,
+                          padding: '1px 7px',
+                          borderRadius: 8,
+                          border: '1px solid var(--color-border)',
+                          background: 'var(--color-input-bg)',
+                        }}
+                      >
+                        {tg}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <div style={{ marginTop: 6, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button
                     className="btn-ghost"
@@ -1684,7 +2084,80 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               {t('settings.noModels')}
             </div>
           )}
+          {(modelFilter.size > 0 || groupFilter.size > 0 || tagFilter.size > 0) && filteredModels.length === 0 && (
+            <div style={{ color: 'var(--color-text-secondary)', fontSize: 13 }}>
+              {t('settings.filterNoMatch')}
+            </div>
+          )}
         </div>
+
+        {/* 模型分组管理：创建 / 重命名 / 改色 / 删除（删除仅移出关联，不删模型） */}
+        <div className="section-title" style={{ marginTop: 18 }}>{t('settings.modelGroups')}</div>
+        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 8 }}>
+          {t('settings.modelGroupsDesc')}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 8 }}>
+          {modelGroups.map((g) => (
+            <div
+              key={g.id}
+              style={{
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '8px 10px',
+                background: 'var(--color-panel-alt)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                minWidth: 200,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="color"
+                  value={g.color}
+                  onChange={(e) => recolorGroup(g.id, e.target.value)}
+                  style={{ width: 24, height: 24, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                />
+                <input
+                  defaultValue={g.name}
+                  key={g.name}
+                  onBlur={(e) => renameGroup(g.id, e.target.value)}
+                  placeholder={t('settings.groupNamePh')}
+                  style={{ flex: 1, minWidth: 0, fontSize: 13 }}
+                />
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  style={{ padding: '2px 8px', fontSize: 12, color: '#e06c75' }}
+                  onClick={() => deleteGroup(g.id)}
+                >
+                  {t('settings.groupDelete')}
+                </button>
+              </div>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {MODEL_GROUP_COLORS.map((c) => (
+                  <span
+                    key={c}
+                    onClick={() => recolorGroup(g.id, c)}
+                    title={c}
+                    style={{
+                      width: 16,
+                      height: 16,
+                      borderRadius: 8,
+                      background: c,
+                      cursor: 'pointer',
+                      outline: g.color === c ? '2px solid var(--color-text)' : 'none',
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+          <button className="btn-primary" style={{ alignSelf: 'flex-start' }} onClick={addGroup}>
+            {t('settings.addGroup')}
+          </button>
+        </div>
+
         <button
           className="btn-primary"
           style={{ marginBottom: 6 }}
@@ -1695,6 +2168,76 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         >
           {t('settings.addModel')}
         </button>
+
+        {/* 模型能力检测：真实探针探测视觉/工具/JSON 支持与上下文窗口（已加入设置搜索索引，id=sec-modeldetect） */}
+        <div id="sec-modeldetect" style={{ marginTop: 16 }}>
+          <div className="section-title">{t('settings.modelCapability')}</div>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 8 }}>
+            {t('settings.detectAllDesc')}
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => setDetectOptsOpen(true)}
+              disabled={detectingAll}
+            >
+              {detectingAll ? t('model.detecting') : t('settings.detectAllModels')}
+            </button>
+          </div>
+        </div>
+
+        {/* 一键检测全部：先选择探测项（NSFW 默认不勾），避免对全部模型无差别发送成人内容探针 */}
+        {detectOptsOpen && (
+          <div
+            className="modal-mask"
+            onClick={() => setDetectOptsOpen(false)}
+          >
+            <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
+              <div className="modal-head">
+                <span>{t('settings.detectAllTitle')}</span>
+                <span className="modal-close" onClick={() => setDetectOptsOpen(false)}>×</span>
+              </div>
+              <div className="modal-body">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
+                  {([
+                    ['images', t('model.capImages')],
+                    ['tools', t('model.capTools')],
+                    ['json', t('model.capJson')],
+                    ['nsfw', t('model.capNsfw')],
+                  ] as const).map(([k, label]) => (
+                    <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
+                      <input
+                        type="checkbox"
+                        checked={detectOpts[k]}
+                        onChange={(e) => setDetectOpts((p) => ({ ...p, [k]: e.target.checked }))}
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', background: 'var(--color-input-bg)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', marginBottom: 10 }}>
+                  {t('settings.detectNsfwWarn')}
+                </div>
+                <div className="row-actions">
+                  <button
+                    className="btn-primary"
+                    disabled={detectingAll}
+                    onClick={() => {
+                      setDetectOptsOpen(false);
+                      detectAllModels(detectOpts);
+                    }}
+                  >
+                    {t('settings.detectStart')}
+                  </button>
+                  <button className="btn-ghost" onClick={() => setDetectOptsOpen(false)}>
+                    {t('common.cancel')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         </div>{/* end cat-models */}
         <div id="cat-appearance" ref={(el) => { catRefs.current['cat-appearance'] = el; }} className="settings-category">
@@ -2093,6 +2636,36 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 }}
               >
                 {t('settings.glassBgPreview')}
+              </div>
+              {/* 聊天界面颜色覆盖（仅玻璃/frost 生效）：防止自定义背景后字体/边框与背景融合看不清 */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13 }}>{t('settings.glassTokenText')}</span>
+                  <input type="color" value={draft.glassTokenText || '#ffffff'} onChange={(e) => patch({ glassTokenText: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13 }}>{t('settings.glassTokenBorder')}</span>
+                  <input type="color" value={draft.glassTokenBorder || '#ffffff'} onChange={(e) => patch({ glassTokenBorder: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13 }}>{t('settings.glassBubbleUserText')}</span>
+                  <input type="color" value={draft.glassBubbleUserText || '#ffffff'} onChange={(e) => patch({ glassBubbleUserText: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13 }}>{t('settings.glassBubbleAiText')}</span>
+                  <input type="color" value={draft.glassBubbleAiText || '#ffffff'} onChange={(e) => patch({ glassBubbleAiText: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13 }}>{t('settings.glassBubbleBorder')}</span>
+                  <input type="color" value={draft.glassBubbleBorder || '#ffffff'} onChange={(e) => patch({ glassBubbleBorder: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
+                </label>
+              </div>
+              <div style={{ marginTop: 6 }}>
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => patch({ glassTokenText: '', glassTokenBorder: '', glassBubbleUserText: '', glassBubbleAiText: '', glassBubbleBorder: '' })}
+                >{t('settings.glassColorReset')}</button>
               </div>
             </div>
           </>
@@ -3102,6 +3675,8 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           initial={editorInitial}
           onClose={() => setEditorOpen(false)}
           onSave={onModelSave}
+          groups={modelGroups}
+          knownTags={allTags}
         />
       )}
 

@@ -104,6 +104,14 @@ export const ChatWindow: React.FC<{
   const [clearOpen, setClearOpen] = useState(false);
   const [modelMap, setModelMap] = useState<Record<string, string>>({});
   const [avatarMap, setAvatarMap] = useState<Record<string, string>>({});
+  // 长记忆（per-chat 独立开关）：开启后该聊天「其他操作」中出现「AI 总结记忆」按钮
+  const [longMemoryOn, setLongMemoryOn] = useState(false);
+  const [longMemoryMap, setLongMemoryMap] = useState<Record<string, boolean>>({});
+  // 已读未读：聊天气泡的「● 未读」徽章 / 未读分隔线 / 侧栏未读角标已按用户要求移除。
+  // 水位线（readWatermark）仅在主进程后台记录（悬浮球未读与统计不依赖它），界面不再消费。
+  const [summarizing, setSummarizing] = useState(false);
+  // 长记忆 10 轮自动提炼计数器：当前聊天累计用户消息轮数（满 10 触发）
+  const [autoMemRound, setAutoMemRound] = useState(0);
   const [enableStreaming, setEnableStreaming] = useState(false);
   const autoMemoryRef = useRef(false);
   const [hideReasoning, setHideReasoning] = useState(true);
@@ -469,7 +477,11 @@ export const ChatWindow: React.FC<{
       const eff = globalOn && (perChat === undefined ? true : perChat);
       setIdleReplyOn(eff);
       idleReplyOnRef.current = eff;
-      idleSecondsRef.current = settings.idleInterval || 600;
+      // 随机模式初值取范围中点（后续以主进程广播的实际抽中间隔为准）
+      idleSecondsRef.current =
+        settings.idleTimingMode === 'random'
+          ? Math.round(((settings.idleRandomMinSec ?? 60) + (settings.idleRandomMaxSec ?? 1800)) / 2)
+          : settings.idleInterval || 600;
       idleSwitchActionRef.current = settings.idleSwitchAction || 'pause';
       setGroupAutoChain(settings.groupAutoChain !== false);
       setGroupSelectReply(!!settings.groupSelectReply);
@@ -490,6 +502,10 @@ export const ChatWindow: React.FC<{
       // 本对话独立开关：场景生图 / 联网搜索
       setSceneImageOn(!!settings.autoSceneImageChats?.[bgKey]);
       setWebSearchOn(!!settings.webSearchChats?.[bgKey]);
+      // 长记忆（per-chat 独立开关）
+      setLongMemoryMap(settings.longMemory || {});
+      setLongMemoryOn(!!settings.longMemory?.[bgKey]);
+      setAutoMemRound((settings.autoMemRoundCount || {})[bgKey] ?? 0);
       const bgPath = settings.chatBackgrounds?.[bgKey];
       if (bgPath) {
         api.getImage(bgPath).then((src) => setChatBg(src));
@@ -518,6 +534,28 @@ export const ChatWindow: React.FC<{
   };
 
   const reload = () => { load(); };
+
+  // 长记忆：per-chat 独立开关切换
+  const toggleLongMemory = async (next: boolean) => {
+    const map = { ...longMemoryMap, [bgKey]: next };
+    setLongMemoryMap(map);
+    setLongMemoryOn(next);
+    await api.saveSettings({ longMemory: map });
+  };
+
+  // 长记忆：手动让 AI 总结记忆（受 longMemory 开关门控，调用默认模型、受 QPS 约束）
+  const handleSummarize = async () => {
+    if (summarizing) return;
+    setSummarizing(true);
+    try {
+      const res = await api.summarizeMemories(chatType, chatId);
+      showToast(res.message, !res.ok);
+    } catch (e: any) {
+      showToast(t('chat.summarizeFail', { msg: e?.message || String(e) }), true);
+    } finally {
+      setSummarizing(false);
+    }
+  };
 
   // 消息列表更新后聚焦输入框（回滚/撤回等操作导致 messages 变化后自动恢复焦点）
   useEffect(() => {
@@ -661,10 +699,13 @@ export const ChatWindow: React.FC<{
     };
     el.addEventListener('scroll', onScroll);
     return () => el.removeEventListener('scroll', onScroll);
-  }, []);
+  }, [chatType, chatId]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, streamingMsgs]);
 
   // 流式事件监听
@@ -701,24 +742,16 @@ export const ChatWindow: React.FC<{
       }
       setStreamingMsgs((prev) => {
         const existing = prev[data.streamId];
-        const next: ChatMessage = existing
-          ? {
-              ...existing,
-              content: existing.content + (data.content || ''),
-              reasoning: (existing.reasoning || '') + (data.reasoning || '') || undefined,
-            }
-          : {
-              id: -Date.now(),
-              chat_type: chatType as any,
-              chat_id: chatId,
-              sender_type: 'ai',
-              sender_name: name,
-              content: data.content || '',
-              reasoning: data.reasoning || undefined,
-              image_path: null,
-              token_used: 0,
-              timestamp: new Date().toISOString(),
-            };
+        if (!existing) {
+          // 未收到 stream:start，或切换聊天后本地占位已被清空：忽略中途 chunk，
+          // 避免生成孤立/不完整的占位气泡；最终消息仍由 stream:done 落库后显示。
+          return prev;
+        }
+        const next: ChatMessage = {
+          ...existing,
+          content: existing.content + (data.content || ''),
+          reasoning: (existing.reasoning || '') + (data.reasoning || '') || undefined,
+        };
         return { ...prev, [data.streamId]: next };
       });
     };
@@ -842,6 +875,10 @@ export const ChatWindow: React.FC<{
         const ts = data.timestamp || Date.now();
         setIdleActivity(chatKey, ts);
         lastActivityRef.current = ts;
+        // 随机模式：主进程随广播下发本聊天下一次触发间隔，倒计时据此显示
+        if (typeof data.intervalMs === 'number' && data.intervalMs > 0) {
+          idleSecondsRef.current = Math.round(data.intervalMs / 1000);
+        }
         // 立即刷新倒计时显示，避免等下次 setInterval 造成短暂不一致
         const total = (idleSecondsRef.current || 600) * 1000;
         setIdleCountdown(Math.ceil(total / 1000));
@@ -918,7 +955,11 @@ export const ChatWindow: React.FC<{
       const eff = globalOn && (perChat === undefined ? true : perChat);
       setIdleReplyOn(eff);
       idleReplyOnRef.current = eff;
-      idleSecondsRef.current = settings.idleInterval || 600;
+      // 随机模式初值取范围中点（后续以主进程广播的实际抽中间隔为准）
+      idleSecondsRef.current =
+        settings.idleTimingMode === 'random'
+          ? Math.round(((settings.idleRandomMinSec ?? 60) + (settings.idleRandomMaxSec ?? 1800)) / 2)
+          : settings.idleInterval || 600;
       idleSwitchActionRef.current = settings.idleSwitchAction || 'pause';
       setGroupAutoChain(settings.groupAutoChain !== false);
       setGroupSelectReply(!!settings.groupSelectReply);
@@ -931,6 +972,7 @@ export const ChatWindow: React.FC<{
       setChatWorldBookId((settings.chatWorldBooks || {})[key] ?? '');
       setSceneImageOn(!!(settings.autoSceneImageChats || {})[key]);
       setWebSearchOn(!!(settings.webSearchChats || {})[key]);
+      setAutoMemRound((settings.autoMemRoundCount || {})[key] ?? 0);
       setSelfRoleId((settings.chatSelfRoles || {})[key] ?? 'default');
       const bgPath = (settings.chatBackgrounds || {})[key];
       if (bgPath) {
@@ -2074,6 +2116,32 @@ export const ChatWindow: React.FC<{
                     ]}
                   />
                 </div>
+                {/* 长记忆：per-chat 独立开关 + 手动让 AI 总结记忆 */}
+                <label
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontSize: 13, cursor: 'pointer' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={longMemoryOn}
+                    onChange={(e) => { toggleLongMemory(e.target.checked); }}
+                  />
+                  🧠 {t('chat.longMemory')}
+                </label>
+                {longMemoryOn && (
+                  <div style={{ padding: '0 10px 4px', fontSize: 12, opacity: 0.7 }}>
+                    {t('chat.longMemoryAutoHint', { n: autoMemRound, total: 10 })}
+                  </div>
+                )}
+                {longMemoryOn && (
+                  <button
+                    className="tool-btn"
+                    style={{ width: '100%', justifyContent: 'flex-start', padding: '6px 10px', fontSize: 13 }}
+                    onClick={() => { handleSummarize(); setMoreOpen(false); }}
+                    disabled={summarizing}
+                  >
+                    {summarizing ? `⏳ ${t('chat.summarizing')}` : `✨ ${t('chat.summarizeMemory')}`}
+                  </button>
+                )}
               </div>,
               document.body,
             )}
@@ -2172,7 +2240,7 @@ export const ChatWindow: React.FC<{
                 userAvatarPath={userAvatarPath}
                 showTts={voiceCfg.tts && m.sender_type === 'ai' && !!m.content}
                 speaking={speakingId === m.id}
-                typing={m.sender_type === 'ai' && (m.id as number) < 0 && !m.content && !m.reasoning}
+                typing={m.sender_type === 'ai' && (m.id as number) < 0 && !m.content && !m.reasoning?.trim()}
                 streaming={(m.id as number) < 0}
                 hideReasoning={hideReasoning}
                 onSpeak={() => speak(m)}
@@ -2776,6 +2844,7 @@ const MessageRow: React.FC<{
   const [selPopup, setSelPopup] = useState<{ x: number; y: number; text: string } | null>(null);
   const recalled = msg.status === 'recalled';
   const failed = msg.status === 'failed';
+  const isUser = msg.sender_type === 'user';
 
   // 发送时间（气泡上方）：同一分钟仅顶部消息显示；1 分钟内显示「刚刚」，否则精确到分钟
   const timeAbove = (() => {
@@ -2862,7 +2931,6 @@ const MessageRow: React.FC<{
   if (msg.sender_type === 'system') {
     return <div className="system-msg">{msg.content}</div>;
   }
-  const isUser = msg.sender_type === 'user';
   // 多图优先：image_path 兼容旧单图数据；images 为新的多图数组
   const imgs = msg.images && msg.images.length ? msg.images : msg.image_path ? [msg.image_path] : [];
   const hasText = !!(msg.content && msg.content.trim());
@@ -2910,9 +2978,9 @@ const MessageRow: React.FC<{
           </div>
         ) : (
           <>
-            {(!isUser && msg.reasoning) || hasText ? (
+            {(!isUser && msg.reasoning?.trim()) || hasText ? (
               <div className={`bubble ${failed ? 'bubble-failed' : ''}`} onMouseUp={handleMouseUp}>
-                {!isUser && msg.reasoning && (
+                {!isUser && msg.reasoning?.trim() && (
                   <ReasoningBlock
                     reasoning={msg.reasoning}
                     defaultOpen={hideReasoning === false || (!!streaming && !msg.content)}

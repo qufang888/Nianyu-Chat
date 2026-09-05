@@ -79,9 +79,14 @@ BrandingText "念语 Nianyu AI Chat"
     ${NSD_GetState} $chkDeleteData $deleteAppDataChecked
   FunctionEnd
 
-  ; 卸载区段末尾：先杀进程，勾选才删除数据目录
-  ; 同时检查自定义数据路径（用户可能将数据迁移到了文档文件夹等位置）
-  Section "-postuninstall"
+  ; 关键修复：删除使用数据的逻辑必须放在卸载「成功完成」回调里执行，
+  ; 而非放在卸载区段（Section）中。原生 NSIS 的自定义 UninstPage 在 electron-builder
+  ; 生成的脚本末尾才被 include，导致该自定义页排在所有内置卸载页（含 instfiles 区段）之后；
+  ; 若删除写在 Section "-postuninstall" 内，该区段会在 instfiles 阶段、用户尚未看到
+  ; 「是否删除数据」勾选页之前就已执行，此时 $deleteAppDataChecked 恒为 0，于是勾选无效、
+  ; 数据被保留（即此前「勾选删除全部数据没有效果」的根因）。
+  ; .onUninstSuccess 在全部页面（含本自定义页）之后、卸载收尾时调用，此时复选框状态已就绪。
+  Function .onUninstSuccess
     ${If} $deleteAppDataChecked == 1
       ; 杀进程释放文件锁，确保 AppData 目录可删
       ; 关键修复：exe 实际文件名取自 productName（念语），而非 package.json 的 name（nianyu-client）。
@@ -117,5 +122,9 @@ BrandingText "念语 Nianyu AI Chat"
         FileClose $4
       ${EndIf}
     ${EndIf}
+  FunctionEnd
+
+  ; 保留空的后置区段以避免与 electron-builder 卸载区段结构冲突；真正的数据删除已移至 .onUninstSuccess
+  Section "-postuninstall"
   SectionEnd
 !endif

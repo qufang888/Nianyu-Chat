@@ -37,6 +37,8 @@ export const ModelCompare: React.FC = () => {
   const [judgeModel, setJudgeModel] = useState('');
   const [totalMs, setTotalMs] = useState(0);
   const [lastQ, setLastQ] = useState('');
+  // 当前正在独立评分的模型（逐模型顺序评判）：用于显示「正在评分」横幅，明确评分进行中
+  const [judging, setJudging] = useState<{ modelId: string; modelName: string } | null>(null);
 
   useEffect(() => {
     api.getSettings().then((s) => {
@@ -76,14 +78,21 @@ export const ModelCompare: React.FC = () => {
       setJudgments(data.judgments);
       setJudgeModel(data.judgeModel);
       setJudgeError(data.judgeError || '');
+      setJudging(null); // 全部评分结束，收起「正在评分」横幅
+    });
+    const offJudging = api.onCompareJudging((_e, data) => {
+      if (data.compareId !== compareId) return;
+      setJudging({ modelId: data.modelId, modelName: data.modelName });
     });
     const offDone = api.onCompareDone((_e, data) => {
       if (data.compareId !== compareId) return;
       setTotalMs(data.totalMs);
+      setJudging(null);
     });
     return () => {
       offResult();
       offJudged();
+      offJudging();
       offDone();
     };
   }, [compareId]);
@@ -110,6 +119,7 @@ export const ModelCompare: React.FC = () => {
     setLastQ(q);
     setJudgeModel('');
     setJudgeError('');
+    setJudging(null);
     setTotalMs(0);
     try {
       await api.compareStart({ question: q, modelIds: activeIds, compareId: cid, judgeModelId: judgeModelId || undefined });
@@ -201,6 +211,28 @@ export const ModelCompare: React.FC = () => {
         </button>
       </div>
 
+      {judging && (
+        <div
+          style={{
+            margin: '0 14px',
+            padding: '8px 12px',
+            borderRadius: 8,
+            background: 'rgba(33,150,243,0.12)',
+            border: '1px solid rgba(33,150,243,0.4)',
+            color: '#1565c0',
+            fontSize: 13,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <span className="typing" aria-label={t('compare.judging')}>
+            <span className="typing-bar" />
+          </span>
+          <span>{t('compare.judging', { name: judging.modelName })}</span>
+        </div>
+      )}
+
       <div style={{ flex: 1, overflow: 'auto', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, padding: 14, alignItems: 'start', minHeight: 0 }}>
         {[0, 1, 2].map((idx) => {
           const id = sel[idx];
@@ -271,7 +303,7 @@ export const ModelCompare: React.FC = () => {
                     {t('compare.tokens', { n: res.completionTokens + res.promptTokens })}
                     <span style={{ marginLeft: 8 }}>{t('compare.chars', { n: res.content.length })}</span>
                   </div>
-                  {judge && (
+                  {judge ? (
                     <div style={{ marginTop: 8 }}>
                       <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 4 }}>{t('compare.qualityTitle')}</div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -282,7 +314,10 @@ export const ModelCompare: React.FC = () => {
                         <span>{judge.comment}</span>
                       </div>
                     </div>
-                  )}
+                  ) : judgeModel ? (
+                    // 评判已执行（judgeModel 已设置）但该模型无有效评分：明确提示，而非留白让用户以为「没跑评判」
+                    <div style={{ marginTop: 8, fontSize: 11, color: '#b26a00' }}>{t('compare.noScore')}</div>
+                  ) : null}
                 </div>
               )}
             </div>

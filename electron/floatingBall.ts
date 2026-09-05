@@ -85,16 +85,14 @@ export function pushUnread(
   chatId: string,
   roleName: string,
   content: string,
-  avatar: string,
-  fromProactive = false
+  avatar: string
 ): void {
   const settings = dm.getSettings();
   if (settings.floatingBall?.enabled === false) return; // 未启用悬浮球则不维护未读
   const mainVisible =
     mainWinRef && !mainWinRef.isDestroyed() && mainWinRef.isVisible() && !mainWinRef.isMinimized();
-  // 手动回复：主窗可见即视为已读，不计未读（原行为）
-  if (mainVisible && !fromProactive) return;
-  // 主动消息：仅当用户此刻正盯着该聊天本身时不计；否则（窗口隐藏 / 在看别的聊天）计入未读
+  // 类 IM 未读：仅当用户此刻正盯着该聊天本身（主窗可见且为当前会话）时视为已读；
+  // 其余情况（主窗隐藏 / 在看别的聊天 / 手动回复 / 主动消息）均计入未读，悬浮球面板即可看到未读消息。
   const viewingThis = mainVisible && activeChatKey === `${chatType}:${chatId}`;
   if (viewingThis) return;
   const key = `${chatType}:${chatId}`;
@@ -129,15 +127,6 @@ export function clearAllUnread(): void {
   if (unreadMap.size === 0) return;
   unreadMap.clear();
   broadcastUnread();
-}
-
-// 悬浮球点击某未读消息：跳转到主界面对应聊天
-function ballOpenChat(chatType: string, chatId: string, name: string): void {
-  clearUnreadForChat(chatType, chatId);
-  if (mainWinRef && !mainWinRef.isDestroyed()) {
-    mainWinRef.webContents.send('app:openChat', { chatType, chatId, name });
-  }
-  mainShowFn?.();
 }
 
 // ===== 悬浮球窗口创建 =====
@@ -310,11 +299,6 @@ export function registerBallIPC(): void {
   // 切换悬浮球置顶
   ipcMain.on('ball:set-always-on-top', (_e, v: boolean) => {
     setBallAlwaysOnTop(!!v);
-  });
-
-  // 打开某条未读消息对应的聊天
-  ipcMain.on('ball:open-chat', (_e, chat: { chatType: string; chatId: string; name: string }) => {
-    ballOpenChat(chat.chatType, chat.chatId, chat.name);
   });
 
   // 渲染端请求拉取未读列表

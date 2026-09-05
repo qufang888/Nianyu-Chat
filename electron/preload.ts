@@ -13,6 +13,7 @@ import type {
   Rule,
   MemoryEntry,
   ErrorLogEntry,
+  ProbeOptions,
 } from '../src/types';
 import type { ImportCharacterResult } from '../src/utils/characterCard';
 
@@ -177,6 +178,8 @@ export interface NianyuAPI {
   }>;
   // 模型对比渐进式广播（每个模型完成即推送结果，与角色记忆无关）
   onCompareResult: (cb: (_e: any, data: { compareId: string; modelId: string; modelName: string; content: string; promptTokens: number; completionTokens: number; elapsedMs: number; error: string }) => void) => () => void;
+  // 逐模型独立评分开始时推送：前端据此显示「正在评分：模型名」横幅
+  onCompareJudging: (cb: (_e: any, data: { compareId: string; modelId: string; modelName: string }) => void) => () => void;
   onCompareJudged: (cb: (_e: any, data: { compareId: string; judgments: Record<string, { score: number; comment: string }>; judgeModel: string }) => void) => () => void;
   onCompareDone: (cb: (_e: any, data: { compareId: string; totalMs: number }) => void) => () => void;
   renameChat: (type: string, id: string, name: string) => Promise<void>;
@@ -241,6 +244,7 @@ export interface NianyuAPI {
 
   getGlobalTokens: () => Promise<number>;
   getRoleStats: () => Promise<RoleStat[]>;
+  getModelStats: () => Promise<{ modelId: string; name: string; tokens: number; calls: number }[]>;
 
   getSettings: () => Promise<AppSettings>;
   saveSettings: (patch: Partial<AppSettings>) => Promise<AppSettings>;
@@ -278,6 +282,21 @@ export interface NianyuAPI {
 
   listModels: (cfg: ModelConfig) => Promise<string[]>;
   testModel: (cfg: ModelConfig) => Promise<{ ok: boolean; message: string }>;
+  detectModel: (id: string, opts?: ProbeOptions) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
+  detectAllModels: (opts?: ProbeOptions) => Promise<{
+    results: Array<{
+      id: string;
+      name: string;
+      ok: boolean;
+      message: string;
+      supportsImages: boolean | null;
+      supportsTools: boolean | null;
+      supportsJson: boolean | null;
+      supportsNsfw: boolean | null;
+      maxContext: number | null;
+      undetected: string[];
+    }>;
+  }>;
 
   transcribeAudio: (data: Uint8Array) => Promise<string>;
   textToSpeech: (text: string, roleId?: string) => Promise<string>;
@@ -341,6 +360,9 @@ export interface NianyuAPI {
   updateMemory: (id: string, content: string) => Promise<void>;
   deleteMemory: (id: string) => Promise<void>;
   extractMemories: (chatType: string, chatId: string) => Promise<number>;
+  summarizeMemories: (chatType: string, chatId: string) => Promise<{ ok: boolean; count: number; message: string }>;
+  markChatRead: (chatType: string, chatId: string, lastId?: number) => Promise<{ ok: boolean; watermark: number }>;
+  onChatReadUpdated: (cb: (data: { chatKey: string; watermark: number }) => void) => () => void;
 
   // ===== 插件（导入 / 列表 / 启停 / 删除 / 受控调用） =====
   importPlugin: (content: string, name: string) => Promise<{ kind: 'worldbook' | 'rule' | 'role' | 'plugin'; id: string; name: string }>;
@@ -537,6 +559,7 @@ const api: NianyuAPI = {
   copyRole: (id, includeChats) => ipcRenderer.invoke('roles:copy', id, includeChats),
   compareStart: (p) => ipcRenderer.invoke('compare:start', p),
   onCompareResult: (cb) => { const l = (_e: any, d: any) => cb(_e, d); ipcRenderer.on('compare:result', l); return () => ipcRenderer.removeListener('compare:result', l); },
+  onCompareJudging: (cb) => { const l = (_e: any, d: any) => cb(_e, d); ipcRenderer.on('compare:judging', l); return () => ipcRenderer.removeListener('compare:judging', l); },
   onCompareJudged: (cb) => { const l = (_e: any, d: any) => cb(_e, d); ipcRenderer.on('compare:judged', l); return () => ipcRenderer.removeListener('compare:judged', l); },
   onCompareDone: (cb) => { const l = (_e: any, d: any) => cb(_e, d); ipcRenderer.on('compare:done', l); return () => ipcRenderer.removeListener('compare:done', l); },
   renameChat: (type, id, name) => ipcRenderer.invoke('chats:rename', type, id, name),
@@ -617,6 +640,7 @@ const api: NianyuAPI = {
 
   getGlobalTokens: () => ipcRenderer.invoke('stats:tokens'),
   getRoleStats: () => ipcRenderer.invoke('stats:roles'),
+  getModelStats: () => ipcRenderer.invoke('stats:modelUsage'),
 
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (patch) => ipcRenderer.invoke('settings:save', patch),
@@ -650,6 +674,8 @@ const api: NianyuAPI = {
 
   listModels: (cfg) => ipcRenderer.invoke('models:list', cfg),
   testModel: (cfg) => ipcRenderer.invoke('models:test', cfg),
+  detectModel: (id, opts) => ipcRenderer.invoke('models:detect', id, opts),
+  detectAllModels: (opts) => ipcRenderer.invoke('models:detectAll', opts),
 
   transcribeAudio: (data) => ipcRenderer.invoke('audio:transcribe', data),
   textToSpeech: (text, roleId) => ipcRenderer.invoke('audio:tts', text, roleId),
@@ -733,6 +759,13 @@ const api: NianyuAPI = {
   updateMemory: (id, content) => ipcRenderer.invoke('memories:update', id, content),
   deleteMemory: (id) => ipcRenderer.invoke('memories:delete', id),
   extractMemories: (chatType, chatId) => ipcRenderer.invoke('memories:extract', chatType, chatId),
+  summarizeMemories: (chatType, chatId) => ipcRenderer.invoke('memories:summarize', chatType, chatId),
+  markChatRead: (chatType, chatId, lastId) => ipcRenderer.invoke('chats:markRead', chatType, chatId, lastId),
+  onChatReadUpdated: (cb) => {
+    const listener = (_e: any, data: any) => cb(data);
+    ipcRenderer.on('chats:readUpdated', listener);
+    return () => ipcRenderer.removeListener('chats:readUpdated', listener);
+  },
 
   // ===== 插件（导入 / 列表 / 启停 / 删除 / 受控调用） =====
   importPlugin: (content, name) => ipcRenderer.invoke('plugin:import', content, name),

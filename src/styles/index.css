@@ -516,9 +516,9 @@ input[type='range']::-moz-range-thumb {
 }
 .token-bar {
   font-size: calc(12px * var(--font-scale));
-  color: var(--color-primary);
+  color: var(--glass-token-fg, var(--color-primary));
   padding: 2px 10px;
-  border: 1px solid var(--color-primary);
+  border: 1px solid var(--glass-token-border, var(--color-primary));
   border-radius: 20px;
 }
 
@@ -544,6 +544,8 @@ input[type='range']::-moz-range-thumb {
 .msg-row.ai {
   align-self: flex-start;
 }
+/* 已读未读：聊天气泡「● 未读」徽章 / 未读分隔线 / 侧栏未读角标已按用户要求移除（v2.3.11），
+   水位线仅在主进程后台记录，界面不再渲染任何未读视觉标记。 */
 .bubble {
   padding: 10px 14px;
   border-radius: var(--bubble-radius, var(--radius));
@@ -555,18 +557,23 @@ input[type='range']::-moz-range-thumb {
 }
 .msg-row.user .bubble {
   background: var(--color-bubble-user);
-  color: var(--color-bubble-user-text);
+  color: var(--glass-bubble-user-fg, var(--color-bubble-user-text));
   border-bottom-right-radius: 2px;
 }
 .msg-row.ai .bubble {
   background: var(--color-bubble-ai);
-  color: var(--color-bubble-ai-text);
+  color: var(--glass-bubble-ai-fg, var(--color-bubble-ai-text));
   border-bottom-left-radius: 2px;
 }
 .bubble .sender {
   font-size: calc(11px * var(--font-scale));
   color: var(--color-text-secondary);
   margin-bottom: 4px;
+}
+/* 毛玻璃/frost：气泡边框色覆盖（默认透明，不影响非玻璃主题布局） */
+[data-theme='glass'] .bubble,
+[data-theme='frost'] .bubble {
+  border: 1px solid var(--glass-bubble-border, transparent);
 }
 /* 旁白分隔：（）与 “” 内文字斜体+灰字，定界符不显示 */
 .narration {
@@ -1622,6 +1629,22 @@ body.cursor-hidden * {
 .select-menu-item.active { background: var(--color-primary); color: var(--color-primary-text); }
 .select-menu-item.selected:not(.active) { background: rgba(128, 128, 128, 0.14); }
 .select-menu-item.disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* 下拉选项悬停提示（如模型能力） */
+.select-menu-tip {
+  position: fixed;
+  z-index: 9999;
+  max-width: 224px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--color-panel, #fff);
+  border: 1px solid var(--color-border, #ddd);
+  color: var(--color-text, #222);
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+}
 
 /* 开屏欢迎语 */
 .splash {

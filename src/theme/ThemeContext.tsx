@@ -86,6 +86,16 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       : settings.glassBgColor || '';
     if (isGlass && glassBg) root.style.setProperty('--app-bg', glassBg);
     else root.style.removeProperty('--app-bg');
+    // 毛玻璃主题：聊天界面颜色覆盖（仅 glass/frost 生效），解决自定义背景后字体/边框与背景融合看不清
+    const setGlassVar = (name: string, val?: string) => {
+      if (isGlass && val) root.style.setProperty(name, val);
+      else root.style.removeProperty(name);
+    };
+    setGlassVar('--glass-token-fg', settings.glassTokenText);
+    setGlassVar('--glass-token-border', settings.glassTokenBorder);
+    setGlassVar('--glass-bubble-user-fg', settings.glassBubbleUserText);
+    setGlassVar('--glass-bubble-ai-fg', settings.glassBubbleAiText);
+    setGlassVar('--glass-bubble-border', settings.glassBubbleBorder);
   }, [settings, theme]);
 
   const setTheme = (t: ThemeName) => {

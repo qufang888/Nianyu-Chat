@@ -59,6 +59,33 @@ export const RoleEditor: React.FC<{
     api.getSettings().then((s) => setModels(s.models || []));
   }, []);
 
+  // 模型能力摘要（用于下拉选项悬停提示与选择器 title）
+  const modelCapText = (m: ModelConfig): string => {
+    const caps: string[] = [];
+    if (m.supportsImages) caps.push(t('model.capImages'));
+    if (m.supportsTools) caps.push(t('model.capTools'));
+    if (m.supportsJson) caps.push(t('model.capJson'));
+    if (m.supportsReasoning) caps.push(t('model.supportsReasoning'));
+    const c = caps.length ? caps.join(' / ') : t('model.capUnknown');
+    const ctx = m.maxContext ? ` · ${t('model.maxContext')}：${m.maxContext}` : '';
+    return `${m.name}：${c}${ctx}`;
+  };
+  const modelCapTip = (m: ModelConfig) => (
+    <div>
+      <div style={{ fontWeight: 700, marginBottom: 4 }}>{m.name}</div>
+      <div>{`${t('model.capImages')}：${m.supportsImages ? t('model.capYes') : t('model.capNo')}`}</div>
+      <div>{`${t('model.capTools')}：${m.supportsTools ? t('model.capYes') : t('model.capNo')}`}</div>
+      <div>{`${t('model.capJson')}：${m.supportsJson ? t('model.capYes') : t('model.capNo')}`}</div>
+      <div>{`${t('model.supportsReasoning')}：${m.supportsReasoning ? t('model.capYes') : t('model.capNo')}`}</div>
+      {m.maxContext ? <div style={{ marginTop: 4 }}>{`${t('model.maxContext')}：${m.maxContext}`}</div> : null}
+    </div>
+  );
+
+  // 必须在 currentModel 之前声明，避免 render 期 find 回调引用未初始化的 const（TDZ）
+  const enabledModels = models.filter((m) => m.enabled);
+  const selectedModel = role.model_config_id || enabledModels[0]?.id || '';
+  const currentModel = models.find((m) => m.id === selectedModel);
+
   // ESC 关闭（仅叉号 / ESC 可退出，点空白不关闭）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -68,8 +95,6 @@ export const RoleEditor: React.FC<{
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const enabledModels = models.filter((m) => m.enabled);
-  const selectedModel = role.model_config_id || enabledModels[0]?.id || '';
 
   const set = (k: keyof Role, v: any) => setRole((r) => ({ ...r, [k]: v }));
 
@@ -274,9 +299,11 @@ export const RoleEditor: React.FC<{
                 <SelectMenu
                   value={selectedModel}
                   onChange={(v) => set('model_config_id', v)}
+                  title={currentModel ? modelCapText(currentModel) : undefined}
                   options={enabledModels.map((m) => ({
                     value: m.id,
                     label: `${m.name}（${m.model}）`,
+                    tooltip: modelCapTip(m),
                   }))}
                 />
               )}

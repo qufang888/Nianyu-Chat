@@ -280,7 +280,11 @@ export const MiniChat: React.FC = () => {
     const eff = globalOn && (perChat === undefined ? true : perChat);
     setIdleReplyOn(eff);
     idleReplyOnRef.current = eff;
-    idleSecondsRef.current = settings.idleInterval || 600;
+    // 随机模式初值取范围中点（后续以主进程广播的实际抽中间隔为准）
+    idleSecondsRef.current =
+      settings.idleTimingMode === 'random'
+        ? Math.round(((settings.idleRandomMinSec ?? 60) + (settings.idleRandomMaxSec ?? 1800)) / 2)
+        : settings.idleInterval || 600;
     idleSwitchActionRef.current = settings.idleSwitchAction || 'pause';
     setGroupAutoChain(settings.groupAutoChain !== false);
     // 加载聊天背景
@@ -650,6 +654,10 @@ export const MiniChat: React.FC = () => {
           const ts = data.timestamp || Date.now();
           setIdleActivity(curKey, ts);
           lastActivityRef.current = ts;
+          // 随机模式：主进程随广播下发本聊天下一次触发间隔，倒计时据此显示
+          if (typeof data.intervalMs === 'number' && data.intervalMs > 0) {
+            idleSecondsRef.current = Math.round(data.intervalMs / 1000);
+          }
           // 立即刷新倒计时显示，避免等下次 setInterval 造成短暂不一致
           const total = (idleSecondsRef.current || 600) * 1000;
           setIdleCountdown(Math.ceil(total / 1000));
@@ -727,7 +735,11 @@ export const MiniChat: React.FC = () => {
       const eff = globalOn && (perChat === undefined ? true : perChat);
       setIdleReplyOn(eff);
       idleReplyOnRef.current = eff;
-      idleSecondsRef.current = settings.idleInterval || 600;
+      // 随机模式初值取范围中点（后续以主进程广播的实际抽中间隔为准）
+      idleSecondsRef.current =
+        settings.idleTimingMode === 'random'
+          ? Math.round(((settings.idleRandomMinSec ?? 60) + (settings.idleRandomMaxSec ?? 1800)) / 2)
+          : settings.idleInterval || 600;
       idleSwitchActionRef.current = settings.idleSwitchAction || 'pause';
       setGroupAutoChain(settings.groupAutoChain !== false);
       setVoiceCfg({

@@ -63,6 +63,7 @@ interface Store {
   storyNodes: StoryNode[]; // 自适应故事线的剧情节点
   moments: Moment[]; // 朋友圈动态（人物养成/社交）
   plugins: Plugin[]; // 插件（声明式/受控 HTTP，兼容外部常见格式）
+  modelUsage: Record<string, { name: string; tokens: number; calls: number }>; // 聊天模型调用量统计（按 modelId 累计 token 与次数）
 }
 
 // 数据保存路径配置：存放在固定的 userData 下（不随数据目录移动），避免「先读设置才能定位数据目录」的鸡生蛋问题。
@@ -299,12 +300,13 @@ class DataManager {
           storyNodes: raw.storyNodes || [],
           moments: raw.moments || [],
           plugins: raw.plugins || [],
+          modelUsage: raw.modelUsage || {},
         };
       }
     } catch (e) {
       console.error('读取存储失败', e);
     }
-    return { roles: [], groups: [], messages: [], affinity: [], worldBooks: [], rules: [], memories: [], seq: 0, chatSessions: [], storyNodes: [], moments: [], plugins: [] };
+    return { roles: [], groups: [], messages: [], affinity: [], worldBooks: [], rules: [], memories: [], seq: 0, chatSessions: [], storyNodes: [], moments: [], plugins: [], modelUsage: {} };
   }
 
   private genId(prefix: string): string {
@@ -699,6 +701,10 @@ class DataManager {
           ...DEFAULT_SETTINGS,
           ...raw,
           models: Array.isArray(raw.models) ? raw.models : [],
+          // 模型分组：老配置无此字段时回落空数组；脏数据（非数组）同样兜底
+          modelGroups: Array.isArray(raw.modelGroups)
+            ? raw.modelGroups.filter((g: any) => g && typeof g.id === 'string' && typeof g.name === 'string')
+            : [],
           voice: { ...DEFAULT_SETTINGS.voice, ...(raw.voice || {}) },
           miniWindow: { ...DEFAULT_SETTINGS.miniWindow, ...(raw.miniWindow || {}) },
           imageGen: { ...DEFAULT_SETTINGS.imageGen, ...(raw.imageGen || {}) },
@@ -707,6 +713,13 @@ class DataManager {
         merged.models = merged.models.filter(
           (m) => !(m.id === 'default' && m.model === 'gpt-4o-mini')
         );
+        // 清理指向已删除分组的孤儿引用，并把非数组的 tags/groupIds 兜底为空数组
+        const groupIds = new Set(merged.modelGroups.map((g) => g.id));
+        merged.models = merged.models.map((m) => ({
+          ...m,
+          groupIds: (Array.isArray(m.groupIds) ? m.groupIds : []).filter((id: string) => groupIds.has(id)),
+          tags: Array.isArray(m.tags) ? m.tags.filter((x: any) => typeof x === 'string') : [],
+        }));
         // 老用户（已存在 settings.json 但无 firstRunDone 字段）视为已完成首启，不再弹出向导
         if (raw.firstRunDone === undefined) merged.firstRunDone = true;
         return merged;
@@ -763,6 +776,8 @@ class DataManager {
       fresh.apiKeys = this.settings.apiKeys;
       fresh.models = this.settings.models;
       fresh.defaultModel = this.settings.defaultModel;
+      // 分组与模型的 tags/groupIds 归属属于模型配置的一部分，随模型一并保留
+      fresh.modelGroups = this.settings.modelGroups || [];
     }
     this.settings = fresh;
     fs.writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2), 'utf-8');
@@ -1167,6 +1182,28 @@ class DataManager {
       }
     }
     return Object.values(stats).sort((a, b) => b.tokens - a.tokens);
+  }
+
+  // 记录一次聊天模型调用（token 与次数累计）。modelId 为空则忽略。
+  recordModelUsage(modelId: string, name: string, promptTokens: number, completionTokens: number): void {
+    if (!modelId) return;
+    if (!this.store.modelUsage) this.store.modelUsage = {};
+    const e = this.store.modelUsage[modelId] || { name, tokens: 0, calls: 0 };
+    if (name) e.name = name;
+    e.tokens += (promptTokens || 0) + (completionTokens || 0);
+    e.calls += 1;
+    this.store.modelUsage[modelId] = e;
+    this.saveStore();
+  }
+
+  // 聊天模型调用量排名：按 token 从高到低；仅包含当前「已启用」的模型（模型被更换/删除则退出排名）。
+  getModelStats(): { modelId: string; name: string; tokens: number; calls: number }[] {
+    const usage = this.store.modelUsage || {};
+    const enabled = new Set((this.settings.models || []).filter((m) => m.enabled).map((m) => m.id));
+    return Object.entries(usage)
+      .filter(([id]) => enabled.has(id))
+      .map(([id, e]) => ({ modelId: id, name: e.name, tokens: e.tokens, calls: e.calls }))
+      .sort((a, b) => b.tokens - a.tokens);
   }
 
   // 将仅剩 1 名成员的群聊转为该成员名下的单聊：

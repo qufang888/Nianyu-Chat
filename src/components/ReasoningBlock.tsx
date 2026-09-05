@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useI18n } from '../i18n/I18nContext';
 
 /**
@@ -14,6 +14,14 @@ export const ReasoningBlock: React.FC<{
 }> = ({ reasoning, defaultOpen, streaming, onCopied }) => {
   const { t } = useI18n();
   const [open, setOpen] = useState(defaultOpen);
+  const userToggledRef = useRef(false);
+  // 跟随父级 defaultOpen 变化（如流式中内容到达后需按设置折叠），
+  // 但一旦用户手动展开/收起，则尊重用户选择不再自动回弹。
+  useEffect(() => {
+    if (!userToggledRef.current) {
+      setOpen(defaultOpen);
+    }
+  }, [defaultOpen]);
   const copy = (e: React.MouseEvent) => {
     e.stopPropagation();
     navigator.clipboard
@@ -21,11 +29,15 @@ export const ReasoningBlock: React.FC<{
       .then(() => onCopied?.())
       .catch(() => {});
   };
+  const handleToggle = () => {
+    userToggledRef.current = true;
+    setOpen((v) => !v);
+  };
   return (
     <div className={`reasoning-block ${open ? 'open' : ''}`}>
       <div
         className="reasoning-head"
-        onClick={() => setOpen((v) => !v)}
+        onClick={handleToggle}
         title={open ? t('chat.reasoningCollapse') : t('chat.reasoningExpand')}
       >
         <span className={`reasoning-arrow ${open ? 'open' : ''}`}>▶</span>

@@ -1,15 +1,60 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
-import { PROVIDER_DEFAULTS, type ModelConfig, type Provider } from '../types';
+import {
+  PROVIDER_DEFAULTS,
+  MODEL_GROUP_COLORS,
+  MODEL_GROUP_NAME_MAX,
+  MODEL_TAG_LEN_MAX,
+  MODEL_TAG_MAX,
+  type ModelConfig,
+  type ModelGroup,
+  type Provider,
+} from '../types';
 import { useToast, ToastView } from './Toast';
 import SelectMenu from './SelectMenu';
+
+// 能力徽章：探测结果为布尔时显示「支持/不支持」，为 undefined/null 时显示「未探测」
+const CapBadge: React.FC<{ label: string; on?: boolean | null }> = ({ label, on }) => {
+  let bg = 'rgba(128,128,128,0.18)';
+  let color = 'var(--color-text-secondary)';
+  let text = '—';
+  if (on === true) {
+    bg = 'rgba(80,180,120,0.22)';
+    color = '#4caf72';
+    text = '✓';
+  } else if (on === false) {
+    bg = 'rgba(224,108,117,0.20)';
+    color = '#e06c75';
+    text = '✕';
+  }
+  return (
+    <span
+      title={on === true ? '支持' : on === false ? '不支持' : '未探测'}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '2px 8px',
+        borderRadius: 10,
+        background: bg,
+        color,
+        fontSize: 12,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label} {text}
+    </span>
+  );
+};
 
 export const ModelEditor: React.FC<{
   initial?: ModelConfig;
   onClose: () => void;
   onSave: (cfg: ModelConfig) => void;
-}> = ({ initial, onClose, onSave }) => {
+  groups?: ModelGroup[]; // 全局分组（用于归属多选）
+  knownTags?: string[]; // 已有标签（用于输入联想）
+}> = ({ initial, onClose, onSave, groups = [], knownTags = [] }) => {
   const { t } = useI18n();
   const { toast, showToast } = useToast();
   const [cfg, setCfg] = useState<ModelConfig>(
@@ -30,6 +75,12 @@ export const ModelEditor: React.FC<{
     }
   );
   const [msg, setMsg] = useState('');
+  // QPS 输入中间态：受控 number 输入若直接 Number() 回写会吃掉「0.」这类中间输入，
+  // 导致小数 QPS 根本打不进去，故单独用字符串保存输入原文。
+  const [qpsText, setQpsText] = useState(
+    initial?.qps !== undefined && initial?.qps !== null ? String(initial.qps) : ''
+  );
+  const [tagDraft, setTagDraft] = useState('');
   const [modelList, setModelList] = useState<string[]>([]);
   const [listLoading, setListLoading] = useState(false);
   const [listError, setListError] = useState('');
@@ -37,6 +88,57 @@ export const ModelEditor: React.FC<{
   const [testing, setTesting] = useState(false);
 
   const set = (k: keyof ModelConfig, v: any) => setCfg((c) => ({ ...c, [k]: v }));
+
+  // ===== QPS：字符串输入 + 失焦归一化，支持 0~1 等小数 =====
+  const onQpsChange = (raw: string) => {
+    setQpsText(raw);
+    const trimmed = raw.trim();
+    if (trimmed === '') return set('qps', undefined);
+    const n = Number(trimmed);
+    if (Number.isFinite(n) && n >= 0) set('qps', n);
+  };
+  const onQpsBlur = () => {
+    const trimmed = qpsText.trim();
+    if (trimmed === '') {
+      set('qps', undefined);
+      setQpsText('');
+      return;
+    }
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n < 0) {
+      set('qps', undefined);
+      setQpsText('');
+      return;
+    }
+    set('qps', n);
+    setQpsText(String(n));
+  };
+
+  // ===== 标签：回车添加，超长截断并提示，超出数量上限拒绝 =====
+  const addTag = (raw: string) => {
+    const text = raw.trim();
+    if (!text) return;
+    if (text.length > MODEL_TAG_LEN_MAX) setMsg(t('model.tagTooLong', { n: MODEL_TAG_LEN_MAX }));
+    const v = text.slice(0, MODEL_TAG_LEN_MAX);
+    const cur = cfg.tags || [];
+    if (cur.includes(v)) {
+      setTagDraft('');
+      return;
+    }
+    if (cur.length >= MODEL_TAG_MAX) {
+      setMsg(t('model.tagLimitReached', { n: MODEL_TAG_MAX }));
+      return;
+    }
+    set('tags', [...cur, v]);
+    setTagDraft('');
+  };
+  const removeTag = (v: string) => set('tags', (cfg.tags || []).filter((x) => x !== v));
+
+  // ===== 分组归属（多归属）：勾选即加入/移出 =====
+  const toggleGroup = (gid: string) => {
+    const cur = cfg.groupIds || [];
+    set('groupIds', cur.includes(gid) ? cur.filter((x) => x !== gid) : [...cur, gid]);
+  };
 
   // ESC 关闭（仅叉号 / ESC 可退出，点空白不关闭）
   useEffect(() => {
@@ -79,6 +181,45 @@ export const ModelEditor: React.FC<{
       showToast(t('model.testFailToast'), { error: true });
     } finally {
       setTesting(false);
+    }
+  };
+
+  // 能力探针：向模型发送极小请求，真实探测视觉/工具/JSON 能力与上下文窗口（非启发式）
+  const [detecting, setDetecting] = useState(false);
+  const detectModel = async () => {
+    if (!cfg.id) {
+      showToast(t('model.needModelIdBeforeDetect'), true);
+      return;
+    }
+    setDetecting(true);
+    try {
+      const res = await api.detectModel(cfg.id);
+      if (res.config) {
+        // 把探测结果同步进本地草稿，便于用户查看/手动微调后保存
+        setCfg((c) => ({
+          ...c,
+          supportsImages: res.config!.supportsImages,
+          supportsTools: res.config!.supportsTools,
+          supportsJson: res.config!.supportsJson,
+          supportsNsfw: res.config!.supportsNsfw,
+          maxContext: res.config!.maxContext || c.maxContext,
+          lastDetectedAt: res.config!.lastDetectedAt,
+        }));
+      }
+      const caps: string[] = [];
+      caps.push(`${t('model.capImages')}: ${res.config?.supportsImages ? t('model.capYes') : t('model.capNo')}`);
+      caps.push(`${t('model.capTools')}: ${res.config?.supportsTools ? t('model.capYes') : t('model.capNo')}`);
+      caps.push(`${t('model.capJson')}: ${res.config?.supportsJson ? t('model.capYes') : t('model.capNo')}`);
+      caps.push(`${t('model.capNsfw')}: ${res.config?.supportsNsfw ? t('model.capYes') : t('model.capNo')}`);
+      const undetected = res.undetected && res.undetected.length ? `（${t('model.capUnknown')}）` : '';
+      showToast(
+        (res.ok ? t('model.detectOk', { msg: caps.join('  ') }) : t('model.detectFail', { msg: res.message })) + undetected,
+        !res.ok
+      );
+    } catch (e: any) {
+      showToast(t('model.detectFail', { msg: e?.message || String(e) }), true);
+    } finally {
+      setDetecting(false);
     }
   };
 
@@ -138,6 +279,7 @@ export const ModelEditor: React.FC<{
                   { value: 'openai', label: 'OpenAI' },
                   { value: 'deepseek', label: 'DeepSeek' },
                   { value: 'anthropic', label: 'Anthropic' },
+                  { value: 'local', label: t('model.providerLocal') },
                   { value: 'custom', label: t('model.providerCustom') },
                   { value: 'openai-compatible', label: t('model.providerOaiComp') },
                 ]}
@@ -161,11 +303,11 @@ export const ModelEditor: React.FC<{
                 <input
                   value={cfg.baseUrl}
                   onChange={(e) => set('baseUrl', e.target.value)}
-                  placeholder={cfg.provider === 'openai-compatible' ? '' : 'https://api.openai.com/v1'}
+                  placeholder={cfg.provider === 'openai-compatible' || cfg.provider === 'local' ? '' : 'https://api.openai.com/v1'}
                 />
-                {cfg.provider === 'openai-compatible' && (
+                {(cfg.provider === 'openai-compatible' || cfg.provider === 'local') && (
                   <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-                    {t('model.baseUrlHint')}
+                    {cfg.provider === 'local' ? t('model.localBaseUrlHint') : t('model.baseUrlHint')}
                   </div>
                 )}
               </Field>
@@ -177,6 +319,11 @@ export const ModelEditor: React.FC<{
                 onChange={(e) => set('apiKey', e.target.value)}
                 placeholder={t('model.apiKeyPh')}
               />
+              {cfg.provider === 'local' && (
+                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+                  {t('model.localApiKeyHint')}
+                </div>
+              )}
             </Field>
             <Field label={t('model.modelId')}>
               <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
@@ -315,13 +462,126 @@ export const ModelEditor: React.FC<{
                 {t('model.supportsReasoningDesc')}
               </div>
             </Field>
+            <Field label={t('model.supportsTools')}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={!!cfg.supportsTools}
+                  onChange={(e) => set('supportsTools', e.target.checked)}
+                />
+                {cfg.supportsTools ? t('model.enabledOn') : t('model.enabledOff')}
+              </label>
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                {t('model.supportsToolsDesc')}
+              </div>
+            </Field>
+            <Field label={t('model.supportsJson')}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={!!cfg.supportsJson}
+                  onChange={(e) => set('supportsJson', e.target.checked)}
+                />
+                {cfg.supportsJson ? t('model.enabledOn') : t('model.enabledOff')}
+              </label>
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                {t('model.supportsJsonDesc')}
+              </div>
+            </Field>
+            <Field label={t('model.supportsNsfw')}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={!!cfg.supportsNsfw}
+                  onChange={(e) => set('supportsNsfw', e.target.checked)}
+                />
+                {cfg.supportsNsfw ? t('model.enabledOn') : t('model.enabledOff')}
+              </label>
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                {t('model.supportsNsfwDesc')}
+              </div>
+            </Field>
+            <Field label={t('model.groups')} full>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
+                {(groups || []).length === 0 && (
+                  <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{t('model.groupsEmpty')}</span>
+                )}
+                {(groups || []).map((g) => {
+                  const active = (cfg.groupIds || []).includes(g.id);
+                  return (
+                    <button
+                      key={g.id}
+                      type="button"
+                      onClick={() => toggleGroup(g.id)}
+                      style={{
+                        padding: '3px 10px',
+                        fontSize: 12,
+                        borderRadius: 14,
+                        cursor: 'pointer',
+                        border: `1px solid ${g.color}`,
+                        background: active ? g.color : 'transparent',
+                        color: active ? '#fff' : 'var(--color-text)',
+                      }}
+                    >
+                      {g.name}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                {t('model.groupsDesc')}
+              </div>
+            </Field>
+            <Field label={t('model.tags')} full>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                {(cfg.tags || []).map((v) => (
+                  <span
+                    key={v}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '2px 8px',
+                      borderRadius: 10,
+                      background: 'var(--color-input-bg)',
+                      border: '1px solid var(--color-border)',
+                      fontSize: 12,
+                    }}
+                  >
+                    {v}
+                    <span
+                      onClick={() => removeTag(v)}
+                      style={{ cursor: 'pointer', color: 'var(--color-text-secondary)' }}
+                    >
+                      ×
+                    </span>
+                  </span>
+                ))}
+              </div>
+              <input
+                value={tagDraft}
+                onChange={(e) => setTagDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addTag(tagDraft);
+                  }
+                }}
+                placeholder={t('model.tagsPh')}
+              />
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                {t('model.tagsDesc', { max: MODEL_TAG_MAX, len: MODEL_TAG_LEN_MAX })}
+              </div>
+            </Field>
             <Field label={t('model.qps')}>
               <input
                 type="number"
                 min={0}
+                step={0.1}
                 placeholder={t('model.qpsDesc')}
-                value={cfg.qps ?? ''}
-                onChange={(e) => set('qps', e.target.value === '' ? undefined : Number(e.target.value) || 0)}
+                value={qpsText}
+                onChange={(e) => onQpsChange(e.target.value)}
+                onBlur={onQpsBlur}
               />
               <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
                 {t('model.qpsHint')}
@@ -332,6 +592,9 @@ export const ModelEditor: React.FC<{
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
             <button type="button" className="btn-primary" onClick={testConn} disabled={testing}>
               {testing ? t('model.testing') : t('model.testConnection')}
+            </button>
+            <button type="button" className="btn-ghost" onClick={detectModel} disabled={detecting || !cfg.id}>
+              {detecting ? t('model.detecting') : t('model.detectCapabilities')}
             </button>
             {testState && (
               <span
@@ -345,6 +608,19 @@ export const ModelEditor: React.FC<{
                   : t('model.testFail', { msg: testState.message })}
               </span>
             )}
+          </div>
+
+          {/* 能力探针结果徽章 */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8, fontSize: 12 }}>
+            <CapBadge label={t('model.capImages')} on={cfg.supportsImages} />
+            <CapBadge label={t('model.capTools')} on={cfg.supportsTools} />
+            <CapBadge label={t('model.capJson')} on={cfg.supportsJson} />
+            <CapBadge label={t('model.capNsfw')} on={cfg.supportsNsfw} />
+            {cfg.lastDetectedAt ? (
+              <span style={{ color: 'var(--color-text-secondary)' }}>
+                {t('model.capDetectedAt', { time: new Date(cfg.lastDetectedAt).toLocaleString() })}
+              </span>
+            ) : null}
           </div>
 
           <div

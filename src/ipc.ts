@@ -12,6 +12,7 @@ import type {
   Rule,
   MemoryEntry,
   Plugin,
+  ProbeOptions,
 } from './types';
 import type { ImportCharacterResult } from './utils/characterCard';
 export type { ImportCharacterResult };
@@ -169,6 +170,8 @@ export interface NianyuAPI {
   }>;
   // 模型对比渐进式广播
   onCompareResult: (cb: (_e: any, data: { compareId: string; modelId: string; modelName: string; content: string; promptTokens: number; completionTokens: number; elapsedMs: number; error: string }) => void) => () => void;
+  // 逐模型独立评分开始时广播：前端据此显示「正在评分：模型名」横幅，避免用户无法判断评分是否在运行
+  onCompareJudging: (cb: (_e: any, data: { compareId: string; modelId: string; modelName: string }) => void) => () => void;
   onCompareJudged: (cb: (_e: any, data: { compareId: string; judgments: Record<string, { score: number; comment: string }>; judgeModel: string; judgeError?: string }) => void) => () => void;
   onCompareDone: (cb: (_e: any, data: { compareId: string; totalMs: number }) => void) => () => void;
   renameChat: (type: string, id: string, name: string) => Promise<void>;
@@ -230,6 +233,7 @@ export interface NianyuAPI {
   getAffinityLog: (roleId?: string) => Promise<AffinityLogEntry[]>;
   getGlobalTokens: () => Promise<number>;
   getRoleStats: () => Promise<RoleStat[]>;
+  getModelStats: () => Promise<{ modelId: string; name: string; tokens: number; calls: number }[]>;
 
   getSettings: () => Promise<AppSettings>;
   saveSettings: (patch: Partial<AppSettings>) => Promise<AppSettings>;
@@ -257,6 +261,21 @@ export interface NianyuAPI {
 
   listModels: (cfg: ModelConfig) => Promise<string[]>;
   testModel: (cfg: ModelConfig) => Promise<{ ok: boolean; message: string }>;
+  detectModel: (id: string, opts?: ProbeOptions) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
+  detectAllModels: (opts?: ProbeOptions) => Promise<{
+    results: Array<{
+      id: string;
+      name: string;
+      ok: boolean;
+      message: string;
+      supportsImages: boolean | null;
+      supportsTools: boolean | null;
+      supportsJson: boolean | null;
+      supportsNsfw: boolean | null;
+      maxContext: number | null;
+      undetected: string[];
+    }>;
+  }>;
 
   transcribeAudio: (data: Uint8Array, format?: string, language?: string) => Promise<string>;
   textToSpeech: (text: string, roleId?: string) => Promise<string>;
@@ -302,6 +321,11 @@ export interface NianyuAPI {
   updateMemory: (id: string, content: string) => Promise<void>;
   deleteMemory: (id: string) => Promise<void>;
   extractMemories: (chatType: string, chatId: string) => Promise<number>;
+  // 长记忆：手动让 AI 总结记忆（受 per-chat longMemory 开关门控，调用默认模型、受 QPS 约束）
+  summarizeMemories: (chatType: string, chatId: string) => Promise<{ ok: boolean; count: number; message: string }>;
+  // 已读未读：类 IM 已读回执（per-chat 水位线）
+  markChatRead: (chatType: string, chatId: string, lastId?: number) => Promise<{ ok: boolean; watermark: number }>;
+  onChatReadUpdated: (cb: (data: { chatKey: string; watermark: number }) => void) => () => void;
 
   // ===== 插件（导入 / 列表 / 启停 / 删除 / 受控调用） =====
   importPlugin: (content: string, name: string) => Promise<{ kind: 'worldbook' | 'rule' | 'role' | 'plugin'; id: string; name: string }>;
@@ -323,6 +347,7 @@ export interface NianyuAPI {
   ballSetEnabled: (enabled: boolean) => void;
   ballSetAlwaysOnTop: (v: boolean) => void; // 切换悬浮球置顶
   ballCloseSession: () => void; // 本次关闭悬浮球（不持久化，重启恢复）
+  ballOpenChat: (chat: { chatType: string; chatId: string; name?: string }) => void; // 悬浮球面板点击聊天 → 呼出对应小窗
   setActiveChat: (type: string, id: string) => void; // 通知主进程当前聊天（主动消息未读判断）
 
   // ===== 主进程错误推送 =====
@@ -356,6 +381,8 @@ export const api: NianyuAPI = {
   ...raw,
   getGlobalTokens: () => raw.getGlobalTokens(),
   getRoleStats: () => raw.getRoleStats(),
+  getModelStats: () => raw.getModelStats(),
+  ballOpenChat: (chat) => raw.ballOpenChat(chat),
   rateInfo: (modelId) => raw.rateInfo(modelId),
   getChatModelId: (chatType, chatId) => raw.getChatModelId(chatType, chatId),
   translate: (text) => raw.translate(text),
@@ -364,6 +391,7 @@ export const api: NianyuAPI = {
   copyRole: (id, includeChats) => raw.copyRole(id, includeChats),
   compareStart: (p) => raw.compareStart(p),
   onCompareResult: (cb) => raw.onCompareResult(cb),
+  onCompareJudging: (cb) => raw.onCompareJudging(cb),
   onCompareJudged: (cb) => raw.onCompareJudged(cb),
   onCompareDone: (cb) => raw.onCompareDone(cb),
   renameChat: (type, id, name) => raw.renameChat(type, id, name),

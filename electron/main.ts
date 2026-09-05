@@ -18,6 +18,9 @@ import {
   aiCompleteRole,
   listModels,
   testConnection,
+  detectCapabilities,
+  CapabilityProbeResult,
+  ProbeOptions,
   AIMessage,
   ContentPart,
   streamAI,
@@ -76,7 +79,7 @@ function pushMediaUnread(chatType: string, chatId: string, aiName: string, kind:
     const rid = dm.resolveSingleRoleId(chatType, chatId);
     avatar = (rid && dm.getRole(rid)?.avatar_path) || '';
   }
-  pushUnread(chatType, chatId, aiName, content, avatar, true);
+  pushUnread(chatType, chatId, aiName, content, avatar);
   // 后台消息提醒卡片：主窗/小窗均隐藏时由 showNotifyCard 内部判断并弹出（与渲染端互补，覆盖未挂载聊天）
   try {
     const name =
@@ -998,6 +1001,9 @@ async function judgeMood(role: Role, settings: AppSettings, recent: string): Pro
     .filter(Boolean)
     .join('\n');
   try {
+    const wait = rateWaitMs(cfg.id);
+    if (wait > 0) await sleep(wait);
+    rateMark(cfg.id);
     const res = await queryAI(
       cfg,
       [
@@ -1125,6 +1131,9 @@ async function judgeRelationship(role: Role, cfg: ModelConfig, userDesc: string,
     `}`,
   ].join('\n');
   try {
+    const wait = rateWaitMs(cfg.id);
+    if (wait > 0) await sleep(wait);
+    rateMark(cfg.id);
     const res = await queryAI(
       cfg,
       [
@@ -1181,6 +1190,9 @@ async function judgeAndPostMoments(
   ].join('\n');
   let parsed: any = null;
   try {
+    const wait = rateWaitMs(cfg.id);
+    if (wait > 0) await sleep(wait);
+    rateMark(cfg.id);
     const res = await queryAI(
       cfg,
       [
@@ -1283,6 +1295,9 @@ async function judgeSceneImageLLM(
     `}`,
   ].join('\n');
   try {
+    const wait = rateWaitMs(cfg.id);
+    if (wait > 0) await sleep(wait);
+    rateMark(cfg.id);
     const res = await queryAI(
       cfg,
       [
@@ -1863,11 +1878,17 @@ function buildSystemPrompt(role: Role, freezeMemory = false, chatId?: string): s
   }
   // ===== 记忆注入（观察者模式「记忆冻结」时跳过外部历史记忆）=====
   if (!freezeMemory) {
-    // 记忆隔离：开启时只取该聊天的记忆 + 角色级共享记忆（chatId 为空）；关闭则取角色全部记忆
-    const iso = role.memoryIsolation ?? true;
-    const memories = dm.listMemories(role.id, iso ? chatId : undefined);
-    if (memories.length > 0) {
-      parts.push(`【关于你与用户的记忆】\n${memories.map((m) => `- ${m.content}`).join('\n')}`);
+    // 长记忆 per-chat 开关门控：关闭长内存的聊天不回灌任何记忆（已存记忆保留，重新开启即恢复），实现「关闭后从零开始」
+    // 该构建函数仅有 chatId、无 chatType，按 Nianyu 键约定同时查 single:/group: 两种前缀（二者命名空间互斥，不会误命中）
+    const longOn =
+      settings.longMemory?.[`single:${chatId}`] || settings.longMemory?.[`group:${chatId}`];
+    if (longOn) {
+      // 记忆隔离：开启时只取该聊天的记忆 + 角色级共享记忆（chatId 为空）；关闭则取角色全部记忆
+      const iso = role.memoryIsolation ?? true;
+      const memories = dm.listMemories(role.id, iso ? chatId : undefined);
+      if (memories.length > 0) {
+        parts.push(`【关于你与用户的记忆】\n${memories.map((m) => `- ${m.content}`).join('\n')}`);
+      }
     }
   }
   parts.push('请始终以该角色身份和口吻回复，不要跳出角色，不要提及你是AI或语言模型。');
@@ -2080,16 +2101,23 @@ function sleep(ms: number): Promise<void> {
 }
 
 // 计算某模型还需等待多少毫秒才能再发一次（基于该模型配置的 qps）；无限制返回 0
+// 支持小数 qps：改用「间隔制」判定，两次请求至少间隔 60000/qps 毫秒（qps=0.5 → 120s，qps=2 → 30s）。
+// 同时保留 60 秒滑动窗口计数，双重约束下既平滑了突发，也保证窗口内总量不超。
 function rateWaitMs(modelId: string): number {
   const settings = dm.getSettings();
   const cfg = settings.models.find((m) => m.id === modelId);
   const qps = cfg?.qps;
-  if (!qps || qps <= 0) return 0;
+  if (!qps || qps <= 0 || !Number.isFinite(qps)) return 0;
   const now = Date.now();
   const arr = (modelRequestLog.get(modelId) || []).filter((t) => now - t < RATE_WINDOW_MS);
   modelRequestLog.set(modelId, arr);
-  if (arr.length < qps) return 0;
-  return RATE_WINDOW_MS - (now - arr[0]) + 50;
+  // 1) 间隔等待：距上一次请求需满 60000/qps 毫秒
+  const interval = Math.round(RATE_WINDOW_MS / qps);
+  const intervalWait = arr.length > 0 ? Math.max(0, interval - (now - arr[arr.length - 1])) : 0;
+  // 2) 窗口计数等待：窗口内已达上限时，等最早一条滚出窗口
+  const countWait =
+    arr.length >= Math.ceil(qps) ? Math.max(0, RATE_WINDOW_MS - (now - arr[0]) + 50) : 0;
+  return Math.max(intervalWait, countWait);
 }
 
 // 标记一次实际发出的请求（用于计数）
@@ -2101,6 +2129,30 @@ function rateMark(modelId: string): void {
   modelRequestLog.set(modelId, arr);
 }
 
+// 当前前台聊天 key（"single:roleId" / "group:groupId"）；用于类 IM 已读回执判断是否「正在看」
+let activeChatKeyMain = '';
+
+// per-chat 聊天 key 构造
+function chatKeyOf(chatType: string, chatId: string): string {
+  return `${chatType}:${chatId}`;
+}
+
+// 已读未读：类 IM 已读回执（per-chat 水位线）。
+// 把某聊天水位线前移到 lastId（缺省=当前最新消息 id），返回新水位线并广播。
+function markChatRead(chatType: string, chatId: string, lastId?: number): number {
+  const settings = dm.getSettings();
+  const key = chatKeyOf(chatType, chatId);
+  let wm = lastId;
+  if (wm === undefined) {
+    const msgs = dm.getMessages(chatType, chatId);
+    wm = msgs.length ? Math.max(...msgs.map((m) => m.id)) : 0;
+  }
+  settings.readWatermark = { ...settings.readWatermark, [key]: wm };
+  dm.saveSettings({ readWatermark: settings.readWatermark });
+  broadcast('chats:readUpdated', { chatKey: key, watermark: wm });
+  return wm;
+}
+
 // ===== 翻译（右键菜单翻译文本） =====
 async function translateText(text: string, settings: AppSettings): Promise<string> {
   const modelId = settings.translationModelId || settings.defaultModel;
@@ -2109,6 +2161,9 @@ async function translateText(text: string, settings: AppSettings): Promise<strin
   const target = settings.translationLang === 'auto' ? settings.lang : settings.translationLang || settings.lang;
   const langName = target === 'en' ? 'English' : '中文';
   const prompt = `请将下面的文本翻译成${langName}，只返回译文本身，不要任何解释，也不要用引号包裹：\n\n${text}`;
+  const wait = rateWaitMs(cfg.id);
+  if (wait > 0) await sleep(wait);
+  rateMark(cfg.id);
   const res = await queryAI(
     cfg,
     [
@@ -2541,6 +2596,15 @@ ${searchContext}`
     affinityChanges.push({ role_id: r.roleId, change: r.total - original, total: r.total });
     totalTokens += r.tokens;
   }
+  // 类 IM 已读回执：当前聊天处于前台时，新到达的 AI 消息视为已读（水位线前移），
+  // 未读视觉标记只保留给非前台聊天，避免「明明在看却标未读」。
+  if (activeChatKeyMain === `${p.chatType}:${p.chatId}`) {
+    try {
+      markChatRead(p.chatType, p.chatId);
+    } catch (e) {
+      console.error('[nianyu] markChatRead on generate failed', e);
+    }
+  }
   return { aiMessages, affinityChanges, totalTokens };
 }
 
@@ -2699,7 +2763,8 @@ ${searchContext}`
     let reasoningAcc = '';
     // 被打断时给已输出内容追加省略号，未输出部分用「...」占位，避免气泡消失只剩头像名称
     const truncateMarker = '...';
-    const finalizeRole = (content: string, reasoning: string, interrupted: boolean) => {
+    // tokens = 该次回复消耗的 prompt+completion（真实 usage 或估算）；此前流式落库恒 0，Token 统计失真
+    const finalizeRole = (content: string, reasoning: string, interrupted: boolean, tokens = 0) => {
       let finalContent = content.trim();
       if (interrupted) {
         if (!finalContent) finalContent = truncateMarker;
@@ -2713,7 +2778,7 @@ ${searchContext}`
         content: finalContent,
         reasoning: reasoning || '',
         image_path: null,
-        token_used: 0,
+        token_used: tokens,
         timestamp: new Date().toISOString(),
       });
       sendStreamDone(streamId, aiMsg);
@@ -2736,11 +2801,12 @@ ${searchContext}`
           return;
         }
         if (controller.signal.aborted) {
-          finalizeRole(res.content || '', res.reasoning || '', true);
+          finalizeRole(res.content || '', res.reasoning || '', true, res.promptTokens + res.completionTokens);
           return;
         }
         emitChunk(res.content, true, '', res.reasoning || '');
-        finalizeRole(res.content, res.reasoning || '', false);
+        dm.recordModelUsage(cfg.id, cfg.name, res.promptTokens, res.completionTokens);
+        finalizeRole(res.content, res.reasoning || '', false, res.promptTokens + res.completionTokens);
         return;
       }
 
@@ -2756,10 +2822,11 @@ ${searchContext}`
         controller
       );
       if (controller.signal.aborted) {
-        finalizeRole(full || '', reasoningAcc || '', true);
+        finalizeRole(full || '', reasoningAcc || '', true, res.promptTokens + res.completionTokens);
         return;
       }
-      finalizeRole(full || res.content || '', reasoningAcc || res.reasoning || '', false);
+      dm.recordModelUsage(cfg.id, cfg.name, res.promptTokens, res.completionTokens);
+      finalizeRole(full || res.content || '', reasoningAcc || res.reasoning || '', false, res.promptTokens + res.completionTokens);
     } catch (e: any) {
       if (controller.signal.aborted) {
         // 中断导致的流异常：保留已生成部分内容，静默收尾
@@ -2834,6 +2901,9 @@ async function pickNextSpeaker(
     .map((m) => `${m.sender_name}: ${(m.content || '').slice(0, 200)}`)
     .join('\n');
   try {
+    const wait = rateWaitMs(cfg.id);
+    if (wait > 0) await sleep(wait);
+    rateMark(cfg.id);
     const res = await queryAI(
       cfg,
       [
@@ -2939,8 +3009,13 @@ async function handleGroupContinue(
   try {
     let full = '';
     let tokens = 0;
+    let usedPrompt = 0;
+    let usedCompletion = 0;
     let reasoning: string | undefined;
       if (cfg.provider === 'anthropic') {
+        const wait = rateWaitMs(cfg.id);
+        if (wait > 0) await sleep(wait);
+        rateMark(cfg.id);
         const res = await queryAI(cfg, messages, 1024);
         if (res.error) {
           // 模型回复错误：不进聊天框、不进记忆；用气泡通知用户
@@ -2949,10 +3024,15 @@ async function handleGroupContinue(
           return { ok: false, roleId: role.id, roleName: role.name, error: res.error.message };
         }
         full = res.content;
-        tokens = res.promptTokens + res.completionTokens;
+        usedPrompt = res.promptTokens;
+        usedCompletion = res.completionTokens;
+        tokens = usedPrompt + usedCompletion;
         reasoning = res.reasoning;
         emitChunk(full, true, '', res.reasoning || '');
       } else {
+      const wait = rateWaitMs(cfg.id);
+      if (wait > 0) await sleep(wait);
+      rateMark(cfg.id);
       const res = await streamAI(
         cfg,
         messages,
@@ -2964,9 +3044,12 @@ async function handleGroupContinue(
         controller
       );
       full = full || res.content;
-      tokens = res.promptTokens + res.completionTokens;
+      usedPrompt = res.promptTokens;
+      usedCompletion = res.completionTokens;
+      tokens = usedPrompt + usedCompletion;
       reasoning = res.reasoning;
     }
+    dm.recordModelUsage(cfg.id, cfg.name, usedPrompt, usedCompletion);
     const aiVisible = p.visibleToGroup !== false;
     const aiToMem = aiVisible && p.toMemory !== false;
     const aiMsg = dm.addMessage({
@@ -3090,6 +3173,9 @@ async function handleProactive(p: {
   const controller = new AbortController();
   registerStream(p.chatId, controller);
   try {
+    const wait = rateWaitMs(cfg.id);
+    if (wait > 0) await sleep(wait);
+    rateMark(cfg.id);
     const res = await queryAI(cfg, messages, 1024);
     if (res.error) {
       // 模型回复错误：不进聊天框、不进记忆；用气泡通知用户（主动消息无需重发面板，仅移除占位）
@@ -3097,6 +3183,7 @@ async function handleProactive(p: {
       sendStreamChunk(streamId, { content: '', done: true, error: res.error.message, seq: 1 });
       return { ok: false, roleId: role.id, roleName: role.name, error: res.error.message };
     }
+    dm.recordModelUsage(cfg.id, cfg.name, res.promptTokens, res.completionTokens);
     if (controller.signal.aborted) return { ok: false, roleId: role.id, roleName: role.name };
     const aiMsg = dm.addMessage({
       chat_type: p.chatType as any,
@@ -3149,6 +3236,34 @@ function parseFirstJson(text: string): any | null {
   } catch {
     return null;
   }
+}
+
+// 从评测模型回复中稳健抽取「质量评分」：优先标准 JSON；失败时用正则兜底硬提取 score/comment。
+// 避免模型在 JSON 前后夹带说明文字、或返回非严格 JSON 时整段评分丢失（此前会导致每模型 judgments 为空、前端无结果渲染）。
+function extractJudge(text: string): { score: number; comment: string } | null {
+  const parsed = parseFirstJson(text);
+  let rec: any = null;
+  if (parsed) {
+    rec = Array.isArray(parsed.scores)
+      ? parsed.scores[0]
+      : typeof parsed.score !== 'undefined'
+        ? parsed
+        : null;
+  }
+  if (rec && typeof rec.score !== 'undefined') {
+    return {
+      score: Math.max(0, Math.min(100, Number(rec.score) || 0)),
+      comment: String(rec.comment || ''),
+    };
+  }
+  // 兜底：从文本硬匹配 "score": 88 / score=88 以及 comment
+  const sm = text.match(/["']?score["']?\s*[:=]\s*(\d{1,3})/i);
+  if (sm) {
+    const score = Math.max(0, Math.min(100, Number(sm[1]) || 0));
+    const cm = text.match(/["']?comment["']?\s*[:=]\s*["']([^"']{0,50})["']/i);
+    return { score, comment: cm ? cm[1] : '' };
+  }
+  return null;
 }
 
 // 随机事件的主题偏好（快捷调出）：送礼 / 约会 / 日常 / 惊喜 / 争执
@@ -3227,6 +3342,9 @@ async function handleRandomEvent(p: {
     .filter(Boolean)
     .join('\n');
 
+  const wait = rateWaitMs(cfg.id);
+  if (wait > 0) await sleep(wait);
+  rateMark(cfg.id);
   const res = await queryAI(
     cfg,
     [
@@ -3751,10 +3869,37 @@ async function importPluginLogic(
   return { kind: 'rule', id: rule.id, name: rule.name };
 }
 
-// AI 自动提炼记忆：取最近对话，让模型总结 durable 事实，去重后写入记忆
+// AI 自动提炼记忆 / 手动总结记忆 共用核心：取最近对话，让模型总结 durable 事实，去重后写入记忆。
+// 不含「自动开关 enableAutoMemory」「per-chat 长记忆开关 longMemory」「主动消息开关 idleWriteMemory」判定（那些是自动路径专属门控），
+// 但观察者模式写入开关对两种路径都生效。受默认模型 QPS 限速约束。
+// AI 自动提炼记忆（10 轮自动）：受 全局 enableAutoMemory + per-chat longMemory 双开关 + 主动消息开关门控；
+// 每累计 10 条用户消息轮数（autoMemRoundCount）触发一次提炼并归零，未满则仅累加计数、不提炼。
+const AUTO_MEM_ROUNDS = 10;
 async function extractMemories(chatType: string, chatId: string): Promise<number> {
   const settings = dm.getSettings();
   if (!settings.enableAutoMemory) return 0;
+  const key = chatKeyOf(chatType, chatId);
+  // per-chat 长记忆开关：未开启长记忆的聊天不做任何自动提炼（关闭=从零开始）
+  if (!settings.longMemory?.[key]) return 0;
+  const hist0 = dm.getMessages(chatType, chatId);
+  if (hist0.length > 0 && hist0[hist0.length - 1].from_proactive && !settings.idleWriteMemory) {
+    return 0;
+  }
+  // 累计用户消息轮数，满 AUTO_MEM_ROUNDS 才提炼（主动消息触发的轮次不计入）
+  const next = (settings.autoMemRoundCount?.[key] || 0) + 1;
+  if (next < AUTO_MEM_ROUNDS) {
+    const counters = { ...(settings.autoMemRoundCount || {}), [key]: next };
+    dm.saveSettings({ autoMemRoundCount: counters });
+    return 0;
+  }
+  // 满 10 轮：归零并提炼
+  const counters2 = { ...(settings.autoMemRoundCount || {}), [key]: 0 };
+  dm.saveSettings({ autoMemRoundCount: counters2 });
+  return doExtractMemories(chatType, chatId);
+}
+
+async function doExtractMemories(chatType: string, chatId: string): Promise<number> {
+  const settings = dm.getSettings();
   // 观察者私密小窗：受「写入长期记忆」开关控制（默认不写入）
   if (chatId.startsWith('obs:')) {
     const obs = getObserverConfig(chatType, chatId);
@@ -3765,12 +3910,7 @@ async function extractMemories(chatType: string, chatId: string): Promise<number
     const obs = getObserverConfig('group', chatId);
     if (obs.observerMode && !obs.publicWriteMemory) return 0;
   }
-  // 主动消息的最近消息：受「主动消息写入记忆」开关控制（默认不写入）
-  const hist0 = dm.getMessages(chatType, chatId);
-  if (hist0.length > 0 && hist0[hist0.length - 1].from_proactive && !settings.idleWriteMemory) {
-    return 0;
-  }
-  const history = hist0;
+  const history = dm.getMessages(chatType, chatId);
   if (history.length < 2) return 0;
   let roleId: string | undefined;
   if (chatType === 'single') {
@@ -3798,6 +3938,9 @@ async function extractMemories(chatType: string, chatId: string): Promise<number
   if (!cfg) return 0;
   const prompt = `你是记忆提炼助手。从下面的对话中，提取关于用户或角色关系「值得长期记住」的事实（如用户偏好、禁忌、约定、重要事件、角色对用户的看法等）。\n已存在的记忆：\n${existing.length ? existing.join('\n') : '（无）'}\n\n最近对话：\n${convo}\n\n请只输出新增的、不与已有记忆重复、且确实值得长期记住的要点。每条一行，不要编号，不要解释。如果没有新要点，只输出一个空行。`;
   try {
+    const wait = rateWaitMs(cfg.id);
+    if (wait > 0) await sleep(wait);
+    rateMark(cfg.id);
     const res = await queryAI(cfg, [{ role: 'system', content: prompt }], 600);
     const lines = (res.content || '')
       .split('\n')
@@ -3870,7 +4013,8 @@ function notifyModelError(err: ModelErrorInfo, roleName?: string): void {
 // 全程广播 video:progress（0~100 进度）与 video:done（成功携带 imagePath / 失败携带 error）。
 async function runVideoGenJob(chatType: string, chatId: string, prompt: string, refDataUrl?: string): Promise<void> {
   try {
-    const vg = dm.getSettings().videoGen;
+    const settings = dm.getSettings();
+    const vg = settings.videoGen;
     if (!vg || !vg.enabled || !vg.baseUrl || !vg.apiKey) {
       throw new Error('未配置生视频 API，请在设置中开启「生视频」并填写独立的 Base URL 与 API Key');
     }
@@ -4015,10 +4159,9 @@ function sendStreamDone(streamId: string, message: ChatMessage): void {
     const chatType = dm.getGroup(chatId) ? 'group' : 'single';
     const role = dm.getRole(roleId) || (chatType === 'single' ? dm.getRole(chatId) : undefined);
     const avatar = role?.avatar_path || '';
-    // from_proactive=空闲主动消息；from_auto=群聊自动接话/续聊。
-    // 二者同属「非用户直接请求」的 AI 自发消息，只要用户没正盯着该聊天就计入悬浮球未读。
-    const aiInitiated = message.from_proactive === true || message.from_auto === true;
-    pushUnread(chatType, chatId, message.sender_name, message.content, avatar, aiInitiated);
+    // 未读计入规则统一为「类 IM」：仅用户正盯着该聊天本身时不计，其余（含手动回复 / 主动消息 / 群聊自动接话）均计入，
+    // 详见 electron/floatingBall.ts 的 pushUnread。
+    pushUnread(chatType, chatId, message.sender_name, message.content, avatar);
     // 后台消息提醒卡片：主窗/小窗均隐藏时由 showNotifyCard 内部判断并弹出；
     // 与渲染端 onDone 触发的 notifyCard 互补，覆盖当前未挂载聊天的场景（避免卡片消失）
     if (message.sender_type === 'ai' && message.content) {
@@ -4045,6 +4188,9 @@ function registerIPC(): void {
       settings.models.find((m) => m.id === modelId && m.enabled) ||
       settings.models.find((m) => m.enabled);
     if (!cfg) return '（请先在设置-模型管理中添加并启用一个模型配置）';
+    const wait = rateWaitMs(cfg.id);
+    if (wait > 0) await sleep(wait);
+    rateMark(cfg.id);
     return aiCompleteRole(cfg, basic);
   });
 
@@ -4153,6 +4299,9 @@ function registerIPC(): void {
         broadcast('compare:result', { compareId, ...r });
         return r;
       }
+      const wait = rateWaitMs(cfg.id);
+      if (wait > 0) await sleep(wait);
+      rateMark(cfg.id);
       const t0 = Date.now();
       try {
         const res = await queryAI(
@@ -4186,49 +4335,58 @@ function registerIPC(): void {
     });
     const results = await Promise.all(jobs);
     // 质量评判：评测模型可由界面临时指定（judgeModelId），否则回退默认模型。
-    // 若评测模型本身是被测模型之一（互评），则不评判其自身输出，仅评判其它被测模型。
+    // 改为「逐模型独立评判」：每个成功输出的模型各自发起一次评判请求，
+    // 单个模型的输出报错或单次评判失败都只影响该模型自身，绝不连累其他模型的评分（满足隔离要求）。
+    // 若评测模型本身是被测模型之一（互评），则不评判其自身输出。
     const judgments: Record<string, { score: number; comment: string }> = {};
     let judgeError: string | undefined;
     const judgeCfg =
       (p.judgeModelId && cfgMap.get(p.judgeModelId)) ||
       settings.models.find((m) => m.id === settings.defaultModel && m.enabled);
-    if (judgeCfg && results.some((r) => !r.error)) {
+    if (judgeCfg) {
       const judgeIsCompared = ids.includes(judgeCfg.id);
-      try {
-        const list = results
-          .map((r, i) => `【${i + 1}. ${r.modelName}】\n${(r.content || '(无输出)').slice(0, 1500)}`)
-          .join('\n\n');
-        const res = await queryAI(
-          judgeCfg,
-          [
-            {
-              role: 'system',
-              content: '你是 AI 输出质量评测员。请从准确度、完整性、逻辑、可读性四方面为下面的若干 AI 回答打分（0-100 整数），并给每条不超过 30 字的中文评语。严格输出 JSON：{"scores":[{"index":1,"score":88,"comment":"评语"}]}，不要输出任何其他内容。',
-            },
-            { role: 'user', content: list },
-          ],
-          1024
-        );
-        if (res.error) {
-          judgeError = res.error.message;
-        } else {
-          const parsed = parseFirstJson(res.content);
-          if (parsed && Array.isArray(parsed.scores)) {
-            for (const s of parsed.scores) {
-              const idx = Number(s?.index) - 1;
-              if (results[idx] && !results[idx].error && !(judgeIsCompared && results[idx].modelId === judgeCfg.id)) {
-                judgments[results[idx].modelId] = { score: Math.max(0, Math.min(100, Number(s?.score) || 0)), comment: String(s?.comment || '') };
-              }
-            }
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        if (r.error) continue; // 出错的被测模型不评分（符合预期）
+        if (judgeIsCompared && r.modelId === judgeCfg.id) continue; // 互评跳过自评
+        // 逐模型独立评分开始：广播「正在评分」事件，前端据此显示横幅，明确评分进行中
+        broadcast('compare:judging', { compareId, modelId: r.modelId, modelName: r.modelName });
+        const wait = rateWaitMs(judgeCfg.id);
+        if (wait > 0) await sleep(wait);
+        rateMark(judgeCfg.id);
+        try {
+          const res = await queryAI(
+            judgeCfg,
+            [
+              {
+                role: 'system',
+                content: '你是 AI 输出质量评测员。请从准确度、完整性、逻辑、可读性四方面为下面这一条 AI 回答打分（0-100 整数），并给出不超过 30 字的中文评语。严格只输出 JSON：{"score":88,"comment":"评语"}，不要输出任何其他内容。',
+              },
+              { role: 'user', content: `【${r.modelName}】\n${(r.content || '').slice(0, 1500)}` },
+            ],
+            512
+          );
+          if (res.error) {
+            judgeError = res.error.message;
+            dm.logError('model', `对比质量评判失败(${r.modelName})：${res.error.message}`);
+            continue; // 仅跳过该模型评分，不阻断其余
+          }
+          const rec = extractJudge(res.content);
+          if (rec) {
+            judgments[r.modelId] = rec;
           } else {
             judgeError = '评分结果解析失败（模型未返回合法 JSON）';
+            dm.logError('model', `对比质量评判解析失败(${r.modelName})：${res.content.slice(0, 200)}`);
           }
+        } catch (e: any) {
+          judgeError = e?.message || String(e);
+          dm.logError('model', `对比质量评判异常(${r.modelName})：${judgeError}`);
         }
-      } catch (e: any) {
-        judgeError = e?.message || String(e);
       }
-      if (judgeError) dm.logError('model', `对比质量评判失败：${judgeError}`);
     }
+    // 只要至少有一个模型成功评分，就不再展示全局「评分失败」横幅（局部失败已记入错误日志）；
+    // 仅当全部未能评分且发生过错误时才保留 judgeError 提示。
+    if (Object.keys(judgments).length > 0) judgeError = undefined;
     broadcast('compare:judged', { compareId, judgments, judgeModel: judgeCfg?.name || '', judgeError });
     broadcast('compare:done', { compareId, totalMs: Date.now() - startedAt });
     return { results, judgments, totalMs: Date.now() - startedAt, judgeModel: judgeCfg?.name || '' };
@@ -4414,6 +4572,7 @@ function registerIPC(): void {
     return rows.reduce((s, m) => s + (m.token_used || 0), 0);
   });
   ipcMain.handle('stats:roles', () => dm.getRoleStats());
+  ipcMain.handle('stats:modelUsage', () => dm.getModelStats());
 
   ipcMain.handle('affinity:log', (_e, roleId) => dm.getAffinityLog(roleId));
 
@@ -4501,6 +4660,86 @@ function registerIPC(): void {
       dm.logError('model', `模型连接测试异常：${e?.message || String(e)}`, e?.stack);
       throw e;
     }
+  });
+
+  // ===== 模型能力探针（真实请求探测，非启发式）=====
+  // 把探测结果落到模型配置：仅覆盖已确认项（布尔），null（无法判定）不覆盖用户手动标记；记录探测时间
+  function applyDetectResult(cfg: ModelConfig, res: CapabilityProbeResult): void {
+    if (res.supportsImages !== null) cfg.supportsImages = res.supportsImages;
+    if (res.supportsTools !== null) cfg.supportsTools = res.supportsTools;
+    if (res.supportsJson !== null) cfg.supportsJson = res.supportsJson;
+    if (res.supportsNsfw !== null) cfg.supportsNsfw = res.supportsNsfw;
+    if (res.maxContext && res.maxContext > 0) cfg.maxContext = res.maxContext;
+    cfg.lastDetectedAt = Date.now();
+  }
+
+  ipcMain.handle('models:detect', async (_e, id: string, opts?: ProbeOptions) => {
+    try {
+      const settings = dm.getSettings();
+      const cfg = settings.models.find((m) => m.id === id);
+      if (!cfg) return { ok: false, message: '未找到模型配置', config: null };
+      const res = await detectCapabilities(cfg, opts);
+      applyDetectResult(cfg, res);
+      dm.saveSettings({ models: settings.models });
+      broadcast('settings:changed', {});
+      return { ok: res.ok, message: res.message, config: cfg, undetected: res.undetected || [] };
+    } catch (e: any) {
+      dm.logError('model', `模型能力探测异常：${e?.message || String(e)}`, e?.stack);
+      throw e;
+    }
+  });
+
+  // 一键检测全部模型连通性与能力，逐个探测后统一落库
+  ipcMain.handle('models:detectAll', async (_e, opts?: ProbeOptions) => {
+    try {
+      const settings = dm.getSettings();
+      const results: any[] = [];
+      for (const cfg of settings.models) {
+        const res = await detectCapabilities(cfg, opts);
+        applyDetectResult(cfg, res);
+        results.push({
+          id: cfg.id,
+          name: cfg.name,
+          ok: res.ok,
+          message: res.message,
+          supportsImages: res.supportsImages,
+          supportsTools: res.supportsTools,
+          supportsJson: res.supportsJson,
+          supportsNsfw: res.supportsNsfw,
+          maxContext: res.maxContext,
+          undetected: res.undetected || [],
+        });
+      }
+      dm.saveSettings({ models: settings.models });
+      broadcast('settings:changed', {});
+      return { results };
+    } catch (e: any) {
+      dm.logError('model', `一键探测全部模型异常：${e?.message || String(e)}`, e?.stack);
+      throw e;
+    }
+  });
+
+  // ===== 长记忆：手动让 AI 总结记忆（受 per-chat longMemory 开关门控）=====
+  ipcMain.handle('memories:summarize', async (_e, p: { chatType: string; chatId: string }) => {
+    try {
+      const settings = dm.getSettings();
+      const key = chatKeyOf(p.chatType, p.chatId);
+      if (!settings.longMemory?.[key]) {
+        return { ok: false, count: 0, message: '该聊天未开启长记忆（请在聊天「其他操作」中打开长记忆开关）' };
+      }
+      const count = await doExtractMemories(p.chatType, p.chatId);
+      return { ok: true, count, message: count > 0 ? `已总结 ${count} 条记忆` : '没有新的可总结内容' };
+    } catch (e: any) {
+      dm.logError('model', `手动总结记忆异常：${e?.message || String(e)}`, e?.stack);
+      return { ok: false, count: 0, message: `总结失败：${e?.message || String(e)}` };
+    }
+  });
+
+  // ===== 已读未读：类 IM 已读回执（per-chat 水位线）=====
+  // markChatRead 已在模块顶层定义（generateAIResponses 等模块级函数也需要引用）
+  ipcMain.handle('chats:markRead', async (_e, p: { chatType: string; chatId: string; lastId?: number }) => {
+    const wm = markChatRead(p.chatType, p.chatId, p.lastId);
+    return { ok: true, watermark: wm };
   });
   ipcMain.handle('app:setMenuLang', (_e, lang: string) => {
     if (lang === 'zh' || lang === 'en') Menu.setApplicationMenu(buildMenu(lang));
@@ -4967,6 +5206,13 @@ function registerIPC(): void {
       showMiniWindow();
     }
   );
+  // 悬浮球面板点击某聊天：呼出该聊天的「小窗」界面（而非主窗口），契合快捷选择聊天定位
+  ipcMain.on('ball:open-chat', (_e, chat: { chatType: string; chatId: string; name?: string }) => {
+    clearUnreadForChat(chat.chatType, chat.chatId);
+    pendingMiniChat = { chatType: chat.chatType, chatId: chat.chatId };
+    showMiniWindow();
+  });
+
   ipcMain.handle('mini:getInitial', () => {
     const v = pendingMiniChat;
     pendingMiniChat = null;
@@ -4984,7 +5230,7 @@ function registerIPC(): void {
   const idleState = new Map<string, number>(); // chatKey -> lastActivityTs
   // 渲染端当前查看的聊天（`${chatType}:${chatId}`）。窗口隐藏/托盘后仍保留，
   // 供主动消息调度器判断该对哪个聊天开口（与悬浮球未读判定共用同一来源）。
-  let activeChatKeyMain = '';
+  // 注意：activeChatKeyMain 已在模块顶层声明，此处不再重复声明。
   ipcMain.handle('idle:get', (_e, chatKey: string) => {
     return idleState.get(chatKey) ?? null;
   });
@@ -5010,6 +5256,15 @@ function registerIPC(): void {
   // 改由主进程以 idleState（全局权威计时基准）驱动：窗口隐藏、最小化、托盘常驻都不影响计时与触发。
   // 渲染端只保留倒计时显示，不再自行触发，避免双触发。
   const proactiveBusyKeys = new Set<string>(); // 正在生成主动消息的 chatKey，防重入
+  // 随机模式：每个聊天当前抽中的间隔（毫秒）。触发一条后重抽，实现「每次间隔都随机」。
+  const idleRandomOverrideMs = new Map<string, number>();
+  // 随机范围（秒）：钳制 1~86400（1 秒 ~ 24 小时），且 max >= min
+  const randomRangeSec = (s: AppSettings): { min: number; max: number } => {
+    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+    const min = clamp(Math.floor(s.idleRandomMinSec ?? 60), 1, 86400);
+    const max = clamp(Math.floor(s.idleRandomMaxSec ?? 1800), min, 86400);
+    return { min, max };
+  };
   setInterval(() => {
     if (quitting) return;
     if (proactiveBusyKeys.size > 0) return; // 串行：同一时刻只生成一条，避免并发刷屏
@@ -5031,8 +5286,18 @@ function registerIPC(): void {
     if (perChat === false) return; // 该聊天单独关闭了主动消息
     const ts = idleState.get(key);
     if (ts == null) return;
-    const idleMs = (s.idleInterval || 600) * 1000;
-    if (Date.now() - ts < idleMs) return;
+    // 触发间隔：fixed=idleInterval 固定值；random=该聊天抽中的随机值（缺失时现抽）
+    let intervalMs = (s.idleInterval || 600) * 1000;
+    if (s.idleTimingMode === 'random') {
+      let ov = idleRandomOverrideMs.get(key);
+      if (ov == null) {
+        const { min, max } = randomRangeSec(s);
+        ov = Math.floor(min * 1000 + Math.random() * (max - min + 1) * 1000);
+        idleRandomOverrideMs.set(key, ov);
+      }
+      intervalMs = ov;
+    }
+    if (Date.now() - ts < intervalMs) return;
     const sep = key.indexOf(':');
     if (sep <= 0) return;
     const chatType = key.slice(0, sep);
@@ -5043,20 +5308,29 @@ function registerIPC(): void {
     // 正在生成其它内容（用户发消息 / AI 回复 / 自动接话）时让路，下轮再判
     if (streamControllers.has(chatId)) return;
     proactiveBusyKeys.add(key);
-    // 先重置计时再发请求，杜绝并发重复触发与「窗口恢复后补触发」
+    // 先重置计时再发请求，杜绝并发重复触发与「窗口恢复后补触发」；
+    // intervalMs 随广播下发给渲染端，用于倒计时显示（随机模式下每次触发间隔都不同）
     const startedAt = Date.now();
     idleState.set(key, startedAt);
-    broadcast('idle:activity', { chatKey: key, timestamp: startedAt });
+    broadcast('idle:activity', { chatKey: key, timestamp: startedAt, intervalMs });
     void handleProactive({ chatType, chatId })
       .catch(() => {
         /* 生成失败已由 handleProactive 内部落库/气泡处理，此处仅防 unhandledrejection */
       })
       .finally(() => {
         proactiveBusyKeys.delete(key);
-        // 一条主动消息后需再次静默整段时长才会触发下一条（避免连续刷屏）
+        // 一条主动消息后需再次静默整段时长才会触发下一条（避免连续刷屏）；
+        // 随机模式下立即重抽下一次间隔并随广播下发，保证倒计时与实际触发一致
         const finishedAt = Date.now();
+        let nextMs = (dm.getSettings().idleInterval || 600) * 1000;
+        const s2 = dm.getSettings();
+        if (s2.idleTimingMode === 'random') {
+          const { min, max } = randomRangeSec(s2);
+          nextMs = Math.floor(min * 1000 + Math.random() * (max - min + 1) * 1000);
+          idleRandomOverrideMs.set(key, nextMs);
+        }
         idleState.set(key, finishedAt);
-        broadcast('idle:activity', { chatKey: key, timestamp: finishedAt });
+        broadcast('idle:activity', { chatKey: key, timestamp: finishedAt, intervalMs: nextMs });
       });
   }, 3000);
   ipcMain.handle('mini:setOpacity', (_e, v: number) => {
@@ -5232,8 +5506,10 @@ function registerIPC(): void {
   // 同时作为主进程主动消息调度器的目标聊天（窗口隐藏后仍有效）
   ipcMain.on('app:active-chat', (_e, p: { type: string; id: string }) => {
     if (p && typeof p.type === 'string' && typeof p.id === 'string') {
-      setActiveChat(p.type, p.id);
+      setActiveChat(p.type, p.id); // 清除悬浮球该会话未读
       activeChatKeyMain = `${p.type}:${p.id}`;
+      // 注意：类 IM 已读水位线不再在「打开」时立即前移，改由渲染端在用户滚动到底部（真正读完）后标记，
+      // 这样返回有未读消息的聊天时，能先看到「未读分隔线 / 标记」，符合类 IM 体验。
     }
   });
   // 设置中切换悬浮球开关：启用则创建、关闭则销毁
