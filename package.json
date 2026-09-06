@@ -48,6 +48,7 @@
       "icon": "build/icon.ico"
     },
     "nsis": {
+      "warningsAsErrors": false,
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
