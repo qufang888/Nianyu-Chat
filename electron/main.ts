@@ -29,6 +29,7 @@ import {
   generateImage,
   generateVideo,
   setDeepThinkLevel,
+  setAiSettingsProvider,
   AUTOCOMPLETE_SYS_PROMPT_IMAGE,
   AUTOCOMPLETE_SYS_PROMPT_VIDEO,
   AUTOCOMPLETE_MAX_TOKENS,
@@ -38,6 +39,7 @@ import {
 import { createBackup, restoreBackup } from './backup';
 import { parseCharacterCard, parseCharacterCardText } from '../src/utils/characterCard';
 import { diagnoseError } from '../src/utils/errorDiagnosis';
+import { initProactiveEngine, rescheduleProactive, extractPendingCallback, heartbeatProactive } from './proactive';
 import type {
   Role,
   ChatMessage,
@@ -2228,16 +2230,29 @@ function resolveMembers(chatType: string, chatId: string, content: string): Role
   return memberRoles;
 }
 
+// 全局模型参数解析：模型未单独设置的参数（温度/topP/topK）回退到 settings.globalModelParams。
+// 在模型解析出口统一应用，所有聊天/内部功能调用点自动生效；模型一旦单独设置即用独立值。
+function effectiveModel(cfg: ModelConfig, settings: AppSettings): ModelConfig {
+  const g = settings.globalModelParams || {};
+  return {
+    ...cfg,
+    temperature: cfg.temperature ?? g.temperature,
+    topP: cfg.topP ?? g.topP,
+    topK: cfg.topK ?? g.topK,
+  };
+}
+
 function resolveRoleModel(role: Role, settings: AppSettings): ModelConfig | undefined {
-  return (
+  const cfg =
     settings.models.find((m) => m.id === role.model_config_id && m.enabled) ||
-    settings.models.find((m) => m.id === settings.defaultModel && m.enabled)
-  );
+    settings.models.find((m) => m.id === settings.defaultModel && m.enabled);
+  return cfg ? effectiveModel(cfg, settings) : undefined;
 }
 
 // 取设置里的默认模型配置（随机事件一律用默认 AI 生成，不计入聊天消耗）
 function getDefaultModelConfig(settings: AppSettings): ModelConfig | undefined {
-  return settings.models.find((m) => m.id === settings.defaultModel && m.enabled);
+  const cfg = settings.models.find((m) => m.id === settings.defaultModel && m.enabled);
+  return cfg ? effectiveModel(cfg, settings) : undefined;
 }
 
 // 解析当前对话实际使用的「自我身份」：
@@ -2302,6 +2317,12 @@ function addUserMessage(p: {
   });
   // 广播用户消息到所有窗口（让 MiniChat 发出的图片在小窗/主窗同步显示）
   broadcast('stream:user', msg);
+  // 用户在该聊天发言：解除主动消息冷却（idleCooldownUntilReply），允许下一条主动消息
+  proactiveAwaitingReply.delete(`${p.chatType}:${p.chatId}`);
+  // NHPP 主动消息引擎：用户交互 → 重算候选时刻 + 抽取显式承诺（待回访）。
+  // 仅 settings.proactiveEngine === 'nhpp' 时生效；经典 idle 定时机制不受影响。
+  rescheduleProactive(p.chatType, p.chatId);
+  extractPendingCallback(p.chatType, p.chatId, p.content || '');
   return msg;
 }
 
@@ -2470,9 +2491,11 @@ async function generateAIResponses(
 
   // 联网搜索：每个聊天每次只检索一次，结果作为上下文注入所有成员的回复
   let searchCtx: string | null = null;
+  let searchPages: SearchResult[] | null = null; // 随消息持久化（search_results），历史消息也能点击引用编号
   if (settings.webSearchChats?.[`${p.chatType}:${p.chatId}`]) {
     const sp = await fetchSearchContext(p.chatType, p.chatId, p.content, settings);
     searchCtx = sp?.context ?? null;
+    searchPages = sp?.pages ?? null;
   }
   // 已启用插件的提示词片段（声明式，全局生效）
   const pluginCtx = getEnabledPluginContext();
@@ -2544,6 +2567,7 @@ ${searchContext}`
         image_path: null,
         token_used: res.promptTokens + res.completionTokens,
         timestamp: new Date().toISOString(),
+        search_results: searchPages || undefined,
       });
       sendStreamDone(streamId, aiMsg);
       void requestMoodJudge(p.chatType, p.chatId, role.id);
@@ -2622,6 +2646,9 @@ async function handleSendUser(p: {
 
 // 进行中的流式生成控制器，按 chatId 归组；删除聊天时整体中止，杜绝孤儿流继续写库
 const streamControllers = new Map<string, AbortController>();
+// 主动消息冷却表（chatKey 集合）：发出主动消息后加入，用户在该聊天回复后移除。
+// idleCooldownUntilReply 开启时，调度器跳过仍在冷却中的聊天（每个聊天独立冷却）。
+const proactiveAwaitingReply = new Set<string>();
 function registerStream(chatId: string, c: AbortController): void {
   const prev = streamControllers.get(chatId);
   if (prev && prev !== c) prev.abort(); // 同一聊天只保留一条进行中生成
@@ -2693,9 +2720,11 @@ async function handleStream(p: {
 
   // 联网搜索：每个聊天每次只检索一次，结果作为上下文注入所有成员的回复
   let searchCtx: string | null = null;
+  let searchPages: SearchResult[] | null = null; // 随消息持久化（search_results），历史消息也能点击引用编号
   if (settings.webSearchChats?.[`${p.chatType}:${p.chatId}`]) {
     const sp = await fetchSearchContext(p.chatType, p.chatId, p.content, settings);
     searchCtx = sp?.context ?? null;
+    searchPages = sp?.pages ?? null;
   }
   // 已启用插件的提示词片段（声明式，全局生效）
   const pluginCtx = getEnabledPluginContext();
@@ -2780,6 +2809,7 @@ ${searchContext}`
         image_path: null,
         token_used: tokens,
         timestamp: new Date().toISOString(),
+        search_results: searchPages || undefined,
       });
       sendStreamDone(streamId, aiMsg);
       if (!interrupted) void requestMoodJudge(p.chatType, p.chatId, role.id);
@@ -2791,8 +2821,8 @@ ${searchContext}`
       const wait = rateWaitMs(cfg.id);
       if (wait > 0) await sleep(wait);
       rateMark(cfg.id);
-      // Anthropic 不支持流式，回退到非流式（一次性整段）
-      if (cfg.provider === 'anthropic') {
+      // Anthropic 不支持流式，或能力探针判定该模型不支持流式 → 回退到非流式（一次性整段）
+      if (cfg.provider === 'anthropic' || cfg.supportsStream === false) {
         const res = await queryAI(cfg, messages, 1024);
         if (res.error) {
           // 模型回复错误：不进聊天框、不进记忆；用气泡通知用户
@@ -3012,7 +3042,8 @@ async function handleGroupContinue(
     let usedPrompt = 0;
     let usedCompletion = 0;
     let reasoning: string | undefined;
-      if (cfg.provider === 'anthropic') {
+      // Anthropic 不支持流式，或能力探针判定该模型不支持流式 → 回退到非流式
+      if (cfg.provider === 'anthropic' || cfg.supportsStream === false) {
         const wait = rateWaitMs(cfg.id);
         if (wait > 0) await sleep(wait);
         rateMark(cfg.id);
@@ -3098,6 +3129,7 @@ async function handleGroupContinue(
 async function handleProactive(p: {
   chatType: string;
   chatId: string;
+  extraInstruction?: string; // NHPP 定向回访：附加上下文指令（普通主动消息不传，行为不变）
 }): Promise<{ ok: boolean; roleId?: string; roleName?: string; error?: string }> {
   const settings = dm.getSettings();
   // 全局主开关 + 按聊天单独开关：任一关闭则不主动发消息
@@ -3132,8 +3164,10 @@ async function handleProactive(p: {
   // 观察者模式「记忆冻结」：对局内不读取外部世界书
   const obs = isGroup ? getObserverConfig('group', p.chatId) : null;
   const worldBook = obs?.freezeMemory ? '' : resolveWorldBook(p.chatType, p.chatId, settings);
-  // 主动发言指令：贴合刚才的对话氛围与「当前心情」，自然开口；不等待用户提问
+  // 主动发言指令：贴合刚才的对话氛围与「当前心情」，自然开口；不等待用户提问。
+  // NHPP 定向回访时 extraInstruction 提供具体回访语境（覆盖默认泛化指令）。
   const instruction =
+    p.extraInstruction ||
     '（主动发起）你注意到用户暂时没有说话。请结合刚才的对话氛围与你当前的【情绪】，' +
     '主动向用户发一条自然、贴合情境的消息：可以延续刚才的话题，也可以自然地开启一个新话题。' +
     '直接说话，不要加任何前缀、括号说明或「用户不在」之类的元描述。';
@@ -3198,6 +3232,8 @@ async function handleProactive(p: {
       from_proactive: true,
     } as any);
     sendStreamDone(streamId, aiMsg);
+    // 主动消息冷却：记录该聊天等待用户回复（idleCooldownUntilReply 开启时阻止下一条主动消息）
+    proactiveAwaitingReply.add(`${p.chatType}:${p.chatId}`);
     void requestMoodJudge(p.chatType, p.chatId, role.id);
     void requestRelationshipAndMoments(p.chatType, p.chatId, role.id);
     void triggerSceneImage(p.chatType, p.chatId, role.id);
@@ -3402,6 +3438,21 @@ async function handleChooseEvent(p: {
     if (res) mood = res.label;
   }
   logEmotionIfObserver(p.chatType, p.chatId, p.roleId); // 记录对局情绪轨迹（事件也会改变好感/心情）
+  // 事件本身 + 用户所选选项写入角色记忆（未选择的选项不写入）。
+  // 遵循角色「记忆隔离」：开启（默认）时 chatId=当前聊天（对话间互相独立），关闭则写入角色级共享记忆。
+  try {
+    const iso = role.memoryIsolation ?? true;
+    const memContent = `随机事件：${p.eventText}\n我的选择：${p.choiceText}`;
+    dm.addMemory({
+      roleId: p.roleId,
+      chatId: iso ? p.chatId : undefined,
+      content: memContent,
+      source: 'auto',
+    } as any);
+  } catch (e: any) {
+    // 记忆写入失败不影响事件选择流程本身
+    console.error('[event] 写入事件记忆失败', e?.message || e);
+  }
   activeEvents.delete(p.chatId); // 选完即关闭该聊天的事件占用
   // 在聊天中插入系统消息通知好感/情绪变化
   const moodNote = p.mood ? ` · 心情 → ${mood}` : '';
@@ -4586,6 +4637,8 @@ function registerIPC(): void {
     }
     // 深度思考等级同步给 AI 调用层（全局，避免改动所有调用点）
     if (patch && patch.deepThinkLevel !== undefined) setDeepThinkLevel(next.deepThinkLevel);
+    // 开机自启动：设置变更即时注册/取消登录项
+    if (patch && patch.launchOnBoot !== undefined) applyLaunchOnBoot(patch.launchOnBoot);
     // 广播设置变更，让主窗与小窗同步刷新（世界书/身份/背景/开关等）
     broadcast('settings:changed', patch || {});
     // 缩放基准/上下限变更时，主窗与小窗立即按新参数重新缩放（两端同步显示）
@@ -4594,6 +4647,46 @@ function registerIPC(): void {
       applyWindowZoom(miniWindow, true);
     }
     return next;
+  });
+  // 当前聊天生效模型（渲染端用于：聊天流式开关的显示与写入「生效来源」）。
+  // 群聊成员各有模型，返回 null → 渲染端回退到全局 enableStreaming。
+  ipcMain.handle('chat:getModel', (_e, chatType: string, chatId: string) => {
+    const settings = dm.getSettings();
+    if (chatType === 'group') return null;
+    const role = dm.getRole(dm.resolveSingleRoleId(chatType, chatId));
+    if (!role) return null;
+    return resolveRoleModel(role, settings) || null;
+  });
+
+  // ---------- MCP 服务器管理（v2.3.17 新增） ----------
+  ipcMain.handle('mcp:status', async () => {
+    const { mcpStatus } = await import('./mcpManager');
+    return mcpStatus(dm.getSettings());
+  });
+  ipcMain.handle('mcp:add', async (_e, p: { key: string; config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean } }) => {
+    const s = dm.getSettings();
+    const key = (p.key || '').trim();
+    if (!key) throw new Error('请填写服务器名称');
+    if (!p.config?.command?.trim()) throw new Error('请填写启动命令');
+    const servers = { ...(s.mcpServers || {}) };
+    if (!servers[key] && Object.keys(servers).length >= 10) throw new Error('MCP 服务器数量已达上限（10 个）');
+    servers[key] = { ...p.config, enabled: p.config.enabled !== false };
+    dm.saveSettings({ mcpServers: servers });
+    return { ok: true };
+  });
+  ipcMain.handle('mcp:remove', async (_e, key: string) => {
+    const s = dm.getSettings();
+    const servers = { ...(s.mcpServers || {}) };
+    delete servers[key];
+    dm.saveSettings({ mcpServers: servers });
+    return { ok: true };
+  });
+  ipcMain.handle('mcp:toggle', async (_e, key: string, enabled: boolean) => {
+    const s = dm.getSettings();
+    const servers = { ...(s.mcpServers || {}) };
+    if (servers[key]) servers[key] = { ...servers[key], enabled };
+    dm.saveSettings({ mcpServers: servers });
+    return { ok: true };
   });
   ipcMain.handle('settings:reset', (_e, keepKeys: boolean) => {
     const next = dm.resetSettings(keepKeys);
@@ -4669,6 +4762,7 @@ function registerIPC(): void {
     if (res.supportsTools !== null) cfg.supportsTools = res.supportsTools;
     if (res.supportsJson !== null) cfg.supportsJson = res.supportsJson;
     if (res.supportsNsfw !== null) cfg.supportsNsfw = res.supportsNsfw;
+    if (res.supportsStream !== null) cfg.supportsStream = res.supportsStream;
     if (res.maxContext && res.maxContext > 0) cfg.maxContext = res.maxContext;
     cfg.lastDetectedAt = Date.now();
   }
@@ -4685,6 +4779,23 @@ function registerIPC(): void {
       return { ok: res.ok, message: res.message, config: cfg, undetected: res.undetected || [] };
     } catch (e: any) {
       dm.logError('model', `模型能力探测异常：${e?.message || String(e)}`, e?.stack);
+      throw e;
+    }
+  });
+
+  // 编辑中的模型（尚未保存、无 id）也可探测能力：不落库，仅返回结果，由前端合并进草稿。
+  // 此前新增模型必须先保存再进编辑界面才能「检测能力」，现在填完 Base URL / 模型名即可直接检测。
+  ipcMain.handle('models:detectConfig', async (_e, draft: Partial<ModelConfig>, opts?: ProbeOptions) => {
+    try {
+      if (!draft || !draft.baseUrl || !draft.model) {
+        return { ok: false, message: '请先填写 API Base URL 与模型名称', config: null };
+      }
+      const probe = { ...draft, id: draft.id || '__draft__' } as ModelConfig;
+      const res = await detectCapabilities(probe, opts);
+      applyDetectResult(probe, res);
+      return { ok: res.ok, message: res.message, config: probe, undetected: res.undetected || [] };
+    } catch (e: any) {
+      dm.logError('model', `编辑中模型能力探测异常：${e?.message || String(e)}`, e?.stack);
       throw e;
     }
   });
@@ -4706,6 +4817,7 @@ function registerIPC(): void {
           supportsTools: res.supportsTools,
           supportsJson: res.supportsJson,
           supportsNsfw: res.supportsNsfw,
+          supportsStream: res.supportsStream,
           maxContext: res.maxContext,
           undetected: res.undetected || [],
         });
@@ -5250,14 +5362,18 @@ function registerIPC(): void {
     broadcast('idle:tick', payload);
   }, 250);
 
-  // ===== 主动消息：主进程统一调度 =====
+  // ===== 主动消息：主进程统一调度（每个聊天独立计时）=====
   // 原先由渲染进程用 setInterval 自行判断并调用 chats:proactive。主界面关闭到托盘时窗口仅 hide，
   // 渲染进程的定时器会被 Chromium 节流乃至冻结，于是主动消息不触发，直到重新打开窗口才「姗姗来迟」。
   // 改由主进程以 idleState（全局权威计时基准）驱动：窗口隐藏、最小化、托盘常驻都不影响计时与触发。
   // 渲染端只保留倒计时显示，不再自行触发，避免双触发。
+  // v2.3.12：调度从「只评估当前查看的聊天」改为「所有开启主动消息的聊天各自独立计时」——
+  // 每个聊天用自己的静默时钟 + 自己抽中的随机间隔，到点独立触发（后台触发进未读/悬浮球通知）。
   const proactiveBusyKeys = new Set<string>(); // 正在生成主动消息的 chatKey，防重入
   // 随机模式：每个聊天当前抽中的间隔（毫秒）。触发一条后重抽，实现「每次间隔都随机」。
   const idleRandomOverrideMs = new Map<string, number>();
+  // 切换聊天 pause/reset 模式：离开聊天时冻结其计时（记录已静默时长），回到该聊天时解冻续走
+  const idleFrozenElapsedMs = new Map<string, number>();
   // 随机范围（秒）：钳制 1~86400（1 秒 ~ 24 小时），且 max >= min
   const randomRangeSec = (s: AppSettings): { min: number; max: number } => {
     const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -5267,52 +5383,72 @@ function registerIPC(): void {
   };
   setInterval(() => {
     if (quitting) return;
-    if (proactiveBusyKeys.size > 0) return; // 串行：同一时刻只生成一条，避免并发刷屏
     const s = dm.getSettings();
     if (s.idleEnabled === false) return;
-    // 优先用渲染端回传的「当前查看的聊天」；缺失时兜底取最近有活动记录的聊天
-    let key = activeChatKeyMain;
-    if (!key || idleState.get(key) == null) {
-      let newest = -1;
-      for (const [k, t] of idleState) {
-        if (t > newest) {
-          newest = t;
-          key = k;
+    if (proactiveBusyKeys.size > 0) return; // 串行：同一时刻只生成一条，避免并发刷屏
+    // 冷却开关关闭：清空冷却表，避免历史残留误挡（开启时才按冷却跳过）
+    if (s.idleCooldownUntilReply === false && proactiveAwaitingReply.size > 0) {
+      proactiveAwaitingReply.clear();
+    }
+    const switchAction = s.idleSwitchAction || 'continue';
+    if (switchAction === 'continue' && idleFrozenElapsedMs.size > 0) {
+      idleFrozenElapsedMs.clear(); // continue 模式没有冻结概念，清理历史残留恢复独立计时
+    }
+    const now = Date.now();
+    // 每个聊天独立评估：静默时长 >= 该聊天自己的间隔即超时，挑「超时最久」的一个触发；
+    // 当前查看的聊天在超时程度相近时优先（+1ms 平局加成）
+    let bestKey: string | null = null;
+    let bestOverdue = -1;
+    let bestIntervalMs = 0;
+    for (const [k, ts] of idleState) {
+      if ((s.chatIdleEnabled || {})[k] === false) continue; // 该聊天单独关闭了主动消息
+      if (s.idleCooldownUntilReply !== false && proactiveAwaitingReply.has(k)) continue; // 冷却中：等用户回复
+      const sep = k.indexOf(':');
+      if (sep <= 0) continue;
+      const chatType = k.slice(0, sep);
+      const chatId = k.slice(sep + 1);
+      if (!chatId) continue;
+      // 该聊天还没有任何消息则不主动开口（与旧逻辑一致）
+      if (dm.getMessages(chatType, chatId).length === 0) continue;
+      // 正在生成其它内容（用户发消息 / AI 回复 / 自动接话）时让路，下轮再判
+      if (streamControllers.has(chatId)) continue;
+      const frozen = idleFrozenElapsedMs.get(k);
+      // pause/reset 模式：非当前查看的聊天计时冻结、不后台触发（回来时续走/重置）；
+      // continue 模式：所有聊天独立计时，离开后照常在后台触发（消息进未读清单/悬浮球）
+      if (frozen == null && k !== activeChatKeyMain && switchAction !== 'continue') continue;
+      const elapsed = frozen != null ? frozen : now - ts;
+      // 触发间隔：fixed=idleInterval 固定值；random=该聊天抽中的随机值（缺失时现抽）
+      let intervalMs = (s.idleInterval || 600) * 1000;
+      if (s.idleTimingMode === 'random') {
+        let ov = idleRandomOverrideMs.get(k);
+        if (ov == null) {
+          const { min, max } = randomRangeSec(s);
+          ov = Math.floor(min * 1000 + Math.random() * (max - min + 1) * 1000);
+          idleRandomOverrideMs.set(k, ov);
         }
+        intervalMs = ov;
+      }
+      const overdue = elapsed - intervalMs;
+      if (overdue <= 0) continue;
+      const score = overdue + (k === activeChatKeyMain ? 1 : 0);
+      if (score > bestOverdue) {
+        bestOverdue = score;
+        bestKey = k;
+        bestIntervalMs = intervalMs;
       }
     }
-    if (!key) return;
-    const perChat = (s.chatIdleEnabled || {})[key];
-    if (perChat === false) return; // 该聊天单独关闭了主动消息
-    const ts = idleState.get(key);
-    if (ts == null) return;
-    // 触发间隔：fixed=idleInterval 固定值；random=该聊天抽中的随机值（缺失时现抽）
-    let intervalMs = (s.idleInterval || 600) * 1000;
-    if (s.idleTimingMode === 'random') {
-      let ov = idleRandomOverrideMs.get(key);
-      if (ov == null) {
-        const { min, max } = randomRangeSec(s);
-        ov = Math.floor(min * 1000 + Math.random() * (max - min + 1) * 1000);
-        idleRandomOverrideMs.set(key, ov);
-      }
-      intervalMs = ov;
-    }
-    if (Date.now() - ts < intervalMs) return;
+    if (!bestKey) return;
+    const key = bestKey;
     const sep = key.indexOf(':');
-    if (sep <= 0) return;
     const chatType = key.slice(0, sep);
     const chatId = key.slice(sep + 1);
-    if (!chatId) return;
-    // 该聊天还没有任何消息则不主动开口（与旧渲染端逻辑一致）
-    if (dm.getMessages(chatType, chatId).length === 0) return;
-    // 正在生成其它内容（用户发消息 / AI 回复 / 自动接话）时让路，下轮再判
-    if (streamControllers.has(chatId)) return;
     proactiveBusyKeys.add(key);
     // 先重置计时再发请求，杜绝并发重复触发与「窗口恢复后补触发」；
     // intervalMs 随广播下发给渲染端，用于倒计时显示（随机模式下每次触发间隔都不同）
     const startedAt = Date.now();
     idleState.set(key, startedAt);
-    broadcast('idle:activity', { chatKey: key, timestamp: startedAt, intervalMs });
+    idleFrozenElapsedMs.delete(key);
+    broadcast('idle:activity', { chatKey: key, timestamp: startedAt, intervalMs: bestIntervalMs });
     void handleProactive({ chatType, chatId })
       .catch(() => {
         /* 生成失败已由 handleProactive 内部落库/气泡处理，此处仅防 unhandledrejection */
@@ -5507,7 +5643,28 @@ function registerIPC(): void {
   ipcMain.on('app:active-chat', (_e, p: { type: string; id: string }) => {
     if (p && typeof p.type === 'string' && typeof p.id === 'string') {
       setActiveChat(p.type, p.id); // 清除悬浮球该会话未读
-      activeChatKeyMain = `${p.type}:${p.id}`;
+      const nextKey = `${p.type}:${p.id}`;
+      // 切换聊天时的计时行为（idleSwitchAction）：
+      // - continue：所有聊天独立计时，不做冻结/恢复
+      // - pause：离开的聊天冻结计时（记录已静默时长），回到该聊天时解冻续走
+      // - reset：同 pause 冻结（不后台触发），回到该聊天后由渲染端重置计时
+      try {
+        const action = dm.getSettings().idleSwitchAction || 'continue';
+        const prevKey = activeChatKeyMain;
+        if (action !== 'continue' && prevKey && prevKey !== nextKey) {
+          if (!idleFrozenElapsedMs.has(prevKey) && idleState.has(prevKey)) {
+            idleFrozenElapsedMs.set(prevKey, Date.now() - (idleState.get(prevKey) as number));
+          }
+        }
+        const frozenElapsed = idleFrozenElapsedMs.get(nextKey);
+        if (frozenElapsed != null) {
+          // 回到该聊天：解冻并按冻结时长顺延（pause=回来后继续）
+          idleFrozenElapsedMs.delete(nextKey);
+          idleState.set(nextKey, Date.now() - frozenElapsed);
+          broadcast('idle:activity', { chatKey: nextKey, timestamp: Date.now() - frozenElapsed });
+        }
+      } catch { /* 调度状态异常不影响聊天切换 */ }
+      activeChatKeyMain = nextKey;
       // 注意：类 IM 已读水位线不再在「打开」时立即前移，改由渲染端在用户滚动到底部（真正读完）后标记，
       // 这样返回有未读消息的聊天时，能先看到「未读分隔线 / 标记」，符合类 IM 体验。
     }
@@ -5564,9 +5721,21 @@ process.on('unhandledRejection', (reason) => {
   }
 });
 
+// 开机自启动：根据设置注册/取消登录项（Windows 写注册表，macOS 写 Login Items）
+function applyLaunchOnBoot(enabled: boolean): void {
+  try {
+    app.setLoginItemSettings({ openAtLogin: !!enabled });
+    console.log('[launch] openAtLogin =', !!enabled);
+  } catch (e) {
+    console.error('[launch] setLoginItemSettings failed', e);
+  }
+}
+
 app.whenReady().then(() => {
   const settings = dm.getSettings();
   setDeepThinkLevel(settings.deepThinkLevel);
+  // 开机自启动：默认开启（settings.launchOnBoot !== false）
+  applyLaunchOnBoot(settings.launchOnBoot !== false);
   Menu.setApplicationMenu(buildMenu(settings.lang === 'en' ? 'en' : 'zh'));
   protocol.registerFileProtocol('nianyuimg', (request, callback) => {
     const url = request.url.replace('nianyuimg://', '');
@@ -5594,6 +5763,35 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   applyMiniSettings();
+  // MCP：注入设置提供器（ai.ts 请求构造时读取 mcpServers）；应用退出时断开全部连接
+  setAiSettingsProvider(() => dm.getSettings());
+  app.on('will-quit', () => {
+    try {
+      void import('./mcpManager').then((m) => m.disconnectAll());
+    } catch {
+      /* ignore */
+    }
+  });
+  // NHPP 主动消息引擎：注入依赖并启动统一调度心跳（60s/轮，扫描到期候选与待回访）。
+  // 仅当 settings.proactiveEngine === 'nhpp' 时实际调度；经典 idle 定时消息机制完全不受影响。
+  initProactiveEngine({
+    getSettings: () => dm.getSettings(),
+    sendProactive: (chatType, chatId, extraInstruction) => handleProactive({ chatType, chatId, extraInstruction }),
+    getMessages: (chatType, chatId) => dm.getMessages(chatType, chatId),
+    isBusy: (chatId) => streamControllers.has(chatId),
+    getDefaultModel: () => {
+      const s = dm.getSettings();
+      return getDefaultModelConfig(s) || undefined;
+    },
+    logError: (category, message, detail) => dm.logError(category, message, detail),
+  });
+  setInterval(() => {
+    try {
+      heartbeatProactive();
+    } catch {
+      /* 心跳异常不中断 */
+    }
+  }, 60_000);
   // 桌面悬浮球：注入主窗引用/唤出函数，并按设置创建悬浮球窗口
   setBallMainShow(showMainWindow);
   setBallMainWindow(mainWindow);

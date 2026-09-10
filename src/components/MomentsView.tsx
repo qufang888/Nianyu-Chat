@@ -11,6 +11,7 @@ interface MomentItem {
   roleId: string;
   content: string;
   images: string[];
+  videos?: string[]; // 视频路径（AI 生成视频动态；与主进程 Moment 类型对齐）
   created_at: string;
   scheduledAt?: string | null;
   published: boolean;

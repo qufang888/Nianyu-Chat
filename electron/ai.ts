@@ -273,6 +273,16 @@ export async function queryAI(
   }
 }
 
+// ===== MCP 工具调用支持 =====
+const MCP_TOOL_ROUNDS = 3; // tool_calls → 执行 → 回传 的最大轮数（防失控循环）
+let settingsProvider: (() => any) | null = null; // 由 main.ts 注入（读取 mcpServers 等设置）
+export function setAiSettingsProvider(fn: () => any): void {
+  settingsProvider = fn;
+}
+function dmGetSettings(): any {
+  return settingsProvider ? settingsProvider() : { mcpServers: {} };
+}
+
 async function queryOpenAILike(
   cfg: ModelConfig,
   messages: AIMessage[],
@@ -281,43 +291,74 @@ async function queryOpenAILike(
 ): Promise<AIResult> {
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
   if (cfg.apiKey) h['Authorization'] = `Bearer ${cfg.apiKey}`;
-  const resp = await fetch(joinUrl(cfg.baseUrl, '/chat/completions'), {
-    method: 'POST',
-    headers: h,
-    body: JSON.stringify((() => {
-      const b: Record<string, any> = {
-        model: cfg.model,
-        messages,
-        max_tokens: cfg.maxTokens ?? maxTokens,
-        temperature: cfg.temperature,
-        stream: false,
-      };
-      if (cfg.topP !== undefined) b.top_p = cfg.topP;
-      if (cfg.topK !== undefined && cfg.topK > 0) b.top_k = cfg.topK;
-      applyDeepThink(b, cfg);
-      applyCustomParams(b, cfg);
-      return b;
-    })()),
-    signal: controller.signal,
-  });
-  if (!resp.ok) {
-    const errText = await resp.text();
-    throw new ModelApiError(resp.status, `API 请求失败 ${resp.status}: ${errText.slice(0, 300)}`, errText.slice(0, 2000));
+  // MCP 工具注入：仅 supportsTools 模型；AI 返回 tool_calls 时执行并回传结果，最多 MCP_TOOL_ROUNDS 轮
+  let mcpTools: any[] = [];
+  let mcpMgr: any = null;
+  if (cfg.supportsTools) {
+    try {
+      mcpMgr = await import('./mcpManager');
+      mcpTools = await mcpMgr.collectMcpTools(dmGetSettings());
+    } catch {
+      mcpTools = [];
+    }
   }
-  const data = (await resp.json()) as any;
-  const msg = data?.choices?.[0]?.message ?? {};
-  const rawContent: string = msg?.content ?? '';
-  // 思维链：模型无关抽取（任意厂牌字段）+ 剥离 <think> 标签（内联思考）
-  let reasoning: string = extractReasoning(msg);
-  const split = splitThink(rawContent);
-  if (split.reasoning) reasoning = reasoning ? `${reasoning}\n${split.reasoning}` : split.reasoning;
-  const usage = data?.usage ?? {};
-  return {
-    content: split.content,
-    reasoning: reasoning || undefined,
-    promptTokens: Number(usage.prompt_tokens) || 0,
-    completionTokens: Number(usage.completion_tokens) || 0,
-  };
+  const chatMessages: any[] = [...messages];
+  let promptTokens = 0;
+  let completionTokens = 0;
+  for (let round = 0; ; round++) {
+    const bodyObj: Record<string, any> = {
+      model: cfg.model,
+      messages: chatMessages,
+      max_tokens: cfg.maxTokens ?? maxTokens,
+      temperature: cfg.temperature ?? 1, // undefined 兜底：模型未设且全局未设时用 1.0
+      stream: false,
+    };
+    if (cfg.topP !== undefined) bodyObj.top_p = cfg.topP;
+    if (cfg.topK !== undefined && cfg.topK > 0) bodyObj.top_k = cfg.topK;
+    applyDeepThink(bodyObj, cfg);
+    applyCustomParams(bodyObj, cfg);
+    if (mcpTools.length > 0) bodyObj.tools = mcpTools; // MCP 工具（支持多轮 tool_calls）
+    const resp = await fetch(joinUrl(cfg.baseUrl, '/chat/completions'), {
+      method: 'POST',
+      headers: h,
+      body: JSON.stringify(bodyObj),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new ModelApiError(resp.status, `API 请求失败 ${resp.status}: ${errText.slice(0, 300)}`, errText.slice(0, 2000));
+    }
+    const data = (await resp.json()) as any;
+    const msg = data?.choices?.[0]?.message ?? {};
+    const usage = data?.usage ?? {};
+    promptTokens += Number(usage.prompt_tokens) || 0;
+    completionTokens += Number(usage.completionTokens) || Number(usage.completion_tokens) || 0;
+    // tool_calls：执行 MCP 工具并把结果回传给模型继续生成
+    if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0 && round < MCP_TOOL_ROUNDS && mcpMgr) {
+      chatMessages.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls });
+      for (const tc of msg.tool_calls) {
+        let toolText = '';
+        try {
+          toolText = await mcpMgr.callMcpToolByFullName(dmGetSettings(), tc.function?.name || '', tc.function?.arguments || '{}');
+        } catch (e: any) {
+          toolText = `工具调用失败：${e?.message || String(e)}`;
+        }
+        chatMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolText });
+      }
+      continue; // 携带工具结果再请求
+    }
+    const rawContent: string = msg?.content ?? '';
+    // 思维链：模型无关抽取（任意厂牌字段）+ 剥离 <think> 标签（内联思考）
+    let reasoning: string = extractReasoning(msg);
+    const split = splitThink(rawContent);
+    if (split.reasoning) reasoning = reasoning ? `${reasoning}\n${split.reasoning}` : split.reasoning;
+    return {
+      content: split.content,
+      reasoning: reasoning || undefined,
+      promptTokens,
+      completionTokens,
+    };
+  }
 }
 
 // OpenAI 兼容接口流式调用；Anthropic 不在此实现
@@ -338,7 +379,7 @@ export async function streamAI(
         model: cfg.model,
         messages,
         max_tokens: cfg.maxTokens ?? maxTokens,
-        temperature: cfg.temperature,
+        temperature: cfg.temperature ?? 1, // undefined 兜底：模型未设且全局未设时用 1.0
         stream: true,
         // 请求服务端在流式末尾返回真实 usage（OpenAI/DeepSeek/vLLM 支持；不支持的服务端会忽略该字段）
         stream_options: { include_usage: true },
@@ -464,7 +505,7 @@ async function queryAnthropic(
       const b: Record<string, any> = {
         model: cfg.model,
         max_tokens: cfg.maxTokens ?? maxTokens,
-        temperature: Math.min(cfg.temperature, 1),
+        temperature: Math.min(cfg.temperature ?? 1, 1),
         system,
         messages: turns,
       };
@@ -572,6 +613,7 @@ export interface CapabilityProbeResult {
   supportsTools: boolean | null; // 工具调用（function calling / tool_calls）
   supportsJson: boolean | null; // JSON 模式（response_format=json_object）
   supportsNsfw: boolean | null; // NSFW（成人）内容输出：true=可输出，false=被拒答，null=无法判定
+  supportsStream: boolean | null; // 流式输出（SSE）：true=支持，false=不支持/被拒，null=无法判定
   maxContext: number | null; // 从 /models 读到的上下文窗口（读不到=null）
   undetected?: string[]; // 未能探测的能力列表（如 Anthropic 仅做连通性）
 }
@@ -736,6 +778,64 @@ async function fetchModelContextWindow(cfg: ModelConfig): Promise<number | null>
   }
 }
 
+// 流式探针：发 stream:true 极小请求，依据响应判定该模型是否支持 SSE 流式输出。
+// 判定规则：
+//   - 2xx 且 Content-Type 含 text/event-stream 且读到 data: 帧 → true
+//   - 2xx 但返回普通 JSON（服务端忽略 stream 参数按非流式应答）→ false
+//   - 400/415/422（服务端明确拒绝 stream 相关参数）→ false
+//   - 其余（401/429/5xx/网络异常/超时）→ null（无法判定，不覆盖手动标记）
+async function probeStream(cfg: ModelConfig): Promise<boolean | null> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (cfg.apiKey) h['Authorization'] = `Bearer ${cfg.apiKey}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const resp = await fetch(joinUrl(cfg.baseUrl, '/chat/completions'), {
+      method: 'POST',
+      headers: h,
+      body: JSON.stringify({
+        model: cfg.model,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 4,
+        stream: true,
+      }),
+      signal: controller.signal,
+    });
+    if (resp.status === 400 || resp.status === 415 || resp.status === 422) return false;
+    if (!(resp.status >= 200 && resp.status < 300)) return null;
+    const ct = String(resp.headers.get('content-type') || '');
+    if (!/text\/event-stream/i.test(ct)) {
+      // 非 SSE：网关按非流式 JSON 应答（忽略 stream 参数）→ 不支持流式
+      await resp.text().catch(() => '');
+      return false;
+    }
+    const reader = resp.body?.getReader();
+    if (!reader) return null;
+    const decoder = new TextDecoder();
+    let buf = '';
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        if (buf.includes('data:')) return true;
+      }
+      // SSE 响应头但未读到任何 data 帧（空流/立即结束）→ 按不支持处理
+      return false;
+    } catch {
+      // 读流中断（含超时 abort）：已收到数据帧则判支持，否则无法判定
+      return buf.includes('data:') ? true : null;
+    } finally {
+      try { reader.releaseLock(); } catch { /* ignore */ }
+      controller.abort(); // 尽早断开探测连接
+    }
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // 真实能力探针：先验证连通性，再逐项发送极小请求判定能力
 // opts 可关闭部分探针（未传=全跑）；被关闭的项返回 null，不覆盖用户手动值。
 export async function detectCapabilities(
@@ -747,6 +847,7 @@ export async function detectCapabilities(
     tools: opts?.tools !== false,
     json: opts?.json !== false,
     nsfw: opts?.nsfw !== false,
+    stream: opts?.stream !== false,
   };
   const out: CapabilityProbeResult = {
     ok: false,
@@ -755,6 +856,7 @@ export async function detectCapabilities(
     supportsTools: null,
     supportsJson: null,
     supportsNsfw: null,
+    supportsStream: null,
     maxContext: null,
   };
   if (!cfg.model) {
@@ -777,6 +879,8 @@ export async function detectCapabilities(
     if (want.nsfw) skip.push('supportsNsfw');
     out.undetected = skip;
     out.maxContext = await fetchModelContextWindow(cfg);
+    // Anthropic 走 /messages 私有格式，本应用聊天流式不覆盖 Anthropic（handleStream 回退非流式），直接判定不支持
+    out.supportsStream = false;
     return out;
   }
 
@@ -847,7 +951,12 @@ export async function detectCapabilities(
     // 其余状态码（401/429/5xx/网络异常）保持 null
   }
 
-  // 6) 上下文窗口（best-effort）
+  // 6) 流式探针：真实发一个 stream:true 请求，检查是否返回 SSE 数据帧
+  if (want.stream) {
+    out.supportsStream = await probeStream(cfg);
+  }
+
+  // 7) 上下文窗口（best-effort）
   out.maxContext = await fetchModelContextWindow(cfg);
   return out;
 }

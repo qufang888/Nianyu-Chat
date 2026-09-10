@@ -3,8 +3,6 @@ import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
 import {
   PROVIDER_DEFAULTS,
-  MODEL_GROUP_COLORS,
-  MODEL_GROUP_NAME_MAX,
   MODEL_TAG_LEN_MAX,
   MODEL_TAG_MAX,
   type ModelConfig,
@@ -54,9 +52,12 @@ export const ModelEditor: React.FC<{
   onSave: (cfg: ModelConfig) => void;
   groups?: ModelGroup[]; // 全局分组（用于归属多选）
   knownTags?: string[]; // 已有标签（用于输入联想）
-}> = ({ initial, onClose, onSave, groups = [], knownTags = [] }) => {
+  // 全局模型参数（用于「跟随全局」显示；streamEnabled=全局流式开关当前值）
+  globalParams?: { temperature?: number; topP?: number; topK?: number; streamEnabled?: boolean };
+}> = ({ initial, onClose, onSave, groups = [], knownTags = [], globalParams }) => {
   const { t } = useI18n();
   const { toast, showToast } = useToast();
+  const g = globalParams || {};
   const [cfg, setCfg] = useState<ModelConfig>(
     initial || {
       id: crypto.randomUUID(),
@@ -66,9 +67,7 @@ export const ModelEditor: React.FC<{
       apiKey: '',
       model: '',
       maxContext: PROVIDER_DEFAULTS.openai.maxContext,
-      temperature: 1.0,
-      topP: 1,
-      topK: 0,
+      // 温度/topP/topK 默认不写独立值 → 跟随全局参数（globalModelParams）
       memReadLimit: 0,
       customParams: '',
       enabled: true,
@@ -88,6 +87,30 @@ export const ModelEditor: React.FC<{
   const [testing, setTesting] = useState(false);
 
   const set = (k: keyof ModelConfig, v: any) => setCfg((c) => ({ ...c, [k]: v }));
+
+  // 「跟随全局」提示后缀：该参数未单独设置（undefined）时显示，生效值取全局默认
+  const followTag = (v: unknown) => (v === undefined ? ` · ${t('model.followGlobal')}` : '');
+  const tempEff = cfg.temperature ?? g.temperature ?? 1;
+  const topPEff = cfg.topP ?? g.topP ?? 0.95;
+  const topKEff = cfg.topK ?? g.topK ?? 50;
+  // 跟随全局 = 四项（温度/TopP/TopK/流式）均无独立值（纯派生：新建模型默认勾选，调任一参数自动取消）
+  const followAll =
+    cfg.temperature === undefined && cfg.topP === undefined && cfg.topK === undefined && cfg.streamEnabled === undefined;
+  const setFollowAll = (follow: boolean) => {
+    if (follow) {
+      // 勾选：清空全部独立值 → 完全跟随全局
+      setCfg((c) => ({ ...c, temperature: undefined, topP: undefined, topK: undefined, streamEnabled: undefined }));
+    } else {
+      // 取消勾选：把当前显示的全局值固化为独立值（滑块/开关保持不变，之后调整才真正独立）
+      setCfg((c) => ({
+        ...c,
+        temperature: c.temperature ?? g.temperature ?? 1,
+        topP: c.topP ?? g.topP ?? 0.95,
+        topK: c.topK ?? g.topK ?? 50,
+        streamEnabled: c.streamEnabled ?? g.streamEnabled ?? false,
+      }));
+    }
+  };
 
   // ===== QPS：字符串输入 + 失焦归一化，支持 0~1 等小数 =====
   const onQpsChange = (raw: string) => {
@@ -175,7 +198,7 @@ export const ModelEditor: React.FC<{
     try {
       const res = await api.testModel({ ...cfg });
       setTestState(res);
-      showToast(res.ok ? t('model.testOkToast') : t('model.testFailToast'), !res.ok);
+      showToast(res.ok ? t('model.testOkToast') : t('model.testFailToast'), { error: !res.ok });
     } catch (e: any) {
       setTestState({ ok: false, message: e?.message || String(e) });
       showToast(t('model.testFailToast'), { error: true });
@@ -185,15 +208,14 @@ export const ModelEditor: React.FC<{
   };
 
   // 能力探针：向模型发送极小请求，真实探测视觉/工具/JSON 能力与上下文窗口（非启发式）
+  // 已保存模型按 id 探测并落库；新增/未保存模型直接用当前草稿探测（不落库），结果合并回表单
   const [detecting, setDetecting] = useState(false);
   const detectModel = async () => {
-    if (!cfg.id) {
-      showToast(t('model.needModelIdBeforeDetect'), true);
-      return;
-    }
     setDetecting(true);
     try {
-      const res = await api.detectModel(cfg.id);
+      const res = cfg.id
+        ? await api.detectModel(cfg.id)
+        : await api.detectModelConfig({ ...cfg, id: cfg.id || '__draft__' });
       if (res.config) {
         // 把探测结果同步进本地草稿，便于用户查看/手动微调后保存
         setCfg((c) => ({
@@ -214,10 +236,10 @@ export const ModelEditor: React.FC<{
       const undetected = res.undetected && res.undetected.length ? `（${t('model.capUnknown')}）` : '';
       showToast(
         (res.ok ? t('model.detectOk', { msg: caps.join('  ') }) : t('model.detectFail', { msg: res.message })) + undetected,
-        !res.ok
+        { error: !res.ok }
       );
     } catch (e: any) {
-      showToast(t('model.detectFail', { msg: e?.message || String(e) }), true);
+      showToast(t('model.detectFail', { msg: e?.message || String(e) }), { error: true });
     } finally {
       setDetecting(false);
     }
@@ -376,27 +398,67 @@ export const ModelEditor: React.FC<{
               format={(v) => (v === 0 ? t('model.unlimited') : v >= 1000 ? `${Math.round(v / 1000)}K` : `${v}`)}
             />
             <RangeField
-              label={t('model.temperature', { value: cfg.temperature.toFixed(2) })}
-              value={cfg.temperature}
+              label={t('model.temperature', { value: tempEff.toFixed(2) }) + followTag(cfg.temperature)}
+              value={tempEff}
               min={0}
               max={2}
               step={0.01}
               onChange={(v) => set('temperature', v)}
             />
-            <div style={{ gridColumn: '1 / -1', fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4, marginBottom: 2 }}>
-              {t('model.advanced')}
+            <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, marginBottom: 2 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                {/* 跟随全局：勾选=参数+流式全部随全局（派生态）；调任一参数自动取消 */}
+                <input
+                  type="checkbox"
+                  checked={followAll}
+                  onChange={(e) => setFollowAll(e.target.checked)}
+                />
+                {t('model.followGlobalAll')}
+              </label>
+              {/* 一键对齐全局（与勾选跟随全局等效） */}
+              <button
+                type="button"
+                className="btn-ghost"
+                style={{ padding: '2px 10px', fontSize: 12 }}
+                onClick={() => {
+                  setFollowAll(true);
+                  showToast(t('model.resetToGlobalDone'));
+                }}
+              >
+                {t('model.resetToGlobal')}
+              </button>
             </div>
+            <Field label={t('model.streamMode')} full>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                <input
+                  type="checkbox"
+                  disabled={cfg.streamEnabled === undefined}
+                  checked={cfg.streamEnabled ?? g.streamEnabled ?? false}
+                  onChange={(e) => set('streamEnabled', e.target.checked)}
+                />
+                <span>
+                  {cfg.streamEnabled === undefined
+                    ? `${t('model.followGlobal')}（${(g.streamEnabled ?? false) ? t('common.on') : t('common.off')}）`
+                    : cfg.streamEnabled
+                      ? t('common.on')
+                      : t('common.off')}
+                </span>
+              </label>
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                {t('model.streamModeDesc')}
+              </div>
+            </Field>
             <RangeField
-              label={t('model.topP')}
-              value={cfg.topP ?? 1}
+              label={t('model.topP') + followTag(cfg.topP)}
+              value={topPEff}
               min={0}
               max={1}
               step={0.01}
               onChange={(v) => set('topP', v)}
             />
             <RangeField
-              label={t('model.topK')}
-              value={cfg.topK ?? 0}
+              label={t('model.topK') + followTag(cfg.topK)}
+              value={topKEff}
               min={0}
               max={50}
               step={1}
@@ -567,8 +629,14 @@ export const ModelEditor: React.FC<{
                     addTag(tagDraft);
                   }
                 }}
+                list="known-tags-datalist"
                 placeholder={t('model.tagsPh')}
               />
+              <datalist id="known-tags-datalist">
+                {(knownTags || []).map((tg) => (
+                  <option key={tg} value={tg} />
+                ))}
+              </datalist>
               <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
                 {t('model.tagsDesc', { max: MODEL_TAG_MAX, len: MODEL_TAG_LEN_MAX })}
               </div>
@@ -593,7 +661,7 @@ export const ModelEditor: React.FC<{
             <button type="button" className="btn-primary" onClick={testConn} disabled={testing}>
               {testing ? t('model.testing') : t('model.testConnection')}
             </button>
-            <button type="button" className="btn-ghost" onClick={detectModel} disabled={detecting || !cfg.id}>
+            <button type="button" className="btn-ghost" onClick={detectModel} disabled={detecting}>
               {detecting ? t('model.detecting') : t('model.detectCapabilities')}
             </button>
             {testState && (
@@ -615,6 +683,7 @@ export const ModelEditor: React.FC<{
             <CapBadge label={t('model.capImages')} on={cfg.supportsImages} />
             <CapBadge label={t('model.capTools')} on={cfg.supportsTools} />
             <CapBadge label={t('model.capJson')} on={cfg.supportsJson} />
+            <CapBadge label={t('model.capStream')} on={cfg.supportsStream} />
             <CapBadge label={t('model.capNsfw')} on={cfg.supportsNsfw} />
             {cfg.lastDetectedAt ? (
               <span style={{ color: 'var(--color-text-secondary)' }}>
