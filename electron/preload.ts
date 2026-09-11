@@ -44,6 +44,13 @@ export interface NianyuAPI {
     content: string;
     imagePath?: string | null;
   }) => Promise<SendMessageResult>;
+  // 当前聊天生效模型（群聊返回 null）；用于流式开关显示/写入生效来源
+  getChatModel: (chatType: string, chatId: string) => Promise<ModelConfig | null>;
+  // MCP 服务器管理
+  mcpStatus: () => Promise<any[]>;
+  mcpAdd: (p: { key: string; config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean } }) => Promise<{ ok: boolean }>;
+  mcpRemove: (key: string) => Promise<{ ok: boolean }>;
+  mcpToggle: (key: string, enabled: boolean) => Promise<{ ok: boolean }>;
   sendUserMessage: (p: {
     chatType: string;
     chatId: string;
@@ -283,6 +290,7 @@ export interface NianyuAPI {
   listModels: (cfg: ModelConfig) => Promise<string[]>;
   testModel: (cfg: ModelConfig) => Promise<{ ok: boolean; message: string }>;
   detectModel: (id: string, opts?: ProbeOptions) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
+  detectModelConfig: (cfg: Partial<ModelConfig>, opts?: ProbeOptions) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
   detectAllModels: (opts?: ProbeOptions) => Promise<{
     results: Array<{
       id: string;
@@ -293,6 +301,7 @@ export interface NianyuAPI {
       supportsTools: boolean | null;
       supportsJson: boolean | null;
       supportsNsfw: boolean | null;
+      supportsThinkLevel: boolean | null;
       maxContext: number | null;
       undetected: string[];
     }>;
@@ -336,6 +345,7 @@ export interface NianyuAPI {
   onBallUnread: (cb: (data: { count: number; items: BallUnreadItem[] }) => void) => () => void;
   offBallUnread: (cb: (data: any) => void) => void;
   onBallBlur: (cb: () => void) => () => void;
+  onBallVideoProgress: (cb: (data: { percent: number; statusText: string }) => void) => () => void;
   offBallBlur: (cb: () => void) => void;
 
   // ===== 世界书 =====
@@ -410,6 +420,11 @@ const api: NianyuAPI = {
   getChatList: () => ipcRenderer.invoke('chats:list'),
   getMessages: (type, id) => ipcRenderer.invoke('chats:messages', type, id),
   sendMessage: (p) => ipcRenderer.invoke('chats:send', p),
+  getChatModel: (chatType: string, chatId: string) => ipcRenderer.invoke('chat:getModel', chatType, chatId),
+  mcpStatus: () => ipcRenderer.invoke('mcp:status'),
+  mcpAdd: (p) => ipcRenderer.invoke('mcp:add', p),
+  mcpRemove: (key: string) => ipcRenderer.invoke('mcp:remove', key),
+  mcpToggle: (key: string, enabled: boolean) => ipcRenderer.invoke('mcp:toggle', key, enabled),
   sendUserMessage: (p) => ipcRenderer.invoke('chats:sendUser', p),
   sendAIMessages: (p) => ipcRenderer.invoke('chats:sendAI', p),
   startStream: (p) => ipcRenderer.invoke('chats:stream', p),
@@ -675,6 +690,7 @@ const api: NianyuAPI = {
   listModels: (cfg) => ipcRenderer.invoke('models:list', cfg),
   testModel: (cfg) => ipcRenderer.invoke('models:test', cfg),
   detectModel: (id, opts) => ipcRenderer.invoke('models:detect', id, opts),
+  detectModelConfig: (cfg, opts) => ipcRenderer.invoke('models:detectConfig', cfg, opts),
   detectAllModels: (opts) => ipcRenderer.invoke('models:detectAll', opts),
 
   transcribeAudio: (data) => ipcRenderer.invoke('audio:transcribe', data),
@@ -727,6 +743,11 @@ const api: NianyuAPI = {
     const listener = (_e: any, data: any) => cb(data);
     ipcRenderer.on('ball:unread', listener);
     return () => ipcRenderer.removeListener('ball:unread', listener);
+  },
+  onBallVideoProgress: (cb) => {
+    const listener = (_e: any, data: any) => cb(data);
+    ipcRenderer.on('ball:videoProgress', listener);
+    return () => ipcRenderer.removeListener('ball:videoProgress', listener);
   },
   offBallUnread: () => {},
   onBallBlur: (cb) => {

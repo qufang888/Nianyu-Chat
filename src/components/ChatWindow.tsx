@@ -25,6 +25,7 @@ import { useVoiceInput } from '../hooks/useVoiceInput';
 import { EVENT_COOLDOWN_MS, EVENT_TRIGGER_THRESHOLD } from '../eventThemes';
 import { getEventStore, setEventStore } from '../utils/eventStore';
 import { setIdleActivity } from '../utils/idleTimerStore';
+import { resolveWantStream, resolveStreamInfo, persistStreamToggle, type StreamPref } from '../utils/chatStream';
 import CustomScrollArea from './CustomScrollArea';
 import { ClearChatModal } from './ClearChatModal';
 import { MessageSearch } from './MessageSearch';
@@ -113,6 +114,8 @@ export const ChatWindow: React.FC<{
   // 长记忆 10 轮自动提炼计数器：当前聊天累计用户消息轮数（满 10 触发）
   const [autoMemRound, setAutoMemRound] = useState(0);
   const [enableStreaming, setEnableStreaming] = useState(false);
+  // 流式偏好的「来源」（model=模型独立设置 / global=跟随全局），用于按钮 tooltip
+  const [streamPref, setStreamPref] = useState<StreamPref>({ on: false, source: 'global' });
   const autoMemoryRef = useRef(false);
   const [hideReasoning, setHideReasoning] = useState(true);
   // 随机事件
@@ -159,7 +162,7 @@ export const ChatWindow: React.FC<{
   const [replyVisible, setReplyVisible] = useState(true);
   const [replyToMemory, setReplyToMemory] = useState(true);
   const [idleCountdown, setIdleCountdown] = useState(0); // 主动消息触发倒计时（秒）
-  const idleSwitchActionRef = useRef<'pause' | 'reset' | 'continue'>('pause'); // 切换聊天时的计时模式
+  const idleSwitchActionRef = useRef<'pause' | 'reset' | 'continue'>('continue'); // 切换聊天时的计时模式
 
 // 随机事件快捷主题见 ../eventThemes（主窗/小窗共用）
   const [chatBg, setChatBg] = useState<string | null>(null);
@@ -467,14 +470,21 @@ export const ChatWindow: React.FC<{
         }
         setGroupMoods(moods);
       }
-      setEnableStreaming(!!settings.enableStreaming);
+      // 流式开关显示「生效值」：模型独立 streamEnabled 优先，否则全局 enableStreaming
+      resolveStreamInfo(chatType, chatId)
+        .then((info) => {
+          setEnableStreaming(info.on);
+          setStreamPref(info);
+        })
+        .catch(() => {});
       autoMemoryRef.current = !!settings.enableAutoMemory;
       setHideReasoning(settings.hideReasoning !== false);
       setEnableRandomEvents(settings.enableRandomEvents !== false);
-      // 主动消息：全局主开关 × 当前聊天单独开关
+      // 主动消息：全局主开关 × 当前聊天单独开关 × 引擎（NHPP 接管时隐藏经典倒计时）
       const globalOn = settings.idleEnabled !== false;
+      const engine = settings.proactiveEngine || 'legacy';
       const perChat = (settings.chatIdleEnabled || {})[bgKey];
-      const eff = globalOn && (perChat === undefined ? true : perChat);
+      const eff = globalOn && engine !== 'nhpp' && (perChat === undefined ? true : perChat);
       setIdleReplyOn(eff);
       idleReplyOnRef.current = eff;
       // 随机模式初值取范围中点（后续以主进程广播的实际抽中间隔为准）
@@ -482,7 +492,7 @@ export const ChatWindow: React.FC<{
         settings.idleTimingMode === 'random'
           ? Math.round(((settings.idleRandomMinSec ?? 60) + (settings.idleRandomMaxSec ?? 1800)) / 2)
           : settings.idleInterval || 600;
-      idleSwitchActionRef.current = settings.idleSwitchAction || 'pause';
+      idleSwitchActionRef.current = settings.idleSwitchAction || 'continue';
       setGroupAutoChain(settings.groupAutoChain !== false);
       setGroupSelectReply(!!settings.groupSelectReply);
       setVoiceCfg({
@@ -549,9 +559,9 @@ export const ChatWindow: React.FC<{
     setSummarizing(true);
     try {
       const res = await api.summarizeMemories(chatType, chatId);
-      showToast(res.message, !res.ok);
+      showToast(res.message, { error: !res.ok });
     } catch (e: any) {
-      showToast(t('chat.summarizeFail', { msg: e?.message || String(e) }), true);
+      showToast(t('chat.summarizeFail', { msg: e?.message || String(e) }), { error: true });
     } finally {
       setSummarizing(false);
     }
@@ -604,8 +614,8 @@ export const ChatWindow: React.FC<{
       });
       inputRef.current.dispatchEvent(fakeEvent);
     };
-    window.addEventListener('keydown', onKeyDown, { error: true }); // capture 阶段拦截
-    return () => window.removeEventListener('keydown', onKeyDown, { error: true });
+    window.addEventListener('keydown', onKeyDown, { capture: true }); // capture 阶段拦截
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true });
   }, []);
 
   // 随机事件弹窗关闭后，若当前无其他模态/遮罩打开，立即把焦点归还聊天输入框
@@ -945,7 +955,13 @@ export const ChatWindow: React.FC<{
       if (!patch) return;
       const settings = await api.getSettings();
       const key = bgKey;
-      setEnableStreaming(!!settings.enableStreaming);
+      // 流式开关显示「生效值」：模型独立 streamEnabled 优先，否则全局 enableStreaming
+      resolveStreamInfo(chatType, chatId)
+        .then((info) => {
+          setEnableStreaming(info.on);
+          setStreamPref(info);
+        })
+        .catch(() => {});
       autoMemoryRef.current = !!settings.enableAutoMemory;
       setHideReasoning(settings.hideReasoning !== false);
       setEnableRandomEvents(settings.enableRandomEvents !== false);
@@ -960,7 +976,7 @@ export const ChatWindow: React.FC<{
         settings.idleTimingMode === 'random'
           ? Math.round(((settings.idleRandomMinSec ?? 60) + (settings.idleRandomMaxSec ?? 1800)) / 2)
           : settings.idleInterval || 600;
-      idleSwitchActionRef.current = settings.idleSwitchAction || 'pause';
+      idleSwitchActionRef.current = settings.idleSwitchAction || 'continue';
       setGroupAutoChain(settings.groupAutoChain !== false);
       setGroupSelectReply(!!settings.groupSelectReply);
       setVoiceCfg({
@@ -1131,11 +1147,11 @@ export const ChatWindow: React.FC<{
     };
     window.addEventListener('mousedown', close);
     window.addEventListener('resize', close);
-    window.addEventListener('scroll', close, { error: true });
+    window.addEventListener('scroll', close, { passive: true });
     return () => {
       window.removeEventListener('mousedown', close);
       window.removeEventListener('resize', close);
-      window.removeEventListener('scroll', close, { error: true });
+      window.removeEventListener('scroll', close); // capture 默认 false 与 add 一致；remove 不支持 passive 选项
     };
   }, [showPrivateMenu, showObserverConfig]);
 
@@ -1317,8 +1333,9 @@ export const ChatWindow: React.FC<{
     if (!forwardMsg) return;
     const prefix = `「转发自 ${name || chatId}」\n`;
     try {
-      const settings = await api.getSettings();
-      if (settings.enableStreaming) {
+      // 转发同样走「生效流式偏好」：模型独立设置优先，否则全局
+      const wantStream = await resolveWantStream(targetChatType, targetChatId);
+      if (wantStream) {
         await api.startStream({ chatType: targetChatType as ChatType, chatId: targetChatId, content: prefix + forwardMsg.content, imagePath: '' });
       } else {
         await api.sendMessage({ chatType: targetChatType as ChatType, chatId: targetChatId, content: prefix + forwardMsg.content, imagePath: '' });
@@ -1678,7 +1695,7 @@ export const ChatWindow: React.FC<{
 
   // 群聊仅剩 1 人 → 用户选择「保持群聊」：持久化忽略标记，此后再进入不再弹提示
   const handleKeepGroup = async () => {
-    await api.setGroupIgnoreConvert(chatId, { error: true });
+    await api.setGroupIgnoreConvert(chatId, true);
     setConvertPrompt(false);
   };
 
@@ -1774,7 +1791,12 @@ export const ChatWindow: React.FC<{
       audioRef.current?.pause();
       setSpeakingId(msg.id);
       showToast(t('chat.toastSpeaking'));
-      const src = await api.textToSpeech(msg.content, msg.role_id);
+      // 解析说话角色 id：单聊=当前聊天角色；群聊=按发送者名匹配成员（TTS 按角色音色合成）
+      const ttsRoleId =
+        chatType === 'single'
+          ? members[0]?.id || chatId
+          : members.find((r) => r.name === msg.sender_name)?.id;
+      const src = await api.textToSpeech(msg.content, ttsRoleId);
       const audio = new Audio(src);
       audioRef.current = audio;
       audio.onended = () => setSpeakingId((id) => (id === msg.id ? null : id));
@@ -2227,7 +2249,11 @@ export const ChatWindow: React.FC<{
         )}
         {allMessagesUnique.map((m, i) => {
           const sid = (m as any).streamId || streamMsgIdRef.current[String(m.id)];
-          const sr = sid ? searchResultsByStream[sid] : undefined;
+          // 搜索结果优先取随消息持久化的 search_results（每条回复自己的资料，重启后历史消息仍可点击引用），
+          // 否则回退到本次会话内存中按 streamId 分桶的结果
+          const msgSr = (m as any).search_results as SearchResultItem[] | undefined;
+          const sr = msgSr && msgSr.length ? msgSr : sid ? searchResultsByStream[sid] : undefined;
+          const expKey = sid || `msg-${m.id}`;
           return (
             <Fragment key={m.id}>
               <MessageRow
@@ -2257,20 +2283,21 @@ export const ChatWindow: React.FC<{
                 onMarkNode={storyOn ? markNode : undefined}
                 roleMood={chatType === 'group' && m.sender_type === 'ai' ? groupMoods[m.sender_name] : undefined}
                 searchResults={sr}
+                onOpenSearch={sr && sr.length > 0 ? () => setExpandedStreams((v) => ({ ...v, [expKey]: true })) : undefined}
               />
               {sr && sr.length > 0 && (
                 <div className="search-result-bubble" key={`sr-${m.id}`}>
                   <button
                     type="button"
                     className="srb-head"
-                    onClick={() => setExpandedStreams((v) => ({ ...v, [sid]: !v[sid] }))}
+                    onClick={() => setExpandedStreams((v) => ({ ...v, [expKey]: !v[expKey] }))}
                     title={t('chat.webSearchResultToggle')}
                   >
                     <span className="srb-icon">🌐</span>
                     <span className="srb-title">{t('chat.webSearchResultTitle', { n: sr.length })}</span>
-                    <span className="srb-chevron">{expandedStreams[sid] ? '▾' : '▸'}</span>
+                    <span className="srb-chevron">{expandedStreams[expKey] ? '▾' : '▸'}</span>
                   </button>
-                  {expandedStreams[sid] && (
+                  {expandedStreams[expKey] && (
                     <div className="srb-list">
                       {sr.map((r, i2) => (
                         <div
@@ -2425,11 +2452,23 @@ export const ChatWindow: React.FC<{
           </button>
           <button
             className={`tool-btn${enableStreaming ? ' active' : ''}`}
-            title={t('settings.enableStreaming')}
+            title={
+              streamPref.source === 'model'
+                ? t('chat.streamTipModel', { state: enableStreaming ? t('common.on') : t('common.off') })
+                : t('chat.streamTipGlobal', { state: enableStreaming ? t('common.on') : t('common.off') })
+            }
             onClick={() => {
               const next = !enableStreaming;
               setEnableStreaming(next);
-              api.saveSettings({ enableStreaming: next });
+              // 写到「生效来源」：模型已独立设置→写该模型；否则写全局
+              persistStreamToggle(chatType, chatId, next).catch(() => {});
+              // 本地立即重算来源提示（模型首次独立化后 source 变 model）
+              resolveStreamInfo(chatType, chatId)
+                .then((info) => {
+                  setEnableStreaming(info.on);
+                  setStreamPref(info);
+                })
+                .catch(() => {});
               showToast(t(next ? 'settings.streamingEnabled' : 'settings.streamingDisabled'), {
                 duration: 3000,
                 animation: 'linear',
@@ -2678,7 +2717,7 @@ export const ChatWindow: React.FC<{
           event={eventState}
           loading={eventLoading && !eventState}
           onChoose={(opt) => chooseOption(opt)}
-          onAutoChoose={(opt) => chooseOption(opt, { error: true })}
+          onAutoChoose={(opt) => chooseOption(opt, true)}
           onClose={() => {
             setEventState(null);
             setEventLoading(false);
@@ -2835,9 +2874,11 @@ const MessageRow: React.FC<{
   onMarkNode?: (msg: ChatMessage) => void;
   roleMood?: string;
   searchResults?: SearchResultItem[];
+  // 点击越界引用编号时展开本条回复下方的联网搜索结果列表
+  onOpenSearch?: () => void;
 }> = ({
   msg, onImage, prevTimestamp, modelName, avatarPath, userAvatarPath, showTts, speaking, typing, streaming, hideReasoning, onSpeak, onReasoningCopied,
-  onQuickMemory, onSaveImageMemory, onViewPrompt, onForward, onEdit, onRollback, onRecall, onCopy, onTranslate, onMarkNode, roleMood, searchResults,
+  onQuickMemory, onSaveImageMemory, onViewPrompt, onForward, onEdit, onRollback, onRecall, onCopy, onTranslate, onMarkNode, roleMood, searchResults, onOpenSearch,
 }) => {
   const { t } = useI18n();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -2935,13 +2976,17 @@ const MessageRow: React.FC<{
   const imgs = msg.images && msg.images.length ? msg.images : msg.image_path ? [msg.image_path] : [];
   const hasText = !!(msg.content && msg.content.trim());
 
-  // 联网搜索内联引用：仅 AI 消息、且本消息对应 stream 有搜索结果时启用 [n] 可点击
-  const citeCitations = (!isUser && searchResults && searchResults.length)
-    ? Object.fromEntries(searchResults.map((r, idx) => [idx + 1, r.url]))
+  // 联网搜索内联引用：仅 AI 消息启用 [n] 可点击。资料来源优先取随消息持久化的 search_results，
+  // 缺失时回退到本次会话内存中按 streamId 分桶的搜索结果（两者顺序都与注入模型的编号一致）
+  const msgSrSelf = (msg as any).search_results as SearchResultItem[] | undefined;
+  const citeSrc = msgSrSelf && msgSrSelf.length ? msgSrSelf : searchResults && searchResults.length ? searchResults : undefined;
+  const citeCitations = (!isUser && citeSrc && citeSrc.length)
+    ? Object.fromEntries(citeSrc.map((r, idx) => [idx + 1, r.url]))
     : undefined;
   const citeOnClick = citeCitations
     ? (url: string) => { try { api?.openExternal?.(url); } catch { /* web/Capacitor 构建无此接口时忽略 */ } }
     : undefined;
+  const citeOnMiss = citeCitations && onOpenSearch ? onOpenSearch : undefined;
 
   // 已撤回或失败消息特殊渲染
   if (recalled) {
@@ -2964,6 +3009,9 @@ const MessageRow: React.FC<{
         {!isUser && (
           <div className="sender">
             {msg.sender_name}
+            {msg.from_proactive && (
+              <span className="proactive-tag" title={t('msg.proactiveTitle')}>{t('msg.proactiveTag')}</span>
+            )}
             {roleMood && <span className="mood-tag">· {roleMood}</span>}
             {modelName && (
               <span className="model-tag">{t('chat.modelTag', { name: modelName })}</span>
@@ -2988,7 +3036,7 @@ const MessageRow: React.FC<{
                     onCopied={onReasoningCopied}
                   />
                 )}
-                {hasText && renderMarkdown(msg.content, { citations: citeCitations, onCite: citeOnClick })}
+                {hasText && renderMarkdown(msg.content, { citations: citeCitations, onCite: citeOnClick, onCiteMiss: citeOnMiss })}
                 {/* F6 修复：流式进行中始终在气泡内显示加载动画，避免「只有顶部横幅显示 AI 正在回复」 */}
                 {streaming && (
                   <span className="typing-inline" aria-label={t('chat.replying')} />
