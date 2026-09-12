@@ -13,17 +13,22 @@ export interface ModelConfig {
   apiKey: string;
   model: string; // 实际模型 ID，如 deepseek-reasoner
   maxContext: number; // 最大上下文长度（token）
-  temperature: number; // 0 - 2
+  // 温度（0~2）。可选：未设置=跟随全局默认（settings.globalModelParams.temperature），
+  // 全局也未设置时由 ai.ts 兜底 1.0。模型编辑器可单独覆盖，「恢复到全局设置」即清空此值。
+  temperature?: number;
+  // 模型级流式输出：undefined=跟随全局（settings.enableStreaming）；true/false=强制开/关（覆盖全局）
+  streamEnabled?: boolean;
   enabled: boolean;
   supportsImages?: boolean; // 是否支持图片输入（多模态视觉）：开启后用户发送的图片才会作为 image_url 内容块发给模型；关闭则图片仅作占位文本，绝不报错
   supportsReasoning?: boolean; // 是否标记该模型支持深度思考/推理（手动标记，替代早期「按模型名关键字猜测」）；开启且全局深度思考档位非 off 时，请求体写入 reasoning_effort
   supportsTools?: boolean; // 能力探针结果：是否支持工具调用（function calling / tool_calls）；开启后请求体可带 tools，AI 可触发工具
   supportsJson?: boolean; // 能力探针结果：是否支持 JSON 模式（response_format={"type":"json_object"}）；开启后可用于需要结构化输出的场景
+  supportsStream?: boolean; // 能力探针结果：是否支持流式输出（SSE）。false 时聊天对该模型自动走非流式，即使全局/模型开关为开
   lastDetectedAt?: number | null; // 最近一次能力探针时间戳（ms），null=从未检测；用于设置页展示「上次检测」
   qps?: number; // 每分钟请求上限，支持小数（如 0.5=每 120 秒 1 次）；0 或未设置=无限制；超出后请求延迟，限制解除后自动发送排队消息
   // ===== 采样与上下文高级参数（无极滑动 + 输入框直输）=====
-  topP?: number; // 核采样 top-p（0~1），不设置=使用模型默认
-  topK?: number; // 核采样 top-k（0~50），0=关闭
+  topP?: number; // 核采样 top-p（0~1）。未设置=跟随全局默认（globalModelParams.topP），全局也未设置=使用模型默认
+  topK?: number; // 核采样 top-k（0~50），0=关闭。未设置=跟随全局默认（globalModelParams.topK）
   maxTokens?: number; // 单次输出最大 token 数，不设置=使用软件内置兜底(1024)
   memReadLimit?: number; // 短期记忆：发送给模型的最近对话条数上限（0=不限制）
   // ===== 自定义请求参数（JSON 文本）=====
@@ -67,6 +72,8 @@ export interface ProbeOptions {
   tools?: boolean;
   json?: boolean;
   nsfw?: boolean;
+  stream?: boolean;
+  thinkLevel?: boolean; // 思考等级（reasoning_effort / thinking）：探测模型是否接受思考强度参数
 }
 
 export interface Role {
@@ -164,6 +171,7 @@ export interface ChatMessage {
   msg_kind?: 'public' | 'private'; // 观察者模式：公屏 / 私密小窗对话（默认 public）
   status?: 'normal' | 'recalled' | 'failed'; // 消息状态：正常 / 已撤回 / 发送失败
   from_proactive?: boolean; // 是否由主动消息机制产生（用于记忆控制：空闲主动发消息时此字段为 true）
+  search_results?: Array<{ title: string; url: string; snippet?: string }>; // 本条回复依据的联网搜索结果（与正文 [n] 编号一致），持久化后历史消息也能点击引用
   from_auto?: boolean; // 是否由「自动接话 / 续聊」产生：非用户直接请求的 AI 自发消息，仅用于悬浮球未读判定，不参与记忆控制
   genPrompt?: string; // 软件内生图时使用的提示词：仅 AI 生成的图片消息带此字段；手动发送的图片为空，用于右键「查看提示词」
   visibleToGroup?: boolean; // 群聊消息是否全群可见（默认 true）；false=仅用户与指定 AI 可见的私密备注
@@ -237,8 +245,18 @@ export interface VoiceSettings {
   // ===== ASR 上传格式（修复第三方 ASR 返回 400 的核心配置）=====
   asrFormat?: 'wav' | 'mp3' | 'webm' | 'm4a' | 'flac'; // 上传给服务器的音频容器格式；默认 wav（兼容性最好）
   asrLanguage?: string; // 可选：强制识别语言（如 zh / en），空=自动检测
-  // ===== 数字人角色独立音色（按角色配置 TTS 输出音色）=====
-  ttsVoices?: Record<string, string>; // key=数字人角色 id（roleId），value=音色名；按角色分别配置 TTS 音色，缺省回退到 ttsVoice
+  ttsScopes?: { dialogue?: boolean; narration?: boolean; psyche?: boolean }; // 朗读范围（全局）：勾选的类别才会被朗读；默认仅对话
+  ttsRegenerate?: boolean; // 朗读音频缓存：false（默认）=已合成过的文本直接复用音频，不重复调用 API 不消耗 token；true=每次重新合成
+  // ===== 数字人角色独立音色 / 语音 API（按角色配置 TTS 输出音色与调用端点）=====
+  ttsVoices?: Record<string, string | RoleTtsConfig>; // key=roleId；值为音色名（旧格式，兼容）或 RoleTtsConfig；缺省回退全局 voice 设置
+}
+
+// 按角色的 TTS 独立配置：未填写的字段回退全局 voice 设置（旧版纯音色名字符串自动兼容）
+export interface RoleTtsConfig {
+  voice?: string; // 音色名
+  baseUrl?: string; // 独立 TTS API baseUrl（空=用全局 ttsBaseUrl）
+  apiKey?: string; // 独立 TTS API Key（空=用全局 ttsApiKey）
+  model?: string; // 独立 TTS 模型名（空=用全局 ttsModel）
 }
 
 // 生图（专用图像生成 API）：拥有独立的 baseUrl/apiKey，与「模型配置中心」完全解耦，调用 OpenAI 兼容 /images/generations
@@ -306,8 +324,22 @@ export interface AppSettings {
   lastBackupTime: string | null;
   fontSize: number; // 全局 UI 字体大小(px)
   fontFamily: string; // 字体样式 key：见 FONT_FAMILIES
-  enableStreaming: boolean;
+  enableStreaming: boolean; // 全局流式输出开关（设置页）；模型可用 streamEnabled 单独覆盖
   streamParallel: number; // 群聊流式并行数量：1=顺序，3=适中，999=全部并行
+  // 全局模型参数（默认值）：模型编辑器内未单独设置的参数（温度/topP/topK）回退到这里。
+  // 模型一旦在编辑器内单独设置，即用独立值、不随全局调节；「恢复到全局设置」按钮清空独立值。
+  globalModelParams: {
+    temperature?: number; // 全局默认温度（0~2）
+    topP?: number; // 全局默认 top-p（0~1）；不设置=请求不带 top_p（用服务端模型默认）
+    topK?: number; // 全局默认 top-k（0~50）；0=不带 top_k
+  };
+  // ===== 主动消息引擎（v2.3.17 新增；与经典 idle 定时消息隔离，二选一）=====
+  proactiveEngine?: 'legacy' | 'nhpp'; // legacy=经典定时（默认，原机制不动）；nhpp=NHPP+贝叶斯智能调度
+  proactiveDnd?: { enabled?: boolean; start?: string; end?: string }; // 勿扰窗口（'HH:mm'，支持跨午夜）
+  proactiveDailyLimit?: number; // NHPP：每聊天每日主动消息硬上限（默认 5）
+  proactiveFreshnessMin?: number; // NHPP：距上一条消息不足 N 分钟不触发（默认 10）
+  // ===== MCP 服务器（v2.3.17 新增）=====
+  mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>;
   chatBackgrounds: Record<string, string>; // key: "single:roleId" or "group:groupId"
   chatSoundPaths: Record<string, string>; // 每个聊天的自定义通知铃声路径，key 同上。空 = 使用全局通知音
   backupDir: string; // 自定义备份目录（空 = 每次手动选择）
@@ -325,6 +357,9 @@ export interface AppSettings {
   worldBook: string; // 兼容旧版单世界书，迁移后清空
   defaultWorldBookId: string; // 全局默认世界书 id（空=不使用）
   chatWorldBooks: Record<string, string>; // 按聊天覆盖：key="single:roleId"/"group:groupId" -> worldBookId（''=继承角色/默认）
+  worldBookOrder?: string[]; // 世界书管理界面展示顺序（worldBook id 数组，拖拽排序；缺失的按原顺序追加在末尾）
+  pinnedChats?: string[]; // 置顶聊天（key="${chatType}:${chatId}"），聊天列表/悬浮球面板置顶展示
+  chatOrder?: string[]; // 手动拖动的聊天顺序（key 数组，按显示顺序；新聊天按后端顺序追加末尾）
   sharedRuleIds: string[]; // 共用规则（所有对话/模型遵守）
   enableAutoMemory: boolean; // AI 自动提炼记忆（默认关）
   longMemory: Record<string, boolean>; // 长记忆独立开关：key="single:roleId"/"group:groupId"，每聊天独立；开启后该聊天启用「手动让 AI 总结记忆」按钮（仅长记忆开时可用）
@@ -352,7 +387,8 @@ export interface AppSettings {
   idleRandomMinSec?: number; // 随机模式最小静默时长（秒）：钳制 1~86400（1 秒 ~ 24 小时），默认 60
   idleRandomMaxSec?: number; // 随机模式最大静默时长（秒）：钳制 1~86400 且 ≥ 最小值，默认 1800
   idleWriteMemory: boolean; // 主动消息是否参与 AI 自动记忆提炼（默认 false）
-  idleSwitchAction: 'pause' | 'reset' | 'continue'; // 切换聊天时主动消息计时行为：暂停/重置/继续（全局，默认 pause）
+  idleSwitchAction: 'pause' | 'reset' | 'continue'; // 切换聊天时主动消息计时行为：继续（默认，每聊天独立后台触发）/暂停/重置
+  idleCooldownUntilReply?: boolean; // 主动消息冷却：发出主动消息后，用户在该聊天回复前不再触发（默认 true；按聊天独立）
   eventMoodImpact: number; // 随机事件影响心情的程度（0~1）：0=事件只改好感度，1=事件必按所选心情改变角色心情
   dialogueMoodImpact: number; // 对话影响心情的程度（0~1）：0=心情只由事件决定，1=AI 充分依据对话判定当前心情
   autoRelationship: boolean; // AI 依据聊天内容自动判定关系值/关系类别（关闭则不更新，纯展示）
@@ -392,6 +428,8 @@ export interface AppSettings {
   // ===== 关闭主界面行为 =====
   closeToTray: boolean; // 关闭主界面时：true=最小化到托盘继续运行；false=直接退出程序。设置内即时生效
   closeConfirmDone: boolean; // 是否已走过「首次关闭提示」并勾选「不再提示」；false 时首次点关闭会弹提示框
+  // ===== 开机自启动 =====
+  launchOnBoot?: boolean; // 系统启动时自动运行念语（默认开），可在设置中关闭
   // ===== 开屏动画（仅首次启动展示一次）=====
   hasShownSplash?: boolean; // 为 true 后，之后启动不再展示开屏动画
   // ===== 桌面悬浮球 =====
@@ -427,6 +465,12 @@ export interface AppSettings {
   sceneImageIntervalSec: number; // 两次生图最小间隔（秒），设置内可调节
   sceneImageJudge: 'llm' | 'heuristic'; // 场景判定方式：'llm'=轻量模型判定（最准，耗 token）；'heuristic'=关键词/情绪启发式（零成本）
   asyncImageUseAvatar: boolean; // 异步生图时自动读取 AI 人物头像作为参考，使生成形象更贴近角色（无关内容时不影响图片）
+  // ===== 调试模式 / 内置内容 =====
+  debugMode?: boolean; // 调试模式：进入时快照数据，会话内修改在退出时全部恢复（不生效），并输出错误报告
+  builtinSeeded?: boolean; // 内置人物卡/世界书是否已注入（只注入一次，删除后不复活）
+  // ===== 自动生图/生视频前的调用确认（仅自动流程生效；手动生图生视频不弹）=====
+  confirmBeforeAutoImage: boolean; // 自动生图（异步场景生图 / 朋友圈自动配图）调用模型前先弹确认框取得许可
+  confirmBeforeAutoVideo: boolean; // 自动生视频（朋友圈自动配视频）调用模型前先弹确认框取得许可
   // ===== 插件系统 =====
   pluginAllowJs: boolean; // 允许本地 JS 插件（默认关；开启有 RCE 风险，需弹窗确认）
   // ===== 联网搜索（类 DeepSeek，上下文注入式）=====
@@ -509,8 +553,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   lastBackupTime: null,
   fontSize: 14,
   fontFamily: 'system',
-  enableStreaming: false,
+  enableStreaming: true, // 全局流式输出默认开启（v2.3.16 起；已保存过设置的老用户不受影响）
   streamParallel: 1,
+  globalModelParams: { temperature: 1.0, topP: 0.95, topK: 50 }, // 全局模型参数默认值（模型未单独设置时生效）
+  proactiveEngine: 'legacy', // 主动消息机制默认经典定时；NHPP 智能调度可在设置中切换
   chatBackgrounds: {},
   chatSoundPaths: {},
   backupDir: '',
@@ -529,6 +575,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     asrFormat: 'wav',
     asrLanguage: '',
     ttsVoices: {},
+    ttsScopes: { dialogue: true, narration: false, psyche: false }, // 朗读范围默认仅对话
+    ttsRegenerate: false, // 默认复用已合成音频（重复朗读不消耗 token）
   },
   miniWindow: {
     enabled: true,
@@ -557,6 +605,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sceneImageIntervalSec: 120,
   sceneImageJudge: 'llm',
   asyncImageUseAvatar: true,
+  // ===== 自动生图/生视频调用确认默认值（默认开启，需用户许可才调用模型）=====
+  confirmBeforeAutoImage: true,
+  confirmBeforeAutoVideo: true,
+  debugMode: false,
+  builtinSeeded: false,
   // ===== 插件系统默认值 =====
   pluginAllowJs: false,
   // ===== 联网搜索默认值 =====
@@ -598,7 +651,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   idleRandomMinSec: 60,
   idleRandomMaxSec: 1800,
   idleWriteMemory: false,
-  idleSwitchAction: 'pause',
+  idleSwitchAction: 'continue', // 默认「继续计时」：每个聊天独立计时并可在后台触发（主动消息类 IM 化）
+  idleCooldownUntilReply: true, // 主动消息冷却默认开启：用户回复上一条主动消息后才发下一条
   eventMoodImpact: 1,
   dialogueMoodImpact: 1,
   moodJudgeCooldownMs: 20000,
@@ -633,6 +687,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   silent: false,
   closeToTray: true,
   closeConfirmDone: false,
+  launchOnBoot: true, // 开机自启动默认开启
   hasShownSplash: false,
   floatingBall: { enabled: true, x: 0, y: 0, alwaysOnTop: true, autoHideInFullscreen: true },
   customCursor: {
