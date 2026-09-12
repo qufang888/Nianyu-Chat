@@ -256,6 +256,46 @@ input[type='range']::-moz-range-thumb {
   border-radius: 8px;
   font-size: calc(18px * var(--font-scale));
 }
+.list-header .btn-collapse {
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: calc(18px * var(--font-scale));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+}
+.list-header .btn-collapse:hover,
+.list-header .btn-add:hover {
+  filter: brightness(1.08);
+}
+
+/* 聊天侧边栏收起后的恢复按钮：渲染在左侧导航图标列底部（设置图标下方），视觉与导航项一致 */
+.sidebar-restore {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  border: none;
+  background: transparent;
+  color: var(--color-nav-icon);
+  font-size: calc(22px * var(--font-scale));
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: all var(--transition);
+}
+.sidebar-restore:hover {
+  background: var(--color-hover);
+  color: var(--color-nav-active);
+}
 .list-scroll {
   flex: 1;
   overflow-y: auto;
@@ -297,6 +337,29 @@ input[type='range']::-moz-range-thumb {
 }
 .list-item.active {
   background: var(--color-hover);
+}
+
+/* 聊天置顶：📌角标 + 轻底色，拖拽排序时的视觉指示 */
+.list-item .list-pin {
+  position: absolute;
+  top: 4px;
+  left: 8px;
+  font-size: calc(10px * var(--font-scale));
+  line-height: 1;
+  opacity: 0.9;
+  pointer-events: none;
+}
+.list-item.pinned {
+  background: color-mix(in srgb, var(--color-primary, #3a8fd0) 7%, transparent);
+}
+.list-item.pinned.active {
+  background: var(--color-hover);
+}
+.list-item.dragging {
+  opacity: 0.45;
+}
+.list-item.drag-over {
+  box-shadow: inset 0 2px 0 var(--color-primary);
 }
 .avatar {
   width: 44px;
@@ -417,6 +480,23 @@ input[type='range']::-moz-range-thumb {
   margin-left: 8px;
   font-weight: 400;
   white-space: nowrap;
+}
+
+/* 主动消息标记：AI 自发（非回复用户）的消息在发送者名旁标注 ⚡主动 */
+/* 颜色全部走主题变量，明暗/毛玻璃等主题自动适配 */
+.proactive-tag {
+  font-size: calc(10px * var(--font-scale));
+  color: var(--color-primary);
+  background: var(--color-hover);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 1px 7px;
+  margin-left: 8px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+.proactive-tag::before {
+  content: '⚡ ';
 }
 
 /* 右侧主区 */
@@ -579,6 +659,33 @@ input[type='range']::-moz-range-thumb {
 .narration {
   font-style: italic;
   color: var(--color-text-muted);
+}
+/* 人物心理（「」包裹）：与旁白同为次要文本，色调区分（v2.3.19） */
+.psyche {
+  font-style: italic;
+  color: var(--color-text-secondary);
+  opacity: 0.92;
+}
+
+/* ===== 流式逐字渐显（v2.3.19） =====
+   每个新输出的字固定 0.3s 渐显，速度不随模型输出快慢变化；
+   模型输出停滞（超过一个动画周期无新字）时，仅最后一个字切换为
+   渐隐 0.5s + 渐显 0.5s 的闪烁过渡；此前已生成的字绝不参与动画。 */
+.stream-char {
+  display: inline;
+  animation: nyCharIn 0.3s ease both;
+}
+@keyframes nyCharIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.stream-char.stall {
+  animation: nyCharBlink 1s ease-in-out infinite;
+}
+@keyframes nyCharBlink {
+  0% { opacity: 1; }
+  50% { opacity: 0; }
+  100% { opacity: 1; }
 }
 /* 气泡上方发送时间：同一分钟仅顶部显示 */
 .msg-time-above {
@@ -1291,6 +1398,11 @@ input[type='range']::-moz-range-thumb {
 .cite-badge:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 1px;
+}
+/* 越界引用徽标（模型标了编号但无对应搜索结果）：视觉弱化，点击展开搜索结果列表 */
+.cite-badge-miss {
+  opacity: 0.55;
+  font-weight: 400;
 }
 .srb-item {
   cursor: pointer;
@@ -3101,7 +3213,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 /* ===== 消息查找（主窗 + 小窗共用） ===== */
 .msg-search {
   flex-shrink: 0;
-  background: var(--color-surface, #fff);
+  background: var(--color-panel, #fff);
   border-bottom: 1px solid var(--color-border, #eee);
   padding: 8px 10px;
 }
@@ -3452,7 +3564,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 }
 .settings-header-search .settings-search-input {
   width: 220px;
-  background: var(--color-bg-input, rgba(128, 128, 128, 0.10));
+  background: var(--color-input-bg, rgba(128, 128, 128, 0.10));
 }
 .section-title { scroll-margin-top: 16px; }
 .settings-search-input {
@@ -3461,7 +3573,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   padding: 9px 14px;
   font-size: 13px;
   color: var(--color-text, #1a1d24);
-  background: var(--color-bg-input, rgba(128, 128, 128, 0.10));
+  background: var(--color-input-bg, rgba(128, 128, 128, 0.10));
   border: 1px solid var(--color-border, rgba(128, 128, 128, 0.25));
   border-radius: 10px;
   outline: none;
@@ -3480,7 +3592,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   top: calc(100% + 6px);
   max-height: 240px;
   overflow-y: auto;
-  background: rgba(140, 145, 165, 0.22);
+  background: var(--color-panel-alt, rgba(140, 145, 165, 0.22));
   backdrop-filter: blur(20px) saturate(160%);
   -webkit-backdrop-filter: blur(20px) saturate(160%);
   border: 1px solid var(--color-border, rgba(255, 255, 255, 0.22));
@@ -3499,7 +3611,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   cursor: pointer;
   transition: background 0.12s;
 }
-.settings-suggest-item:hover { background: rgba(255, 255, 255, 0.18); }
+.settings-suggest-item:hover { background: var(--color-hover, rgba(255, 255, 255, 0.18)); }
 .settings-suggest-empty { padding: 10px 12px; font-size: 12.5px; color: var(--color-text-secondary, #888); }
 .search-hl {
   background: var(--color-primary, #3a8fd0);
@@ -3515,6 +3627,24 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 @keyframes settingFlash {
   0% { background: var(--color-primary, #3a8fd0); box-shadow: 0 0 0 4px var(--color-primary-shadow, rgba(58, 143, 208, 0.4)); }
   100% { background: transparent; box-shadow: 0 0 0 0 transparent; }
+}
+
+/* 模型管理页：点击搜索结果后目标模型卡片高亮闪动 3 秒（3 次 1s 脉冲） */
+.model-flash {
+  animation: modelFlash 1s ease-out 3;
+  border-radius: var(--radius-sm, 8px);
+}
+@keyframes modelFlash {
+  0% { background: var(--color-primary, #3a8fd0); box-shadow: 0 0 0 4px var(--color-primary-shadow, rgba(58, 143, 208, 0.4)); }
+  100% { background: var(--color-panel-alt); box-shadow: 0 0 0 0 transparent; }
+}
+
+/* 世界书管理：拖拽排序视觉指示 */
+.lib-item.dragging {
+  opacity: 0.45;
+}
+.lib-item.drag-over {
+  box-shadow: inset 0 2px 0 var(--color-primary);
 }
 
 /* ===== 毛玻璃主题下浮层面板统一加深：防止下方内容穿透导致文字重叠 ===== */

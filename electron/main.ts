@@ -19,6 +19,7 @@ import {
   listModels,
   testConnection,
   detectCapabilities,
+  listPollyVoices,
   CapabilityProbeResult,
   ProbeOptions,
   AIMessage,
@@ -29,6 +30,7 @@ import {
   generateImage,
   generateVideo,
   setDeepThinkLevel,
+  setAiSettingsProvider,
   AUTOCOMPLETE_SYS_PROMPT_IMAGE,
   AUTOCOMPLETE_SYS_PROMPT_VIDEO,
   AUTOCOMPLETE_MAX_TOKENS,
@@ -38,6 +40,7 @@ import {
 import { createBackup, restoreBackup } from './backup';
 import { parseCharacterCard, parseCharacterCardText } from '../src/utils/characterCard';
 import { diagnoseError } from '../src/utils/errorDiagnosis';
+import { initProactiveEngine, rescheduleProactive, extractPendingCallback, heartbeatProactive } from './proactive';
 import type {
   Role,
   ChatMessage,
@@ -65,7 +68,9 @@ import {
   showFloatingBall,
   hideFloatingBall,
   setActiveChat,
+  sendBallVideoProgress,
 } from './floatingBall';
+import { seedBuiltinContent } from './builtinContent';
 
 // 媒体生成（生图/生视频）完成写入 AI 消息后补未读：仅主窗不可见 / 未正盯该聊天时计入，
 // 防止「结果已生成但悬浮球未读清单没显示」。头像按聊天类型解析（单聊取角色，群聊无头像留空）。
@@ -359,6 +364,7 @@ function createWindow(opts?: { coldStart?: boolean }): void {
     // ===== 无边框自定义窗口 =====
     frame: false,
     titleBarStyle: 'hidden',
+    transparent: true, // 启用窗口透明（必须显式开启，否则 backgroundColor 全透明会被渲染成纯黑窗）
     backgroundColor: '#00000000', // 全透明背景，支撑毛玻璃半透明与圆角
     roundedCorners: true, // Windows 11 原生圆角
     hasShadow: true, // 保留窗口阴影
@@ -483,6 +489,7 @@ function createMiniWindow(): void {
     // 与主窗一致的无边框 + 透明 + 圆角 + 阴影
     frame: false,
     titleBarStyle: 'hidden',
+    transparent: true, // 启用窗口透明（与主窗一致，否则全透明背景会渲染成纯黑窗）
     backgroundColor: '#00000000',
     roundedCorners: true,
     hasShadow: true,
@@ -1070,6 +1077,58 @@ function saveGeneratedImage(b64: string): string | null {
   }
 }
 
+// 主进程内直接弹出确认框（与 app:confirm 完全一致：question 图标 + OK/Cancel）。
+// 供自动生图 / 自动生视频等后台流程在调用模型前取得用户许可（手动生图生视频不走这里）。
+async function confirmFromMain(message: string, title?: string): Promise<boolean> {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  const res = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    buttons: ['OK', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+    title: title || '确认',
+    message: message || '',
+  });
+  // 原生对话框关闭后会破坏渲染器输入框的焦点路由：键击无法进入任何输入框，
+  // 直到窗口失去并重新获得 OS 焦点才恢复。此处主动重置窗口 OS 焦点修复该问题。
+  try {
+    mainWindow.focus();
+    mainWindow.webContents.focus();
+  } catch {
+    /* 窗口可能已销毁，忽略 */
+  }
+  return res.response === 0;
+}
+
+// 自动生图 / 生视频调用模型前的许可判定：
+//  - 设置在「生图/生视频」各自独立开关中关闭提醒时直接放行；
+//  - 否则弹确认框取得许可（与恢复出厂设置同一类确认框）；
+//  - 手动生图生视频不调用本函数，故不受影响。
+async function allowAutoGeneration(kind: 'image' | 'video', scene: string): Promise<boolean> {
+  const s = dm.getSettings();
+  const needConfirm = kind === 'image' ? s.confirmBeforeAutoImage !== false : s.confirmBeforeAutoVideo !== false;
+  if (!needConfirm) return true;
+  const what = kind === 'image' ? '生图' : '生视频';
+  return confirmFromMain(
+    `即将在「${scene}」自动${what}，需要调用${kind === 'image' ? '图像生成' : '视频生成'}模型并可能产生费用。是否允许本次调用？`,
+    `自动${what}确认`
+  );
+}
+
+// 朗读缓存键：双哈希（djb2 + FNV-1a）拼接，避免引入 crypto 依赖；碰撞概率可忽略
+function ttsCacheKey(baseUrl: string, model: string, voice: string, text: string): string {
+  const s = `${baseUrl}|${model}|${voice}|${text}`;
+  let h1 = 5381;
+  let h2 = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = ((h1 << 5) + h1 + c) >>> 0;
+    h2 = ((h2 ^ c) >>> 0);
+    h2 = Math.imul(h2, 0x01000193) >>> 0;
+  }
+  return h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0') + '_' + s.length.toString(36);
+}
+
 // 计算某聊天的「内容快照」：取最近若干条消息的 id+内容拼接，用于判断自上次关系判定后是否有新聊天内容。
 function computeChatSnapshot(chatType: string, chatId: string): string {
   const msgs = dm.getMessages(chatType, chatId).slice(-50);
@@ -1238,7 +1297,8 @@ async function judgeAndPostMoments(
     if (todayCount >= perCharLimit) break; // 自动触发达单人物每日上限即暂停；手动触发无上限
     if (!mm || typeof mm.content !== 'string' || !mm.content.trim()) continue;
     const images: string[] = [];
-    if (mm.needImage && igCfg) {
+    // 自动生图前先取得用户许可（未获许可则降级为纯文字动态；手动生图不受影响）
+    if (mm.needImage && igCfg && (await allowAutoGeneration('image', '朋友圈自动配图'))) {
       try {
         const { b64 } = await generateImage(
           { baseUrl: igCfg.baseUrl, apiKey: igCfg.apiKey },
@@ -1264,7 +1324,10 @@ async function judgeAndPostMoments(
       vg && vg.enabled && vg.baseUrl && vg.apiKey &&
       mm.needVideo && String(mm.videoPrompt || '').trim()
     ) {
-      void runMomentVideoJob(role.id, momentId, String(mm.videoPrompt || mm.content).slice(0, 400));
+      // 自动生视频前先取得用户许可（未获许可则跳过配视频；手动生视频不受影响）
+      if (await allowAutoGeneration('video', '朋友圈自动配视频')) {
+        void runMomentVideoJob(role.id, momentId, String(mm.videoPrompt || mm.content).slice(0, 400));
+      }
     }
   }
   if (added > 0) {
@@ -1377,6 +1440,11 @@ async function triggerSceneImage(chatType: string, chatId: string, roleId: strin
     judge = await judgeSceneImageLLM(role, cfg, recent);
   }
   if (!judge.should || !judge.prompt) return;
+  // 异步场景生图前先取得用户许可。未获许可则跳过本次并按间隔冷却（避免反复弹窗打扰），手动生图不受影响
+  if (!(await allowAutoGeneration('image', '异步场景生图'))) {
+    lastSceneImageAt.set(key, now);
+    return;
+  }
   lastSceneImageAt.set(key, now); // 先占位，避免并发重复生成
   // 自动读取人物头像作为参考图（仅当开启且场景涉及人物时），使生成形象更贴近角色；无关场景不传，不影响内容
   let referenceImages: string[] | undefined;
@@ -2228,16 +2296,29 @@ function resolveMembers(chatType: string, chatId: string, content: string): Role
   return memberRoles;
 }
 
+// 全局模型参数解析：模型未单独设置的参数（温度/topP/topK）回退到 settings.globalModelParams。
+// 在模型解析出口统一应用，所有聊天/内部功能调用点自动生效；模型一旦单独设置即用独立值。
+function effectiveModel(cfg: ModelConfig, settings: AppSettings): ModelConfig {
+  const g = settings.globalModelParams || {};
+  return {
+    ...cfg,
+    temperature: cfg.temperature ?? g.temperature,
+    topP: cfg.topP ?? g.topP,
+    topK: cfg.topK ?? g.topK,
+  };
+}
+
 function resolveRoleModel(role: Role, settings: AppSettings): ModelConfig | undefined {
-  return (
+  const cfg =
     settings.models.find((m) => m.id === role.model_config_id && m.enabled) ||
-    settings.models.find((m) => m.id === settings.defaultModel && m.enabled)
-  );
+    settings.models.find((m) => m.id === settings.defaultModel && m.enabled);
+  return cfg ? effectiveModel(cfg, settings) : undefined;
 }
 
 // 取设置里的默认模型配置（随机事件一律用默认 AI 生成，不计入聊天消耗）
 function getDefaultModelConfig(settings: AppSettings): ModelConfig | undefined {
-  return settings.models.find((m) => m.id === settings.defaultModel && m.enabled);
+  const cfg = settings.models.find((m) => m.id === settings.defaultModel && m.enabled);
+  return cfg ? effectiveModel(cfg, settings) : undefined;
 }
 
 // 解析当前对话实际使用的「自我身份」：
@@ -2302,6 +2383,12 @@ function addUserMessage(p: {
   });
   // 广播用户消息到所有窗口（让 MiniChat 发出的图片在小窗/主窗同步显示）
   broadcast('stream:user', msg);
+  // 用户在该聊天发言：解除主动消息冷却（idleCooldownUntilReply），允许下一条主动消息
+  proactiveAwaitingReply.delete(`${p.chatType}:${p.chatId}`);
+  // NHPP 主动消息引擎：用户交互 → 重算候选时刻 + 抽取显式承诺（待回访）。
+  // 仅 settings.proactiveEngine === 'nhpp' 时生效；经典 idle 定时机制不受影响。
+  rescheduleProactive(p.chatType, p.chatId);
+  extractPendingCallback(p.chatType, p.chatId, p.content || '');
   return msg;
 }
 
@@ -2470,9 +2557,11 @@ async function generateAIResponses(
 
   // 联网搜索：每个聊天每次只检索一次，结果作为上下文注入所有成员的回复
   let searchCtx: string | null = null;
+  let searchPages: SearchResult[] | null = null; // 随消息持久化（search_results），历史消息也能点击引用编号
   if (settings.webSearchChats?.[`${p.chatType}:${p.chatId}`]) {
     const sp = await fetchSearchContext(p.chatType, p.chatId, p.content, settings);
     searchCtx = sp?.context ?? null;
+    searchPages = sp?.pages ?? null;
   }
   // 已启用插件的提示词片段（声明式，全局生效）
   const pluginCtx = getEnabledPluginContext();
@@ -2544,6 +2633,7 @@ ${searchContext}`
         image_path: null,
         token_used: res.promptTokens + res.completionTokens,
         timestamp: new Date().toISOString(),
+        search_results: searchPages || undefined,
       });
       sendStreamDone(streamId, aiMsg);
       void requestMoodJudge(p.chatType, p.chatId, role.id);
@@ -2622,6 +2712,9 @@ async function handleSendUser(p: {
 
 // 进行中的流式生成控制器，按 chatId 归组；删除聊天时整体中止，杜绝孤儿流继续写库
 const streamControllers = new Map<string, AbortController>();
+// 主动消息冷却表（chatKey 集合）：发出主动消息后加入，用户在该聊天回复后移除。
+// idleCooldownUntilReply 开启时，调度器跳过仍在冷却中的聊天（每个聊天独立冷却）。
+const proactiveAwaitingReply = new Set<string>();
 function registerStream(chatId: string, c: AbortController): void {
   const prev = streamControllers.get(chatId);
   if (prev && prev !== c) prev.abort(); // 同一聊天只保留一条进行中生成
@@ -2693,9 +2786,11 @@ async function handleStream(p: {
 
   // 联网搜索：每个聊天每次只检索一次，结果作为上下文注入所有成员的回复
   let searchCtx: string | null = null;
+  let searchPages: SearchResult[] | null = null; // 随消息持久化（search_results），历史消息也能点击引用编号
   if (settings.webSearchChats?.[`${p.chatType}:${p.chatId}`]) {
     const sp = await fetchSearchContext(p.chatType, p.chatId, p.content, settings);
     searchCtx = sp?.context ?? null;
+    searchPages = sp?.pages ?? null;
   }
   // 已启用插件的提示词片段（声明式，全局生效）
   const pluginCtx = getEnabledPluginContext();
@@ -2780,6 +2875,7 @@ ${searchContext}`
         image_path: null,
         token_used: tokens,
         timestamp: new Date().toISOString(),
+        search_results: searchPages || undefined,
       });
       sendStreamDone(streamId, aiMsg);
       if (!interrupted) void requestMoodJudge(p.chatType, p.chatId, role.id);
@@ -2791,8 +2887,8 @@ ${searchContext}`
       const wait = rateWaitMs(cfg.id);
       if (wait > 0) await sleep(wait);
       rateMark(cfg.id);
-      // Anthropic 不支持流式，回退到非流式（一次性整段）
-      if (cfg.provider === 'anthropic') {
+      // Anthropic 不支持流式，或能力探针判定该模型不支持流式 → 回退到非流式（一次性整段）
+      if (cfg.provider === 'anthropic' || cfg.supportsStream === false) {
         const res = await queryAI(cfg, messages, 1024);
         if (res.error) {
           // 模型回复错误：不进聊天框、不进记忆；用气泡通知用户
@@ -3012,7 +3108,8 @@ async function handleGroupContinue(
     let usedPrompt = 0;
     let usedCompletion = 0;
     let reasoning: string | undefined;
-      if (cfg.provider === 'anthropic') {
+      // Anthropic 不支持流式，或能力探针判定该模型不支持流式 → 回退到非流式
+      if (cfg.provider === 'anthropic' || cfg.supportsStream === false) {
         const wait = rateWaitMs(cfg.id);
         if (wait > 0) await sleep(wait);
         rateMark(cfg.id);
@@ -3098,6 +3195,7 @@ async function handleGroupContinue(
 async function handleProactive(p: {
   chatType: string;
   chatId: string;
+  extraInstruction?: string; // NHPP 定向回访：附加上下文指令（普通主动消息不传，行为不变）
 }): Promise<{ ok: boolean; roleId?: string; roleName?: string; error?: string }> {
   const settings = dm.getSettings();
   // 全局主开关 + 按聊天单独开关：任一关闭则不主动发消息
@@ -3132,8 +3230,10 @@ async function handleProactive(p: {
   // 观察者模式「记忆冻结」：对局内不读取外部世界书
   const obs = isGroup ? getObserverConfig('group', p.chatId) : null;
   const worldBook = obs?.freezeMemory ? '' : resolveWorldBook(p.chatType, p.chatId, settings);
-  // 主动发言指令：贴合刚才的对话氛围与「当前心情」，自然开口；不等待用户提问
+  // 主动发言指令：贴合刚才的对话氛围与「当前心情」，自然开口；不等待用户提问。
+  // NHPP 定向回访时 extraInstruction 提供具体回访语境（覆盖默认泛化指令）。
   const instruction =
+    p.extraInstruction ||
     '（主动发起）你注意到用户暂时没有说话。请结合刚才的对话氛围与你当前的【情绪】，' +
     '主动向用户发一条自然、贴合情境的消息：可以延续刚才的话题，也可以自然地开启一个新话题。' +
     '直接说话，不要加任何前缀、括号说明或「用户不在」之类的元描述。';
@@ -3198,6 +3298,8 @@ async function handleProactive(p: {
       from_proactive: true,
     } as any);
     sendStreamDone(streamId, aiMsg);
+    // 主动消息冷却：记录该聊天等待用户回复（idleCooldownUntilReply 开启时阻止下一条主动消息）
+    proactiveAwaitingReply.add(`${p.chatType}:${p.chatId}`);
     void requestMoodJudge(p.chatType, p.chatId, role.id);
     void requestRelationshipAndMoments(p.chatType, p.chatId, role.id);
     void triggerSceneImage(p.chatType, p.chatId, role.id);
@@ -3402,6 +3504,21 @@ async function handleChooseEvent(p: {
     if (res) mood = res.label;
   }
   logEmotionIfObserver(p.chatType, p.chatId, p.roleId); // 记录对局情绪轨迹（事件也会改变好感/心情）
+  // 事件本身 + 用户所选选项写入角色记忆（未选择的选项不写入）。
+  // 遵循角色「记忆隔离」：开启（默认）时 chatId=当前聊天（对话间互相独立），关闭则写入角色级共享记忆。
+  try {
+    const iso = role.memoryIsolation ?? true;
+    const memContent = `随机事件：${p.eventText}\n我的选择：${p.choiceText}`;
+    dm.addMemory({
+      roleId: p.roleId,
+      chatId: iso ? p.chatId : undefined,
+      content: memContent,
+      source: 'auto',
+    } as any);
+  } catch (e: any) {
+    // 记忆写入失败不影响事件选择流程本身
+    console.error('[event] 写入事件记忆失败', e?.message || e);
+  }
   activeEvents.delete(p.chatId); // 选完即关闭该聊天的事件占用
   // 在聊天中插入系统消息通知好感/情绪变化
   const moodNote = p.mood ? ` · 心情 → ${mood}` : '';
@@ -4019,6 +4136,7 @@ async function runVideoGenJob(chatType: string, chatId: string, prompt: string, 
       throw new Error('未配置生视频 API，请在设置中开启「生视频」并填写独立的 Base URL 与 API Key');
     }
     broadcast('video:progress', { chatType, chatId, prompt, percent: 0, status: 'queued' });
+    sendBallVideoProgress(0, 'queued'); // 悬浮球显示轮巡进度（仅显示）
     const { url } = await generateVideo(
       { baseUrl: vg.baseUrl, apiKey: vg.apiKey },
       prompt,
@@ -4026,8 +4144,10 @@ async function runVideoGenJob(chatType: string, chatId: string, prompt: string, 
       vg.size || '1280x720',
       vg.duration || '5',
       refDataUrl ? [refDataUrl] : undefined,
-      (percent, status) =>
-        broadcast('video:progress', { chatType, chatId, prompt, percent, status: status || 'generating' })
+      (percent, status) => {
+        broadcast('video:progress', { chatType, chatId, prompt, percent, status: status || 'generating' });
+        sendBallVideoProgress(percent, status);
+      }
     );
     let videoPath: string | null = null;
     if (url) {
@@ -4061,9 +4181,20 @@ async function runVideoGenJob(chatType: string, chatId: string, prompt: string, 
     broadcast('stream:user', aiMsg);
     broadcast('video:done', { chatType, chatId, prompt, ok: true, imagePath: videoPath });
     pushMediaUnread(chatType, chatId, aiName, 'video'); // 主窗不可见/未盯该聊天则补未读
+    // 桌面提示：视频已生成完成，点击卡片跳回该视频所在的聊天
+    const lang1 = dm.getSettings().lang === 'en' ? 'en' : 'zh';
+    showNotifyCard({
+      chatType,
+      chatId,
+      roleName: aiName,
+      name: aiName,
+      content: lang1 === 'en' ? 'Video generated' : '视频已生成完成',
+    });
   } catch (e: any) {
     console.error('[nianyu] 生视频失败', e?.message || e);
     broadcast('video:done', { chatType, chatId, prompt, ok: false, error: e?.message || String(e) });
+  } finally {
+    sendBallVideoProgress(-1); // 生成结束（成功/失败）：悬浮球图标恢复常态
   }
 }
 
@@ -4074,6 +4205,7 @@ async function runMomentVideoJob(roleId: string, momentId: number, prompt: strin
   if (!s.momentsVideoEnabled || !vg || !vg.enabled || !vg.baseUrl || !vg.apiKey) return;
   try {
     broadcast('video:progress', { chatType: 'moments', chatId: roleId, prompt, percent: 0, status: 'queued' });
+    sendBallVideoProgress(0, 'queued'); // 悬浮球显示轮巡进度（仅显示）
     const { url } = await generateVideo(
       { baseUrl: vg.baseUrl, apiKey: vg.apiKey },
       prompt,
@@ -4081,8 +4213,10 @@ async function runMomentVideoJob(roleId: string, momentId: number, prompt: strin
       vg.size || '1280x720',
       vg.duration || '5',
       undefined,
-      (percent, status) =>
-        broadcast('video:progress', { chatType: 'moments', chatId: roleId, prompt, percent, status: status || 'generating' })
+      (percent, status) => {
+        broadcast('video:progress', { chatType: 'moments', chatId: roleId, prompt, percent, status: status || 'generating' });
+        sendBallVideoProgress(percent, status);
+      }
     );
     let videoPath: string | null = null;
     if (url) {
@@ -4101,6 +4235,16 @@ async function runMomentVideoJob(roleId: string, momentId: number, prompt: strin
       const m = dm.listMoments(roleId, true).find((x) => x.id === momentId);
       if (m) dm.updateMoment(momentId, { videos: [...(m.videos || []), videoPath] });
       broadcast('moments:changed', { roleId });
+      // 桌面提示：朋友圈视频已生成完成，点击卡片跳到朋友圈对应位置
+      const lang2 = dm.getSettings().lang === 'en' ? 'en' : 'zh';
+      const r2 = dm.getRole(roleId);
+      showNotifyCard({
+        chatType: 'moments',
+        chatId: roleId,
+        roleName: r2?.name || 'AI',
+        name: r2?.name || 'AI',
+        content: lang2 === 'en' ? 'Moments video generated' : '朋友圈视频已生成完成',
+      });
       broadcast('video:done', { chatType: 'moments', chatId: roleId, prompt, ok: true, imagePath: videoPath });
     } else {
       broadcast('video:done', { chatType: 'moments', chatId: roleId, prompt, ok: false, error: '生视频失败：未获取到视频数据' });
@@ -4108,6 +4252,8 @@ async function runMomentVideoJob(roleId: string, momentId: number, prompt: strin
   } catch (e: any) {
     console.error('[nianyu] 朋友圈视频失败', e?.message || e);
     broadcast('video:done', { chatType: 'moments', chatId: roleId, prompt, ok: false, error: e?.message || String(e) });
+  } finally {
+    sendBallVideoProgress(-1); // 生成结束（成功/失败）：悬浮球图标恢复常态
   }
 }
 
@@ -4586,6 +4732,8 @@ function registerIPC(): void {
     }
     // 深度思考等级同步给 AI 调用层（全局，避免改动所有调用点）
     if (patch && patch.deepThinkLevel !== undefined) setDeepThinkLevel(next.deepThinkLevel);
+    // 开机自启动：设置变更即时注册/取消登录项
+    if (patch && patch.launchOnBoot !== undefined) applyLaunchOnBoot(patch.launchOnBoot);
     // 广播设置变更，让主窗与小窗同步刷新（世界书/身份/背景/开关等）
     broadcast('settings:changed', patch || {});
     // 缩放基准/上下限变更时，主窗与小窗立即按新参数重新缩放（两端同步显示）
@@ -4594,6 +4742,46 @@ function registerIPC(): void {
       applyWindowZoom(miniWindow, true);
     }
     return next;
+  });
+  // 当前聊天生效模型（渲染端用于：聊天流式开关的显示与写入「生效来源」）。
+  // 群聊成员各有模型，返回 null → 渲染端回退到全局 enableStreaming。
+  ipcMain.handle('chat:getModel', (_e, chatType: string, chatId: string) => {
+    const settings = dm.getSettings();
+    if (chatType === 'group') return null;
+    const role = dm.getRole(dm.resolveSingleRoleId(chatType, chatId));
+    if (!role) return null;
+    return resolveRoleModel(role, settings) || null;
+  });
+
+  // ---------- MCP 服务器管理（v2.3.17 新增） ----------
+  ipcMain.handle('mcp:status', async () => {
+    const { mcpStatus } = await import('./mcpManager');
+    return mcpStatus(dm.getSettings());
+  });
+  ipcMain.handle('mcp:add', async (_e, p: { key: string; config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean } }) => {
+    const s = dm.getSettings();
+    const key = (p.key || '').trim();
+    if (!key) throw new Error('请填写服务器名称');
+    if (!p.config?.command?.trim()) throw new Error('请填写启动命令');
+    const servers = { ...(s.mcpServers || {}) };
+    if (!servers[key] && Object.keys(servers).length >= 10) throw new Error('MCP 服务器数量已达上限（10 个）');
+    servers[key] = { ...p.config, enabled: p.config.enabled !== false };
+    dm.saveSettings({ mcpServers: servers });
+    return { ok: true };
+  });
+  ipcMain.handle('mcp:remove', async (_e, key: string) => {
+    const s = dm.getSettings();
+    const servers = { ...(s.mcpServers || {}) };
+    delete servers[key];
+    dm.saveSettings({ mcpServers: servers });
+    return { ok: true };
+  });
+  ipcMain.handle('mcp:toggle', async (_e, key: string, enabled: boolean) => {
+    const s = dm.getSettings();
+    const servers = { ...(s.mcpServers || {}) };
+    if (servers[key]) servers[key] = { ...servers[key], enabled };
+    dm.saveSettings({ mcpServers: servers });
+    return { ok: true };
   });
   ipcMain.handle('settings:reset', (_e, keepKeys: boolean) => {
     const next = dm.resetSettings(keepKeys);
@@ -4669,6 +4857,9 @@ function registerIPC(): void {
     if (res.supportsTools !== null) cfg.supportsTools = res.supportsTools;
     if (res.supportsJson !== null) cfg.supportsJson = res.supportsJson;
     if (res.supportsNsfw !== null) cfg.supportsNsfw = res.supportsNsfw;
+    if (res.supportsStream !== null) cfg.supportsStream = res.supportsStream;
+    // 思考等级探测结果回写到 supportsReasoning（控制深度思考档位是否对该模型生效）
+    if (res.supportsThinkLevel !== null) cfg.supportsReasoning = res.supportsThinkLevel;
     if (res.maxContext && res.maxContext > 0) cfg.maxContext = res.maxContext;
     cfg.lastDetectedAt = Date.now();
   }
@@ -4685,6 +4876,23 @@ function registerIPC(): void {
       return { ok: res.ok, message: res.message, config: cfg, undetected: res.undetected || [] };
     } catch (e: any) {
       dm.logError('model', `模型能力探测异常：${e?.message || String(e)}`, e?.stack);
+      throw e;
+    }
+  });
+
+  // 编辑中的模型（尚未保存、无 id）也可探测能力：不落库，仅返回结果，由前端合并进草稿。
+  // 此前新增模型必须先保存再进编辑界面才能「检测能力」，现在填完 Base URL / 模型名即可直接检测。
+  ipcMain.handle('models:detectConfig', async (_e, draft: Partial<ModelConfig>, opts?: ProbeOptions) => {
+    try {
+      if (!draft || !draft.baseUrl || !draft.model) {
+        return { ok: false, message: '请先填写 API Base URL 与模型名称', config: null };
+      }
+      const probe = { ...draft, id: draft.id || '__draft__' } as ModelConfig;
+      const res = await detectCapabilities(probe, opts);
+      applyDetectResult(probe, res);
+      return { ok: res.ok, message: res.message, config: probe, undetected: res.undetected || [] };
+    } catch (e: any) {
+      dm.logError('model', `编辑中模型能力探测异常：${e?.message || String(e)}`, e?.stack);
       throw e;
     }
   });
@@ -4706,6 +4914,8 @@ function registerIPC(): void {
           supportsTools: res.supportsTools,
           supportsJson: res.supportsJson,
           supportsNsfw: res.supportsNsfw,
+          supportsStream: res.supportsStream,
+          supportsThinkLevel: res.supportsThinkLevel,
           maxContext: res.maxContext,
           undetected: res.undetected || [],
         });
@@ -5147,28 +5357,201 @@ function registerIPC(): void {
   });
 
   // ---------- 语音：TTS 合成，返回 base64 mp3 ----------
-  // roleId 可选：按数字人角色分别解析音色（ttsVoices[roleId] 优先，缺省回退全局 ttsVoice）
+  // roleId 可选：按数字人角色解析独立语音 API/音色（ttsVoices[roleId] 支持 RoleTtsConfig 或旧版纯音色名，v2.3.19）。
+  // 朗读缓存：同一（端点+模型+音色+文本）直接复用磁盘缓存，重复朗读不再调用 API、不消耗 token；
+  // 设置 voice.ttsRegenerate=true 时跳过缓存强制重新合成（结果仍回写缓存）。
   ipcMain.handle('audio:tts', async (_e, text: string, roleId?: string) => {
-    const s = dm.getSettings();
-    const v = s.voice;
+    const v = dm.getSettings().voice;
     if (!v?.ttsBaseUrl || !v?.ttsApiKey) throw new Error('未配置 TTS 专用 API，请在设置中填写独立的 Base URL 与 API Key');
-    const voiceName = (roleId && v.ttsVoices && v.ttsVoices[roleId]) || v.ttsVoice || 'alloy';
-    const buf = await textToSpeech(
-      { baseUrl: v.ttsBaseUrl, apiKey: v.ttsApiKey },
-      text,
-      v.ttsModel || 'tts-1',
-      voiceName
-    );
-    return `data:audio/mpeg;base64,${buf.toString('base64')}`;
+    const rv = (roleId && v.ttsVoices && v.ttsVoices[roleId]) || undefined;
+    const rvCfg = typeof rv === 'string' ? { voice: rv } : rv || {};
+    const baseUrl = rvCfg.baseUrl || v.ttsBaseUrl;
+    const apiKey = rvCfg.apiKey || v.ttsApiKey;
+    const voiceName = rvCfg.voice || v.ttsVoice || 'alloy';
+    const model = rvCfg.model || v.ttsModel || 'tts-1';
+    const cacheDir = path.join(dm.dataDirectory, 'tts-cache');
+    try { fs.mkdirSync(cacheDir, { recursive: true }); } catch { /* 目录已存在等，忽略 */ }
+    const cacheKey = ttsCacheKey(baseUrl, model, voiceName, text);
+    // 缓存按实际容器分扩展名（Gemini 协议为 WAV，其余为 MP3），读取时按扩展名还原 MIME
+    const candidates: { file: string; mime: string }[] = [
+      { file: path.join(cacheDir, `${cacheKey}.mp3`), mime: 'audio/mpeg' },
+      { file: path.join(cacheDir, `${cacheKey}.wav`), mime: 'audio/wav' },
+    ];
+    if (v.ttsRegenerate !== true) {
+      for (const c of candidates) {
+        if (fs.existsSync(c.file)) {
+          try {
+            return `data:${c.mime};base64,${fs.readFileSync(c.file).toString('base64')}`;
+          } catch { /* 缓存读取失败则走正常合成 */ }
+        }
+      }
+    }
+    const { audio, mime } = await textToSpeech({ baseUrl, apiKey }, text, model, voiceName);
+    try { fs.writeFileSync(path.join(cacheDir, `${cacheKey}.${mime === 'audio/wav' ? 'wav' : 'mp3'}`), audio); } catch { /* 缓存写入失败不影响本次播放 */ }
+    return `data:${mime};base64,${audio.toString('base64')}`;
   });
 
-  // ---------- 语音：拉取 TTS 可用音色列表（服务端优先，失败回退内置清单） ----------
-  ipcMain.handle('audio:listVoices', async () => {
-    const DEFAULT_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
-    const v = dm.getSettings().voice;
-    if (!v?.ttsBaseUrl || !v?.ttsApiKey) return DEFAULT_VOICES;
+  // ---------- 调试模式（v2.3.19）：快照/恢复实现「修改不生效」+ 手动触发 + 错误报告 ----------
+  // 原理：进入调试时把 store.json / settings.json / proactive-nhpp.json 快照到 dataDir/debug-backup/；
+  // 会话内一切写入照常真实发生（因此可完整测试全链路），退出调试时用快照覆盖回去并 reloadAll，
+  // 等效于「该模式内造成的一切修改都不会生效」；同时汇总本会话新增的错误日志按功能分类输出。
+  let debugActive = false;
+  let debugStartAt = 0;
+  const debugSnapshotFiles = ['store.json', 'settings.json', 'proactive-nhpp.json'];
+  const resolveChatRole = (ct: string, cid: string): string | null => {
+    if (ct === 'single') return cid;
+    const g = dm.getGroup(cid);
+    const first = (g?.member_ids || '').split(',').map((s) => s.trim()).filter(Boolean)[0];
+    return first || null;
+  };
+  ipcMain.handle('debug:start', () => {
+    if (debugActive) return { ok: true, already: true };
     try {
-      const url = `${v.ttsBaseUrl.replace(/\/+$/, '')}/audio/voices`;
+      const dir = path.join(dm.dataDirectory, 'debug-backup');
+      fs.mkdirSync(dir, { recursive: true });
+      for (const f of debugSnapshotFiles) {
+        const src = path.join(dm.dataDirectory, f);
+        if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dir, f));
+      }
+      debugActive = true;
+      debugStartAt = Date.now();
+      dm.logError('functional', '[调试] 调试模式已开始：本会话内的所有修改将在结束后全部恢复');
+      broadcast('settings:changed', {});
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+  ipcMain.handle('debug:trigger', async (_e, kind: string, chatType: string, chatId: string) => {
+    try {
+      if (kind === 'proactive') {
+        await handleProactive({ chatType, chatId });
+        return { ok: true, message: '已触发主动消息（按当前设置生成并发送）' };
+      }
+      if (kind === 'moments' || kind === 'relationship') {
+        const roleId = resolveChatRole(chatType, chatId);
+        if (!roleId) return { ok: false, error: '该聊天没有可用角色（群聊取第一位成员）' };
+        const res = await requestRelationshipAndMoments(chatType, chatId, roleId, {
+          force: true,
+          doRelationship: kind === 'relationship',
+          doMoments: kind === 'moments',
+        });
+        return {
+          ok: true,
+          message: kind === 'moments' ? `已触发朋友圈自动发（新增 ${res.moments} 条）` : '已触发关系判定',
+        };
+      }
+      if (kind === 'sceneImage') {
+        const roleId = resolveChatRole(chatType, chatId);
+        if (!roleId) return { ok: false, error: '该聊天没有可用角色（群聊取第一位成员）' };
+        await triggerSceneImage(chatType, chatId, roleId);
+        return { ok: true, message: '已触发异步场景生图' };
+      }
+      return { ok: false, error: `未知触发类型: ${kind}` };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+  ipcMain.handle('debug:end', async () => {
+    if (!debugActive) return { ok: false, error: '调试模式未开启' };
+    debugActive = false;
+    const dir = path.join(dm.dataDirectory, 'debug-backup');
+    let restored = 0;
+    for (const f of debugSnapshotFiles) {
+      const bak = path.join(dir, f);
+      if (fs.existsSync(bak)) {
+        try {
+          fs.copyFileSync(bak, path.join(dm.dataDirectory, f));
+          restored += 1;
+        } catch { /* 单文件恢复失败继续处理其余 */ }
+      }
+    }
+    dm.reloadAll();
+    broadcast('settings:changed', {});
+    // 汇总本会话新增错误，按功能分类输出（functional=功能链路 / model=模型调用 / other=其他）
+    const report: Record<string, { time: string; message: string }[]> = {};
+    try {
+      for (const e of dm.getErrorLog()) {
+        const t = new Date(e.time || 0).getTime();
+        if (!(t >= debugStartAt)) continue;
+        const cat = e.category || 'other';
+        (report[cat] = report[cat] || []).push({ time: e.time, message: e.message });
+      }
+    } catch { /* 读取失败则返回空报告 */ }
+    return { ok: true, restored, report };
+  });
+
+  // ---------- 语音：拉取 TTS 音色列表（v2.3.22 起全量实时拉取，软件不再内置任何音色清单） ----------
+  // 政策（用户明令）：音色一律自动从厂商接口拉取；没有列表 API 的厂商返回空列表，音色由用户手填。
+  // 音色输入框本身是自由文本（datalist 仅作建议），永远不会硬编码音色清单。
+  ipcMain.handle('audio:listVoices', async () => {
+    const v = dm.getSettings().voice;
+    if (!v?.ttsBaseUrl || !v?.ttsApiKey) return [];
+    try {
+      const vb = v.ttsBaseUrl.trim().replace(/\/+$/, '').replace(/\/audio\/speech$/i, '');
+      // 无公开列表端点的厂商：返回空列表，音色手填
+      if (/\/t2a_v2$/i.test(vb)) return []; // MiniMax
+      if (/generativelanguage\.googleapis\.com/i.test(vb)) return []; // Gemini（官方文档预置音色，手填）
+      if (/openspeech\.bytedance\.com/i.test(vb)) return []; // 字节火山（voice_type 见控制台）
+      if (/tencentcloudapi\.com/i.test(vb)) return []; // 腾讯云（VoiceType 见控制台）
+      if (/baidubce\.com|tsn\.baidu\.com/i.test(vb)) return []; // 百度（voicer 见控制台）
+      if (/dashscope\.aliyuncs\.com/i.test(vb)) return []; // 阿里 qwen-tts（音色名见文档）
+      // Azure：GET /cognitiveservices/voices/list → ShortName
+      if (/tts\.speech\.microsoft\.com/i.test(vb)) {
+        try {
+          const origin = new URL(vb).origin;
+          const vr = await fetch(`${origin}/cognitiveservices/voices/list`, {
+            headers: { 'Ocp-Apim-Subscription-Key': v.ttsApiKey },
+          });
+          if (vr.ok) {
+            const vd: any = await vr.json();
+            const names = (Array.isArray(vd) ? vd : []).map((x: any) => x?.ShortName).filter(Boolean);
+            if (names.length) return names;
+          }
+        } catch { /* 拉取失败返回空，音色手填 */ }
+        return [];
+      }
+      // ElevenLabs：GET /v1/voices → voice_id
+      if (/api\.elevenlabs\.io/i.test(vb)) {
+        const lvb = /\/v1/i.test(vb) ? vb : `${vb}/v1`;
+        const vr = await fetch(`${lvb}/voices`, { headers: { 'xi-api-key': v.ttsApiKey } });
+        if (vr.ok) {
+          const vd: any = await vr.json();
+          const ids = (vd?.voices || []).map((x: any) => x?.voice_id).filter(Boolean);
+          if (ids.length) return ids;
+        }
+        return [];
+      }
+      // Fish Audio：GET /model → _id
+      if (/api\.fish\.audio/i.test(vb)) {
+        const fr = await fetch('https://api.fish.audio/model?page_size=30', { headers: { Authorization: `Bearer ${v.ttsApiKey}` } });
+        if (fr.ok) {
+          const fd: any = await fr.json();
+          const ids = (fd?.items || []).map((x: any) => x?._id || x?.id).filter(Boolean);
+          if (ids.length) return ids;
+        }
+        return [];
+      }
+      // Cartesia：GET /voices → id
+      if (/api\.cartesia\.ai/i.test(vb)) {
+        const cr = await fetch(`${vb}/voices`, { headers: { 'X-API-Key': v.ttsApiKey, 'Cartesia-Version': '2025-04-16' } });
+        if (cr.ok) {
+          const cd: any = await cr.json();
+          const ids = (Array.isArray(cd) ? cd : cd?.voices || []).map((x: any) => x?.id).filter(Boolean);
+          if (ids.length) return ids;
+        }
+        return [];
+      }
+      // AWS Polly：DescribeVoices（SigV4 签名，实现在 ai.ts）
+      if (/polly\.[a-z0-9-]+\.amazonaws\.com/i.test(vb)) {
+        try {
+          const ids = await listPollyVoices(vb, v.ttsApiKey);
+          if (ids.length) return ids;
+        } catch { /* 拉取失败返回空，音色手填 */ }
+        return [];
+      }
+      // OpenAI 兼容：GET /audio/voices；服务端不支持该端点时返回空（不回退任何内置清单）
+      const url = `${vb}/audio/voices`;
       const resp = await fetch(url, { headers: { Authorization: `Bearer ${v.ttsApiKey}` } });
       if (resp.ok) {
         const data: any = await resp.json().catch(() => null);
@@ -5181,9 +5564,9 @@ function registerIPC(): void {
         }
       }
     } catch {
-      /* 服务端不支持列接口时回退内置清单 */
+      /* 拉取失败返回空，音色手填 */
     }
-    return DEFAULT_VOICES;
+    return [];
   });
 
   // ---------- 快捷小窗 ----------
@@ -5250,14 +5633,18 @@ function registerIPC(): void {
     broadcast('idle:tick', payload);
   }, 250);
 
-  // ===== 主动消息：主进程统一调度 =====
+  // ===== 主动消息：主进程统一调度（每个聊天独立计时）=====
   // 原先由渲染进程用 setInterval 自行判断并调用 chats:proactive。主界面关闭到托盘时窗口仅 hide，
   // 渲染进程的定时器会被 Chromium 节流乃至冻结，于是主动消息不触发，直到重新打开窗口才「姗姗来迟」。
   // 改由主进程以 idleState（全局权威计时基准）驱动：窗口隐藏、最小化、托盘常驻都不影响计时与触发。
   // 渲染端只保留倒计时显示，不再自行触发，避免双触发。
+  // v2.3.12：调度从「只评估当前查看的聊天」改为「所有开启主动消息的聊天各自独立计时」——
+  // 每个聊天用自己的静默时钟 + 自己抽中的随机间隔，到点独立触发（后台触发进未读/悬浮球通知）。
   const proactiveBusyKeys = new Set<string>(); // 正在生成主动消息的 chatKey，防重入
   // 随机模式：每个聊天当前抽中的间隔（毫秒）。触发一条后重抽，实现「每次间隔都随机」。
   const idleRandomOverrideMs = new Map<string, number>();
+  // 切换聊天 pause/reset 模式：离开聊天时冻结其计时（记录已静默时长），回到该聊天时解冻续走
+  const idleFrozenElapsedMs = new Map<string, number>();
   // 随机范围（秒）：钳制 1~86400（1 秒 ~ 24 小时），且 max >= min
   const randomRangeSec = (s: AppSettings): { min: number; max: number } => {
     const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -5267,52 +5654,74 @@ function registerIPC(): void {
   };
   setInterval(() => {
     if (quitting) return;
-    if (proactiveBusyKeys.size > 0) return; // 串行：同一时刻只生成一条，避免并发刷屏
     const s = dm.getSettings();
     if (s.idleEnabled === false) return;
-    // 优先用渲染端回传的「当前查看的聊天」；缺失时兜底取最近有活动记录的聊天
-    let key = activeChatKeyMain;
-    if (!key || idleState.get(key) == null) {
-      let newest = -1;
-      for (const [k, t] of idleState) {
-        if (t > newest) {
-          newest = t;
-          key = k;
+    // 双引擎互斥：NHPP 智能调度接管后，经典定时机制立即停用（避免两套同时发主动消息）
+    if (s.proactiveEngine === 'nhpp') return;
+    if (proactiveBusyKeys.size > 0) return; // 串行：同一时刻只生成一条，避免并发刷屏
+    // 冷却开关关闭：清空冷却表，避免历史残留误挡（开启时才按冷却跳过）
+    if (s.idleCooldownUntilReply === false && proactiveAwaitingReply.size > 0) {
+      proactiveAwaitingReply.clear();
+    }
+    const switchAction = s.idleSwitchAction || 'continue';
+    if (switchAction === 'continue' && idleFrozenElapsedMs.size > 0) {
+      idleFrozenElapsedMs.clear(); // continue 模式没有冻结概念，清理历史残留恢复独立计时
+    }
+    const now = Date.now();
+    // 每个聊天独立评估：静默时长 >= 该聊天自己的间隔即超时，挑「超时最久」的一个触发；
+    // 当前查看的聊天在超时程度相近时优先（+1ms 平局加成）
+    let bestKey: string | null = null;
+    let bestOverdue = -1;
+    let bestIntervalMs = 0;
+    for (const [k, ts] of idleState) {
+      if ((s.chatIdleEnabled || {})[k] === false) continue; // 该聊天单独关闭了主动消息
+      if (s.idleCooldownUntilReply !== false && proactiveAwaitingReply.has(k)) continue; // 冷却中：等用户回复
+      const sep = k.indexOf(':');
+      if (sep <= 0) continue;
+      const chatType = k.slice(0, sep);
+      const chatId = k.slice(sep + 1);
+      if (!chatId) continue;
+      // 该聊天还没有任何消息则不主动开口（与旧逻辑一致）
+      if (dm.getMessages(chatType, chatId).length === 0) continue;
+      // 正在生成其它内容（用户发消息 / AI 回复 / 自动接话）时让路，下轮再判
+      if (streamControllers.has(chatId)) continue;
+      const frozen = idleFrozenElapsedMs.get(k);
+      // pause/reset 模式：非当前查看的聊天计时冻结、不后台触发（回来时续走/重置）；
+      // continue 模式：所有聊天独立计时，离开后照常在后台触发（消息进未读清单/悬浮球）
+      if (frozen == null && k !== activeChatKeyMain && switchAction !== 'continue') continue;
+      const elapsed = frozen != null ? frozen : now - ts;
+      // 触发间隔：fixed=idleInterval 固定值；random=该聊天抽中的随机值（缺失时现抽）
+      let intervalMs = (s.idleInterval || 600) * 1000;
+      if (s.idleTimingMode === 'random') {
+        let ov = idleRandomOverrideMs.get(k);
+        if (ov == null) {
+          const { min, max } = randomRangeSec(s);
+          ov = Math.floor(min * 1000 + Math.random() * (max - min + 1) * 1000);
+          idleRandomOverrideMs.set(k, ov);
         }
+        intervalMs = ov;
+      }
+      const overdue = elapsed - intervalMs;
+      if (overdue <= 0) continue;
+      const score = overdue + (k === activeChatKeyMain ? 1 : 0);
+      if (score > bestOverdue) {
+        bestOverdue = score;
+        bestKey = k;
+        bestIntervalMs = intervalMs;
       }
     }
-    if (!key) return;
-    const perChat = (s.chatIdleEnabled || {})[key];
-    if (perChat === false) return; // 该聊天单独关闭了主动消息
-    const ts = idleState.get(key);
-    if (ts == null) return;
-    // 触发间隔：fixed=idleInterval 固定值；random=该聊天抽中的随机值（缺失时现抽）
-    let intervalMs = (s.idleInterval || 600) * 1000;
-    if (s.idleTimingMode === 'random') {
-      let ov = idleRandomOverrideMs.get(key);
-      if (ov == null) {
-        const { min, max } = randomRangeSec(s);
-        ov = Math.floor(min * 1000 + Math.random() * (max - min + 1) * 1000);
-        idleRandomOverrideMs.set(key, ov);
-      }
-      intervalMs = ov;
-    }
-    if (Date.now() - ts < intervalMs) return;
+    if (!bestKey) return;
+    const key = bestKey;
     const sep = key.indexOf(':');
-    if (sep <= 0) return;
     const chatType = key.slice(0, sep);
     const chatId = key.slice(sep + 1);
-    if (!chatId) return;
-    // 该聊天还没有任何消息则不主动开口（与旧渲染端逻辑一致）
-    if (dm.getMessages(chatType, chatId).length === 0) return;
-    // 正在生成其它内容（用户发消息 / AI 回复 / 自动接话）时让路，下轮再判
-    if (streamControllers.has(chatId)) return;
     proactiveBusyKeys.add(key);
     // 先重置计时再发请求，杜绝并发重复触发与「窗口恢复后补触发」；
     // intervalMs 随广播下发给渲染端，用于倒计时显示（随机模式下每次触发间隔都不同）
     const startedAt = Date.now();
     idleState.set(key, startedAt);
-    broadcast('idle:activity', { chatKey: key, timestamp: startedAt, intervalMs });
+    idleFrozenElapsedMs.delete(key);
+    broadcast('idle:activity', { chatKey: key, timestamp: startedAt, intervalMs: bestIntervalMs });
     void handleProactive({ chatType, chatId })
       .catch(() => {
         /* 生成失败已由 handleProactive 内部落库/气泡处理，此处仅防 unhandledrejection */
@@ -5507,7 +5916,28 @@ function registerIPC(): void {
   ipcMain.on('app:active-chat', (_e, p: { type: string; id: string }) => {
     if (p && typeof p.type === 'string' && typeof p.id === 'string') {
       setActiveChat(p.type, p.id); // 清除悬浮球该会话未读
-      activeChatKeyMain = `${p.type}:${p.id}`;
+      const nextKey = `${p.type}:${p.id}`;
+      // 切换聊天时的计时行为（idleSwitchAction）：
+      // - continue：所有聊天独立计时，不做冻结/恢复
+      // - pause：离开的聊天冻结计时（记录已静默时长），回到该聊天时解冻续走
+      // - reset：同 pause 冻结（不后台触发），回到该聊天后由渲染端重置计时
+      try {
+        const action = dm.getSettings().idleSwitchAction || 'continue';
+        const prevKey = activeChatKeyMain;
+        if (action !== 'continue' && prevKey && prevKey !== nextKey) {
+          if (!idleFrozenElapsedMs.has(prevKey) && idleState.has(prevKey)) {
+            idleFrozenElapsedMs.set(prevKey, Date.now() - (idleState.get(prevKey) as number));
+          }
+        }
+        const frozenElapsed = idleFrozenElapsedMs.get(nextKey);
+        if (frozenElapsed != null) {
+          // 回到该聊天：解冻并按冻结时长顺延（pause=回来后继续）
+          idleFrozenElapsedMs.delete(nextKey);
+          idleState.set(nextKey, Date.now() - frozenElapsed);
+          broadcast('idle:activity', { chatKey: nextKey, timestamp: Date.now() - frozenElapsed });
+        }
+      } catch { /* 调度状态异常不影响聊天切换 */ }
+      activeChatKeyMain = nextKey;
       // 注意：类 IM 已读水位线不再在「打开」时立即前移，改由渲染端在用户滚动到底部（真正读完）后标记，
       // 这样返回有未读消息的聊天时，能先看到「未读分隔线 / 标记」，符合类 IM 体验。
     }
@@ -5564,9 +5994,23 @@ process.on('unhandledRejection', (reason) => {
   }
 });
 
+// 开机自启动：根据设置注册/取消登录项（Windows 写注册表，macOS 写 Login Items）
+function applyLaunchOnBoot(enabled: boolean): void {
+  try {
+    app.setLoginItemSettings({ openAtLogin: !!enabled });
+    console.log('[launch] openAtLogin =', !!enabled);
+  } catch (e) {
+    console.error('[launch] setLoginItemSettings failed', e);
+  }
+}
+
 app.whenReady().then(() => {
+  // 内置内容：3 张人物卡 + 教学世界书（仅首次注入，settings.builtinSeeded 标记防重复）
+  try { seedBuiltinContent(dm); } catch { /* 注入失败不影响启动 */ }
   const settings = dm.getSettings();
   setDeepThinkLevel(settings.deepThinkLevel);
+  // 开机自启动：默认开启（settings.launchOnBoot !== false）
+  applyLaunchOnBoot(settings.launchOnBoot !== false);
   Menu.setApplicationMenu(buildMenu(settings.lang === 'en' ? 'en' : 'zh'));
   protocol.registerFileProtocol('nianyuimg', (request, callback) => {
     const url = request.url.replace('nianyuimg://', '');
@@ -5594,6 +6038,35 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   applyMiniSettings();
+  // MCP：注入设置提供器（ai.ts 请求构造时读取 mcpServers）；应用退出时断开全部连接
+  setAiSettingsProvider(() => dm.getSettings());
+  app.on('will-quit', () => {
+    try {
+      void import('./mcpManager').then((m) => m.disconnectAll());
+    } catch {
+      /* ignore */
+    }
+  });
+  // NHPP 主动消息引擎：注入依赖并启动统一调度心跳（60s/轮，扫描到期候选与待回访）。
+  // 仅当 settings.proactiveEngine === 'nhpp' 时实际调度；经典 idle 定时消息机制完全不受影响。
+  initProactiveEngine({
+    getSettings: () => dm.getSettings(),
+    sendProactive: (chatType, chatId, extraInstruction) => handleProactive({ chatType, chatId, extraInstruction }),
+    getMessages: (chatType, chatId) => dm.getMessages(chatType, chatId),
+    isBusy: (chatId) => streamControllers.has(chatId),
+    getDefaultModel: () => {
+      const s = dm.getSettings();
+      return getDefaultModelConfig(s) || undefined;
+    },
+    logError: (category, message, detail) => dm.logError(category, message, detail),
+  });
+  setInterval(() => {
+    try {
+      heartbeatProactive();
+    } catch {
+      /* 心跳异常不中断 */
+    }
+  }, 60_000);
   // 桌面悬浮球：注入主窗引用/唤出函数，并按设置创建悬浮球窗口
   setBallMainShow(showMainWindow);
   setBallMainWindow(mainWindow);

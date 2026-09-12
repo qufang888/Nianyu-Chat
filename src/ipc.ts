@@ -61,6 +61,13 @@ export interface NianyuAPI {
   rateInfo: (modelId: string) => Promise<{ enabled: boolean; limit: number; waitMs: number }>;
   // 当前聊天参与限速的代表模型 id（单聊=角色模型；群聊=默认模型）
   getChatModelId: (chatType: string, chatId: string) => Promise<string>;
+  // 当前聊天生效模型配置（单聊=角色绑定/默认模型，已应用全局参数回退；群聊=null）
+  getChatModel: (chatType: string, chatId: string) => Promise<ModelConfig | null>;
+  // MCP 服务器管理
+  mcpStatus: () => Promise<any[]>;
+  mcpAdd: (p: { key: string; config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean } }) => Promise<{ ok: boolean }>;
+  mcpRemove: (key: string) => Promise<{ ok: boolean }>;
+  mcpToggle: (key: string, enabled: boolean) => Promise<{ ok: boolean }>;
   // 翻译文本（右键菜单翻译）
   translate: (text: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
   // 打断生成：中止某聊天当前流式输出（已生成内容保留）
@@ -262,6 +269,7 @@ export interface NianyuAPI {
   listModels: (cfg: ModelConfig) => Promise<string[]>;
   testModel: (cfg: ModelConfig) => Promise<{ ok: boolean; message: string }>;
   detectModel: (id: string, opts?: ProbeOptions) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
+  detectModelConfig: (cfg: Partial<ModelConfig>, opts?: ProbeOptions) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
   detectAllModels: (opts?: ProbeOptions) => Promise<{
     results: Array<{
       id: string;
@@ -279,6 +287,9 @@ export interface NianyuAPI {
 
   transcribeAudio: (data: Uint8Array, format?: string, language?: string) => Promise<string>;
   textToSpeech: (text: string, roleId?: string) => Promise<string>;
+  debugStart: () => Promise<{ ok: boolean; already?: boolean; error?: string }>;
+  debugTrigger: (kind: string, chatType: string, chatId: string) => Promise<{ ok: boolean; message?: string; error?: string }>;
+  debugEnd: () => Promise<{ ok: boolean; restored?: number; error?: string; report?: Record<string, { time: string; message: string }[]> }>;
   listVoices: () => Promise<string[]>;
 
   miniOpen: (p?: {
@@ -385,6 +396,11 @@ export const api: NianyuAPI = {
   ballOpenChat: (chat) => raw.ballOpenChat(chat),
   rateInfo: (modelId) => raw.rateInfo(modelId),
   getChatModelId: (chatType, chatId) => raw.getChatModelId(chatType, chatId),
+  getChatModel: (chatType, chatId) => raw.getChatModel(chatType, chatId),
+  mcpStatus: () => raw.mcpStatus(),
+  mcpAdd: (p) => raw.mcpAdd(p),
+  mcpRemove: (key) => raw.mcpRemove(key),
+  mcpToggle: (key, enabled) => raw.mcpToggle(key, enabled),
   translate: (text) => raw.translate(text),
   interruptStream: (chatId) => raw.interruptStream(chatId),
   copyChat: (type, id) => raw.copyChat(type, id),
