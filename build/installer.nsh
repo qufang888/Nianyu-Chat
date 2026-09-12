@@ -42,6 +42,10 @@ BrandingText "念语 Nianyu AI Chat"
 ; 删除前先杀进程，防止文件锁导致 RMDir 失败。
 ; 注意：Electron 的 userData 目录取自 package.json 的 name（nianyu-client），
 ;       并非 productName（念语），故此处按真实目录名删除。
+; v2.3.23 修复三处残留根因：
+;   ① custom-data-path.txt 位于被删的 AppData 内，必须先于 RMDir 读取（此前顺序颠倒，自定义数据目录永远删不到）；
+;   ② 注册表自启动项（HKCU Run 的 electron.app.念语）此前从不清理；
+;   ③ 删除无重试——首杀进程后 800ms 内锁可能未释放，增加多轮「杀进程→删除」循环。
 ; =====================================================================
 !ifdef BUILD_UNINSTALLER
   !include "nsDialogs.nsh"
@@ -60,7 +64,7 @@ BrandingText "念语 Nianyu AI Chat"
     ${If} $R0 == error
       Abort
     ${EndIf}
-    ${NSD_CreateLabel} 0 0 100% 42u "卸载 念语 时，是否一并删除所有使用数据？$\n（聊天记录、记忆、设置、自定义音效等，位于 AppData 或「文档\念语数据」目录）$\n默认不删除，你可稍后手动清理。"
+    ${NSD_CreateLabel} 0 0 100% 42u "卸载 念语 时，是否一并删除所有使用数据？$\n（聊天记录、记忆、设置、自定义音效、自启动项等，位于 AppData 或「文档\念语数据」目录）$\n默认不删除，你可稍后手动清理。"
     Pop $R1
     ${NSD_CreateCheckBox} 0 54u 100% 16u "删除所有使用数据（不可恢复）"
     Pop $chkDeleteData
@@ -79,48 +83,40 @@ BrandingText "念语 Nianyu AI Chat"
     ${NSD_GetState} $chkDeleteData $deleteAppDataChecked
   FunctionEnd
 
-  ; 关键修复：删除使用数据的逻辑必须放在卸载「成功完成」回调里执行，
-  ; 而非放在卸载区段（Section）中。原生 NSIS 的自定义 UninstPage 在 electron-builder
+  ; 关键：删除使用数据的逻辑放在卸载「成功完成」回调（.onUninstSuccess）里执行，
+  ; 而非卸载区段（Section）中。原生 NSIS 的自定义 UninstPage 在 electron-builder
   ; 生成的脚本末尾才被 include，导致该自定义页排在所有内置卸载页（含 instfiles 区段）之后；
-  ; 若删除写在 Section "-postuninstall" 内，该区段会在 instfiles 阶段、用户尚未看到
-  ; 「是否删除数据」勾选页之前就已执行，此时 $deleteAppDataChecked 恒为 0，于是勾选无效、
-  ; 数据被保留（即此前「勾选删除全部数据没有效果」的根因）。
-  ; .onUninstSuccess 在全部页面（含本自定义页）之后、卸载收尾时调用，此时复选框状态已就绪。
+  ; 若删除写在 Section 内，该区段会在 instfiles 阶段、用户尚未看到勾选页之前就已执行，
+  ; 此时 $deleteAppDataChecked 恒为 0，于是勾选无效、数据被保留。
   Function .onUninstSuccess
     ${If} $deleteAppDataChecked == 1
-      ; 杀进程释放文件锁，确保 AppData 目录可删
-      ; 关键修复：exe 实际文件名取自 productName（念语），而非 package.json 的 name（nianyu-client）。
-      ; 此前误用 nianyu-client.exe 导致进程杀不掉 → 数据目录被锁 → RMDir 静默失败 → 重装后数据仍在。
-      nsExec::Exec 'taskkill /f /im "念语.exe" 2>nul'
+      DetailPrint "正在删除所有使用数据..."
+      ; 1) 杀进程释放文件锁（exe 名取自 productName：念语.exe）
+      nsExec::Exec 'taskkill /f /im "念语.exe"'
       Sleep 800
-      ; 多次尝试删除，规避文件锁残留（首轮失败后再杀一次并重试）
-      RMDir /r "$APPDATA\nianyu-client"
-      RMDir /r "$LOCALAPPDATA\nianyu-client"
-      ; 默认数据目录「文档\念语数据」：早期版本数据存于 AppData，现版本默认存于文档目录，
-      ; 此前未删此目录是「勾选删除数据但数据仍保留」的根因。$DOCUMENTS 自动适配系统语言。
-      RMDir /r "$DOCUMENTS\念语数据"
-      nsExec::Exec 'taskkill /f /im "念语.exe" 2>nul'
-      Sleep 300
-      RMDir /r "$APPDATA\nianyu-client"
-      RMDir /r "$LOCALAPPDATA\nianyu-client"
-      RMDir /r "$DOCUMENTS\念语数据"
-      ; 删除自定义数据目录（路径存储在 custom-data-path.txt 中，每行一个路径）
-      ${If} ${FileExists} "$APPDATA\nianyu-client\custom-data-path.txt"
-        ; NSIS 3.x 可用 FileRead 逐行读取并删除
-        FileOpen $4 "$APPDATA\nianyu-client\custom-data-path.txt" r
-        IfErrors done_custom_path
-        loop_custom_path:
-          FileRead $4 $5
-          IfErrors done_custom_path
-          StrCpy $5 "$5" "" -1  ; 去掉换行符
-          StrCmp $5 "" loop_custom_path  ; 跳过空行
-          ; 先删 custom-data-path.txt 自身（它在待删目录内的话会被 RMDir /r 一并删除）
-          ; 但它实际在 APPDATA 里，所以单独保留到后面统一清
-          RMDir /r "$5"
-          Goto loop_custom_path
-        done_custom_path:
-        FileClose $4
-      ${EndIf}
+      ; 2) 删除自定义数据目录：custom-data-path.txt（changeDataDir 时写入，每行一个路径）
+      ;    该文件在被删的 AppData 内，必须先于 RMDir 读取；cmd for /f 逐行 rmdir，天然兼容含空格路径
+      nsExec::Exec 'cmd /c for /f "usebackq delims=" %A in ("$APPDATA\nianyu-client\custom-data-path.txt") do rmdir /s /q "%A"'
+      ; 3) 主数据目录 + 运行时目录：循环 3 轮「杀进程→删除」，规避锁释放延迟
+      StrCpy $R6 0
+      ${Do}
+        RMDir /r "$DOCUMENTS\念语数据"
+        RMDir /r "$APPDATA\nianyu-client"
+        RMDir /r "$LOCALAPPDATA\nianyu-client"
+        RMDir /r "$APPDATA\念语"
+        RMDir /r "$LOCALAPPDATA\念语"
+        IntOp $R6 $R6 + 1
+        ${If} $R6 >= 3
+          ${ExitDo}
+        ${EndIf}
+        nsExec::Exec 'taskkill /f /im "念语.exe"'
+        Sleep 400
+      ${Loop}
+      ; 4) 注册表自启动项（含历史命名变体；不存在时静默跳过）
+      DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "electron.app.念语"
+      DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "念语"
+      DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "nianyu-client"
+      DetailPrint "使用数据清理完成。"
     ${EndIf}
   FunctionEnd
 
