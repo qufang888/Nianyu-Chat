@@ -80,6 +80,17 @@ function broadcastUnread(): void {
 // 新增一条未读。fromProactive=true 表示这是角色「主动消息」回复（用户并未发消息请求）：
 // 此类回复只要用户没正盯着该聊天本身，就计入未读（窗口隐藏 / 在看别的聊天都算）；
 // 手动回复（fromProactive=false）维持原行为：仅主窗隐藏/最小化时才计未读。
+// 生视频轮巡进度：仅用于悬浮球显示，不改变悬浮球任何交互逻辑。
+// percent 0~100 表示进度；percent < 0 表示生成结束（完成/失败），球恢复常态图标。
+export function sendBallVideoProgress(percent: number, statusText?: string): void {
+  if (ballWindow && !ballWindow.isDestroyed()) {
+    ballWindow.webContents.send('ball:videoProgress', {
+      percent: Math.max(-1, Math.min(100, Math.round(percent))),
+      statusText: statusText || '',
+    });
+  }
+}
+
 export function pushUnread(
   chatType: string,
   chatId: string,
