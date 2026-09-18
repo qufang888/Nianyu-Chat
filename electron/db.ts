@@ -993,6 +993,106 @@ class DataManager {
     if (this.store.storyNodes.length !== before) this.saveStore();
   }
 
+  // 重命名剧情节点（v2.3.37）：非破坏式，仅改 title
+  renameStoryNode(id: number, title: string): void {
+    const t = (title || '').trim();
+    if (!t) return;
+    const n = this.store.storyNodes.find((x) => x.id === id);
+    if (n) {
+      n.title = t;
+      this.saveStore();
+    }
+  }
+
+  /**
+   * 从剧情节点处分叉新聊天（v2.3.37）：原聊天不动，新聊天包含「节点消息及之前」的消息，
+   * 记忆按口径截取——自动记忆（sourceMsgIds 全部指向节点前消息）保留；
+   * 手动/无关联记忆按 created_at ≤ 节点消息 timestamp 保留。
+   * 群聊复制整组成员；单聊绑定原角色（不复制角色卡）。per-chat 设置复制式带到新聊（不影响原聊）。
+   */
+  forkChatFromNode(chatType: string, chatId: string, msgId: number): { chat_type: string; chat_id: string; name: string } {
+    const now = new Date().toISOString();
+    const all = this.store.messages.filter((m) => m.chat_type === chatType && m.chat_id === chatId);
+    const idx = all.findIndex((m) => m.id === msgId);
+    if (idx < 0) throw new Error('node message not found');
+    const before = all.slice(0, idx + 1); // 含节点消息本身
+    const beforeIds = new Set(before.map((m) => m.id));
+    const nodeMsg = before[before.length - 1];
+    const nodeTitle = this.store.storyNodes.find((n) => n.msg_id === msgId && n.chat_type === chatType && n.chat_id === chatId)?.title || '节点';
+
+    // 记忆截取口径：sourceMsgIds 非空 → 关联消息全部在节点前才保留；否则按 created_at ≤ 节点消息时间
+    const memKeep = (m: (typeof this.store.memories)[number]): boolean => {
+      if (m.sourceMsgIds && m.sourceMsgIds.length) return m.sourceMsgIds.every((id) => beforeIds.has(id));
+      if (m.sourceMsgId != null) return beforeIds.has(m.sourceMsgId);
+      return (m.created_at || '') <= nodeMsg.timestamp;
+    };
+
+    const srcSession = this.store.chatSessions.find(
+      (x) => x.chat_type === chatType && x.chat_id === chatId
+    );
+
+    if (chatType === 'group') {
+      const g = this.getGroup(chatId);
+      if (!g) throw new Error('group not found');
+      const newId = this.genId('group');
+      const newName = `${g.group_name} · ${nodeTitle.slice(0, 12)}`;
+      this.store.groups.push({ ...g, group_id: newId, group_name: newName, created_at: now });
+      for (const m of before) {
+        this.store.messages.push({ ...m, id: this.nextId(), chat_id: newId });
+      }
+      for (const m of this.store.memories.filter((mm) => mm.chatId === chatId && memKeep(mm))) {
+        this.store.memories.push({ ...m, id: this.genId('mem'), chatId: newId, created_at: now, updated_at: now });
+      }
+      // per-chat 设置：复制式带到新聊（不影响原聊）
+      this.copyChatSettings(`group:${chatId}`, `group:${newId}`);
+      this.store.chatSessions.push({ chat_type: 'group', chat_id: newId, last_time: now, storyEnabled: true });
+      this.saveStore();
+      return { chat_type: 'group', chat_id: newId, name: newName };
+    }
+
+    // single：绑定原角色（不复制角色卡，语义为「回到该节点重新开始」）
+    const roleId = this.resolveSingleRoleId('single', chatId);
+    const newId = `single_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`;
+    const baseName = srcSession?.chat_name || this.getRole(roleId)?.name || roleId;
+    const newName = `${baseName} · ${nodeTitle.slice(0, 12)}`;
+    for (const m of before) {
+      this.store.messages.push({ ...m, id: this.nextId(), chat_id: newId });
+    }
+    for (const m of this.store.memories.filter((mm) => mm.roleId === roleId && mm.chatId === chatId && memKeep(mm))) {
+      this.store.memories.push({ ...m, id: this.genId('mem'), roleId, chatId: newId, created_at: now, updated_at: now });
+    }
+    this.copyChatSettings(`single:${chatId}`, `single:${newId}`);
+    this.store.chatSessions.push({
+      chat_type: 'single',
+      chat_id: newId,
+      role_id: roleId,
+      chat_name: newName,
+      last_time: now,
+      storyEnabled: true,
+    });
+    this.saveStore();
+    return { chat_type: 'single', chat_id: newId, name: newName };
+  }
+
+  // per-chat 设置：复制式重映射（与 remapChatSettings 的「移动」语义不同，源聊 key 保留）
+  private copyChatSettings(srcKey: string, newKey: string): void {
+    const maps: Record<string, any>[] = [
+      this.settings.chatWorldBooks,
+      this.settings.chatIdleEnabled,
+      this.settings.chatSoundPaths,
+      this.settings.chatBackgrounds,
+      this.settings.chatSelfRoles,
+      this.settings.autoSceneImageChats,
+      this.settings.webSearchChats,
+    ];
+    for (const map of maps) {
+      if (map && Object.prototype.hasOwnProperty.call(map, srcKey)) {
+        map[newKey] = map[srcKey];
+      }
+    }
+    this.saveSettings({});
+  }
+
   // ===== 朋友圈动态（人物养成/社交） =====
   // 新增动态：scheduledAt 为空/null 立即发布；否则到点后才发布
   addMoment(roleId: string, content: string, images: string[], scheduledAt?: string | null, selfRoleId?: string): number {
