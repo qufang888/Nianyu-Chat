@@ -30,6 +30,34 @@ let dragStartY = 0;
 let dragMaxDisp = 0;
 const DRAG_CLAMP = 64; // 悬浮球本体尺寸，钳制时以本体右下角为准
 
+// ===== 光标在窗检测轮询（v2.3.36 修复：动态光标移出悬浮球不隐去）=====
+// 穿透窗 forward 模式只转发 mousemove：鼠标直接移出窗口边界时，渲染端收不到任何
+// mouseleave/mouseout（DOM 合成事件也无从派发），setInteractive(false) 永不执行，
+// 动态光标残留在 alwaysOnTop 画布上。主进程按固定间隔轮询系统光标是否仍在窗口矩形内，
+// 离开瞬间推送 ball:cursor-window=false，渲染端据此走既有隐藏链路（gate-off + 合成 mouseout）。
+// 球↔面板之间的细粒度进出仍由 DOM mouseenter/mouseleave 处理，本轮询仅兜底「出窗」场景。
+const CURSOR_POLL_MS = 200; // 轮询间隔：隐去延迟上限 ≈ 间隔 + 渲染端 120ms 防抖，观感约 0.3s
+let cursorPollTimer: ReturnType<typeof setInterval> | null = null;
+let lastCursorInside = true; // 初始视为在窗内，避免启动瞬间多发一次 false
+function startCursorPoll(): void {
+  if (cursorPollTimer) clearInterval(cursorPollTimer);
+  cursorPollTimer = setInterval(() => {
+    if (!ballWindow || ballWindow.isDestroyed() || !ballWindow.isVisible()) return;
+    try {
+      const p = screen.getCursorScreenPoint();
+      const b = ballWindow.getBounds();
+      const inside =
+        p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height;
+      if (inside !== lastCursorInside) {
+        lastCursorInside = inside;
+        ballWindow.webContents.send('ball:cursor-window', inside);
+      }
+    } catch {
+      /* 轮询失败静默跳过，下一轮重试 */
+    }
+  }, CURSOR_POLL_MS);
+}
+
 export function setBallMainShow(fn: () => void): void {
   mainShowFn = fn;
 }
@@ -80,6 +108,17 @@ function broadcastUnread(): void {
 // 新增一条未读。fromProactive=true 表示这是角色「主动消息」回复（用户并未发消息请求）：
 // 此类回复只要用户没正盯着该聊天本身，就计入未读（窗口隐藏 / 在看别的聊天都算）；
 // 手动回复（fromProactive=false）维持原行为：仅主窗隐藏/最小化时才计未读。
+// 生视频轮巡进度：仅用于悬浮球显示，不改变悬浮球任何交互逻辑。
+// percent 0~100 表示进度；percent < 0 表示生成结束（完成/失败），球恢复常态图标。
+export function sendBallVideoProgress(percent: number, statusText?: string): void {
+  if (ballWindow && !ballWindow.isDestroyed()) {
+    ballWindow.webContents.send('ball:videoProgress', {
+      percent: Math.max(-1, Math.min(100, Math.round(percent))),
+      statusText: statusText || '',
+    });
+  }
+}
+
 export function pushUnread(
   chatType: string,
   chatId: string,
@@ -184,6 +223,8 @@ export function createFloatingBall(): void {
   // 透明窗默认整体穿透鼠标，仅不透明区域（球/面板）由渲染端动态切回可交互
   ballWindow.setIgnoreMouseEvents(true, { forward: true });
 
+  startCursorPoll(); // 光标在窗检测轮询（修复动态光标移出不隐去）
+
   const dev = process.env.NIANYU_DEV === '1';
   if (dev) ballWindow.loadURL(`${'http://localhost:5173'}/floating-ball.html`);
   else ballWindow.loadFile(path.join(__dirname, '../../dist/floating-ball.html'));
@@ -206,6 +247,11 @@ export function createFloatingBall(): void {
 }
 
 export function destroyFloatingBall(): void {
+  if (cursorPollTimer) {
+    clearInterval(cursorPollTimer);
+    cursorPollTimer = null;
+    lastCursorInside = true; // 重建窗口后重新从「在窗内」状态起步
+  }
   if (ballWindow && !ballWindow.isDestroyed()) ballWindow.destroy();
   ballWindow = null;
 }

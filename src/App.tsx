@@ -45,6 +45,10 @@ export default function App() {
   );
   const [aboutOpen, setAboutOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  // 聊天侧边栏缩进：true=收起会话列表，聊天区占满整页
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // 设置页导航重置信号：再次点击左侧「设置」图标时从二级页退回设置主界面
+  const [settingsNavTick, setSettingsNavTick] = useState(0);
 
   // 首次启动向导：未走过初始设置 或 没有配置模型时弹出，添加模型为必填。
   useEffect(() => {
@@ -158,15 +162,35 @@ export default function App() {
     <div className="app-root">
       <CustomTitleBar title={title} />
       <div className="app-shell">
-        <Sidebar view={view} onChange={setView} />
+        <Sidebar
+          view={view}
+          onChange={(v) => {
+            if (v === 'settings') setSettingsNavTick((t) => t + 1);
+            setView(v);
+          }}
+          extra={
+            view === 'chats' && sidebarCollapsed ? (
+              <button
+                className="sidebar-restore"
+                title={t('chats.expandSidebar')}
+                onClick={() => setSidebarCollapsed(false)}
+              >
+                ›
+              </button>
+            ) : undefined
+          }
+        />
       {view === 'chats' && (
         <>
-          <ChatList
-            selectedId={selected?.id || null}
-            onSelect={(it) => onSelectChat(it)}
-            onNewGroup={() => setShowGroup(true)}
-            onDelete={(it) => onDeleteChat(it)}
-          />
+          {!sidebarCollapsed && (
+            <ChatList
+              selectedId={selected?.id || null}
+              onSelect={(it) => onSelectChat(it)}
+              onNewGroup={() => setShowGroup(true)}
+              onDelete={(it) => onDeleteChat(it)}
+              onToggleCollapse={() => setSidebarCollapsed(true)}
+            />
+          )}
           {selected ? (
             <ChatWindow
               key={`${selected.type}:${selected.id}`}
@@ -196,6 +220,7 @@ export default function App() {
         <Settings
           onRerunWizard={() => { setView('chats'); setShowOnboarding(true); }}
           onAbout={() => setAboutOpen(true)}
+          navResetTick={settingsNavTick}
         />
       )}
       {view === 'stats' && <StatsView />}
