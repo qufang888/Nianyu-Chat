@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import type { ModelConfig, ProbeOptions } from '../src/types';
 
 export interface ContentPart {
@@ -273,6 +274,16 @@ export async function queryAI(
   }
 }
 
+// ===== MCP 工具调用支持 =====
+const MCP_TOOL_ROUNDS = 3; // tool_calls → 执行 → 回传 的最大轮数（防失控循环）
+let settingsProvider: (() => any) | null = null; // 由 main.ts 注入（读取 mcpServers 等设置）
+export function setAiSettingsProvider(fn: () => any): void {
+  settingsProvider = fn;
+}
+function dmGetSettings(): any {
+  return settingsProvider ? settingsProvider() : { mcpServers: {} };
+}
+
 async function queryOpenAILike(
   cfg: ModelConfig,
   messages: AIMessage[],
@@ -281,43 +292,74 @@ async function queryOpenAILike(
 ): Promise<AIResult> {
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
   if (cfg.apiKey) h['Authorization'] = `Bearer ${cfg.apiKey}`;
-  const resp = await fetch(joinUrl(cfg.baseUrl, '/chat/completions'), {
-    method: 'POST',
-    headers: h,
-    body: JSON.stringify((() => {
-      const b: Record<string, any> = {
-        model: cfg.model,
-        messages,
-        max_tokens: cfg.maxTokens ?? maxTokens,
-        temperature: cfg.temperature,
-        stream: false,
-      };
-      if (cfg.topP !== undefined) b.top_p = cfg.topP;
-      if (cfg.topK !== undefined && cfg.topK > 0) b.top_k = cfg.topK;
-      applyDeepThink(b, cfg);
-      applyCustomParams(b, cfg);
-      return b;
-    })()),
-    signal: controller.signal,
-  });
-  if (!resp.ok) {
-    const errText = await resp.text();
-    throw new ModelApiError(resp.status, `API 请求失败 ${resp.status}: ${errText.slice(0, 300)}`, errText.slice(0, 2000));
+  // MCP 工具注入：仅 supportsTools 模型；AI 返回 tool_calls 时执行并回传结果，最多 MCP_TOOL_ROUNDS 轮
+  let mcpTools: any[] = [];
+  let mcpMgr: any = null;
+  if (cfg.supportsTools) {
+    try {
+      mcpMgr = await import('./mcpManager');
+      mcpTools = await mcpMgr.collectMcpTools(dmGetSettings());
+    } catch {
+      mcpTools = [];
+    }
   }
-  const data = (await resp.json()) as any;
-  const msg = data?.choices?.[0]?.message ?? {};
-  const rawContent: string = msg?.content ?? '';
-  // 思维链：模型无关抽取（任意厂牌字段）+ 剥离 <think> 标签（内联思考）
-  let reasoning: string = extractReasoning(msg);
-  const split = splitThink(rawContent);
-  if (split.reasoning) reasoning = reasoning ? `${reasoning}\n${split.reasoning}` : split.reasoning;
-  const usage = data?.usage ?? {};
-  return {
-    content: split.content,
-    reasoning: reasoning || undefined,
-    promptTokens: Number(usage.prompt_tokens) || 0,
-    completionTokens: Number(usage.completion_tokens) || 0,
-  };
+  const chatMessages: any[] = [...messages];
+  let promptTokens = 0;
+  let completionTokens = 0;
+  for (let round = 0; ; round++) {
+    const bodyObj: Record<string, any> = {
+      model: cfg.model,
+      messages: chatMessages,
+      max_tokens: cfg.maxTokens ?? maxTokens,
+      temperature: cfg.temperature ?? 1, // undefined 兜底：模型未设且全局未设时用 1.0
+      stream: false,
+    };
+    if (cfg.topP !== undefined) bodyObj.top_p = cfg.topP;
+    if (cfg.topK !== undefined && cfg.topK > 0) bodyObj.top_k = cfg.topK;
+    applyDeepThink(bodyObj, cfg);
+    applyCustomParams(bodyObj, cfg);
+    if (mcpTools.length > 0) bodyObj.tools = mcpTools; // MCP 工具（支持多轮 tool_calls）
+    const resp = await fetch(joinUrl(cfg.baseUrl, '/chat/completions'), {
+      method: 'POST',
+      headers: h,
+      body: JSON.stringify(bodyObj),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new ModelApiError(resp.status, `API 请求失败 ${resp.status}: ${errText.slice(0, 300)}`, errText.slice(0, 2000));
+    }
+    const data = (await resp.json()) as any;
+    const msg = data?.choices?.[0]?.message ?? {};
+    const usage = data?.usage ?? {};
+    promptTokens += Number(usage.prompt_tokens) || 0;
+    completionTokens += Number(usage.completionTokens) || Number(usage.completion_tokens) || 0;
+    // tool_calls：执行 MCP 工具并把结果回传给模型继续生成
+    if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0 && round < MCP_TOOL_ROUNDS && mcpMgr) {
+      chatMessages.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls });
+      for (const tc of msg.tool_calls) {
+        let toolText = '';
+        try {
+          toolText = await mcpMgr.callMcpToolByFullName(dmGetSettings(), tc.function?.name || '', tc.function?.arguments || '{}');
+        } catch (e: any) {
+          toolText = `工具调用失败：${e?.message || String(e)}`;
+        }
+        chatMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolText });
+      }
+      continue; // 携带工具结果再请求
+    }
+    const rawContent: string = msg?.content ?? '';
+    // 思维链：模型无关抽取（任意厂牌字段）+ 剥离 <think> 标签（内联思考）
+    let reasoning: string = extractReasoning(msg);
+    const split = splitThink(rawContent);
+    if (split.reasoning) reasoning = reasoning ? `${reasoning}\n${split.reasoning}` : split.reasoning;
+    return {
+      content: split.content,
+      reasoning: reasoning || undefined,
+      promptTokens,
+      completionTokens,
+    };
+  }
 }
 
 // OpenAI 兼容接口流式调用；Anthropic 不在此实现
@@ -338,7 +380,7 @@ export async function streamAI(
         model: cfg.model,
         messages,
         max_tokens: cfg.maxTokens ?? maxTokens,
-        temperature: cfg.temperature,
+        temperature: cfg.temperature ?? 1, // undefined 兜底：模型未设且全局未设时用 1.0
         stream: true,
         // 请求服务端在流式末尾返回真实 usage（OpenAI/DeepSeek/vLLM 支持；不支持的服务端会忽略该字段）
         stream_options: { include_usage: true },
@@ -464,7 +506,7 @@ async function queryAnthropic(
       const b: Record<string, any> = {
         model: cfg.model,
         max_tokens: cfg.maxTokens ?? maxTokens,
-        temperature: Math.min(cfg.temperature, 1),
+        temperature: Math.min(cfg.temperature ?? 1, 1),
         system,
         messages: turns,
       };
@@ -510,13 +552,15 @@ export async function listModels(cfg: ModelConfig): Promise<string[]> {
   try {
     let url: string;
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    // 端点归一（v2.3.20）：TTS 场景下 baseUrl 可能手填了完整 /audio/speech 地址，剥掉再拼 /models（对聊天场景无影响）
+    const normBase = (cfg.baseUrl || '').trim().replace(/\/+$/, '').replace(/\/audio\/speech$/i, '');
     if (cfg.provider === 'anthropic') {
       if (!cfg.apiKey) throw new Error('未配置 API Key');
-      url = joinUrl(cfg.baseUrl, '/models');
+      url = joinUrl(normBase, '/models');
       headers['x-api-key'] = cfg.apiKey;
       headers['anthropic-version'] = '2023-06-01';
     } else {
-      url = joinUrl(cfg.baseUrl, '/models');
+      url = joinUrl(normBase, '/models');
       if (cfg.apiKey) headers['Authorization'] = `Bearer ${cfg.apiKey}`;
     }
     const resp = await fetch(url, { headers, signal: controller.signal });
@@ -572,6 +616,8 @@ export interface CapabilityProbeResult {
   supportsTools: boolean | null; // 工具调用（function calling / tool_calls）
   supportsJson: boolean | null; // JSON 模式（response_format=json_object）
   supportsNsfw: boolean | null; // NSFW（成人）内容输出：true=可输出，false=被拒答，null=无法判定
+  supportsStream: boolean | null; // 流式输出（SSE）：true=支持，false=不支持/被拒，null=无法判定
+  supportsThinkLevel: boolean | null; // 思考等级（reasoning_effort / thinking budget）：true=可切换思考强度，false=不接受该参数，null=无法判定
   maxContext: number | null; // 从 /models 读到的上下文窗口（读不到=null）
   undetected?: string[]; // 未能探测的能力列表（如 Anthropic 仅做连通性）
 }
@@ -736,6 +782,64 @@ async function fetchModelContextWindow(cfg: ModelConfig): Promise<number | null>
   }
 }
 
+// 流式探针：发 stream:true 极小请求，依据响应判定该模型是否支持 SSE 流式输出。
+// 判定规则：
+//   - 2xx 且 Content-Type 含 text/event-stream 且读到 data: 帧 → true
+//   - 2xx 但返回普通 JSON（服务端忽略 stream 参数按非流式应答）→ false
+//   - 400/415/422（服务端明确拒绝 stream 相关参数）→ false
+//   - 其余（401/429/5xx/网络异常/超时）→ null（无法判定，不覆盖手动标记）
+async function probeStream(cfg: ModelConfig): Promise<boolean | null> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (cfg.apiKey) h['Authorization'] = `Bearer ${cfg.apiKey}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const resp = await fetch(joinUrl(cfg.baseUrl, '/chat/completions'), {
+      method: 'POST',
+      headers: h,
+      body: JSON.stringify({
+        model: cfg.model,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 4,
+        stream: true,
+      }),
+      signal: controller.signal,
+    });
+    if (resp.status === 400 || resp.status === 415 || resp.status === 422) return false;
+    if (!(resp.status >= 200 && resp.status < 300)) return null;
+    const ct = String(resp.headers.get('content-type') || '');
+    if (!/text\/event-stream/i.test(ct)) {
+      // 非 SSE：网关按非流式 JSON 应答（忽略 stream 参数）→ 不支持流式
+      await resp.text().catch(() => '');
+      return false;
+    }
+    const reader = resp.body?.getReader();
+    if (!reader) return null;
+    const decoder = new TextDecoder();
+    let buf = '';
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        if (buf.includes('data:')) return true;
+      }
+      // SSE 响应头但未读到任何 data 帧（空流/立即结束）→ 按不支持处理
+      return false;
+    } catch {
+      // 读流中断（含超时 abort）：已收到数据帧则判支持，否则无法判定
+      return buf.includes('data:') ? true : null;
+    } finally {
+      try { reader.releaseLock(); } catch { /* ignore */ }
+      controller.abort(); // 尽早断开探测连接
+    }
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // 真实能力探针：先验证连通性，再逐项发送极小请求判定能力
 // opts 可关闭部分探针（未传=全跑）；被关闭的项返回 null，不覆盖用户手动值。
 export async function detectCapabilities(
@@ -747,6 +851,8 @@ export async function detectCapabilities(
     tools: opts?.tools !== false,
     json: opts?.json !== false,
     nsfw: opts?.nsfw !== false,
+    stream: opts?.stream !== false,
+    thinkLevel: opts?.thinkLevel !== false,
   };
   const out: CapabilityProbeResult = {
     ok: false,
@@ -755,6 +861,8 @@ export async function detectCapabilities(
     supportsTools: null,
     supportsJson: null,
     supportsNsfw: null,
+    supportsStream: null,
+    supportsThinkLevel: null,
     maxContext: null,
   };
   if (!cfg.model) {
@@ -775,8 +883,11 @@ export async function detectCapabilities(
     if (want.tools) skip.push('supportsTools');
     if (want.json) skip.push('supportsJson');
     if (want.nsfw) skip.push('supportsNsfw');
+    if (want.thinkLevel) skip.push('supportsThinkLevel');
     out.undetected = skip;
     out.maxContext = await fetchModelContextWindow(cfg);
+    // Anthropic 走 /messages 私有格式，本应用聊天流式不覆盖 Anthropic（handleStream 回退非流式），直接判定不支持
+    out.supportsStream = false;
     return out;
   }
 
@@ -800,21 +911,24 @@ export async function detectCapabilities(
   }
 
   // 3) 工具探针：带一个空工具，看服务端是否接受 tools / tool_choice
+  //    v2.3.38：部分网关只接受 tools、对 tool_choice 报 400——首次判定不支持时补测一次「不带 tool_choice」，
+  //    避免「实际支持工具却被判为不支持」的误判。
   if (want.tools) {
-    const tools = await postChatRaw(cfg, {
-      model: cfg.model,
-      max_tokens: 4,
-      temperature: 0,
-      messages: [{ role: 'user', content: 'hi' }],
-      tools: [
-        {
-          type: 'function',
-          function: { name: '__probe', description: 'capability probe', parameters: { type: 'object', properties: {} } },
-        },
-      ],
-      tool_choice: 'auto',
-    });
-    out.supportsTools = capFromStatus(tools.status);
+    const probeTools = [
+      {
+        type: 'function',
+        function: { name: '__probe', description: 'capability probe', parameters: { type: 'object', properties: {} } },
+      },
+    ];
+    const base = { model: cfg.model, max_tokens: 4, temperature: 0, messages: [{ role: 'user', content: 'hi' }] };
+    const withChoice = await postChatRaw(cfg, { ...base, tools: probeTools, tool_choice: 'auto' });
+    let toolsVerdict = capFromStatus(withChoice.status);
+    if (toolsVerdict === false) {
+      const noChoice = await postChatRaw(cfg, { ...base, tools: probeTools });
+      const c2 = capFromStatus(noChoice.status);
+      if (c2 === true) toolsVerdict = true; // 仅 tool_choice 被拒 → 工具本身仍可用
+    }
+    out.supportsTools = toolsVerdict;
   }
 
   // 4) JSON 探针：请求 json_object 模式，看服务端是否接受 response_format
@@ -829,7 +943,34 @@ export async function detectCapabilities(
     out.supportsJson = capFromStatus(json.status);
   }
 
-  // 5) NSFW 探针：请求一段成人向描写，按返回正文语义判定是否被拒答。
+  // 5) 思考等级探针：带思考强度参数发一个极小请求，服务端接受即视为「可切换思考等级」。
+  //    v2.3.38 修复：三种主流写法（OpenAI 系 reasoning_effort、兼容端 thinking.budget_tokens、
+  //    国产端 enable_thinking）改为【分别探测、任一被接受即判定支持】——此前一次全部下发，
+  //    严格网关会因其中任一不认识的参数整体返回 400，导致「实际支持却判为不支持」的误判。
+  if (want.thinkLevel) {
+    const thinkVariants: Record<string, any>[] = [
+      { reasoning_effort: 'low' },
+      { thinking: { type: 'enabled', budget_tokens: 128 } },
+      { enable_thinking: true },
+    ];
+    let thinkVerdict: boolean | null = null;
+    for (const variant of thinkVariants) {
+      const think = await postChatRaw(cfg, {
+        model: cfg.model,
+        max_tokens: 16,
+        temperature: 0,
+        messages: [{ role: 'user', content: 'hi' }],
+        ...variant,
+      });
+      const c = capFromStatus(think.status);
+      if (c === true) { thinkVerdict = true; break; } // 任一写法被接受即支持
+      if (c === false) { thinkVerdict = false; }      // 该写法不支持，继续试下一种
+      // null（401/429/5xx 等无法判定）：保持上一次结论不变，继续试
+    }
+    out.supportsThinkLevel = thinkVerdict;
+  }
+
+  // 6) NSFW 探针：请求一段成人向描写，按返回正文语义判定是否被拒答。
   //    注意：本探针会向模型真实发送成人内容请求，在部分厂商侧会留下审核日志，故一键检测全部时默认关闭。
   if (want.nsfw) {
     const nsfw = await postChatRaw(cfg, {
@@ -847,8 +988,28 @@ export async function detectCapabilities(
     // 其余状态码（401/429/5xx/网络异常）保持 null
   }
 
-  // 6) 上下文窗口（best-effort）
+  // 7) 流式探针：真实发一个 stream:true 请求，检查是否返回 SSE 数据帧
+  if (want.stream) {
+    out.supportsStream = await probeStream(cfg);
+  }
+
+  // 8) 上下文窗口（best-effort）
   out.maxContext = await fetchModelContextWindow(cfg);
+
+  // 9) 汇总「未判定」项（v2.3.38）：显式跳过（未勾选探测项）或探测结果为 null（网络/鉴权异常等）的项，
+  //    前端据此把「未判定」与「判定为不支持」区分显示——避免 null 被当成「不支持」误导用户。
+  const undetected: string[] = [];
+  const collect = (field: keyof CapabilityProbeResult, cfgKey: string) => {
+    const v = (out as any)[field];
+    if (v === null || v === undefined) undetected.push(cfgKey);
+  };
+  collect('supportsImages', 'supportsImages');
+  collect('supportsTools', 'supportsTools');
+  collect('supportsJson', 'supportsJson');
+  collect('supportsNsfw', 'supportsNsfw');
+  collect('supportsStream', 'supportsStream');
+  collect('supportsThinkLevel', 'supportsThinkLevel');
+  out.undetected = undetected;
   return out;
 }
 
@@ -899,40 +1060,798 @@ export async function transcribeAudio(
   }
 }
 
-// 文本转语音（OpenAI 兼容 /audio/speech），返回 mp3 音频 Buffer
+// ===== 文本转语音：多协议适配（v2.3.22） =====
+// 依据 Base URL 自动识别协议：OpenAI 兼容 /audio/speech、MiniMax T2A v2、Google Gemini TTS、
+// ElevenLabs、Fish Audio、字节跳动（火山引擎）TTS。返回音频 Buffer + MIME
+//（Gemini 返回 L16 PCM，此处统一包一层 WAV 头，浏览器 <audio> 可直接播放）。
+export type TtsMime = 'audio/mpeg' | 'audio/wav';
+export interface TtsResult {
+  audio: Buffer;
+  mime: TtsMime;
+}
+
+// L16 PCM → WAV 容器（44 字节 RIFF 头）
+function pcmToWav(pcm: Buffer, sampleRate = 24000, channels = 1, bitsPerSample = 16): Buffer {
+  const header = Buffer.alloc(44);
+  const dataSize = pcm.length;
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE((sampleRate * channels * bitsPerSample) / 8, 28);
+  header.writeUInt16LE((channels * bitsPerSample) / 8, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(dataSize, 40);
+  return Buffer.concat([header, pcm]);
+}
+
+// 语速 / 音调统一参数（v2.3.34）
+//   speed：语速倍率，1=原速（范围 0.5~2.0，归一后钳制 0.25~4 以适配各厂商上限）
+//   pitch：音调偏移（近似半音），0=不变（范围 -12~12）
+// 约定：只有协议原生支持该参数的适配器才真正使用它，其余适配器忽略（参数名以 _ 前缀标注）。
+export interface TtsOptions {
+  speed?: number;
+  pitch?: number;
+}
+
+// 语速归一：非法/<=0 → 1（原速）；钳制到 0.25~4（覆盖各家参数范围）
+function normSpeed(v?: number): number {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return Math.min(4, Math.max(0.25, n));
+}
+// 音调归一：非法 → 0（不变）；钳制到 -12~12（半音）
+function normPitch(v?: number): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.min(12, Math.max(-12, n));
+}
+// 半音偏移 → 频率比（把「音调」换算成各厂商要求倍率形式的音高参数）
+function pitchRatio(semitones: number): number {
+  return Math.pow(2, semitones / 12);
+}
+
 export async function textToSpeech(
   cfg: { baseUrl: string; apiKey: string },
   text: string,
   model: string,
-  voice: string
-): Promise<Buffer> {
+  voice: string,
+  opts?: TtsOptions
+): Promise<TtsResult> {
   if (!cfg.apiKey) throw new Error('TTS 模型未配置 API Key');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 60000);
+  const speed = normSpeed(opts?.speed);
+  const pitch = normPitch(opts?.pitch);
   try {
-    const resp = await fetch(joinUrl(cfg.baseUrl, '/audio/speech'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: model || 'tts-1',
-        voice: voice || 'alloy',
-        input: text.slice(0, 4096),
-        response_format: 'mp3',
-      }),
-      signal: controller.signal,
-    });
-    if (!resp.ok) {
-      const errText = await resp.text();
-      throw new Error(`TTS 失败 ${resp.status}: ${errText.slice(0, 300)}`);
+    const rawBase = (cfg.baseUrl || '').trim().replace(/\/+$/, '');
+    // 字节/豆包 v3 单向流式（国内 openspeech.bytedance.com/api/v3/... 与 BytePlus 国际站 voice.*.bytepluses.com）
+    // 必须排在 v1 判定之前——国内 v1 与 v3 同域名，只能按路径区分。
+    if (/bytepluses\.com/i.test(rawBase) || /\/api\/v3\/tts\/unidirectional/i.test(rawBase)) {
+      return await ttsByteDanceV3(rawBase, cfg.apiKey, text, model, voice, speed, pitch, controller.signal);
     }
-    const buf = Buffer.from(await resp.arrayBuffer());
-    return buf;
+    if (/\/t2a_v2$/i.test(rawBase)) {
+      // MiniMax：国内站 api.minimaxi.chat / api.minimaxi.com，国际站 api.minimax.io（同协议，按 baseUrl 原样调用）
+      return await ttsMiniMax(rawBase, cfg.apiKey, text, model, voice, speed, pitch, controller.signal);
+    }
+    if (/generativelanguage\.googleapis\.com/i.test(rawBase) || /:generatecontent$/i.test(rawBase)) {
+      return await ttsGemini(rawBase, cfg.apiKey, text, model, voice, controller.signal);
+    }
+    if (/api\.elevenlabs\.io/i.test(rawBase)) {
+      return await ttsElevenLabs(rawBase, cfg.apiKey, text, model, voice, speed, pitch, controller.signal);
+    }
+    if (/api\.fish\.audio/i.test(rawBase)) {
+      return await ttsFishAudio(rawBase, cfg.apiKey, text, model, voice, speed, pitch, controller.signal);
+    }
+    if (/openspeech\.bytedance\.com/i.test(rawBase) || /\/api\/v1\/tts$/i.test(rawBase)) {
+      return await ttsByteDance(rawBase, cfg.apiKey, text, model, voice, speed, pitch, controller.signal);
+    }
+    // Azure 语音服务：全球 tts.speech.microsoft.com；中国区（世纪互联）<region>.tts.speech.azure.cn / *.cognitiveservices.azure.cn
+    if (/tts\.speech\.(?:microsoft\.com|azure\.cn)/i.test(rawBase) || /cognitiveservices\/v1/i.test(rawBase)) {
+      return await ttsAzure(rawBase, cfg.apiKey, text, model, voice, speed, pitch, controller.signal);
+    }
+    // AWS Polly：全球 polly.<region>.amazonaws.com；中国区 polly.cn-north-1.amazonaws.com.cn
+    if (/polly\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?/i.test(rawBase)) {
+      return await ttsPolly(rawBase, cfg.apiKey, text, model, voice, controller.signal);
+    }
+    // 腾讯云：国内 tts.tencentcloudapi.com；国际站 tts.intl.tencentcloudapi.com（签名与 Host 按 baseUrl 推导）
+    if (/tencentcloudapi\.com/i.test(rawBase)) {
+      return await ttsTencent(rawBase, cfg.apiKey, text, model, voice, speed, pitch, controller.signal);
+    }
+    if (/baidubce\.com|tsn\.baidu\.com/i.test(rawBase)) {
+      return await ttsBaidu(rawBase, cfg.apiKey, text, model, voice, speed, pitch, controller.signal);
+    }
+    // 阿里云百炼 DashScope：国内 dashscope.aliyuncs.com；国际（新加坡）dashscope-intl.aliyuncs.com；美国 dashscope-us.aliyuncs.com
+    if (/dashscope(?:-intl|-us)?\.aliyuncs\.com/i.test(rawBase)) {
+      return await ttsAliyun(rawBase, cfg.apiKey, text, model, voice, speed, pitch, controller.signal);
+    }
+    if (/api\.cartesia\.ai/i.test(rawBase)) {
+      return await ttsCartesia(rawBase, cfg.apiKey, text, model, voice, speed, pitch, controller.signal);
+    }
+    // OpenAI 原生协议（官方端点）优先于兼容协议识别（v2.3.25）
+    if (/api\.openai\.com/i.test(rawBase)) {
+      return await ttsOpenAINative(rawBase, cfg.apiKey, text, model, voice, speed, controller.signal);
+    }
+    return await ttsOpenAI(rawBase, cfg.apiKey, text, model, voice, speed, controller.signal);
   } finally {
     clearTimeout(timer);
   }
+}
+
+// ---------- OpenAI 兼容（含各类第三方 /audio/speech 网关） ----------
+async function ttsOpenAI(base: string, apiKey: string, text: string, model: string, voice: string, speed: number, signal: AbortSignal): Promise<TtsResult> {
+  // v2.3.23：模型/音色不再内置默认——只认用户手填或服务端拉取的值，留空明确报错
+  if (!model) throw new Error('OpenAI 兼容 TTS：请填写模型名（如 tts-1）');
+  if (!voice) throw new Error('OpenAI 兼容 TTS：请填写音色（可从服务端拉取或手填）');
+  const speechUrl = /\/audio\/speech$/i.test(base) ? base : joinUrl(base, '/audio/speech');
+  const body: Record<string, any> = {
+    model,
+    voice,
+    input: text.slice(0, 4096),
+    response_format: 'mp3',
+  };
+  // 语速（v2.3.34）：协议原生支持，未调整时不带该字段以免影响不支持 speed 的网关
+  if (speed !== 1) body.speed = Number(speed.toFixed(3));
+  const resp = await fetch(speechUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    // 兼容网关的错误响应可能是 JSON（error.message）或纯文本，两者都识别
+    let msg = errText.slice(0, 300);
+    try {
+      const j = JSON.parse(errText);
+      if (j?.error?.message) msg = String(j.error.message).slice(0, 300);
+    } catch { /* 非 JSON */ }
+    throw new Error(`TTS 失败 ${resp.status}: ${msg}`);
+  }
+  // v2.3.25：部分兼容网关成功时返回 JSON（base64 音频或音频下载 URL）而非二进制流——防御解析
+  const ct = (resp.headers.get('content-type') || '').toLowerCase();
+  if (ct.includes('application/json')) {
+    const j: any = await resp.json();
+    const b64 = j?.audio ?? j?.b64_json ?? j?.data?.audio ?? j?.data;
+    if (typeof b64 === 'string' && b64.length > 0) {
+      return { audio: Buffer.from(b64, 'base64'), mime: 'audio/mpeg' };
+    }
+    const audioUrl = j?.audio_url ?? j?.url ?? j?.data?.url;
+    if (typeof audioUrl === 'string' && audioUrl) {
+      const r2 = await fetch(audioUrl, { signal });
+      if (!r2.ok) throw new Error(`TTS 音频下载失败 ${r2.status}`);
+      return { audio: Buffer.from(await r2.arrayBuffer()), mime: 'audio/mpeg' };
+    }
+    throw new Error(`TTS 失败：网关返回了无法识别的 JSON 响应：${JSON.stringify(j).slice(0, 200)}`);
+  }
+  return { audio: Buffer.from(await resp.arrayBuffer()), mime: 'audio/mpeg' };
+}
+
+// ---------- OpenAI 原生 TTS（api.openai.com 官方端点）：POST /v1/audio/speech，返回二进制 mp3 ----------
+// Base URL 填 https://api.openai.com/v1（或根域名 / 完整 /audio/speech 地址，自动归一）；
+// 模型如 gpt-4o-mini-tts / tts-1 / tts-1-hd；音色为官方预置音色名（官方无列表端点，手填）。
+// 官方错误响应为 JSON（error.message），解析后透出原文。
+async function ttsOpenAINative(base: string, apiKey: string, text: string, model: string, voice: string, speed: number, signal: AbortSignal): Promise<TtsResult> {
+  if (!model) throw new Error('OpenAI 原生 TTS：请填写模型名（如 gpt-4o-mini-tts / tts-1 / tts-1-hd）');
+  if (!voice) throw new Error('OpenAI 原生 TTS：请填写音色（官方预置音色名，见 OpenAI 文档）');
+  let url = base;
+  if (!/\/audio\/speech$/i.test(url)) url = `${url}/audio/speech`;
+  if (!/\/v1\/audio\/speech$/i.test(url)) url = url.replace(/\/audio\/speech$/i, '/v1/audio/speech');
+  const body: Record<string, any> = {
+    model,
+    voice,
+    input: text.slice(0, 4096),
+    response_format: 'mp3',
+  };
+  // 语速（官方范围 0.25~4.0）；未调整时不带该字段
+  if (speed !== 1) body.speed = Number(speed.toFixed(3));
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    let msg = errText.slice(0, 300);
+    try {
+      const j = JSON.parse(errText);
+      if (j?.error?.message) msg = String(j.error.message).slice(0, 300);
+    } catch { /* 非 JSON */ }
+    throw new Error(`OpenAI 原生 TTS 失败 ${resp.status}: ${msg}`);
+  }
+  return { audio: Buffer.from(await resp.arrayBuffer()), mime: 'audio/mpeg' };
+}
+
+// ---------- MiniMax T2A v2：请求体/响应均为私有格式，data.audio 为 hex 编码 ----------
+// 国内站 api.minimaxi.chat / api.minimaxi.com，国际站 api.minimax.io（同协议，按 baseUrl 原样调用）
+async function ttsMiniMax(base: string, apiKey: string, text: string, model: string, voice: string, speed: number, pitch: number, signal: AbortSignal): Promise<TtsResult> {
+  if (!model) throw new Error('MiniMax TTS：请填写模型名（如 speech-02-hd / speech-02-turbo）');
+  if (!voice) throw new Error('MiniMax TTS：请填写音色 voice_id（如 female-shaonv）');
+  // 语速（官方 0.5~2.0）与音调（官方 -12~12，近似半音）均原生支持（v2.3.34）
+  const resp = await fetch(base, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model,
+      text: text.slice(0, 10000),
+      stream: false,
+      voice_setting: {
+        voice_id: voice,
+        speed: Number(Math.min(2, Math.max(0.5, speed)).toFixed(2)),
+        vol: 1.0,
+        pitch: Math.round(Math.min(12, Math.max(-12, pitch))),
+      },
+      audio_setting: { sample_rate: 32000, bitrate: 128000, format: 'mp3', channel: 1 },
+    }),
+    signal,
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`MiniMax TTS 失败 ${resp.status}: ${errText.slice(0, 300)}`);
+  }
+  const data: any = await resp.json();
+  const sc = data?.base_resp?.status_code;
+  if (sc !== 0 && sc !== undefined && sc !== null) {
+    throw new Error(`MiniMax TTS 失败 ${sc}: ${String(data?.base_resp?.status_msg || '').slice(0, 300)}`);
+  }
+  const audioHex: string = data?.data?.audio || '';
+  if (!audioHex) throw new Error('MiniMax TTS 未返回音频数据');
+  // 官方返回 hex 编码；防御校验：非合法 hex（如某些版本返回 base64）时按 base64 解码兜底
+  const isHex = /^[0-9a-fA-F]+$/.test(audioHex) && audioHex.length % 2 === 0;
+  return { audio: isHex ? Buffer.from(audioHex, 'hex') : Buffer.from(audioHex, 'base64'), mime: 'audio/mpeg' };
+}
+
+// ---------- Google Gemini TTS：generateContent + responseModalities:[AUDIO]，返回 L16 PCM ----------
+async function ttsGemini(base: string, apiKey: string, text: string, model: string, voice: string, signal: AbortSignal): Promise<TtsResult> {
+  if (!model) throw new Error('Gemini TTS：请填写模型名（如 gemini-2.5-flash-preview-tts）');
+  if (!voice) throw new Error('Gemini TTS：请填写音色（官方预置音色名，如 Kore）');
+  const url = /:generatecontent$/i.test(base) ? base : `${base}/models/${model}:generateContent`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: text.slice(0, 8000) }] }],
+      generationConfig: {
+        responseModalities: ['AUDIO'],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
+      },
+    }),
+    signal,
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Gemini TTS 失败 ${resp.status}: ${errText.slice(0, 300)}`);
+  }
+  const data: any = await resp.json();
+  const part = (data?.candidates?.[0]?.content?.parts || []).find((p: any) => p?.inlineData?.data);
+  const b64: string = part?.inlineData?.data || '';
+  if (!b64) throw new Error('Gemini TTS 未返回音频数据');
+  const mimeType: string = part?.inlineData?.mimeType || 'audio/L16;rate=24000';
+  if (/audio\/(wav|x-wav)/i.test(mimeType)) {
+    return { audio: Buffer.from(b64, 'base64'), mime: 'audio/wav' };
+  }
+  const rateMatch = /rate=(\d+)/i.exec(mimeType);
+  const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
+  return { audio: pcmToWav(Buffer.from(b64, 'base64'), sampleRate), mime: 'audio/wav' };
+}
+
+// ---------- ElevenLabs：POST /v1/text-to-speech/{voice_id}，返回二进制 mp3 ----------
+async function ttsElevenLabs(base: string, apiKey: string, text: string, model: string, voice: string, speed: number, _pitch: number, signal: AbortSignal): Promise<TtsResult> {
+  const mVoice = /\/text-to-speech\/([^/?#]+)/i.exec(base);
+  const voiceId = (mVoice ? decodeURIComponent(mVoice[1]) : voice || '').trim();
+  if (!voiceId) throw new Error('ElevenLabs：请填写音色 voice_id（「音色」栏或 Base URL 中）');
+  if (!model) throw new Error('ElevenLabs：请填写模型 model_id（如 eleven_multilingual_v2）');
+  let url = /\/text-to-speech\//i.test(base) ? base : `${base}/v1/text-to-speech/${encodeURIComponent(voiceId)}`;
+  if (!/output_format=/i.test(url)) url += `${url.includes('?') ? '&' : '?'}output_format=mp3_44100_128`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'xi-api-key': apiKey },
+    body: JSON.stringify({
+      text: text.slice(0, 5000),
+      model_id: model,
+      voice_settings: {
+        stability: 0.5,
+        similarity_boost: 0.75,
+        // 语速（v2.3.34）：ElevenLabs 官方取值范围 0.7~1.2，超出部分在此钳制（不做前端变速以免影响音色）
+        ...(speed !== 1 ? { speed: Number(Math.min(1.2, Math.max(0.7, speed)).toFixed(3)) } : {}),
+      },
+    }),
+    signal,
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`ElevenLabs TTS 失败 ${resp.status}: ${errText.slice(0, 300)}`);
+  }
+  return { audio: Buffer.from(await resp.arrayBuffer()), mime: 'audio/mpeg' };
+}
+
+// ---------- Fish Audio：POST /v1/tts，voice 即 reference_id，返回二进制 mp3 ----------
+async function ttsFishAudio(base: string, apiKey: string, text: string, _model: string, voice: string, speed: number, _pitch: number, signal: AbortSignal): Promise<TtsResult> {
+  const url = /\/tts$/i.test(base) ? base : `${base}/v1/tts`;
+  const refId = (voice || '').trim();
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      text: text.slice(0, 5000),
+      ...(refId ? { reference_id: refId } : {}),
+      format: 'mp3',
+      mp3_bitrate: 128,
+      latency: 'balanced',
+      // 语速（v2.3.34）：Fish Audio 用 prosody.speed，官方范围 0.5~2.0
+      ...(speed !== 1 ? { prosody: { speed: Number(Math.min(2, Math.max(0.5, speed)).toFixed(2)) } } : {}),
+    }),
+    signal,
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Fish Audio TTS 失败 ${resp.status}: ${errText.slice(0, 300)}`);
+  }
+  return { audio: Buffer.from(await resp.arrayBuffer()), mime: 'audio/mpeg' };
+}
+
+// ---------- 字节跳动（火山引擎）TTS：POST /api/v1/tts，响应 JSON data 为 base64 ----------
+// 凭据约定：API Key 栏填 `<AppID>:<AccessToken>`（兼容 `|` 分隔）；「模型」栏填 cluster（默认 volcano_tts）；「音色」栏填 voice_type
+async function ttsByteDance(base: string, apiKey: string, text: string, model: string, voice: string, speed: number, pitch: number, signal: AbortSignal): Promise<TtsResult> {
+  const cred = (apiKey || '').trim();
+  const sepIdx = cred.includes(':') ? cred.indexOf(':') : cred.includes('|') ? cred.indexOf('|') : -1;
+  const appId = sepIdx > 0 ? cred.slice(0, sepIdx).trim() : '';
+  const token = sepIdx > 0 ? cred.slice(sepIdx + 1).trim() : cred;
+  if (!appId || !token) throw new Error('字节 TTS：API Key 栏请按 `<AppID>:<AccessToken>` 填写');
+  if (!model) throw new Error('字节 TTS：请在「模型」栏填写 cluster（如 volcano_tts）');
+  const voiceType = (voice || '').trim();
+  if (!voiceType) throw new Error('字节 TTS：请填写音色 voice_type（见火山引擎控制台）');
+  const url = /\/api\/v1\/tts$/i.test(base) ? base : `${base.replace(/\/api\/v1\/tts.*$/i, '')}/api/v1/tts`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer; ${token}` },
+    body: JSON.stringify({
+      app: { appid: appId, token, cluster: model },
+      user: { uid: 'nianyu' },
+      audio: {
+        voice_type: voiceType,
+        encoding: 'mp3',
+        // 语速 0.2~3.0；音调 pitch_ratio 0.1~3.0（1.0=不变，按半音换算频率比）
+        speed_ratio: Math.min(3, Math.max(0.2, Number(speed.toFixed(2)))),
+        pitch_ratio: Math.min(3, Math.max(0.1, Number(pitchRatio(pitch).toFixed(3)))),
+      },
+      request: { reqid: `${Date.now()}_${Math.floor(Math.random() * 1e6)}`, text: text.slice(0, 1000), text_type: 'plain', operation: 'query' },
+    }),
+    signal,
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`字节 TTS 失败 ${resp.status}: ${errText.slice(0, 300)}`);
+  }
+  const data: any = await resp.json();
+  if (data?.code !== 3000) {
+    throw new Error(`字节 TTS 失败 ${data?.code}: ${String(data?.message || '').slice(0, 300)}`);
+  }
+  const b64: string = data?.data || '';
+  if (!b64) throw new Error('字节 TTS 未返回音频数据');
+  return { audio: Buffer.from(b64, 'base64'), mime: 'audio/mpeg' };
+}
+
+// ---------- 豆包语音 2.0 / BytePlus（v3 单向流式 HTTP） ----------
+// 国内：https://openspeech.bytedance.com/api/v3/tts/unidirectional
+// 国际（BytePlus）：https://voice.<region>.bytepluses.com/api/v3/tts/unidirectional
+// 鉴权：新版控制台用单个 API Key（Header `X-Api-Key`）；兼容旧版 `AppID:AccessToken`（拆成 X-Api-App-Id / X-Api-Access-Key）。
+// 「模型」栏填 X-Api-Resource-Id（TTS 2.0=seed-tts-2.0，TTS 1.0=seed-tts-1.0 / volc.service_type.1000009），留空默认 seed-tts-2.0。
+// 「音色」栏填 speaker（控制台音色库 ID）。响应为逐行 JSON 帧，音频为 base64 分段，需按到达顺序拼接。
+async function ttsByteDanceV3(base: string, apiKey: string, text: string, model: string, voice: string, speed: number, pitch: number, signal: AbortSignal): Promise<TtsResult> {
+  const cred = (apiKey || '').trim();
+  const sepIdx = cred.includes(':') ? cred.indexOf(':') : cred.includes('|') ? cred.indexOf('|') : -1;
+  const appId = sepIdx > 0 ? cred.slice(0, sepIdx).trim() : '';
+  const accessKey = sepIdx > 0 ? cred.slice(sepIdx + 1).trim() : '';
+  const speaker = (voice || '').trim();
+  if (!speaker) throw new Error('豆包语音 2.0 TTS：请填写音色（speaker，见控制台音色库）');
+  const resourceId = (model || '').trim() || 'seed-tts-2.0';
+  const url = /\/api\/v3\/tts\/unidirectional$/i.test(base)
+    ? base
+    : `${base.replace(/\/api\/v3\/tts.*$/i, '').replace(/\/api\/v1\/tts.*$/i, '')}/api/v3/tts/unidirectional`;
+  let reqId = '';
+  try { reqId = crypto.randomUUID(); } catch { reqId = `nianyu-${Date.now()}-${Math.floor(Math.random() * 1e6)}`; }
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Api-Resource-Id': resourceId,
+    'X-Api-Request-Id': reqId,
+    Connection: 'keep-alive',
+  };
+  if (appId && accessKey) {
+    // 兼容旧版控制台凭据（AppID + AccessToken 一对）
+    headers['X-Api-App-Id'] = appId;
+    headers['X-Api-Access-Key'] = accessKey;
+    headers['X-Api-App-Key'] = 'aGjiRDfUWi';
+  } else {
+    // 推荐：新版控制台生成的单个 API Key
+    headers['X-Api-Key'] = cred;
+  }
+  // 语速：speech_rate 官方范围 [-50, 100]（0=原速，100=2.0 倍速，-50=0.5 倍速）
+  const speechRate = Math.max(-50, Math.min(100, Math.round((speed - 1) * 100)));
+  const reqParams: Record<string, any> = {
+    text: text.slice(0, 5000),
+    speaker,
+    audio_params: { format: 'mp3', sample_rate: 24000, speech_rate: speechRate },
+  };
+  // 音调：additions 为 JSON 字符串，post_process.pitch 官方范围 [-12, 12]（0=不变）
+  if (pitch !== 0) reqParams.additions = JSON.stringify({ post_process: { pitch: Math.round(pitch) } });
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ req_params: reqParams }),
+    signal,
+  });
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    throw new Error(`豆包语音 2.0 TTS 失败 ${resp.status}: ${errText.slice(0, 300)}`);
+  }
+  const ct = (resp.headers.get('content-type') || '').toLowerCase();
+  // 少数网关直接回二进制音频
+  if (ct.startsWith('audio/')) {
+    return { audio: Buffer.from(await resp.arrayBuffer()), mime: 'audio/mpeg' };
+  }
+  const frames: Buffer[] = [];
+  const handleFrame = (obj: any): void => {
+    if (!obj || typeof obj !== 'object') return;
+    const b64 = obj.data ?? obj.audio ?? obj.payload ?? obj?.data?.audio;
+    if (typeof b64 === 'string' && b64) {
+      try { frames.push(Buffer.from(b64, 'base64')); } catch { /* 单帧解码失败则跳过 */ }
+    }
+  };
+  let raw = '';
+  const reader = resp.body?.getReader();
+  if (reader) {
+    const decoder = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl = buf.indexOf('\n');
+      while (nl >= 0) {
+        const line = buf.slice(0, nl).replace(/^\s*data:\s*/i, '').trim();
+        buf = buf.slice(nl + 1);
+        if (line) {
+          raw += line;
+          try { handleFrame(JSON.parse(line)); } catch { /* 非完整 JSON 帧，最后统一兜底 */ }
+        }
+        nl = buf.indexOf('\n');
+      }
+    }
+    const tail = buf.replace(/^\s*data:\s*/i, '').trim();
+    if (tail) {
+      raw += tail;
+      try { handleFrame(JSON.parse(tail)); } catch { /* 兜底处理 */ }
+    }
+  } else {
+    raw = await resp.text().catch(() => '');
+    try { handleFrame(JSON.parse(raw)); } catch { /* 兜底处理 */ }
+  }
+  if (!frames.length) {
+    // 兜底：部分实现把多个 JSON 帧直接串联 / 未按行分隔，用正则抽出所有 base64 音频字段
+    const re = /"(?:data|audio|payload)"\s*:\s*"([A-Za-z0-9+/=]{64,})"/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(raw)) !== null) {
+      try { frames.push(Buffer.from(m[1], 'base64')); } catch { /* 忽略非法 base64 */ }
+    }
+  }
+  if (!frames.length) {
+    const err = /"(?:message|msg)"\s*:\s*"([^"]{1,200})"/.exec(raw);
+    throw new Error(`豆包语音 2.0 TTS 未返回音频数据${err ? `：${err[1]}` : ''}`);
+  }
+  return { audio: Buffer.concat(frames), mime: 'audio/mpeg' };
+}
+
+// ---------- Azure TTS（认知服务语音）：SSML POST /cognitiveservices/v1，返回二进制 mp3 ----------
+// Base URL 形如 https://<region>.tts.speech.microsoft.com（可带 /cognitiveservices/v1）；API Key 即订阅密钥；「音色」填神经语音名（如 zh-CN-XiaoxiaoNeural 或 XiaoxiaoNeural）
+async function ttsAzure(base: string, apiKey: string, text: string, _model: string, voice: string, speed: number, pitch: number, signal: AbortSignal): Promise<TtsResult> {
+  let url = base;
+  if (!/cognitiveservices\/v1/i.test(url)) url = `${url}/cognitiveservices/v1`;
+  const name0 = (voice || '').trim() || 'zh-CN-XiaoxiaoNeural';
+  const voiceName = name0.includes('-') ? name0 : `zh-CN-${name0}`;
+  const body = text.slice(0, 5000).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // 语速/音调：Azure 走 SSML <prosody rate="+20%" pitch="+2st">；未调整时不加该层，保持原始 SSML 结构
+  const rateAttr = speed !== 1 ? ` rate='${speed >= 1 ? '+' : ''}${Math.round((speed - 1) * 100)}%'` : '';
+  const pitchAttr = pitch !== 0 ? ` pitch='${pitch > 0 ? '+' : ''}${Math.round(pitch)}st'` : '';
+  const inner = rateAttr || pitchAttr ? `<prosody${rateAttr}${pitchAttr}>${body}</prosody>` : body;
+  const ssml =
+    `<speak version='1.0' xml:lang='zh-CN'><voice name='${voiceName.replace(/['<>&]/g, '')}'>` +
+    inner +
+    `</voice></speak>`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Ocp-Apim-Subscription-Key': apiKey,
+      'Content-Type': 'application/ssml+xml',
+      'X-Microsoft-OutputFormat': 'audio-24khz-48kbitrate-mono-mp3',
+      'User-Agent': 'nianyu-tts',
+    },
+    body: ssml,
+    signal,
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Azure TTS 失败 ${resp.status}: ${errText.slice(0, 300)}`);
+  }
+  return { audio: Buffer.from(await resp.arrayBuffer()), mime: 'audio/mpeg' };
+}
+
+function sha256Hex(data: crypto.BinaryLike): string {
+  return crypto.createHash('sha256').update(data).digest('hex');
+}
+function hmacBuf(key: crypto.BinaryLike, data: string): Buffer {
+  return crypto.createHmac('sha256', key).update(data).digest();
+}
+
+// ---------- AWS Polly：SigV4 签名 POST /v1/speech，返回二进制 mp3 ----------
+// Base URL 形如 https://polly.<region>.amazonaws.com；API Key 栏填 `<AccessKeyId>:<SecretAccessKey>`；「音色」填 VoiceId（如 Zhiyu）
+async function ttsPolly(base: string, apiKey: string, text: string, _model: string, voice: string, signal: AbortSignal): Promise<TtsResult> {
+  const cred = (apiKey || '').trim();
+  const sepIdx = cred.includes(':') ? cred.indexOf(':') : cred.includes('|') ? cred.indexOf('|') : -1;
+  const accessKey = sepIdx > 0 ? cred.slice(0, sepIdx).trim() : '';
+  const secretKey = sepIdx > 0 ? cred.slice(sepIdx + 1).trim() : '';
+  if (!accessKey || !secretKey) throw new Error('AWS Polly：API Key 栏请按 `<AccessKeyId>:<SecretAccessKey>` 填写');
+  const regionMatch = /polly\.([a-z0-9-]+)\.amazonaws\.com/i.exec(base);
+  const region = regionMatch ? regionMatch[1] : 'us-east-1';
+  const host = `polly.${region}.amazonaws.com`;
+  const voiceId = (voice || '').trim();
+  if (!voiceId) throw new Error('AWS Polly：请填写音色 VoiceId（如 Zhiyu）');
+  const payload = JSON.stringify({
+    OutputFormat: 'mp3',
+    Text: text.slice(0, 2500),
+    TextType: 'text',
+    VoiceId: voiceId,
+  });
+  const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const dateStamp = amzDate.slice(0, 8);
+  const service = 'polly';
+  const canonicalHeaders = `content-type:application/json\nhost:${host}\nx-amz-date:${amzDate}\n`;
+  const signedHeaders = 'content-type;host;x-amz-date';
+  const canonicalRequest = ['POST', '/v1/speech', '', canonicalHeaders, signedHeaders, sha256Hex(payload)].join('\n');
+  const scope = `${dateStamp}/${region}/${service}/aws4_request`;
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256Hex(canonicalRequest)].join('\n');
+  const kDate = hmacBuf(`AWS4${secretKey}`, dateStamp);
+  const kRegion = hmacBuf(kDate, region);
+  const kService = hmacBuf(kRegion, service);
+  const kSigning = hmacBuf(kService, 'aws4_request');
+  const signature = crypto.createHmac('sha256', kSigning).update(stringToSign).digest('hex');
+  const authorization = `AWS4-HMAC-SHA256 Credential=${accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  const resp = await fetch(`https://${host}/v1/speech`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Amz-Date': amzDate, Authorization: authorization },
+    body: payload,
+    signal,
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`AWS Polly 失败 ${resp.status}: ${errText.slice(0, 300)}`);
+  }
+  return { audio: Buffer.from(await resp.arrayBuffer()), mime: 'audio/mpeg' };
+}
+
+// Polly 音色列表（DescribeVoices，GET /v1/voices，同样走 SigV4）：供设置页实时拉取，失败由调用方回退空列表
+export async function listPollyVoices(base: string, apiKey: string): Promise<string[]> {
+  const cred = (apiKey || '').trim();
+  const sepIdx = cred.includes(':') ? cred.indexOf(':') : cred.includes('|') ? cred.indexOf('|') : -1;
+  const accessKey = sepIdx > 0 ? cred.slice(0, sepIdx).trim() : '';
+  const secretKey = sepIdx > 0 ? cred.slice(sepIdx + 1).trim() : '';
+  if (!accessKey || !secretKey) return [];
+  const regionMatch = /polly\.([a-z0-9-]+)\.amazonaws\.com/i.exec(base);
+  const region = regionMatch ? regionMatch[1] : 'us-east-1';
+  const host = `polly.${region}.amazonaws.com`;
+  const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const dateStamp = amzDate.slice(0, 8);
+  const service = 'polly';
+  const canonicalHeaders = `host:${host}\nx-amz-date:${amzDate}\n`;
+  const signedHeaders = 'host;x-amz-date';
+  const canonicalRequest = ['GET', '/v1/voices', '', canonicalHeaders, signedHeaders, sha256Hex('')].join('\n');
+  const scope = `${dateStamp}/${region}/${service}/aws4_request`;
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256Hex(canonicalRequest)].join('\n');
+  const kDate = hmacBuf(`AWS4${secretKey}`, dateStamp);
+  const kRegion = hmacBuf(kDate, region);
+  const kService = hmacBuf(kRegion, service);
+  const kSigning = hmacBuf(kService, 'aws4_request');
+  const signature = crypto.createHmac('sha256', kSigning).update(stringToSign).digest('hex');
+  const authorization = `AWS4-HMAC-SHA256 Credential=${accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  const resp = await fetch(`https://${host}/v1/voices`, {
+    headers: { 'X-Amz-Date': amzDate, Authorization: authorization },
+  });
+  if (!resp.ok) return [];
+  const data: any = await resp.json();
+  return (data?.Voices || []).map((v: any) => v?.Id).filter(Boolean);
+}
+
+// ---------- 腾讯云 TTS：TC3-HMAC-SHA256 签名 POST tts.tencentcloudapi.com（TextToVoice），响应 Audio 为 base64 ----------
+// Base URL 填 https://tts.tencentcloudapi.com；API Key 栏填 `<SecretId>:<SecretKey>`；「音色」填 VoiceType（数字音色码如 101001，或字符串音色 ID）
+async function ttsTencent(base: string, apiKey: string, text: string, _model: string, voice: string, speed: number, _pitch: number, signal: AbortSignal): Promise<TtsResult> {
+  const cred = (apiKey || '').trim();
+  const sepIdx = cred.includes(':') ? cred.indexOf(':') : cred.includes('|') ? cred.indexOf('|') : -1;
+  const secretId = sepIdx > 0 ? cred.slice(0, sepIdx).trim() : '';
+  const secretKey = sepIdx > 0 ? cred.slice(sepIdx + 1).trim() : '';
+  if (!secretId || !secretKey) throw new Error('腾讯云 TTS：API Key 栏请按 `<SecretId>:<SecretKey>` 填写');
+  // 域名与地域按 baseUrl 推导，同时适配国内站与国际站：
+  //   国内：tts.tencentcloudapi.com（默认，不显式带地域，保持既有可用配置不变）
+  //   国际：tts.intl.tencentcloudapi.com（地域 ap-singapore）
+  //   指定地域：tts.ap-guangzhou.tencentcloudapi.com 等
+  // 注意：只有「显式识别出地域」时才带 X-TC-Region（且必须参与签名）；
+  //      默认国内站不带该头，避免影响原本已正常工作的国内站配置。
+  let host = 'tts.tencentcloudapi.com';
+  let region = 'ap-guangzhou';
+  let regionExplicit = false;
+  try {
+    const h = new URL(/^https?:\/\//i.test(base) ? base : `https://${base}`).host.toLowerCase();
+    if (/^tts\.intl\.tencentcloudapi\.com$/.test(h)) {
+      host = h;
+      region = 'ap-singapore';
+      regionExplicit = true;
+    } else if (/^tts\.tencentcloudapi\.com$/.test(h)) {
+      host = h;
+    } else if (/^tts\.[a-z0-9-]+\.tencentcloudapi\.com$/.test(h)) {
+      host = h;
+      region = h.split('.')[1];
+      regionExplicit = true;
+    } else if (/tencentcloudapi\.com$/.test(h)) {
+      host = h;
+    }
+  } catch { /* baseUrl 非法时回退国内站默认值 */ }
+  const service = 'tts';
+  const action = 'TextToVoice';
+  const version = '2019-08-23';
+  const vt = (voice || '').trim();
+  if (!vt) throw new Error('腾讯云 TTS：请填写音色 VoiceType（见控制台音色列表）');
+  // 语速：官方 Speed 参数范围 [-2, 6]（0=原速，1=1.2 倍，2=1.5 倍，6=2.5 倍，可带一位小数）
+  const speedParam = speed <= 1 ? 5 * (speed - 1) : speed <= 1.5 ? 5 * (speed - 1) : 2 + 4 * (speed - 1.5);
+  const payload: Record<string, any> = {
+    Text: text.slice(0, 600),
+    SessionId: `nianyu${Date.now() % 100000000}`,
+    VoiceType: /^\d+$/.test(vt) ? parseInt(vt, 10) : vt,
+    Codec: 'mp3', // 与返回 MIME 对齐（默认 wav 会造成格式与声明不一致）
+    ...(speed !== 1 ? { Speed: Number(Math.min(6, Math.max(-2, speedParam)).toFixed(1)) } : {}),
+  };
+  const bodyStr = JSON.stringify(payload);
+  const now = new Date();
+  const timestamp = Math.floor(now.getTime() / 1000);
+  const dateStamp = now.toISOString().slice(0, 10).replace(/-/g, '');
+  const canonicalHeaders =
+    `content-type:application/json; charset=utf-8\nhost:${host}\nx-tc-action:${action.toLowerCase()}\n` +
+    (regionExplicit ? `x-tc-region:${region}\n` : '');
+  const signedHeaders = regionExplicit ? 'content-type;host;x-tc-action;x-tc-region' : 'content-type;host;x-tc-action';
+  const canonicalRequest = ['POST', '/', '', canonicalHeaders, signedHeaders, sha256Hex(bodyStr)].join('\n');
+  const stringToSign = ['TC3-HMAC-SHA256', String(timestamp), `${dateStamp}/${service}/tc3_request`, sha256Hex(canonicalRequest)].join('\n');
+  const kDate = hmacBuf(`TC3${secretKey}`, dateStamp);
+  const kService = hmacBuf(kDate, service);
+  const kSigning = hmacBuf(kService, 'tc3_request');
+  const signature = crypto.createHmac('sha256', kSigning).update(stringToSign).digest('hex');
+  const authorization = `TC3-HMAC-SHA256 Credential=${secretId}/${dateStamp}/${service}/tc3_request, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  const resp = await fetch(`https://${host}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'X-TC-Action': action,
+      'X-TC-Version': version,
+      'X-TC-Timestamp': String(timestamp),
+      ...(regionExplicit ? { 'X-TC-Region': region } : {}),
+      Authorization: authorization,
+    },
+    body: bodyStr,
+    signal,
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`腾讯云 TTS 失败 ${resp.status}: ${errText.slice(0, 300)}`);
+  }
+  const data: any = await resp.json();
+  const err = data?.Response?.Error;
+  if (err) throw new Error(`腾讯云 TTS 失败 ${err.Code}: ${String(err.Message || '').slice(0, 300)}`);
+  const b64: string = data?.Response?.Audio || '';
+  if (!b64) throw new Error('腾讯云 TTS 未返回音频数据');
+  return { audio: Buffer.from(b64, 'base64'), mime: 'audio/mpeg' };
+}
+
+// ---------- 百度智能云 TTS：OAuth 换 access_token + tsn.baidu.com/text2audio，返回二进制 mp3 ----------
+// API Key 栏填 `<APIKey>:<SecretKey>`；「音色」填精品音库 voicer 编号（如 4），留空用基础音库
+const baiduTokenCache = new Map<string, { token: string; expiresAt: number }>();
+async function ttsBaidu(_base: string, apiKey: string, text: string, _model: string, voice: string, speed: number, pitch: number, signal: AbortSignal): Promise<TtsResult> {
+  const cred = (apiKey || '').trim();
+  const sepIdx = cred.includes(':') ? cred.indexOf(':') : cred.includes('|') ? cred.indexOf('|') : -1;
+  const ak = sepIdx > 0 ? cred.slice(0, sepIdx).trim() : '';
+  const sk = sepIdx > 0 ? cred.slice(sepIdx + 1).trim() : '';
+  if (!ak || !sk) throw new Error('百度 TTS：API Key 栏请按 `<APIKey>:<SecretKey>` 填写');
+  // OAuth access_token（有效期 30 天，本地缓存 25 天）
+  const now = Date.now();
+  let cached = baiduTokenCache.get(sk);
+  if (!cached || cached.expiresAt < now) {
+    const tr = await fetch(
+      `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${encodeURIComponent(ak)}&client_secret=${encodeURIComponent(sk)}`,
+      { method: 'POST', signal }
+    );
+    if (!tr.ok) throw new Error(`百度 TTS：获取 access_token 失败 ${tr.status}`);
+    const td: any = await tr.json();
+    if (!td?.access_token) {
+      throw new Error(`百度 TTS：获取 access_token 失败：${String(td?.error_description || td?.error || '未知').slice(0, 200)}`);
+    }
+    cached = { token: td.access_token, expiresAt: now + Math.min(td.expires_in || 2592000, 2160000) * 1000 };
+    baiduTokenCache.set(sk, cached);
+  }
+  // 语速 spd / 音调 pit（v2.3.34）：百度取值为 0~15 的整数，5=正常；
+  // 语速倍率 1.0 → 5，倍率 2.0 → 10；音调半音按 5 为原点线性换算（±12 半音 → 0~15 边界）
+  const spd = Math.round(Math.min(15, Math.max(0, speed * 5)));
+  const pit = Math.round(Math.min(15, Math.max(0, 5 + (pitch * 5) / 12)));
+  const params = new URLSearchParams({
+    tex: text.slice(0, 1000),
+    tok: cached.token,
+    cuid: 'nianyu',
+    ctp: '1',
+    lan: 'zh',
+    aue: '3', // mp3
+    spd: String(spd),
+    pit: String(pit),
+    ...(voice.trim() ? { voicer: voice.trim() } : { per: '0' }),
+  });
+  const resp = await fetch('https://tsn.baidu.com/text2audio', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString(),
+    signal,
+  });
+  const ct = resp.headers.get('content-type') || '';
+  if (!resp.ok || ct.includes('application/json')) {
+    // 出错时百度返回 JSON（err_no/err_msg）
+    const t = await resp.text();
+    throw new Error(`百度 TTS 失败 ${resp.status}: ${t.slice(0, 300)}`);
+  }
+  return { audio: Buffer.from(await resp.arrayBuffer()), mime: 'audio/mpeg' };
+}
+
+// ---------- 阿里云通义 TTS：DashScope 兼容模式 /audio/speech（qwen-tts），返回二进制 ----------
+// Base URL 填 https://dashscope.aliyuncs.com/compatible-mode/v1（填根地址会自动补全）；「音色」填 qwen-tts 音色名（Cherry/Ethan 等）
+async function ttsAliyun(base: string, apiKey: string, text: string, model: string, voice: string, speed: number, _pitch: number, signal: AbortSignal): Promise<TtsResult> {
+  // 保留调用方域名（国内 dashscope / 国际 dashscope-intl / 美国 dashscope-us 三站均支持），只补齐 compatible-mode/v1 路径
+  let b = base.replace(/\/+$/, '');
+  if (!/compatible-mode/i.test(b)) {
+    b = /dashscope(?:-intl|-us)?\.aliyuncs\.com/i.test(b)
+      ? `${b}/compatible-mode/v1`
+      : 'https://dashscope.aliyuncs.com/compatible-mode/v1'; // 非 dashscope 域名：回退国内站
+  } else if (/compatible-mode$/i.test(b)) {
+    b = `${b}/v1`;
+  }
+  if (!model) throw new Error('阿里 TTS：请填写模型名（如 qwen-tts-latest）');
+  if (!voice) throw new Error('阿里 TTS：请填写音色（如 Cherry）');
+  return ttsOpenAI(b, apiKey, text, model, voice, speed, signal);
+}
+
+// ---------- Cartesia Sonic：POST /tts/bytes，返回二进制 mp3 ----------
+// Base URL 填 https://api.cartesia.ai；「音色」填 voice id；「模型」默认 sonic-2
+async function ttsCartesia(base: string, apiKey: string, text: string, model: string, voice: string, speed: number, _pitch: number, signal: AbortSignal): Promise<TtsResult> {
+  const voiceId = (voice || '').trim();
+  if (!voiceId) throw new Error('Cartesia：请填写音色 voice id');
+  if (!model) throw new Error('Cartesia：请填写模型名（如 sonic-2）');
+  const url = /\/tts\/bytes$/i.test(base) ? base : `${base}/tts/bytes`;
+  const body: Record<string, any> = {
+    model_id: model,
+    transcript: text.slice(0, 5000),
+    voice: { mode: 'id', id: voiceId },
+    output_format: { container: 'mp3', bit_rate: 128000, sample_rate: 44100 },
+  };
+  // 语速（v2.3.34）：Cartesia 走 generation_config.speed，官方范围 0.6~1.5
+  if (speed !== 1) body.generation_config = { speed: Number(Math.min(1.5, Math.max(0.6, speed)).toFixed(3)) };
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey, 'Cartesia-Version': '2025-04-16' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Cartesia TTS 失败 ${resp.status}: ${errText.slice(0, 300)}`);
+  }
+  return { audio: Buffer.from(await resp.arrayBuffer()), mime: 'audio/mpeg' };
 }
 
 // 图像生成（OpenAI 兼容 /images/generations）：返回 base64 或图片 URL
