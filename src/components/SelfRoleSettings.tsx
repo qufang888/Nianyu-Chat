@@ -9,8 +9,7 @@ export const SelfRoleSettings: React.FC<{
   selfRoles: SelfRole[];
   currentSelfRoleId: string;
   onPersist: (p: { selfRoles: SelfRole[]; currentSelfRoleId: string }) => void;
-  onBack: () => void;
-}> = ({ selfRoles, currentSelfRoleId, onPersist, onBack }) => {
+}> = ({ selfRoles, currentSelfRoleId, onPersist }) => {
   const { t } = useI18n();
   const [editing, setEditing] = useState<SelfRole | undefined>(undefined);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -59,9 +58,7 @@ export const SelfRoleSettings: React.FC<{
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <button className="btn-ghost" onClick={onBack} style={{ padding: '4px 12px' }}>
-          ← {t('settings.back')}
-        </button>
+        {/* 返回按钮已固定在设置页 header（页面名称右侧），此处不再渲染 */}
         <strong style={{ fontSize: 15 }}>{t('self.manage')}</strong>
       </div>
 
