@@ -19,6 +19,7 @@ import {
   listModels,
   testConnection,
   detectCapabilities,
+  listPollyVoices,
   CapabilityProbeResult,
   ProbeOptions,
   AIMessage,
@@ -29,6 +30,7 @@ import {
   generateImage,
   generateVideo,
   setDeepThinkLevel,
+  setAiSettingsProvider,
   AUTOCOMPLETE_SYS_PROMPT_IMAGE,
   AUTOCOMPLETE_SYS_PROMPT_VIDEO,
   AUTOCOMPLETE_MAX_TOKENS,
@@ -38,6 +40,14 @@ import {
 import { createBackup, restoreBackup } from './backup';
 import { parseCharacterCard, parseCharacterCardText } from '../src/utils/characterCard';
 import { diagnoseError } from '../src/utils/errorDiagnosis';
+import {
+  DEFAULT_MEMORY_INJECT_PROMPT,
+  DEFAULT_MEMORY_SUMMARIZE_PROMPT,
+  MEMORY_INJECT_PLACEHOLDER,
+  MEMORY_SUMMARIZE_EXISTING_PLACEHOLDER,
+  MEMORY_SUMMARIZE_DIALOGUE_PLACEHOLDER,
+} from '../src/utils/builtinPrompts';
+import { initProactiveEngine, rescheduleProactive, extractPendingCallback, heartbeatProactive } from './proactive';
 import type {
   Role,
   ChatMessage,
@@ -65,7 +75,9 @@ import {
   showFloatingBall,
   hideFloatingBall,
   setActiveChat,
+  sendBallVideoProgress,
 } from './floatingBall';
+import { seedBuiltinContent } from './builtinContent';
 
 // 媒体生成（生图/生视频）完成写入 AI 消息后补未读：仅主窗不可见 / 未正盯该聊天时计入，
 // 防止「结果已生成但悬浮球未读清单没显示」。头像按聊天类型解析（单聊取角色，群聊无头像留空）。
@@ -141,7 +153,9 @@ let lastNotifyTime = 0;
 
 const DEV_SERVER = 'http://localhost:5173';
 
-type Lang = 'zh' | 'en';
+type Lang = 'zh' | 'en' | 'fr' | 'de' | 'ja' | 'ko' | 'es' | 'pt' | 'ru' | 'zh-Hant';
+
+const MENU_LANGS: Lang[] = ['zh', 'en', 'fr', 'de', 'ja', 'ko', 'es', 'pt', 'ru', 'zh-Hant'];
 
 const MENU_LABELS: Record<Lang, Record<string, string>> = {
   zh: {
@@ -191,6 +205,71 @@ const MENU_LABELS: Record<Lang, Record<string, string>> = {
     close: 'Close',
     about: 'About Nianyu',
     learnMore: 'Learn More',
+  },
+  // ===== v2.3.38 新增语言的应用菜单 =====
+  fr: {
+    file: 'Fichier', edit: 'Éditer', view: 'Affichage', window: 'Fenêtre', help: 'Aide',
+    undo: 'Annuler', redo: 'Rétablir', cut: 'Couper', copy: 'Copier', paste: 'Coller',
+    selectAll: 'Tout sélectionner', reload: 'Recharger', forceReload: 'Recharger forcé',
+    toggleDevTools: 'Outils de développement', actualSize: 'Taille réelle',
+    zoomIn: 'Zoom avant', zoomOut: 'Zoom arrière', toggleFullscreen: 'Plein écran',
+    minimize: 'Réduire', close: 'Fermer', about: 'À propos de Nianyu', learnMore: 'En savoir plus',
+  },
+  de: {
+    file: 'Datei', edit: 'Bearbeiten', view: 'Ansicht', window: 'Fenster', help: 'Hilfe',
+    undo: 'Rückgängig', redo: 'Wiederholen', cut: 'Ausschneiden', copy: 'Kopieren', paste: 'Einfügen',
+    selectAll: 'Alles auswählen', reload: 'Neu laden', forceReload: 'Erneut neu laden',
+    toggleDevTools: 'Entwicklerwerkzeuge', actualSize: 'Tatsächliche Größe',
+    zoomIn: 'Vergrößern', zoomOut: 'Verkleinern', toggleFullscreen: 'Vollbild',
+    minimize: 'Minimieren', close: 'Schließen', about: 'Über Nianyu', learnMore: 'Mehr erfahren',
+  },
+  ja: {
+    file: 'ファイル', edit: '編集', view: '表示', window: 'ウィンドウ', help: 'ヘルプ',
+    undo: '元に戻す', redo: 'やり直す', cut: '切り取り', copy: 'コピー', paste: '貼り付け',
+    selectAll: 'すべて選択', reload: '再読み込み', forceReload: '強制再読み込み',
+    toggleDevTools: '開発者ツール', actualSize: '実際のサイズ',
+    zoomIn: '拡大', zoomOut: '縮小', toggleFullscreen: 'フルスクリーン',
+    minimize: '最小化', close: '閉じる', about: '念語について', learnMore: '詳細',
+  },
+  ko: {
+    file: '파일', edit: '편집', view: '보기', window: '창', help: '도움말',
+    undo: '실행 취소', redo: '다시 실행', cut: '잘라내기', copy: '복사', paste: '붙여넣기',
+    selectAll: '모두 선택', reload: '새로고침', forceReload: '강제 새로고침',
+    toggleDevTools: '개발자 도구', actualSize: '실제 크기',
+    zoomIn: '확대', zoomOut: '축소', toggleFullscreen: '전체 화면',
+    minimize: '최소화', close: '닫기', about: 'Nianyu 정보', learnMore: '더 알아보기',
+  },
+  es: {
+    file: 'Archivo', edit: 'Editar', view: 'Ver', window: 'Ventana', help: 'Ayuda',
+    undo: 'Deshacer', redo: 'Rehacer', cut: 'Cortar', copy: 'Copiar', paste: 'Pegar',
+    selectAll: 'Seleccionar todo', reload: 'Recargar', forceReload: 'Forzar recarga',
+    toggleDevTools: 'Herramientas de desarrollo', actualSize: 'Tamaño real',
+    zoomIn: 'Ampliar', zoomOut: 'Reducir', toggleFullscreen: 'Pantalla completa',
+    minimize: 'Minimizar', close: 'Cerrar', about: 'Acerca de Nianyu', learnMore: 'Saber más',
+  },
+  pt: {
+    file: 'Arquivo', edit: 'Editar', view: 'Ver', window: 'Janela', help: 'Ajuda',
+    undo: 'Desfazer', redo: 'Refazer', cut: 'Recortar', copy: 'Copiar', paste: 'Colar',
+    selectAll: 'Selecionar tudo', reload: 'Recarregar', forceReload: 'Forçar recarga',
+    toggleDevTools: 'Ferramentas de desenvolvedor', actualSize: 'Tamanho real',
+    zoomIn: 'Ampliar', zoomOut: 'Reduzir', toggleFullscreen: 'Tela cheia',
+    minimize: 'Minimizar', close: 'Fechar', about: 'Sobre o Nianyu', learnMore: 'Saiba mais',
+  },
+  ru: {
+    file: 'Файл', edit: 'Правка', view: 'Вид', window: 'Окно', help: 'Справка',
+    undo: 'Отменить', redo: 'Повторить', cut: 'Вырезать', copy: 'Копировать', paste: 'Вставить',
+    selectAll: 'Выбрать всё', reload: 'Перезагрузить', forceReload: 'Принудительная перезагрузка',
+    toggleDevTools: 'Инструменты разработчика', actualSize: 'Реальный размер',
+    zoomIn: 'Увеличить', zoomOut: 'Уменьшить', toggleFullscreen: 'Полный экран',
+    minimize: 'Свернуть', close: 'Закрыть', about: 'О Nianyu', learnMore: 'Узнать больше',
+  },
+  'zh-Hant': {
+    file: '檔案', edit: '編輯', view: '檢視', window: '視窗', help: '說明',
+    undo: '復原', redo: '重做', cut: '剪下', copy: '複製', paste: '貼上',
+    selectAll: '全選', reload: '重新載入', forceReload: '強制重新載入',
+    toggleDevTools: '開發人員工具', actualSize: '實際大小',
+    zoomIn: '放大', zoomOut: '縮小', toggleFullscreen: '全螢幕',
+    minimize: '最小化', close: '關閉', about: '關於 念語', learnMore: '瞭解更多',
   },
 };
 
@@ -359,6 +438,7 @@ function createWindow(opts?: { coldStart?: boolean }): void {
     // ===== 无边框自定义窗口 =====
     frame: false,
     titleBarStyle: 'hidden',
+    transparent: true, // 启用窗口透明（必须显式开启，否则 backgroundColor 全透明会被渲染成纯黑窗）
     backgroundColor: '#00000000', // 全透明背景，支撑毛玻璃半透明与圆角
     roundedCorners: true, // Windows 11 原生圆角
     hasShadow: true, // 保留窗口阴影
@@ -463,11 +543,9 @@ function createWindow(opts?: { coldStart?: boolean }): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
-    // 真正退出时销毁隐藏的小窗，让 window-all-closed 正常触发
-    if (miniWindow && !miniWindow.isDestroyed()) {
-      miniWindow.destroy();
-      miniWindow = null;
-    }
+    // v2.3.37 修复：主窗关闭（关闭行为=直接退出 或 任务栏关闭）不再连坐销毁小窗——
+    // 小窗/悬浮球/托盘独立存活，window-all-closed 仅在所有窗口真正关闭后触发 app.quit；
+    // 托盘/悬浮球左键/二次启动均可经 showMainWindow() 重建主窗。
   });
 }
 
@@ -483,6 +561,7 @@ function createMiniWindow(): void {
     // 与主窗一致的无边框 + 透明 + 圆角 + 阴影
     frame: false,
     titleBarStyle: 'hidden',
+    transparent: true, // 启用窗口透明（与主窗一致，否则全透明背景会渲染成纯黑窗）
     backgroundColor: '#00000000',
     roundedCorners: true,
     hasShadow: true,
@@ -504,6 +583,9 @@ function createMiniWindow(): void {
   } else {
     miniWindow.loadFile(path.join(__dirname, '../../dist/index.html'), { hash: 'mini' });
   }
+  // 置顶分层（v2.3.37）：小窗用 'floating' 层，低于悬浮球的 'screen-saver' 层——
+  // 悬浮球恒在最顶，小窗在悬浮球之下、仍高于其他软件窗口（构造参数不支持 level，创建后显式设置）
+  miniWindow.setAlwaysOnTop(s.miniWindow?.alwaysOnTop !== false, 'floating');
 
   // 关闭仅隐藏，不退出
   miniWindow.on('close', (e) => {
@@ -653,14 +735,14 @@ function processNotifyQueue(): void {
   const item = notifyQueue.shift();
   if (!item) return;
   currentNotify = item;
-  const lang = dm.getSettings().lang === 'en' ? 'en' : 'zh';
+  const lang = getAppLang();
   const theme = dm.getSettings().theme || 'wechat';
   positionNotifyWindow();
   notifyWindow.setIgnoreMouseEvents(true, { forward: true });
   notifyWindow.showInactive();
   safeSend(notifyWindow, 'notify:data', {
     action: 'show',
-    label: lang === 'en' ? 'New message' : '新消息',
+    label: NOTIFY_NEW_MESSAGE[lang] || '新消息',
     roleName: item.roleName,
     content: item.content,
     chat: {
@@ -770,14 +852,42 @@ function createTrayIcon(): Electron.NativeImage {
 const TRAY_LABELS: Record<Lang, Record<string, string>> = {
   zh: { showMain: '打开主窗口', showMini: '快捷聊天小窗', silent: '静默模式', quit: '退出' },
   en: { showMain: 'Open Main Window', showMini: 'Quick Chat Mini Window', silent: 'Silent Mode', quit: 'Quit' },
+  fr: { showMain: 'Ouvrir la fenêtre principale', showMini: 'Mini-fenêtre de chat', silent: 'Mode silencieux', quit: 'Quitter' },
+  de: { showMain: 'Hauptfenster öffnen', showMini: 'Mini-Chat-Fenster', silent: 'Stiller Modus', quit: 'Beenden' },
+  ja: { showMain: 'メインウィンドウを開く', showMini: 'クイックチャットミニウィンドウ', silent: 'サイレントモード', quit: '終了' },
+  ko: { showMain: '기본 창 열기', showMini: '빠른 채팅 미니 창', silent: '무음 모드', quit: '종료' },
+  es: { showMain: 'Abrir ventana principal', showMini: 'Mini ventana de chat', silent: 'Modo silencioso', quit: 'Salir' },
+  pt: { showMain: 'Abrir janela principal', showMini: 'Mini janela de bate-papo', silent: 'Modo silencioso', quit: 'Sair' },
+  ru: { showMain: 'Открыть главное окно', showMini: 'Мини-окно чата', silent: 'Тихий режим', quit: 'Выход' },
+  'zh-Hant': { showMain: '開啟主視窗', showMini: '快捷聊天小窗', silent: '靜音模式', quit: '結束' },
+};
+
+// 取应用语言（v2.3.38：全 10 语言）。旧二分处（通知/托盘/错误等）统一走此函数：
+// 合法语言直接使用；非法值回退 zh。
+function getAppLang(): Lang {
+  const l = dm.getSettings().lang;
+  return (MENU_LANGS as string[]).includes(l) ? (l as Lang) : 'zh';
+}
+
+// 通知卡「新消息」标签的 9 语言文案
+const NOTIFY_NEW_MESSAGE: Record<Lang, string> = {
+  zh: '新消息',
+  en: 'New message',
+  fr: 'Nouveau message',
+  de: 'Neue Nachricht',
+  ja: '新着メッセージ',
+  ko: '새 메시지',
+  es: 'Nuevo mensaje',
+  pt: 'Nova mensagem',
+  ru: 'Новое сообщение',
+  'zh-Hant': '新訊息',
 };
 
 // 切换静默模式：持久化到设置、重建托盘菜单（更新勾选态）、广播给渲染进程同步
 function toggleSilentMode(): void {
   const next = !(dm.getSettings().silent === true);
   dm.saveSettings({ silent: next });
-  const lang: Lang = dm.getSettings().lang === 'en' ? 'en' : 'zh';
-  buildTrayMenu(lang);
+  buildTrayMenu(getAppLang());
   broadcast('settings:changed', { silent: next });
 }
 
@@ -811,8 +921,7 @@ function buildTrayMenu(lang: Lang): void {
 function createTray(): void {
   tray = new Tray(createTrayIcon());
   tray.setToolTip('念语 Nianyu');
-  const lang: Lang = dm.getSettings().lang === 'en' ? 'en' : 'zh';
-  buildTrayMenu(lang);
+  buildTrayMenu(getAppLang());
   tray.on('double-click', () => showMainWindow());
 }
 
@@ -822,7 +931,7 @@ function applyMiniSettings(): void {
   const s = dm.getSettings();
   const mw = s.miniWindow;
   if (mw?.alwaysOnTop !== undefined && miniWindow && !miniWindow.isDestroyed()) {
-    miniWindow.setAlwaysOnTop(!!mw.alwaysOnTop);
+    miniWindow.setAlwaysOnTop(!!mw.alwaysOnTop, 'floating');
   }
   if (!mw?.enabled || !mw.hotkey) return;
   try {
@@ -1070,6 +1179,59 @@ function saveGeneratedImage(b64: string): string | null {
   }
 }
 
+// 主进程内直接弹出确认框（与 app:confirm 完全一致：question 图标 + OK/Cancel）。
+// 供自动生图 / 自动生视频等后台流程在调用模型前取得用户许可（手动生图生视频不走这里）。
+async function confirmFromMain(message: string, title?: string): Promise<boolean> {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  const res = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    buttons: ['OK', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+    title: title || '确认',
+    message: message || '',
+  });
+  // 原生对话框关闭后会破坏渲染器输入框的焦点路由：键击无法进入任何输入框，
+  // 直到窗口失去并重新获得 OS 焦点才恢复。此处主动重置窗口 OS 焦点修复该问题。
+  try {
+    mainWindow.focus();
+    mainWindow.webContents.focus();
+  } catch {
+    /* 窗口可能已销毁，忽略 */
+  }
+  return res.response === 0;
+}
+
+// 自动生图 / 生视频调用模型前的许可判定：
+//  - 设置在「生图/生视频」各自独立开关中关闭提醒时直接放行；
+//  - 否则弹确认框取得许可（与恢复出厂设置同一类确认框）；
+//  - 手动生图生视频不调用本函数，故不受影响。
+async function allowAutoGeneration(kind: 'image' | 'video', scene: string): Promise<boolean> {
+  const s = dm.getSettings();
+  const needConfirm = kind === 'image' ? s.confirmBeforeAutoImage !== false : s.confirmBeforeAutoVideo !== false;
+  if (!needConfirm) return true;
+  const what = kind === 'image' ? '生图' : '生视频';
+  return confirmFromMain(
+    `即将在「${scene}」自动${what}，需要调用${kind === 'image' ? '图像生成' : '视频生成'}模型并可能产生费用。是否允许本次调用？`,
+    `自动${what}确认`
+  );
+}
+
+// 朗读缓存键：双哈希（djb2 + FNV-1a）拼接，避免引入 crypto 依赖；碰撞概率可忽略
+// v2.3.34 起把语速/音调纳入键，避免「同一文本调了语速却命中旧缓存」导致听起来没生效。
+function ttsCacheKey(baseUrl: string, model: string, voice: string, text: string, speed = 1, pitch = 0): string {
+  const s = `${baseUrl}|${model}|${voice}|${speed}|${pitch}|${text}`;
+  let h1 = 5381;
+  let h2 = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = ((h1 << 5) + h1 + c) >>> 0;
+    h2 = ((h2 ^ c) >>> 0);
+    h2 = Math.imul(h2, 0x01000193) >>> 0;
+  }
+  return h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0') + '_' + s.length.toString(36);
+}
+
 // 计算某聊天的「内容快照」：取最近若干条消息的 id+内容拼接，用于判断自上次关系判定后是否有新聊天内容。
 function computeChatSnapshot(chatType: string, chatId: string): string {
   const msgs = dm.getMessages(chatType, chatId).slice(-50);
@@ -1238,7 +1400,8 @@ async function judgeAndPostMoments(
     if (todayCount >= perCharLimit) break; // 自动触发达单人物每日上限即暂停；手动触发无上限
     if (!mm || typeof mm.content !== 'string' || !mm.content.trim()) continue;
     const images: string[] = [];
-    if (mm.needImage && igCfg) {
+    // 自动生图前先取得用户许可（未获许可则降级为纯文字动态；手动生图不受影响）
+    if (mm.needImage && igCfg && (await allowAutoGeneration('image', '朋友圈自动配图'))) {
       try {
         const { b64 } = await generateImage(
           { baseUrl: igCfg.baseUrl, apiKey: igCfg.apiKey },
@@ -1264,7 +1427,10 @@ async function judgeAndPostMoments(
       vg && vg.enabled && vg.baseUrl && vg.apiKey &&
       mm.needVideo && String(mm.videoPrompt || '').trim()
     ) {
-      void runMomentVideoJob(role.id, momentId, String(mm.videoPrompt || mm.content).slice(0, 400));
+      // 自动生视频前先取得用户许可（未获许可则跳过配视频；手动生视频不受影响）
+      if (await allowAutoGeneration('video', '朋友圈自动配视频')) {
+        void runMomentVideoJob(role.id, momentId, String(mm.videoPrompt || mm.content).slice(0, 400));
+      }
     }
   }
   if (added > 0) {
@@ -1377,6 +1543,11 @@ async function triggerSceneImage(chatType: string, chatId: string, roleId: strin
     judge = await judgeSceneImageLLM(role, cfg, recent);
   }
   if (!judge.should || !judge.prompt) return;
+  // 异步场景生图前先取得用户许可。未获许可则跳过本次并按间隔冷却（避免反复弹窗打扰），手动生图不受影响
+  if (!(await allowAutoGeneration('image', '异步场景生图'))) {
+    lastSceneImageAt.set(key, now);
+    return;
+  }
   lastSceneImageAt.set(key, now); // 先占位，避免并发重复生成
   // 自动读取人物头像作为参考图（仅当开启且场景涉及人物时），使生成形象更贴近角色；无关场景不传，不影响内容
   let referenceImages: string[] | undefined;
@@ -1887,7 +2058,15 @@ function buildSystemPrompt(role: Role, freezeMemory = false, chatId?: string): s
       const iso = role.memoryIsolation ?? true;
       const memories = dm.listMemories(role.id, iso ? chatId : undefined);
       if (memories.length > 0) {
-        parts.push(`【关于你与用户的记忆】\n${memories.map((m) => `- ${m.content}`).join('\n')}`);
+        // v2.3.36：注入记忆提示词可配置（settings.memoryInjectPrompt，清空由设置页兜底回默认）。
+        // {memories} 占位符 → 替换为记忆列表；用户提示词未写占位符时，列表追加到提示词末尾。
+        const memList = memories.map((m) => `- ${m.content}`).join('\n');
+        const tpl = (settings.memoryInjectPrompt || '').trim() || DEFAULT_MEMORY_INJECT_PROMPT;
+        if (tpl.includes(MEMORY_INJECT_PLACEHOLDER)) {
+          parts.push(tpl.split(MEMORY_INJECT_PLACEHOLDER).join(memList));
+        } else {
+          parts.push(`${tpl}\n${memList}`);
+        }
       }
     }
   }
@@ -2100,17 +2279,15 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// 计算某模型还需等待多少毫秒才能再发一次（基于该模型配置的 qps）；无限制返回 0
+// 计算某限速键还需等待多少毫秒才能再发一次；qps 由调用方给出
+// （已保存模型=其配置值；未保存草稿=表单当前填写值）。
 // 支持小数 qps：改用「间隔制」判定，两次请求至少间隔 60000/qps 毫秒（qps=0.5 → 120s，qps=2 → 30s）。
 // 同时保留 60 秒滑动窗口计数，双重约束下既平滑了突发，也保证窗口内总量不超。
-function rateWaitMs(modelId: string): number {
-  const settings = dm.getSettings();
-  const cfg = settings.models.find((m) => m.id === modelId);
-  const qps = cfg?.qps;
+function rateWaitMsKey(key: string, qps?: number): number {
   if (!qps || qps <= 0 || !Number.isFinite(qps)) return 0;
   const now = Date.now();
-  const arr = (modelRequestLog.get(modelId) || []).filter((t) => now - t < RATE_WINDOW_MS);
-  modelRequestLog.set(modelId, arr);
+  const arr = (modelRequestLog.get(key) || []).filter((t) => now - t < RATE_WINDOW_MS);
+  modelRequestLog.set(key, arr);
   // 1) 间隔等待：距上一次请求需满 60000/qps 毫秒
   const interval = Math.round(RATE_WINDOW_MS / qps);
   const intervalWait = arr.length > 0 ? Math.max(0, interval - (now - arr[arr.length - 1])) : 0;
@@ -2120,6 +2297,13 @@ function rateWaitMs(modelId: string): number {
   return Math.max(intervalWait, countWait);
 }
 
+// 按模型 id 查已保存配置后计算等待（聊天等常规路径用）
+function rateWaitMs(modelId: string): number {
+  const settings = dm.getSettings();
+  const cfg = settings.models.find((m) => m.id === modelId);
+  return rateWaitMsKey(modelId, cfg?.qps);
+}
+
 // 标记一次实际发出的请求（用于计数）
 function rateMark(modelId: string): void {
   if (!modelId) return;
@@ -2127,6 +2311,29 @@ function rateMark(modelId: string): void {
   const arr = (modelRequestLog.get(modelId) || []).filter((t) => now - t < RATE_WINDOW_MS);
   arr.push(now);
   modelRequestLog.set(modelId, arr);
+}
+
+// 探测/测试连接的限流键：优先用模型 id（与保存后所有请求路径共享同一限流预算）；
+// 无 id 的纯草稿用「baseUrl|model」合成键，保证同一表单的连续探测/测试互相同步计数。
+function draftRateKey(cfg: Partial<ModelConfig> & { id?: string }): string {
+  if (cfg.id) return cfg.id;
+  return `__draft__:${cfg.baseUrl || ''}|${cfg.model || ''}`;
+}
+
+// 探测/测试连接共用限速门：等待限速窗口解除后记一次请求额度，返回实际等待毫秒。
+// v2.3.40 起「测试连接 / 能力探测 / 一键检测全部」也遵守模型 QPS 限制——
+// qps 取「界面上当前填写的值」（未保存草稿也生效），而非仅已保存配置。
+async function gateByQps(key: string, qps?: number): Promise<number> {
+  const wait = rateWaitMsKey(key, qps);
+  if (wait > 0) await sleep(wait);
+  rateMark(key);
+  return wait;
+}
+
+// 等待提示（主进程消息为简体中文，与既有约定一致）
+function waitNote(waitMs: number): string {
+  const s = Math.round(waitMs / 1000);
+  return waitMs >= 1000 && s > 0 ? `（已按限速等待 ${s} 秒）` : '';
 }
 
 // 当前前台聊天 key（"single:roleId" / "group:groupId"）；用于类 IM 已读回执判断是否「正在看」
@@ -2159,7 +2366,20 @@ async function translateText(text: string, settings: AppSettings): Promise<strin
   const cfg = settings.models.find((m) => m.id === modelId && m.enabled);
   if (!cfg) return text;
   const target = settings.translationLang === 'auto' ? settings.lang : settings.translationLang || settings.lang;
-  const langName = target === 'en' ? 'English' : '中文';
+  // 翻译目标语言名称（v2.3.38：全 10 语言）
+  const LANG_NAMES: Record<string, string> = {
+    zh: '中文',
+    en: 'English',
+    fr: 'French (Français)',
+    de: 'German (Deutsch)',
+    ja: 'Japanese (日本語)',
+    ko: 'Korean (한국어)',
+    es: 'Spanish (Español)',
+    pt: 'Portuguese (Português)',
+    ru: 'Russian (Русский)',
+    'zh-Hant': 'Traditional Chinese (繁體中文)',
+  };
+  const langName = LANG_NAMES[target] || '中文';
   const prompt = `请将下面的文本翻译成${langName}，只返回译文本身，不要任何解释，也不要用引号包裹：\n\n${text}`;
   const wait = rateWaitMs(cfg.id);
   if (wait > 0) await sleep(wait);
@@ -2189,7 +2409,7 @@ async function handleSend(p: {
   if (memberRoles.length === 0) {
     throw new Error('未找到可回复的角色，请检查群组成员或角色是否存在');
   }
-  validateModels(memberRoles, settings);
+  validateModels(memberRoles, settings, p.chatType, p.chatId);
 
   const userMsg = addUserMessage(p);
 
@@ -2228,16 +2448,44 @@ function resolveMembers(chatType: string, chatId: string, content: string): Role
   return memberRoles;
 }
 
+// 全局模型参数解析：模型未单独设置的参数（温度/topP/topK）回退到 settings.globalModelParams。
+// 在模型解析出口统一应用，所有聊天/内部功能调用点自动生效；模型一旦单独设置即用独立值。
+function effectiveModel(cfg: ModelConfig, settings: AppSettings): ModelConfig {
+  const g = settings.globalModelParams || {};
+  return {
+    ...cfg,
+    temperature: cfg.temperature ?? g.temperature,
+    topP: cfg.topP ?? g.topP,
+    topK: cfg.topK ?? g.topK,
+  };
+}
+
 function resolveRoleModel(role: Role, settings: AppSettings): ModelConfig | undefined {
-  return (
+  const cfg =
     settings.models.find((m) => m.id === role.model_config_id && m.enabled) ||
-    settings.models.find((m) => m.id === settings.defaultModel && m.enabled)
-  );
+    settings.models.find((m) => m.id === settings.defaultModel && m.enabled);
+  return cfg ? effectiveModel(cfg, settings) : undefined;
+}
+
+// 聊天级模型覆盖（v2.3.41，仅单聊）：key="single:{roleId}"（settings.chatModels）。
+// 缺记录或 follow != false → 跟随人物绑定模型（无则默认模型），与旧行为一致；
+// follow === false 且 modelId 有效 → 该聊天使用自选模型（人物编辑中的模型即该人物聊天的默认模型，
+// 覆盖只影响本聊天，其他聊天不变）。群聊成员各有模型，不做聊天级覆盖。
+function resolveChatModel(chatType: string, chatId: string, role: Role, settings: AppSettings): ModelConfig | undefined {
+  if (chatType === 'single') {
+    const ov = settings.chatModels?.[`single:${chatId}`];
+    if (ov && ov.follow === false && ov.modelId) {
+      const cfg = settings.models.find((m) => m.id === ov.modelId && m.enabled);
+      if (cfg) return effectiveModel(cfg, settings);
+    }
+  }
+  return resolveRoleModel(role, settings);
 }
 
 // 取设置里的默认模型配置（随机事件一律用默认 AI 生成，不计入聊天消耗）
 function getDefaultModelConfig(settings: AppSettings): ModelConfig | undefined {
-  return settings.models.find((m) => m.id === settings.defaultModel && m.enabled);
+  const cfg = settings.models.find((m) => m.id === settings.defaultModel && m.enabled);
+  return cfg ? effectiveModel(cfg, settings) : undefined;
 }
 
 // 解析当前对话实际使用的「自我身份」：
@@ -2261,8 +2509,9 @@ function resolveActiveSelfRole(
   return settings.selfRoles?.find((r) => r.id === id);
 }
 
-function validateModels(memberRoles: Role[], settings: AppSettings): void {
-  const resolveModel = (role: Role): ModelConfig | undefined => resolveRoleModel(role, settings);
+function validateModels(memberRoles: Role[], settings: AppSettings, chatType?: string, chatId?: string): void {
+  const resolveModel = (role: Role): ModelConfig | undefined =>
+    chatType && chatId ? resolveChatModel(chatType, chatId, role, settings) : resolveRoleModel(role, settings);
   const invalid = memberRoles.find((r) => !resolveModel(r));
   if (invalid) {
     throw new Error(`角色[${invalid.name}]绑定的模型已失效，请重新选择模型`);
@@ -2302,6 +2551,12 @@ function addUserMessage(p: {
   });
   // 广播用户消息到所有窗口（让 MiniChat 发出的图片在小窗/主窗同步显示）
   broadcast('stream:user', msg);
+  // 用户在该聊天发言：解除主动消息冷却（idleCooldownUntilReply），允许下一条主动消息
+  proactiveAwaitingReply.delete(`${p.chatType}:${p.chatId}`);
+  // NHPP 主动消息引擎：用户交互 → 重算候选时刻 + 抽取显式承诺（待回访）。
+  // 仅 settings.proactiveEngine === 'nhpp' 时生效；经典 idle 定时机制不受影响。
+  rescheduleProactive(p.chatType, p.chatId);
+  extractPendingCallback(p.chatType, p.chatId, p.content || '');
   return msg;
 }
 
@@ -2460,7 +2715,7 @@ async function generateAIResponses(
   const storedImage = p.imagePath || null;
   const storedImages = p.imagePaths && p.imagePaths.length ? p.imagePaths : (p.imagePath ? [p.imagePath] : []);
   const history = dm.getMessages(p.chatType, p.chatId);
-  const resolveModel = (role: Role): ModelConfig | undefined => resolveRoleModel(role, settings);
+  const resolveModel = (role: Role): ModelConfig | undefined => resolveChatModel(p.chatType, p.chatId, role, settings);
   const selfRole = resolveActiveSelfRole(settings, p.chatType, p.chatId);
   const isGroup = p.chatType === 'group';
   // 观察者模式「记忆冻结」：对局内不读取外部世界书
@@ -2470,9 +2725,11 @@ async function generateAIResponses(
 
   // 联网搜索：每个聊天每次只检索一次，结果作为上下文注入所有成员的回复
   let searchCtx: string | null = null;
+  let searchPages: SearchResult[] | null = null; // 随消息持久化（search_results），历史消息也能点击引用编号
   if (settings.webSearchChats?.[`${p.chatType}:${p.chatId}`]) {
     const sp = await fetchSearchContext(p.chatType, p.chatId, p.content, settings);
     searchCtx = sp?.context ?? null;
+    searchPages = sp?.pages ?? null;
   }
   // 已启用插件的提示词片段（声明式，全局生效）
   const pluginCtx = getEnabledPluginContext();
@@ -2544,6 +2801,7 @@ ${searchContext}`
         image_path: null,
         token_used: res.promptTokens + res.completionTokens,
         timestamp: new Date().toISOString(),
+        search_results: searchPages || undefined,
       });
       sendStreamDone(streamId, aiMsg);
       void requestMoodJudge(p.chatType, p.chatId, role.id);
@@ -2622,6 +2880,9 @@ async function handleSendUser(p: {
 
 // 进行中的流式生成控制器，按 chatId 归组；删除聊天时整体中止，杜绝孤儿流继续写库
 const streamControllers = new Map<string, AbortController>();
+// 主动消息冷却表（chatKey 集合）：发出主动消息后加入，用户在该聊天回复后移除。
+// idleCooldownUntilReply 开启时，调度器跳过仍在冷却中的聊天（每个聊天独立冷却）。
+const proactiveAwaitingReply = new Set<string>();
 function registerStream(chatId: string, c: AbortController): void {
   const prev = streamControllers.get(chatId);
   if (prev && prev !== c) prev.abort(); // 同一聊天只保留一条进行中生成
@@ -2650,7 +2911,7 @@ async function handleSendAI(p: {
   if (memberRoles.length === 0) {
     throw new Error('未找到可回复的角色，请检查群组成员或角色是否存在');
   }
-  validateModels(memberRoles, settings);
+  validateModels(memberRoles, settings, p.chatType, p.chatId);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120000);
   registerStream(p.chatId, controller);
@@ -2678,7 +2939,7 @@ async function handleStream(p: {
   if (memberRoles.length === 0) {
     throw new Error('未找到可回复的角色，请检查群组成员或角色是否存在');
   }
-  validateModels(memberRoles, settings);
+  validateModels(memberRoles, settings, p.chatType, p.chatId);
 
   const userMsg = addUserMessage(p);
   const storedImage = userMsg.image_path;
@@ -2693,9 +2954,11 @@ async function handleStream(p: {
 
   // 联网搜索：每个聊天每次只检索一次，结果作为上下文注入所有成员的回复
   let searchCtx: string | null = null;
+  let searchPages: SearchResult[] | null = null; // 随消息持久化（search_results），历史消息也能点击引用编号
   if (settings.webSearchChats?.[`${p.chatType}:${p.chatId}`]) {
     const sp = await fetchSearchContext(p.chatType, p.chatId, p.content, settings);
     searchCtx = sp?.context ?? null;
+    searchPages = sp?.pages ?? null;
   }
   // 已启用插件的提示词片段（声明式，全局生效）
   const pluginCtx = getEnabledPluginContext();
@@ -2713,7 +2976,7 @@ async function handleStream(p: {
 
   const streamOne = async (role: Role, searchContext?: string | null) => {
     if (controller.signal.aborted) return;
-    const cfg = resolveRoleModel(role, settings) as ModelConfig;
+    const cfg = resolveChatModel(p.chatType, p.chatId, role, settings) as ModelConfig;
     const vision = !!cfg?.supportsImages;
     const streamId = `${p.chatId}:${role.id}`;
     let seq = 0;
@@ -2780,6 +3043,7 @@ ${searchContext}`
         image_path: null,
         token_used: tokens,
         timestamp: new Date().toISOString(),
+        search_results: searchPages || undefined,
       });
       sendStreamDone(streamId, aiMsg);
       if (!interrupted) void requestMoodJudge(p.chatType, p.chatId, role.id);
@@ -2791,8 +3055,8 @@ ${searchContext}`
       const wait = rateWaitMs(cfg.id);
       if (wait > 0) await sleep(wait);
       rateMark(cfg.id);
-      // Anthropic 不支持流式，回退到非流式（一次性整段）
-      if (cfg.provider === 'anthropic') {
+      // Anthropic 不支持流式，或能力探针判定该模型不支持流式 → 回退到非流式（一次性整段）
+      if (cfg.provider === 'anthropic' || cfg.provider === 'anthropic-compatible' || cfg.supportsStream === false) {
         const res = await queryAI(cfg, messages, 1024);
         if (res.error) {
           // 模型回复错误：不进聊天框、不进记忆；用气泡通知用户
@@ -2961,7 +3225,7 @@ async function handleGroupContinue(
   const memberRoles = ids.map((id) => dm.getRole(id)).filter(Boolean) as Role[];
   if (memberRoles.length === 0) return { ok: false, error: '群组没有可用成员' };
   try {
-    validateModels(memberRoles, settings);
+    validateModels(memberRoles, settings, 'group', p.chatId);
   } catch (e: any) {
     return { ok: false, error: e?.message || String(e) };
   }
@@ -3012,7 +3276,8 @@ async function handleGroupContinue(
     let usedPrompt = 0;
     let usedCompletion = 0;
     let reasoning: string | undefined;
-      if (cfg.provider === 'anthropic') {
+      // Anthropic 不支持流式，或能力探针判定该模型不支持流式 → 回退到非流式
+      if (cfg.provider === 'anthropic' || cfg.provider === 'anthropic-compatible' || cfg.supportsStream === false) {
         const wait = rateWaitMs(cfg.id);
         if (wait > 0) await sleep(wait);
         rateMark(cfg.id);
@@ -3098,6 +3363,7 @@ async function handleGroupContinue(
 async function handleProactive(p: {
   chatType: string;
   chatId: string;
+  extraInstruction?: string; // NHPP 定向回访：附加上下文指令（普通主动消息不传，行为不变）
 }): Promise<{ ok: boolean; roleId?: string; roleName?: string; error?: string }> {
   const settings = dm.getSettings();
   // 全局主开关 + 按聊天单独开关：任一关闭则不主动发消息
@@ -3112,7 +3378,7 @@ async function handleProactive(p: {
     return { ok: false, error: '未找到可回复的角色，请检查角色或群组成员是否存在' };
   }
   try {
-    validateModels(memberRoles, settings);
+    validateModels(memberRoles, settings, p.chatType, p.chatId);
   } catch (e: any) {
     return { ok: false, error: e?.message || String(e) };
   }
@@ -3132,8 +3398,10 @@ async function handleProactive(p: {
   // 观察者模式「记忆冻结」：对局内不读取外部世界书
   const obs = isGroup ? getObserverConfig('group', p.chatId) : null;
   const worldBook = obs?.freezeMemory ? '' : resolveWorldBook(p.chatType, p.chatId, settings);
-  // 主动发言指令：贴合刚才的对话氛围与「当前心情」，自然开口；不等待用户提问
+  // 主动发言指令：贴合刚才的对话氛围与「当前心情」，自然开口；不等待用户提问。
+  // NHPP 定向回访时 extraInstruction 提供具体回访语境（覆盖默认泛化指令）。
   const instruction =
+    p.extraInstruction ||
     '（主动发起）你注意到用户暂时没有说话。请结合刚才的对话氛围与你当前的【情绪】，' +
     '主动向用户发一条自然、贴合情境的消息：可以延续刚才的话题，也可以自然地开启一个新话题。' +
     '直接说话，不要加任何前缀、括号说明或「用户不在」之类的元描述。';
@@ -3167,7 +3435,7 @@ async function handleProactive(p: {
           p.chatId
       );
 
-  const cfg = resolveRoleModel(role, settings) as ModelConfig;
+  const cfg = resolveChatModel(p.chatType, p.chatId, role, settings) as ModelConfig;
   const streamId = `${p.chatId}:${role.id}`;
   sendStreamStart(streamId, role.id, role.name);
   const controller = new AbortController();
@@ -3198,6 +3466,8 @@ async function handleProactive(p: {
       from_proactive: true,
     } as any);
     sendStreamDone(streamId, aiMsg);
+    // 主动消息冷却：记录该聊天等待用户回复（idleCooldownUntilReply 开启时阻止下一条主动消息）
+    proactiveAwaitingReply.add(`${p.chatType}:${p.chatId}`);
     void requestMoodJudge(p.chatType, p.chatId, role.id);
     void requestRelationshipAndMoments(p.chatType, p.chatId, role.id);
     void triggerSceneImage(p.chatType, p.chatId, role.id);
@@ -3402,6 +3672,21 @@ async function handleChooseEvent(p: {
     if (res) mood = res.label;
   }
   logEmotionIfObserver(p.chatType, p.chatId, p.roleId); // 记录对局情绪轨迹（事件也会改变好感/心情）
+  // 事件本身 + 用户所选选项写入角色记忆（未选择的选项不写入）。
+  // 遵循角色「记忆隔离」：开启（默认）时 chatId=当前聊天（对话间互相独立），关闭则写入角色级共享记忆。
+  try {
+    const iso = role.memoryIsolation ?? true;
+    const memContent = `随机事件：${p.eventText}\n我的选择：${p.choiceText}`;
+    dm.addMemory({
+      roleId: p.roleId,
+      chatId: iso ? p.chatId : undefined,
+      content: memContent,
+      source: 'auto',
+    } as any);
+  } catch (e: any) {
+    // 记忆写入失败不影响事件选择流程本身
+    console.error('[event] 写入事件记忆失败', e?.message || e);
+  }
   activeEvents.delete(p.chatId); // 选完即关闭该聊天的事件占用
   // 在聊天中插入系统消息通知好感/情绪变化
   const moodNote = p.mood ? ` · 心情 → ${mood}` : '';
@@ -3936,12 +4221,26 @@ async function doExtractMemories(chatType: string, chatId: string): Promise<numb
     settings.models.find((m) => m.id === settings.defaultModel && m.enabled) ||
     settings.models.find((m) => m.enabled);
   if (!cfg) return 0;
-  const prompt = `你是记忆提炼助手。从下面的对话中，提取关于用户或角色关系「值得长期记住」的事实（如用户偏好、禁忌、约定、重要事件、角色对用户的看法等）。\n已存在的记忆：\n${existing.length ? existing.join('\n') : '（无）'}\n\n最近对话：\n${convo}\n\n请只输出新增的、不与已有记忆重复、且确实值得长期记住的要点。每条一行，不要编号，不要解释。如果没有新要点，只输出一个空行。`;
+  // v2.3.36：总结记忆提示词可配置（settings.memorySummarizePrompt，AI 自动提炼与手动总结两条路径共用此函数）。
+  // 支持 {existing_memories} / {recent_dialogue} 占位符；两者都未写时，把输入数据（已有记忆 + 最近对话）固定追加到提示词末尾。
+  const tpl = (settings.memorySummarizePrompt || '').trim() || DEFAULT_MEMORY_SUMMARIZE_PROMPT;
+  const existingBlock = existing.length ? existing.join('\n') : '（无）';
+  let prompt: string;
+  if (
+    tpl.includes(MEMORY_SUMMARIZE_EXISTING_PLACEHOLDER) ||
+    tpl.includes(MEMORY_SUMMARIZE_DIALOGUE_PLACEHOLDER)
+  ) {
+    prompt = tpl
+      .split(MEMORY_SUMMARIZE_EXISTING_PLACEHOLDER).join(existingBlock)
+      .split(MEMORY_SUMMARIZE_DIALOGUE_PLACEHOLDER).join(convo);
+  } else {
+    prompt = `${tpl}\n\n## 输入数据\n【已存在的记忆（其中的要点不要重复输出）】\n${existingBlock}\n\n【最近对话】\n${convo}`;
+  }
   try {
     const wait = rateWaitMs(cfg.id);
     if (wait > 0) await sleep(wait);
     rateMark(cfg.id);
-    const res = await queryAI(cfg, [{ role: 'system', content: prompt }], 600);
+    const res = await queryAI(cfg, [{ role: 'system', content: prompt }], 1500);
     const lines = (res.content || '')
       .split('\n')
       .map((s) => s.trim())
@@ -4019,6 +4318,7 @@ async function runVideoGenJob(chatType: string, chatId: string, prompt: string, 
       throw new Error('未配置生视频 API，请在设置中开启「生视频」并填写独立的 Base URL 与 API Key');
     }
     broadcast('video:progress', { chatType, chatId, prompt, percent: 0, status: 'queued' });
+    sendBallVideoProgress(0, 'queued'); // 悬浮球显示轮巡进度（仅显示）
     const { url } = await generateVideo(
       { baseUrl: vg.baseUrl, apiKey: vg.apiKey },
       prompt,
@@ -4026,8 +4326,10 @@ async function runVideoGenJob(chatType: string, chatId: string, prompt: string, 
       vg.size || '1280x720',
       vg.duration || '5',
       refDataUrl ? [refDataUrl] : undefined,
-      (percent, status) =>
-        broadcast('video:progress', { chatType, chatId, prompt, percent, status: status || 'generating' })
+      (percent, status) => {
+        broadcast('video:progress', { chatType, chatId, prompt, percent, status: status || 'generating' });
+        sendBallVideoProgress(percent, status);
+      }
     );
     let videoPath: string | null = null;
     if (url) {
@@ -4061,9 +4363,20 @@ async function runVideoGenJob(chatType: string, chatId: string, prompt: string, 
     broadcast('stream:user', aiMsg);
     broadcast('video:done', { chatType, chatId, prompt, ok: true, imagePath: videoPath });
     pushMediaUnread(chatType, chatId, aiName, 'video'); // 主窗不可见/未盯该聊天则补未读
+    // 桌面提示：视频已生成完成，点击卡片跳回该视频所在的聊天
+    const lang1 = dm.getSettings().lang === 'en' ? 'en' : 'zh';
+    showNotifyCard({
+      chatType,
+      chatId,
+      roleName: aiName,
+      name: aiName,
+      content: lang1 === 'en' ? 'Video generated' : '视频已生成完成',
+    });
   } catch (e: any) {
     console.error('[nianyu] 生视频失败', e?.message || e);
     broadcast('video:done', { chatType, chatId, prompt, ok: false, error: e?.message || String(e) });
+  } finally {
+    sendBallVideoProgress(-1); // 生成结束（成功/失败）：悬浮球图标恢复常态
   }
 }
 
@@ -4074,6 +4387,7 @@ async function runMomentVideoJob(roleId: string, momentId: number, prompt: strin
   if (!s.momentsVideoEnabled || !vg || !vg.enabled || !vg.baseUrl || !vg.apiKey) return;
   try {
     broadcast('video:progress', { chatType: 'moments', chatId: roleId, prompt, percent: 0, status: 'queued' });
+    sendBallVideoProgress(0, 'queued'); // 悬浮球显示轮巡进度（仅显示）
     const { url } = await generateVideo(
       { baseUrl: vg.baseUrl, apiKey: vg.apiKey },
       prompt,
@@ -4081,8 +4395,10 @@ async function runMomentVideoJob(roleId: string, momentId: number, prompt: strin
       vg.size || '1280x720',
       vg.duration || '5',
       undefined,
-      (percent, status) =>
-        broadcast('video:progress', { chatType: 'moments', chatId: roleId, prompt, percent, status: status || 'generating' })
+      (percent, status) => {
+        broadcast('video:progress', { chatType: 'moments', chatId: roleId, prompt, percent, status: status || 'generating' });
+        sendBallVideoProgress(percent, status);
+      }
     );
     let videoPath: string | null = null;
     if (url) {
@@ -4101,6 +4417,16 @@ async function runMomentVideoJob(roleId: string, momentId: number, prompt: strin
       const m = dm.listMoments(roleId, true).find((x) => x.id === momentId);
       if (m) dm.updateMoment(momentId, { videos: [...(m.videos || []), videoPath] });
       broadcast('moments:changed', { roleId });
+      // 桌面提示：朋友圈视频已生成完成，点击卡片跳到朋友圈对应位置
+      const lang2 = dm.getSettings().lang === 'en' ? 'en' : 'zh';
+      const r2 = dm.getRole(roleId);
+      showNotifyCard({
+        chatType: 'moments',
+        chatId: roleId,
+        roleName: r2?.name || 'AI',
+        name: r2?.name || 'AI',
+        content: lang2 === 'en' ? 'Moments video generated' : '朋友圈视频已生成完成',
+      });
       broadcast('video:done', { chatType: 'moments', chatId: roleId, prompt, ok: true, imagePath: videoPath });
     } else {
       broadcast('video:done', { chatType: 'moments', chatId: roleId, prompt, ok: false, error: '生视频失败：未获取到视频数据' });
@@ -4108,6 +4434,8 @@ async function runMomentVideoJob(roleId: string, momentId: number, prompt: strin
   } catch (e: any) {
     console.error('[nianyu] 朋友圈视频失败', e?.message || e);
     broadcast('video:done', { chatType: 'moments', chatId: roleId, prompt, ok: false, error: e?.message || String(e) });
+  } finally {
+    sendBallVideoProgress(-1); // 生成结束（成功/失败）：悬浮球图标恢复常态
   }
 }
 
@@ -4213,7 +4541,8 @@ function registerIPC(): void {
     const settings = dm.getSettings();
     if (chatType === 'single') {
       const role = dm.getRole(dm.resolveSingleRoleId(chatType, chatId));
-      if (role) return resolveRoleModel(role, settings)?.id || '';
+      // v2.3.41：聊天级模型覆盖也参与限速代表模型判定
+      if (role) return resolveChatModel(chatType, chatId, role, settings)?.id || '';
       return '';
     }
     return settings.models.find((m) => m.id === settings.defaultModel && m.enabled)?.id || '';
@@ -4415,6 +4744,15 @@ function registerIPC(): void {
     dm.listStoryNodes(chatType, chatId)
   );
   ipcMain.handle('chats:removeStoryNode', (_e, id: number) => dm.removeStoryNode(id));
+  // 重命名剧情节点（v2.3.37）
+  ipcMain.handle('chats:renameStoryNode', (_e, id: number, title: string) => dm.renameStoryNode(id, title));
+  // 从剧情节点分叉新聊天（v2.3.37）：原聊天不动，新聊天含节点及之前的消息与记忆
+  ipcMain.handle('chats:forkFromNode', (_e, chatType: string, chatId: string, nodeId: number) => {
+    const nodes = dm.listStoryNodes(chatType, chatId);
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) throw new Error('story node not found');
+    return dm.forkChatFromNode(chatType, chatId, node.msg_id);
+  });
   // 朋友圈动态：新增 / 列表 / 删除 / 到点发布
   ipcMain.handle('moments:add', (_e, roleId: string, content: string, images: string[], scheduledAt?: string | null, selfRoleId?: string) =>
     dm.addMoment(roleId, content, images, scheduledAt, selfRoleId)
@@ -4556,9 +4894,13 @@ function registerIPC(): void {
 
   // ---------- 消息回滚 / 撤回 ----------
   ipcMain.handle('messages:recall', (_e, msgId: number) => dm.deleteMessage(msgId));
-  ipcMain.handle('messages:rollback', (_e, chatType: string, chatId: string, fromMsgId: number) =>
-    dm.rollbackMessages(chatType, chatId, fromMsgId)
-  );
+  ipcMain.handle('messages:rollback', (_e, chatType: string, chatId: string, fromMsgId: number) => {
+    // v2.3.41：回滚同时删除该时间点之后该聊天角色的全部记忆（含手动/自动/人工改过/纯手写）
+    // 与朋友圈动态（不论点赞/收藏），并广播朋友圈刷新
+    const res = dm.rollbackMessages(chatType, chatId, fromMsgId);
+    if (res.deletedMoments > 0) broadcast('moments:changed', { chatId });
+    return res;
+  });
   // ---------- 记忆快捷添加（选中文本一键记忆） ----------
   ipcMain.handle('memories:addQuick', (_e, p: { roleId: string; content: string }) =>
     dm.addMemory({ roleId: p.roleId, content: p.content, source: 'manual' })
@@ -4582,10 +4924,12 @@ function registerIPC(): void {
     // 快捷键 / 置顶等小窗设置即时生效
     if (patch && (patch.miniWindow || patch.lang)) {
       applyMiniSettings();
-      if (patch.lang) buildTrayMenu(next.lang === 'en' ? 'en' : 'zh');
+      if (patch.lang) buildTrayMenu(getAppLang());
     }
     // 深度思考等级同步给 AI 调用层（全局，避免改动所有调用点）
     if (patch && patch.deepThinkLevel !== undefined) setDeepThinkLevel(next.deepThinkLevel);
+    // 开机自启动：设置变更即时注册/取消登录项
+    if (patch && patch.launchOnBoot !== undefined) applyLaunchOnBoot(patch.launchOnBoot);
     // 广播设置变更，让主窗与小窗同步刷新（世界书/身份/背景/开关等）
     broadcast('settings:changed', patch || {});
     // 缩放基准/上下限变更时，主窗与小窗立即按新参数重新缩放（两端同步显示）
@@ -4595,11 +4939,52 @@ function registerIPC(): void {
     }
     return next;
   });
+  // 当前聊天生效模型（渲染端用于：聊天流式开关的显示与写入「生效来源」）。
+  // 群聊成员各有模型，返回 null → 渲染端回退到全局 enableStreaming。
+  ipcMain.handle('chat:getModel', (_e, chatType: string, chatId: string) => {
+    const settings = dm.getSettings();
+    if (chatType === 'group') return null;
+    const role = dm.getRole(dm.resolveSingleRoleId(chatType, chatId));
+    if (!role) return null;
+    // v2.3.41：返回聊天级覆盖后的生效模型（跟随人物时即人物绑定模型）
+    return resolveChatModel(chatType, chatId, role, settings) || null;
+  });
+
+  // ---------- MCP 服务器管理（v2.3.17 新增） ----------
+  ipcMain.handle('mcp:status', async () => {
+    const { mcpStatus } = await import('./mcpManager');
+    return mcpStatus(dm.getSettings());
+  });
+  ipcMain.handle('mcp:add', async (_e, p: { key: string; config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean } }) => {
+    const s = dm.getSettings();
+    const key = (p.key || '').trim();
+    if (!key) throw new Error('请填写服务器名称');
+    if (!p.config?.command?.trim()) throw new Error('请填写启动命令');
+    const servers = { ...(s.mcpServers || {}) };
+    if (!servers[key] && Object.keys(servers).length >= 10) throw new Error('MCP 服务器数量已达上限（10 个）');
+    servers[key] = { ...p.config, enabled: p.config.enabled !== false };
+    dm.saveSettings({ mcpServers: servers });
+    return { ok: true };
+  });
+  ipcMain.handle('mcp:remove', async (_e, key: string) => {
+    const s = dm.getSettings();
+    const servers = { ...(s.mcpServers || {}) };
+    delete servers[key];
+    dm.saveSettings({ mcpServers: servers });
+    return { ok: true };
+  });
+  ipcMain.handle('mcp:toggle', async (_e, key: string, enabled: boolean) => {
+    const s = dm.getSettings();
+    const servers = { ...(s.mcpServers || {}) };
+    if (servers[key]) servers[key] = { ...servers[key], enabled };
+    dm.saveSettings({ mcpServers: servers });
+    return { ok: true };
+  });
   ipcMain.handle('settings:reset', (_e, keepKeys: boolean) => {
     const next = dm.resetSettings(keepKeys);
     // 语言/小窗设置即时生效
     applyMiniSettings();
-    buildTrayMenu(next.lang === 'en' ? 'en' : 'zh');
+    buildTrayMenu(getAppLang());
     setDeepThinkLevel(next.deepThinkLevel);
     broadcast('settings:changed', { reset: true });
     return next;
@@ -4653,7 +5038,10 @@ function registerIPC(): void {
   ipcMain.handle('models:list', async (_e, cfg) => listModels(cfg));
   ipcMain.handle('models:test', async (_e, cfg) => {
     try {
+      // v2.3.40 测试连接也遵守 QPS 限速：qps 取表单当前值（未保存草稿也生效），等待期间前端按钮保持「测试中」
+      const waitMs = await gateByQps(draftRateKey(cfg || {}), cfg?.qps);
       const res = await testConnection(cfg);
+      if (waitMs > 0 && res) res.message = `${waitNote(waitMs)} ${res.message || ''}`.trim();
       if (!res.ok) dm.logError('model', `模型连接测试失败：${res.message}`);
       return res;
     } catch (e: any) {
@@ -4669,22 +5057,56 @@ function registerIPC(): void {
     if (res.supportsTools !== null) cfg.supportsTools = res.supportsTools;
     if (res.supportsJson !== null) cfg.supportsJson = res.supportsJson;
     if (res.supportsNsfw !== null) cfg.supportsNsfw = res.supportsNsfw;
+    if (res.supportsStream !== null) cfg.supportsStream = res.supportsStream;
+    // 思考等级探测结果回写到 supportsReasoning（控制深度思考档位是否对该模型生效）
+    if (res.supportsThinkLevel !== null) cfg.supportsReasoning = res.supportsThinkLevel;
     if (res.maxContext && res.maxContext > 0) cfg.maxContext = res.maxContext;
     cfg.lastDetectedAt = Date.now();
   }
 
-  ipcMain.handle('models:detect', async (_e, id: string, opts?: ProbeOptions) => {
+  ipcMain.handle('models:detect', async (_e, id: string, opts?: ProbeOptions, qpsOverride?: number) => {
     try {
       const settings = dm.getSettings();
       const cfg = settings.models.find((m) => m.id === id);
       if (!cfg) return { ok: false, message: '未找到模型配置', config: null };
+      // v2.3.40 能力探测也遵守 QPS 限速：优先用表单当前填写的 qps（未保存修改也生效），回退已保存值
+      const waitMs = await gateByQps(cfg.id, typeof qpsOverride === 'number' ? qpsOverride : cfg.qps);
       const res = await detectCapabilities(cfg, opts);
       applyDetectResult(cfg, res);
       dm.saveSettings({ models: settings.models });
       broadcast('settings:changed', {});
-      return { ok: res.ok, message: res.message, config: cfg, undetected: res.undetected || [] };
+      return {
+        ok: res.ok,
+        message: `${waitNote(waitMs)} ${res.message}`.trim(),
+        config: cfg,
+        undetected: res.undetected || [],
+      };
     } catch (e: any) {
       dm.logError('model', `模型能力探测异常：${e?.message || String(e)}`, e?.stack);
+      throw e;
+    }
+  });
+
+  // 编辑中的模型（尚未保存、无 id）也可探测能力：不落库，仅返回结果，由前端合并进草稿。
+  // 此前新增模型必须先保存再进编辑界面才能「检测能力」，现在填完 Base URL / 模型名即可直接检测。
+  ipcMain.handle('models:detectConfig', async (_e, draft: Partial<ModelConfig>, opts?: ProbeOptions) => {
+    try {
+      if (!draft || !draft.baseUrl || !draft.model) {
+        return { ok: false, message: '请先填写 API Base URL 与模型名称', config: null };
+      }
+      const probe = { ...draft, id: draft.id || '__draft__' } as ModelConfig;
+      // v2.3.40 草稿探测也遵守 QPS 限速：qps 取表单当前填写值（未保存也生效）
+      const waitMs = await gateByQps(draftRateKey(probe), draft.qps);
+      const res = await detectCapabilities(probe, opts);
+      applyDetectResult(probe, res);
+      return {
+        ok: res.ok,
+        message: `${waitNote(waitMs)} ${res.message}`.trim(),
+        config: probe,
+        undetected: res.undetected || [],
+      };
+    } catch (e: any) {
+      dm.logError('model', `编辑中模型能力探测异常：${e?.message || String(e)}`, e?.stack);
       throw e;
     }
   });
@@ -4695,17 +5117,21 @@ function registerIPC(): void {
       const settings = dm.getSettings();
       const results: any[] = [];
       for (const cfg of settings.models) {
+        // v2.3.40 一键检测全部也遵守各模型自身的 QPS 限速（逐个等待，超限的模型其探测自动延后）
+        const waitMs = await gateByQps(cfg.id, cfg.qps);
         const res = await detectCapabilities(cfg, opts);
         applyDetectResult(cfg, res);
         results.push({
           id: cfg.id,
           name: cfg.name,
           ok: res.ok,
-          message: res.message,
+          message: `${waitNote(waitMs)} ${res.message}`.trim(),
           supportsImages: res.supportsImages,
           supportsTools: res.supportsTools,
           supportsJson: res.supportsJson,
           supportsNsfw: res.supportsNsfw,
+          supportsStream: res.supportsStream,
+          supportsThinkLevel: res.supportsThinkLevel,
           maxContext: res.maxContext,
           undetected: res.undetected || [],
         });
@@ -4720,14 +5146,17 @@ function registerIPC(): void {
   });
 
   // ===== 长记忆：手动让 AI 总结记忆（受 per-chat longMemory 开关门控）=====
-  ipcMain.handle('memories:summarize', async (_e, p: { chatType: string; chatId: string }) => {
+  // 注意：preload 传的是两个独立参数 (chatType, chatId)（见 preload.ts summarizeMemories），
+  // 不是对象——此前误按对象解构导致 p.chatType/p.chatId 恒为 undefined、key 变成
+  // "undefined:undefined"，长记忆开关永远校验失败（v2.3.36 修复）。
+  ipcMain.handle('memories:summarize', async (_e, chatType: string, chatId: string) => {
     try {
       const settings = dm.getSettings();
-      const key = chatKeyOf(p.chatType, p.chatId);
+      const key = chatKeyOf(chatType, chatId);
       if (!settings.longMemory?.[key]) {
         return { ok: false, count: 0, message: '该聊天未开启长记忆（请在聊天「其他操作」中打开长记忆开关）' };
       }
-      const count = await doExtractMemories(p.chatType, p.chatId);
+      const count = await doExtractMemories(chatType, chatId);
       return { ok: true, count, message: count > 0 ? `已总结 ${count} 条记忆` : '没有新的可总结内容' };
     } catch (e: any) {
       dm.logError('model', `手动总结记忆异常：${e?.message || String(e)}`, e?.stack);
@@ -4742,7 +5171,7 @@ function registerIPC(): void {
     return { ok: true, watermark: wm };
   });
   ipcMain.handle('app:setMenuLang', (_e, lang: string) => {
-    if (lang === 'zh' || lang === 'en') Menu.setApplicationMenu(buildMenu(lang));
+    if ((MENU_LANGS as string[]).includes(lang)) Menu.setApplicationMenu(buildMenu(lang as Lang));
   });
 
   ipcMain.handle('dialog:pickImage', async () => {
@@ -5040,11 +5469,35 @@ function registerIPC(): void {
     return dm.addMemory({ roleId: p.roleId, content, source: 'manual', image_path: p.imagePath } as any);
   });
 
+  // ===== 数据备份与还原 =====
+  // v2.3.33：备份文件名改用【本地时间】命名（此前 toISOString 为 UTC 时间，比本地时钟慢 8 小时，
+  // 用户感知为「名称滞后/是上一次备份的名称」）；并加毫秒 + 随机后缀，杜绝同名覆盖。
+  const backupFileName = (): string => {
+    const d = new Date();
+    const p = (n: number) => String(n).padStart(2, '0');
+    const ms = String(d.getMilliseconds()).padStart(3, '0');
+    const rand = Math.random().toString(36).slice(2, 6);
+    return `NianyuBackup_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}_${ms}${rand}.zip`;
+  };
+  // 防覆盖：目标已存在时自动追加 _1/_2 序号（v2.3.33），绝不静默覆盖旧备份
+  const uniquifyBackupDest = (dest: string): string => {
+    if (!fs.existsSync(dest)) return dest;
+    const dir = path.dirname(dest);
+    const ext = path.extname(dest);
+    const base = path.basename(dest, ext);
+    let i = 1;
+    let cand = path.join(dir, `${base}_${i}${ext}`);
+    while (fs.existsSync(cand)) {
+      i++;
+      cand = path.join(dir, `${base}_${i}${ext}`);
+    }
+    return cand;
+  };
+
   ipcMain.handle('backup:pickTarget', async () => {
     if (!mainWindow) return null;
     const s = dm.getSettings();
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
-    const fileName = `NianyuBackup_${stamp}.zip`;
+    const fileName = backupFileName();
     const defaultPath =
       s.backupDir && fs.existsSync(s.backupDir)
         ? path.join(s.backupDir, fileName)
@@ -5070,15 +5523,18 @@ function registerIPC(): void {
     const s = dm.getSettings();
     if (!s.backupDir) throw new Error('尚未设置默认备份目录');
     fs.mkdirSync(s.backupDir, { recursive: true });
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
-    const dest = path.join(s.backupDir, `NianyuBackup_${stamp}.zip`);
+    const dest = uniquifyBackupDest(path.join(s.backupDir, backupFileName()));
     createBackup(dm.dataDirectory, dest);
     dm.saveSettings({ lastBackupTime: new Date().toISOString() });
     return dest;
   });
   ipcMain.handle('backup:create', (_e, destPath) => {
-    createBackup(dm.dataDirectory, destPath);
+    // 防覆盖：目标已存在时自动改名（返回实际写入路径）
+    const dest = uniquifyBackupDest(String(destPath || ''));
+    if (!dest) throw new Error('备份保存路径为空');
+    createBackup(dm.dataDirectory, dest);
     dm.saveSettings({ lastBackupTime: new Date().toISOString() });
+    return dest;
   });
   ipcMain.handle('backup:pickFile', async () => {
     if (!mainWindow) return null;
@@ -5147,28 +5603,207 @@ function registerIPC(): void {
   });
 
   // ---------- 语音：TTS 合成，返回 base64 mp3 ----------
-  // roleId 可选：按数字人角色分别解析音色（ttsVoices[roleId] 优先，缺省回退全局 ttsVoice）
-  ipcMain.handle('audio:tts', async (_e, text: string, roleId?: string) => {
-    const s = dm.getSettings();
-    const v = s.voice;
+  // roleId 可选：按数字人角色解析独立语音 API/音色（ttsVoices[roleId] 支持 RoleTtsConfig 或旧版纯音色名，v2.3.19）。
+  // 朗读缓存：同一（端点+模型+音色+语速+音调+文本）直接复用磁盘缓存，重复朗读不再调用 API、不消耗 token；
+  // 设置 voice.ttsRegenerate=true 或调用方传入 forceRegenerate=true（右键「重新生成语音」）时跳过缓存强制重新合成（结果仍回写缓存）。
+  // v2.3.44：全局 TTS 总开关 voice.ttsEnabled=false 时直接拒绝（聊天界面已隐藏播报按钮，此处作防御）。
+  ipcMain.handle('audio:tts', async (_e, text: string, roleId?: string, forceRegenerate?: boolean) => {
+    const v = dm.getSettings().voice;
+    if (v?.ttsEnabled === false) throw new Error('全局 TTS 语音已关闭（可在聊天界面标题栏开启）');
     if (!v?.ttsBaseUrl || !v?.ttsApiKey) throw new Error('未配置 TTS 专用 API，请在设置中填写独立的 Base URL 与 API Key');
-    const voiceName = (roleId && v.ttsVoices && v.ttsVoices[roleId]) || v.ttsVoice || 'alloy';
-    const buf = await textToSpeech(
-      { baseUrl: v.ttsBaseUrl, apiKey: v.ttsApiKey },
-      text,
-      v.ttsModel || 'tts-1',
-      voiceName
-    );
-    return `data:audio/mpeg;base64,${buf.toString('base64')}`;
+    const rv = (roleId && v.ttsVoices && v.ttsVoices[roleId]) || undefined;
+    const rvCfg = typeof rv === 'string' ? { voice: rv } : rv || {};
+    const baseUrl = rvCfg.baseUrl || v.ttsBaseUrl;
+    const apiKey = rvCfg.apiKey || v.ttsApiKey;
+    const voiceName = rvCfg.voice || v.ttsVoice || ''; // 留空由各协议合成函数明确报错提示补填（不内置默认）
+    const model = rvCfg.model || v.ttsModel || '';
+    // 语速/音调（v2.3.34）：角色级配置优先，其次全局；均未设时用默认（1 倍速 / 0 音调 = 原样）
+    const speed = rvCfg.speed ?? v.ttsSpeed ?? 1;
+    const pitch = rvCfg.pitch ?? v.ttsPitch ?? 0;
+    const cacheDir = path.join(dm.dataDirectory, 'tts-cache');
+    try { fs.mkdirSync(cacheDir, { recursive: true }); } catch { /* 目录已存在等，忽略 */ }
+    const cacheKey = ttsCacheKey(baseUrl, model, voiceName, text, speed, pitch);
+    // 缓存按实际容器分扩展名（Gemini 协议为 WAV，其余为 MP3），读取时按扩展名还原 MIME
+    const candidates: { file: string; mime: string }[] = [
+      { file: path.join(cacheDir, `${cacheKey}.mp3`), mime: 'audio/mpeg' },
+      { file: path.join(cacheDir, `${cacheKey}.wav`), mime: 'audio/wav' },
+    ];
+    if (v.ttsRegenerate !== true && forceRegenerate !== true) {
+      for (const c of candidates) {
+        if (fs.existsSync(c.file)) {
+          try {
+            return `data:${c.mime};base64,${fs.readFileSync(c.file).toString('base64')}`;
+          } catch { /* 缓存读取失败则走正常合成 */ }
+        }
+      }
+    }
+    const { audio, mime } = await textToSpeech({ baseUrl, apiKey }, text, model, voiceName, { speed, pitch });
+    try { fs.writeFileSync(path.join(cacheDir, `${cacheKey}.${mime === 'audio/wav' ? 'wav' : 'mp3'}`), audio); } catch { /* 缓存写入失败不影响本次播放 */ }
+    return `data:${mime};base64,${audio.toString('base64')}`;
   });
 
-  // ---------- 语音：拉取 TTS 可用音色列表（服务端优先，失败回退内置清单） ----------
-  ipcMain.handle('audio:listVoices', async () => {
-    const DEFAULT_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
-    const v = dm.getSettings().voice;
-    if (!v?.ttsBaseUrl || !v?.ttsApiKey) return DEFAULT_VOICES;
+  // ---------- 调试模式（v2.3.19）：快照/恢复实现「修改不生效」+ 手动触发 + 错误报告 ----------
+  // 原理：进入调试时把 store.json / settings.json / proactive-nhpp.json 快照到 dataDir/debug-backup/；
+  // 会话内一切写入照常真实发生（因此可完整测试全链路），退出调试时用快照覆盖回去并 reloadAll，
+  // 等效于「该模式内造成的一切修改都不会生效」；同时汇总本会话新增的错误日志按功能分类输出。
+  let debugActive = false;
+  let debugStartAt = 0;
+  const debugSnapshotFiles = ['store.json', 'settings.json', 'proactive-nhpp.json'];
+  const resolveChatRole = (ct: string, cid: string): string | null => {
+    if (ct === 'single') return cid;
+    const g = dm.getGroup(cid);
+    const first = (g?.member_ids || '').split(',').map((s) => s.trim()).filter(Boolean)[0];
+    return first || null;
+  };
+  ipcMain.handle('debug:start', () => {
+    if (debugActive) return { ok: true, already: true };
     try {
-      const url = `${v.ttsBaseUrl.replace(/\/+$/, '')}/audio/voices`;
+      const dir = path.join(dm.dataDirectory, 'debug-backup');
+      fs.mkdirSync(dir, { recursive: true });
+      for (const f of debugSnapshotFiles) {
+        const src = path.join(dm.dataDirectory, f);
+        if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dir, f));
+      }
+      debugActive = true;
+      debugStartAt = Date.now();
+      dm.logError('functional', '[调试] 调试模式已开始：本会话内的所有修改将在结束后全部恢复');
+      broadcast('settings:changed', {});
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+  ipcMain.handle('debug:trigger', async (_e, kind: string, chatType: string, chatId: string) => {
+    try {
+      if (kind === 'proactive') {
+        await handleProactive({ chatType, chatId });
+        return { ok: true, message: '已触发主动消息（按当前设置生成并发送）' };
+      }
+      if (kind === 'moments' || kind === 'relationship') {
+        const roleId = resolveChatRole(chatType, chatId);
+        if (!roleId) return { ok: false, error: '该聊天没有可用角色（群聊取第一位成员）' };
+        const res = await requestRelationshipAndMoments(chatType, chatId, roleId, {
+          force: true,
+          doRelationship: kind === 'relationship',
+          doMoments: kind === 'moments',
+        });
+        return {
+          ok: true,
+          message: kind === 'moments' ? `已触发朋友圈自动发（新增 ${res.moments} 条）` : '已触发关系判定',
+        };
+      }
+      if (kind === 'sceneImage') {
+        const roleId = resolveChatRole(chatType, chatId);
+        if (!roleId) return { ok: false, error: '该聊天没有可用角色（群聊取第一位成员）' };
+        await triggerSceneImage(chatType, chatId, roleId);
+        return { ok: true, message: '已触发异步场景生图' };
+      }
+      return { ok: false, error: `未知触发类型: ${kind}` };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+  ipcMain.handle('debug:end', async () => {
+    if (!debugActive) return { ok: false, error: '调试模式未开启' };
+    debugActive = false;
+    const dir = path.join(dm.dataDirectory, 'debug-backup');
+    let restored = 0;
+    for (const f of debugSnapshotFiles) {
+      const bak = path.join(dir, f);
+      if (fs.existsSync(bak)) {
+        try {
+          fs.copyFileSync(bak, path.join(dm.dataDirectory, f));
+          restored += 1;
+        } catch { /* 单文件恢复失败继续处理其余 */ }
+      }
+    }
+    dm.reloadAll();
+    broadcast('settings:changed', {});
+    // 汇总本会话新增错误，按功能分类输出（functional=功能链路 / model=模型调用 / other=其他）
+    const report: Record<string, { time: string; message: string }[]> = {};
+    try {
+      for (const e of dm.getErrorLog()) {
+        const t = new Date(e.time || 0).getTime();
+        if (!(t >= debugStartAt)) continue;
+        const cat = e.category || 'other';
+        (report[cat] = report[cat] || []).push({ time: e.time, message: e.message });
+      }
+    } catch { /* 读取失败则返回空报告 */ }
+    return { ok: true, restored, report };
+  });
+
+  // ---------- 语音：拉取 TTS 音色列表（v2.3.22 起全量实时拉取，软件不再内置任何音色清单） ----------
+  // 政策（用户明令）：音色一律自动从厂商接口拉取；没有列表 API 的厂商返回空列表，音色由用户手填。
+  // 音色输入框本身是自由文本（datalist 仅作建议），永远不会硬编码音色清单。
+  ipcMain.handle('audio:listVoices', async () => {
+    const v = dm.getSettings().voice;
+    if (!v?.ttsBaseUrl || !v?.ttsApiKey) return [];
+    try {
+      const vb = v.ttsBaseUrl.trim().replace(/\/+$/, '').replace(/\/audio\/speech$/i, '');
+      // 无公开列表端点的厂商：返回空列表，音色手填
+      if (/\/t2a_v2$/i.test(vb)) return []; // MiniMax
+      if (/api\.openai\.com/i.test(vb)) return []; // OpenAI 官方（无音色列表端点，音色见官方文档手填）
+      if (/generativelanguage\.googleapis\.com/i.test(vb)) return []; // Gemini（官方文档预置音色，手填）
+      if (/openspeech\.bytedance\.com/i.test(vb)) return []; // 字节火山（voice_type 见控制台）
+      if (/tencentcloudapi\.com/i.test(vb)) return []; // 腾讯云（VoiceType 见控制台）
+      if (/baidubce\.com|tsn\.baidu\.com/i.test(vb)) return []; // 百度（voicer 见控制台）
+      if (/dashscope\.aliyuncs\.com/i.test(vb)) return []; // 阿里 qwen-tts（音色名见文档）
+      // Azure：GET /cognitiveservices/voices/list → ShortName
+      if (/tts\.speech\.microsoft\.com/i.test(vb)) {
+        try {
+          const origin = new URL(vb).origin;
+          const vr = await fetch(`${origin}/cognitiveservices/voices/list`, {
+            headers: { 'Ocp-Apim-Subscription-Key': v.ttsApiKey },
+          });
+          if (vr.ok) {
+            const vd: any = await vr.json();
+            const names = (Array.isArray(vd) ? vd : []).map((x: any) => x?.ShortName).filter(Boolean);
+            if (names.length) return names;
+          }
+        } catch { /* 拉取失败返回空，音色手填 */ }
+        return [];
+      }
+      // ElevenLabs：GET /v1/voices → voice_id
+      if (/api\.elevenlabs\.io/i.test(vb)) {
+        const lvb = /\/v1/i.test(vb) ? vb : `${vb}/v1`;
+        const vr = await fetch(`${lvb}/voices`, { headers: { 'xi-api-key': v.ttsApiKey } });
+        if (vr.ok) {
+          const vd: any = await vr.json();
+          const ids = (vd?.voices || []).map((x: any) => x?.voice_id).filter(Boolean);
+          if (ids.length) return ids;
+        }
+        return [];
+      }
+      // Fish Audio：GET /model → _id
+      if (/api\.fish\.audio/i.test(vb)) {
+        const fr = await fetch('https://api.fish.audio/model?page_size=30', { headers: { Authorization: `Bearer ${v.ttsApiKey}` } });
+        if (fr.ok) {
+          const fd: any = await fr.json();
+          const ids = (fd?.items || []).map((x: any) => x?._id || x?.id).filter(Boolean);
+          if (ids.length) return ids;
+        }
+        return [];
+      }
+      // Cartesia：GET /voices → id
+      if (/api\.cartesia\.ai/i.test(vb)) {
+        const cr = await fetch(`${vb}/voices`, { headers: { 'X-API-Key': v.ttsApiKey, 'Cartesia-Version': '2025-04-16' } });
+        if (cr.ok) {
+          const cd: any = await cr.json();
+          const ids = (Array.isArray(cd) ? cd : cd?.voices || []).map((x: any) => x?.id).filter(Boolean);
+          if (ids.length) return ids;
+        }
+        return [];
+      }
+      // AWS Polly：DescribeVoices（SigV4 签名，实现在 ai.ts）
+      if (/polly\.[a-z0-9-]+\.amazonaws\.com/i.test(vb)) {
+        try {
+          const ids = await listPollyVoices(vb, v.ttsApiKey);
+          if (ids.length) return ids;
+        } catch { /* 拉取失败返回空，音色手填 */ }
+        return [];
+      }
+      // OpenAI 兼容：GET /audio/voices；服务端不支持该端点时返回空（不回退任何内置清单）
+      const url = `${vb}/audio/voices`;
       const resp = await fetch(url, { headers: { Authorization: `Bearer ${v.ttsApiKey}` } });
       if (resp.ok) {
         const data: any = await resp.json().catch(() => null);
@@ -5181,9 +5816,9 @@ function registerIPC(): void {
         }
       }
     } catch {
-      /* 服务端不支持列接口时回退内置清单 */
+      /* 拉取失败返回空，音色手填 */
     }
-    return DEFAULT_VOICES;
+    return [];
   });
 
   // ---------- 快捷小窗 ----------
@@ -5222,7 +5857,7 @@ function registerIPC(): void {
     if (miniWindow && !miniWindow.isDestroyed()) miniWindow.hide();
   });
   ipcMain.handle('mini:setOnTop', (_e, v: boolean) => {
-    if (miniWindow && !miniWindow.isDestroyed()) miniWindow.setAlwaysOnTop(!!v);
+    if (miniWindow && !miniWindow.isDestroyed()) miniWindow.setAlwaysOnTop(!!v, 'floating');
   });
   // ===== 空闲主动回复：主进程维护全局权威计时基准（跨窗口唯一数据源）=====
   // 两窗口各自渲染进程独立，无法共享模块变量，因此由主进程统一持有 lastActivity
@@ -5250,14 +5885,18 @@ function registerIPC(): void {
     broadcast('idle:tick', payload);
   }, 250);
 
-  // ===== 主动消息：主进程统一调度 =====
+  // ===== 主动消息：主进程统一调度（每个聊天独立计时）=====
   // 原先由渲染进程用 setInterval 自行判断并调用 chats:proactive。主界面关闭到托盘时窗口仅 hide，
   // 渲染进程的定时器会被 Chromium 节流乃至冻结，于是主动消息不触发，直到重新打开窗口才「姗姗来迟」。
   // 改由主进程以 idleState（全局权威计时基准）驱动：窗口隐藏、最小化、托盘常驻都不影响计时与触发。
   // 渲染端只保留倒计时显示，不再自行触发，避免双触发。
+  // v2.3.12：调度从「只评估当前查看的聊天」改为「所有开启主动消息的聊天各自独立计时」——
+  // 每个聊天用自己的静默时钟 + 自己抽中的随机间隔，到点独立触发（后台触发进未读/悬浮球通知）。
   const proactiveBusyKeys = new Set<string>(); // 正在生成主动消息的 chatKey，防重入
   // 随机模式：每个聊天当前抽中的间隔（毫秒）。触发一条后重抽，实现「每次间隔都随机」。
   const idleRandomOverrideMs = new Map<string, number>();
+  // 切换聊天 pause/reset 模式：离开聊天时冻结其计时（记录已静默时长），回到该聊天时解冻续走
+  const idleFrozenElapsedMs = new Map<string, number>();
   // 随机范围（秒）：钳制 1~86400（1 秒 ~ 24 小时），且 max >= min
   const randomRangeSec = (s: AppSettings): { min: number; max: number } => {
     const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -5267,52 +5906,74 @@ function registerIPC(): void {
   };
   setInterval(() => {
     if (quitting) return;
-    if (proactiveBusyKeys.size > 0) return; // 串行：同一时刻只生成一条，避免并发刷屏
     const s = dm.getSettings();
     if (s.idleEnabled === false) return;
-    // 优先用渲染端回传的「当前查看的聊天」；缺失时兜底取最近有活动记录的聊天
-    let key = activeChatKeyMain;
-    if (!key || idleState.get(key) == null) {
-      let newest = -1;
-      for (const [k, t] of idleState) {
-        if (t > newest) {
-          newest = t;
-          key = k;
+    // 双引擎互斥：NHPP 智能调度接管后，经典定时机制立即停用（避免两套同时发主动消息）
+    if (s.proactiveEngine === 'nhpp') return;
+    if (proactiveBusyKeys.size > 0) return; // 串行：同一时刻只生成一条，避免并发刷屏
+    // 冷却开关关闭：清空冷却表，避免历史残留误挡（开启时才按冷却跳过）
+    if (s.idleCooldownUntilReply === false && proactiveAwaitingReply.size > 0) {
+      proactiveAwaitingReply.clear();
+    }
+    const switchAction = s.idleSwitchAction || 'continue';
+    if (switchAction === 'continue' && idleFrozenElapsedMs.size > 0) {
+      idleFrozenElapsedMs.clear(); // continue 模式没有冻结概念，清理历史残留恢复独立计时
+    }
+    const now = Date.now();
+    // 每个聊天独立评估：静默时长 >= 该聊天自己的间隔即超时，挑「超时最久」的一个触发；
+    // 当前查看的聊天在超时程度相近时优先（+1ms 平局加成）
+    let bestKey: string | null = null;
+    let bestOverdue = -1;
+    let bestIntervalMs = 0;
+    for (const [k, ts] of idleState) {
+      if ((s.chatIdleEnabled || {})[k] === false) continue; // 该聊天单独关闭了主动消息
+      if (s.idleCooldownUntilReply !== false && proactiveAwaitingReply.has(k)) continue; // 冷却中：等用户回复
+      const sep = k.indexOf(':');
+      if (sep <= 0) continue;
+      const chatType = k.slice(0, sep);
+      const chatId = k.slice(sep + 1);
+      if (!chatId) continue;
+      // 该聊天还没有任何消息则不主动开口（与旧逻辑一致）
+      if (dm.getMessages(chatType, chatId).length === 0) continue;
+      // 正在生成其它内容（用户发消息 / AI 回复 / 自动接话）时让路，下轮再判
+      if (streamControllers.has(chatId)) continue;
+      const frozen = idleFrozenElapsedMs.get(k);
+      // pause/reset 模式：非当前查看的聊天计时冻结、不后台触发（回来时续走/重置）；
+      // continue 模式：所有聊天独立计时，离开后照常在后台触发（消息进未读清单/悬浮球）
+      if (frozen == null && k !== activeChatKeyMain && switchAction !== 'continue') continue;
+      const elapsed = frozen != null ? frozen : now - ts;
+      // 触发间隔：fixed=idleInterval 固定值；random=该聊天抽中的随机值（缺失时现抽）
+      let intervalMs = (s.idleInterval || 600) * 1000;
+      if (s.idleTimingMode === 'random') {
+        let ov = idleRandomOverrideMs.get(k);
+        if (ov == null) {
+          const { min, max } = randomRangeSec(s);
+          ov = Math.floor(min * 1000 + Math.random() * (max - min + 1) * 1000);
+          idleRandomOverrideMs.set(k, ov);
         }
+        intervalMs = ov;
+      }
+      const overdue = elapsed - intervalMs;
+      if (overdue <= 0) continue;
+      const score = overdue + (k === activeChatKeyMain ? 1 : 0);
+      if (score > bestOverdue) {
+        bestOverdue = score;
+        bestKey = k;
+        bestIntervalMs = intervalMs;
       }
     }
-    if (!key) return;
-    const perChat = (s.chatIdleEnabled || {})[key];
-    if (perChat === false) return; // 该聊天单独关闭了主动消息
-    const ts = idleState.get(key);
-    if (ts == null) return;
-    // 触发间隔：fixed=idleInterval 固定值；random=该聊天抽中的随机值（缺失时现抽）
-    let intervalMs = (s.idleInterval || 600) * 1000;
-    if (s.idleTimingMode === 'random') {
-      let ov = idleRandomOverrideMs.get(key);
-      if (ov == null) {
-        const { min, max } = randomRangeSec(s);
-        ov = Math.floor(min * 1000 + Math.random() * (max - min + 1) * 1000);
-        idleRandomOverrideMs.set(key, ov);
-      }
-      intervalMs = ov;
-    }
-    if (Date.now() - ts < intervalMs) return;
+    if (!bestKey) return;
+    const key = bestKey;
     const sep = key.indexOf(':');
-    if (sep <= 0) return;
     const chatType = key.slice(0, sep);
     const chatId = key.slice(sep + 1);
-    if (!chatId) return;
-    // 该聊天还没有任何消息则不主动开口（与旧渲染端逻辑一致）
-    if (dm.getMessages(chatType, chatId).length === 0) return;
-    // 正在生成其它内容（用户发消息 / AI 回复 / 自动接话）时让路，下轮再判
-    if (streamControllers.has(chatId)) return;
     proactiveBusyKeys.add(key);
     // 先重置计时再发请求，杜绝并发重复触发与「窗口恢复后补触发」；
     // intervalMs 随广播下发给渲染端，用于倒计时显示（随机模式下每次触发间隔都不同）
     const startedAt = Date.now();
     idleState.set(key, startedAt);
-    broadcast('idle:activity', { chatKey: key, timestamp: startedAt, intervalMs });
+    idleFrozenElapsedMs.delete(key);
+    broadcast('idle:activity', { chatKey: key, timestamp: startedAt, intervalMs: bestIntervalMs });
     void handleProactive({ chatType, chatId })
       .catch(() => {
         /* 生成失败已由 handleProactive 内部落库/气泡处理，此处仅防 unhandledrejection */
@@ -5507,7 +6168,28 @@ function registerIPC(): void {
   ipcMain.on('app:active-chat', (_e, p: { type: string; id: string }) => {
     if (p && typeof p.type === 'string' && typeof p.id === 'string') {
       setActiveChat(p.type, p.id); // 清除悬浮球该会话未读
-      activeChatKeyMain = `${p.type}:${p.id}`;
+      const nextKey = `${p.type}:${p.id}`;
+      // 切换聊天时的计时行为（idleSwitchAction）：
+      // - continue：所有聊天独立计时，不做冻结/恢复
+      // - pause：离开的聊天冻结计时（记录已静默时长），回到该聊天时解冻续走
+      // - reset：同 pause 冻结（不后台触发），回到该聊天后由渲染端重置计时
+      try {
+        const action = dm.getSettings().idleSwitchAction || 'continue';
+        const prevKey = activeChatKeyMain;
+        if (action !== 'continue' && prevKey && prevKey !== nextKey) {
+          if (!idleFrozenElapsedMs.has(prevKey) && idleState.has(prevKey)) {
+            idleFrozenElapsedMs.set(prevKey, Date.now() - (idleState.get(prevKey) as number));
+          }
+        }
+        const frozenElapsed = idleFrozenElapsedMs.get(nextKey);
+        if (frozenElapsed != null) {
+          // 回到该聊天：解冻并按冻结时长顺延（pause=回来后继续）
+          idleFrozenElapsedMs.delete(nextKey);
+          idleState.set(nextKey, Date.now() - frozenElapsed);
+          broadcast('idle:activity', { chatKey: nextKey, timestamp: Date.now() - frozenElapsed });
+        }
+      } catch { /* 调度状态异常不影响聊天切换 */ }
+      activeChatKeyMain = nextKey;
       // 注意：类 IM 已读水位线不再在「打开」时立即前移，改由渲染端在用户滚动到底部（真正读完）后标记，
       // 这样返回有未读消息的聊天时，能先看到「未读分隔线 / 标记」，符合类 IM 体验。
     }
@@ -5564,10 +6246,24 @@ process.on('unhandledRejection', (reason) => {
   }
 });
 
+// 开机自启动：根据设置注册/取消登录项（Windows 写注册表，macOS 写 Login Items）
+function applyLaunchOnBoot(enabled: boolean): void {
+  try {
+    app.setLoginItemSettings({ openAtLogin: !!enabled });
+    console.log('[launch] openAtLogin =', !!enabled);
+  } catch (e) {
+    console.error('[launch] setLoginItemSettings failed', e);
+  }
+}
+
 app.whenReady().then(() => {
+  // 内置内容：3 张人物卡 + 教学世界书（仅首次注入，settings.builtinSeeded 标记防重复）
+  try { seedBuiltinContent(dm); } catch { /* 注入失败不影响启动 */ }
   const settings = dm.getSettings();
   setDeepThinkLevel(settings.deepThinkLevel);
-  Menu.setApplicationMenu(buildMenu(settings.lang === 'en' ? 'en' : 'zh'));
+  // 开机自启动：默认开启（settings.launchOnBoot !== false）
+  applyLaunchOnBoot(settings.launchOnBoot !== false);
+  Menu.setApplicationMenu(buildMenu((MENU_LANGS as string[]).includes(settings.lang) ? settings.lang as Lang : 'zh'));
   protocol.registerFileProtocol('nianyuimg', (request, callback) => {
     const url = request.url.replace('nianyuimg://', '');
     callback(decodeURIComponent(url));
@@ -5594,6 +6290,35 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   applyMiniSettings();
+  // MCP：注入设置提供器（ai.ts 请求构造时读取 mcpServers）；应用退出时断开全部连接
+  setAiSettingsProvider(() => dm.getSettings());
+  app.on('will-quit', () => {
+    try {
+      void import('./mcpManager').then((m) => m.disconnectAll());
+    } catch {
+      /* ignore */
+    }
+  });
+  // NHPP 主动消息引擎：注入依赖并启动统一调度心跳（60s/轮，扫描到期候选与待回访）。
+  // 仅当 settings.proactiveEngine === 'nhpp' 时实际调度；经典 idle 定时消息机制完全不受影响。
+  initProactiveEngine({
+    getSettings: () => dm.getSettings(),
+    sendProactive: (chatType, chatId, extraInstruction) => handleProactive({ chatType, chatId, extraInstruction }),
+    getMessages: (chatType, chatId) => dm.getMessages(chatType, chatId),
+    isBusy: (chatId) => streamControllers.has(chatId),
+    getDefaultModel: () => {
+      const s = dm.getSettings();
+      return getDefaultModelConfig(s) || undefined;
+    },
+    logError: (category, message, detail) => dm.logError(category, message, detail),
+  });
+  setInterval(() => {
+    try {
+      heartbeatProactive();
+    } catch {
+      /* 心跳异常不中断 */
+    }
+  }, 60_000);
   // 桌面悬浮球：注入主窗引用/唤出函数，并按设置创建悬浮球窗口
   setBallMainShow(showMainWindow);
   setBallMainWindow(mainWindow);

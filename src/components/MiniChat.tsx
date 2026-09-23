@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
+import { localeOf } from '../i18n/translations';
 import { useTheme } from '../theme/ThemeContext';
 import type { ChatListItem, ChatMessage, ChatType, Role, SelfRole, WorldBook } from '../types';
 
@@ -12,13 +13,16 @@ interface SearchResultItem {
   snippet: string;
 }
 import { renderMarkdown } from '../utils/markdown';
+import { filterSpeechText } from '../utils/speechScope';
 import { CustomTitleBar } from './CustomTitleBar';
 import CustomCursor from './CustomCursor';
 import ErrorBubble from './ErrorBubble';
 import { AvatarImg } from './ChatList';
 import { playSoundSync } from '../utils/sound';
+import { NodeBanner } from './NodeBanner';
 import CustomScrollArea from './CustomScrollArea';
 import { GroupEditor } from './GroupEditor';
+import { ChatModelPicker } from './ChatModelPicker';
 import { useToast, ToastView } from './Toast';
 import SelectMenu from './SelectMenu';
 import { ReasoningBlock } from './ReasoningBlock';
@@ -29,6 +33,9 @@ import { MomentsView } from './MomentsView';
 import { EVENT_COOLDOWN_MS, EVENT_TRIGGER_THRESHOLD } from '../eventThemes';
 import { getEventStore, setEventStore } from '../utils/eventStore';
 import { setIdleActivity } from '../utils/idleTimerStore';
+import { resolveWantStream, resolveStreamInfo, persistStreamToggle, type StreamPref } from '../utils/chatStream';
+import { usePseudoReveal, markPseudoPending, isPseudoPending, clearPseudoPending } from '../utils/pseudoStream';
+import { clampPseudoSpeed, PSEUDO_QUEUE } from '../types';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { ClearChatModal } from './ClearChatModal';
 import { MessageSearch } from './MessageSearch';
@@ -111,13 +118,30 @@ export const MiniChat: React.FC = () => {
   const streamMsgIdRef = useRef<Record<string, string>>({});
   const autoMemoryRef = useRef(false);
   const [hideReasoning, setHideReasoning] = useState(true);
+  // 伪流式输出（v2.3.34；v2.3.36 单一「动画速度」）：on=总开关，speed=动画速度/单字渐显时长（秒），触发间隔=speed/4 自动推导
+  const [pseudoCfg, setPseudoCfg] = useState<{ on: boolean; speed: number }>({ on: false, speed: 0.8 });
+  // 供回调（onDone / 非流式落库）读取最新值，避免闭包捕获旧值
+  const pseudoRef = useRef(pseudoCfg);
+  useEffect(() => { pseudoRef.current = pseudoCfg; }, [pseudoCfg]);
   const [enableStreaming, setEnableStreaming] = useState(false);
+  // 流式生效值镜像（ref）：stream:done 事件回调闭包里判断「本次回复是否真实流式」——
+  // 伪流式仅在非流式（生效值关闭）时打标逐字渐显；流式回复已实时输出，不打标
+  const streamOnRef = useRef(true);
+  useEffect(() => { streamOnRef.current = enableStreaming; }, [enableStreaming]);
+  // 流式偏好的「来源」（model=模型独立设置 / global=跟随全局），用于按钮 tooltip
+  const [streamPref, setStreamPref] = useState<StreamPref>({ on: false, source: 'global' });
   // 好感度变化提示（与主界面一致）
   const [affinityPop, setAffinityPop] = useState<string | null>(null);
   // 自适应故事线：开关 / 节点列表 / 侧栏（与主界面同步）
   const [storyOn, setStoryOn] = useState(false);
   const [storyNodes, setStoryNodes] = useState<{ id: number; msg_id: number; title: string; timestamp: string }[]>([]);
   const [showStories, setShowStories] = useState(false);
+  // 节点横幅 / 内联改名 / 分叉（v2.3.37）
+  const [nodeBanner, setNodeBanner] = useState<{ title: string; subtitle?: string } | null>(null);
+  const [editingNodeId, setEditingNodeId] = useState<number | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
+  const [forking, setForking] = useState(false);
+  const storiesRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!current) return;
     api.getStoryEnabled(current.chat_type, current.chat_id).then(setStoryOn);
@@ -136,9 +160,37 @@ export const MiniChat: React.FC = () => {
     setStoryNodes(await api.listStoryNodes(current.chat_type, current.chat_id));
     showToast(t('chat.markNode'));
   };
-  const gotoNode = (msgId: number) => {
-    const el = document.querySelector(`[data-mid="${msgId}"]`);
+  const gotoNode = async (node: { msg_id: number; title: string }) => {
+    const el = document.querySelector(`[data-mid="${node.msg_id}"]`);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // 切换/跳转到剧情节点：弹出横幅展示节点名称（1s 弹入 → 3.5s 停留 → 渐隐 + 音效）
+    setNodeBanner({ title: node.title, subtitle: t('chat.nodeBannerJump') });
+  };
+  const renameNode = async (id: number, title: string) => {
+    await api.renameStoryNode(id, title);
+    if (current) setStoryNodes(await api.listStoryNodes(current.chat_type, current.chat_id));
+    setEditingNodeId(null);
+    showToast(t('chat.nodeRenamed'));
+    // 编辑结束：若鼠标已不在侧栏上，恢复自动收起（编辑期间移出被挂起，收起动作被延迟到此时）
+    if (storiesRef.current && !storiesRef.current.matches(':hover')) setShowStories(false);
+  };
+  const forkFromNode = async (node: { id: number; title: string }) => {
+    if (forking || !current) return;
+    setForking(true);
+    try {
+      const chat = await api.forkChatFromNode(current.chat_type, current.chat_id, node.id);
+      showToast(t('chat.forkOk', { name: chat.name }));
+      setNodeBanner({ title: node.title, subtitle: t('chat.nodeBannerFork') });
+      // 刷新会话列表并切换到新聊天（原聊天保持不变）
+      const list = await api.getChatList();
+      setChats(list);
+      const hit = list.find((c) => c.chat_type === chat.chat_type && c.chat_id === chat.chat_id);
+      setCurrent(hit || ({ chat_type: chat.chat_type, chat_id: chat.chat_id, name: chat.name } as ChatListItem));
+    } catch (e: any) {
+      showToast(t('chat.forkFail', { msg: e?.message || String(e) }), { error: true });
+    } finally {
+      setForking(false);
+    }
   };
   const removeNode = async (id: number) => {
     if (!current) return;
@@ -192,7 +244,8 @@ export const MiniChat: React.FC = () => {
   const [idleReplyOn, setIdleReplyOn] = useState(true);
   const [groupAutoChain, setGroupAutoChain] = useState(false);
   const [idleCountdown, setIdleCountdown] = useState(0);
-  const idleSwitchActionRef = useRef<'pause' | 'reset' | 'continue'>('pause');
+  const idleSwitchActionRef = useRef<'pause' | 'reset' | 'continue'>('continue');
+  const [nhppActive, setNhppActive] = useState(false); // NHPP 接管时经典主动消息开关置灰不可拨动
   const lastActivityRef = useRef(Date.now()); // 最近一次用户操作时间
   const idleReplyOnRef = useRef(true);
   const idleSecondsRef = useRef(60);
@@ -207,8 +260,13 @@ export const MiniChat: React.FC = () => {
   // 语音、模型、头像、token
   const [voiceCfg, setVoiceCfg] = useState({ asr: false, tts: false, auto: false });
   const [speakingId, setSpeakingId] = useState<number | null>(null);
+  // TTS 播放状态机（v2.3.44，与主窗一致）：speakingId=已加载音频的消息；ttsPlaying=播放中；ttsPaused=已暂停；ttsEnabled=全局总开关
+  const [ttsPlaying, setTtsPlaying] = useState(false);
+  const [ttsPaused, setTtsPaused] = useState(false);
+  const [ttsEnabled, setTtsEnabled] = useState(true);
+  const ttsEnabledRef = useRef(true);
+  useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
   const [globalTokens, setGlobalTokens] = useState(0);
-  const [modelMap, setModelMap] = useState<Record<string, string>>({});
   const [avatarMap, setAvatarMap] = useState<Record<string, string>>({});
   const [showMention, setShowMention] = useState(false);
   const [failed, setFailed] = useState<{
@@ -222,6 +280,15 @@ export const MiniChat: React.FC = () => {
   const [observerPrivate, setObserverPrivate] = useState(false);
   const [chatBg, setChatBg] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // v2.3.44：卸载 / 切换聊天时停止播报并清空状态（避免音频跨聊天继续播放）
+  useEffect(() => () => { audioRef.current?.pause(); }, []);
+  useEffect(() => {
+    audioRef.current?.pause();
+    audioRef.current = null;
+    setSpeakingId(null);
+    setTtsPlaying(false);
+    setTtsPaused(false);
+  }, [current?.chat_id]);
   const recentlySentRef = useRef(false);
   const lastSentRef = useRef<{ content: string; imagePaths: string[] }>({
     content: '',
@@ -252,15 +319,12 @@ export const MiniChat: React.FC = () => {
   // 拉取模型/头像/voice/全局token/自我身份等辅助数据（与 ChatWindow.load 对齐）
   const loadAux = async () => {
     const [roles, settings] = await Promise.all([api.getRoles(), api.getSettings()]);
-    const map: Record<string, string> = {};
     const avatars: Record<string, string> = {};
     for (const r of roles) {
-      const cfg = (settings.models || []).find((m) => m.id === r.model_config_id);
-      if (cfg) map[r.name] = cfg.name;
       if (r.avatar_path) avatars[r.name] = r.avatar_path;
     }
-    setModelMap(map);
     setAvatarMap(avatars);
+    setTtsEnabled(settings.voice?.ttsEnabled !== false);
     setVoiceCfg({
       asr: !!(settings.voice?.asrBaseUrl && settings.voice?.asrApiKey),
       tts: !!(settings.voice?.ttsBaseUrl && settings.voice?.ttsApiKey),
@@ -273,11 +337,23 @@ export const MiniChat: React.FC = () => {
     setDefaultSelfId(settings.currentSelfRoleId || '');
     autoMemoryRef.current = !!settings.enableAutoMemory;
     setHideReasoning(settings.hideReasoning !== false);
-    setEnableStreaming(!!settings.enableStreaming);
+    setPseudoCfg({ on: settings.pseudoStreamEnabled === true, speed: clampPseudoSpeed(settings.pseudoStreamSpeed) });
+    // 流式开关显示「生效值」：模型独立 streamEnabled 优先，否则全局 enableStreaming
+    if (current) {
+      resolveStreamInfo(current.chat_type, current.chat_id)
+        .then((info) => {
+          setEnableStreaming(info.on);
+          setStreamPref(info);
+        })
+        .catch(() => {});
+    } else setEnableStreaming(!!settings.enableStreaming);
     setEnableRandomEvents(settings.enableRandomEvents !== false);
     const globalOn = settings.idleEnabled !== false;
+    const engine = settings.proactiveEngine || 'legacy';
+    setNhppActive(engine === 'nhpp');
+    // v2.3.28：头部开关为当前聊天的独立开关（经典 / NHPP 引擎通用——NHPP 调度同样遵守 chatIdleEnabled）
     const perChat = current ? (settings.chatIdleEnabled || {})[`${current.chat_type}:${current.chat_id}`] : undefined;
-    const eff = globalOn && (perChat === undefined ? true : perChat);
+    const eff = globalOn && perChat !== false;
     setIdleReplyOn(eff);
     idleReplyOnRef.current = eff;
     // 随机模式初值取范围中点（后续以主进程广播的实际抽中间隔为准）
@@ -285,7 +361,7 @@ export const MiniChat: React.FC = () => {
       settings.idleTimingMode === 'random'
         ? Math.round(((settings.idleRandomMinSec ?? 60) + (settings.idleRandomMaxSec ?? 1800)) / 2)
         : settings.idleInterval || 600;
-    idleSwitchActionRef.current = settings.idleSwitchAction || 'pause';
+    idleSwitchActionRef.current = settings.idleSwitchAction || 'continue';
     setGroupAutoChain(settings.groupAutoChain !== false);
     // 加载聊天背景
     if (current) {
@@ -589,11 +665,17 @@ export const MiniChat: React.FC = () => {
         doneStreamIds.current.add(data.streamId);
         // 记录 消息id -> streamId，让已完成的回复在历史中仍显示自己的搜索气泡
         if (data.message.id != null) streamMsgIdRef.current[String(data.message.id)] = data.streamId;
+        // 伪流式打标（v2.3.36）：非流式回复也经 stream:done 广播整段到齐，此通道是非流式回复
+        // 到达的唯一可靠路径——伪流式开启且当前流式生效值关闭时打标；打标与 setMessages 同帧，
+        // 气泡挂载即从首字开始渐显。真实流式（streamOnRef=true）不打标，正文已实时输出。
+        if (pseudoRef.current.on && !streamOnRef.current && data.message.sender_type === 'ai' && data.message.content) {
+          markPseudoPending(`${data.message.chat_id}:${data.message.id}`);
+        }
         setMessages((prev) => {
           if (prev.find((m) => m.id === data.message.id)) return prev;
           return [...prev, data.message];
         });
-        if (voiceCfg.auto && data.message.content) speak(data.message);
+        if (ttsEnabledRef.current && voiceCfg.auto && data.message.content) speak(data.message);
       }
       // 后台消息提醒：主窗/小窗均隐藏且软件在后台时，弹出 Steam 风格卡片
       if (data.message?.sender_type === 'ai' && data.message.content) {
@@ -727,12 +809,25 @@ export const MiniChat: React.FC = () => {
       root.classList.toggle('anim-off', !settings.enableAnimations);
       // 全局开关统一重派生
       setHideReasoning(settings.hideReasoning !== false);
-      setEnableStreaming(!!settings.enableStreaming);
+      // v2.3.44：全局 TTS 开关（主窗/设置页切换后小窗立即同步）
+      setTtsEnabled(settings.voice?.ttsEnabled !== false);
+    setPseudoCfg({ on: settings.pseudoStreamEnabled === true, speed: clampPseudoSpeed(settings.pseudoStreamSpeed) });
+      // 流式开关显示「生效值」：模型独立 streamEnabled 优先，否则全局 enableStreaming
+      const [kt, kc] = key.split(':');
+      resolveStreamInfo(kt, kc)
+        .then((info) => {
+          setEnableStreaming(info.on);
+          setStreamPref(info);
+        })
+        .catch(() => {});
       autoMemoryRef.current = !!settings.enableAutoMemory;
       setEnableRandomEvents(settings.enableRandomEvents !== false);
       const globalOn = settings.idleEnabled !== false;
+      const engine = settings.proactiveEngine || 'legacy';
+      setNhppActive(engine === 'nhpp');
+      // v2.3.28：显示态 = 全局开关 × 当前聊天独立开关（经典 / NHPP 通用）
       const perChat = (settings.chatIdleEnabled || {})[key];
-      const eff = globalOn && (perChat === undefined ? true : perChat);
+      const eff = globalOn && perChat !== false;
       setIdleReplyOn(eff);
       idleReplyOnRef.current = eff;
       // 随机模式初值取范围中点（后续以主进程广播的实际抽中间隔为准）
@@ -740,7 +835,7 @@ export const MiniChat: React.FC = () => {
         settings.idleTimingMode === 'random'
           ? Math.round(((settings.idleRandomMinSec ?? 60) + (settings.idleRandomMaxSec ?? 1800)) / 2)
           : settings.idleInterval || 600;
-      idleSwitchActionRef.current = settings.idleSwitchAction || 'pause';
+      idleSwitchActionRef.current = settings.idleSwitchAction || 'continue';
       setGroupAutoChain(settings.groupAutoChain !== false);
       setVoiceCfg({
         asr: !!(settings.voice?.asrBaseUrl && settings.voice?.asrApiKey),
@@ -986,7 +1081,9 @@ export const MiniChat: React.FC = () => {
       const s = await api.getSettings();
       // F1：群聊选人回复 —— 仅在群聊且开启开关时生效
       const selectReply = !!(s.groupSelectReply && current.chat_type === 'group');
-      if (s.enableStreaming && phase === 'full') {
+      // 发送时实时解析「生效流式偏好」：模型独立 streamEnabled 优先，否则全局
+      const wantStream = await resolveWantStream(current.chat_type, current.chat_id);
+      if (wantStream && phase === 'full') {
         const { userMessage, members: streamMembers } = await api.startStream({
           chatType: current.chat_type,
           chatId: current.chat_id,
@@ -1028,6 +1125,12 @@ export const MiniChat: React.FC = () => {
           imagePaths,
         });
         setStreamingMsgs({});
+        // 伪流式输出：非流式回复为整段到齐，逐条打标后由气泡逐字渐显
+        if (pseudoRef.current.on) {
+          for (const m of res.aiMessages) {
+            if (m.sender_type === 'ai' && m.content) markPseudoPending(`${m.chat_id}:${m.id}`);
+          }
+        }
         setMessages((prev) => {
           const seen = new Set(prev.map((m) => m.id));
           const newMsgs = res.aiMessages.filter((m) => !seen.has(m.id));
@@ -1092,8 +1195,8 @@ export const MiniChat: React.FC = () => {
       });
       inputRef.current.dispatchEvent(fakeEvent);
     };
-    window.addEventListener('keydown', onKeyDown, { error: true });
-    return () => window.removeEventListener('keydown', onKeyDown, { error: true });
+    window.addEventListener('keydown', onKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true });
   }, []);
 
   // 随机事件弹窗关闭后，若当前无其他模态/遮罩打开，立即把焦点归还小窗输入框
@@ -1370,7 +1473,7 @@ export const MiniChat: React.FC = () => {
   const handleRollback = async (chatType: string, chatId: string, msgId: number) => {
     if (!(await api.showConfirm!(t('msg.rollbackConfirm')))) return;
     const res = await api.rollbackMessages({ chatType, chatId, fromMsgId: msgId });
-    showToast(t('msg.rollbackDone', { n: res.deletedMsgs, m: res.deletedMems }));
+    showToast(t('msg.rollbackDone', { n: res.deletedMsgs, m: res.deletedMems, k: res.deletedMoments ?? 0 }));
     setRoleMissing(false);
     reloadMessages();
     api.syncMessages({ chatType, chatId, action: 'rolledBack' });
@@ -1530,7 +1633,7 @@ export const MiniChat: React.FC = () => {
 
   const handleKeepGroup = async () => {
     if (!current || current.chat_type !== 'group') return;
-    await api.setGroupIgnoreConvert(current.chat_id, { error: true });
+    await api.setGroupIgnoreConvert(current.chat_id, true);
     setConvertPrompt(false);
   };
 
@@ -1611,29 +1714,93 @@ export const MiniChat: React.FC = () => {
     showToast(t(v ? 'chat.webSearchOn' : 'chat.webSearchOff'), { duration: 2000, animation: 'linear' });
   };
 
-  // ---------- 语音输入（ASR） ----------
-  // ---------- 文本转语音（TTS） ----------
-  const speak = async (msg: ChatMessage) => {
-    if (speakingId === msg.id) {
-      audioRef.current?.pause();
-      audioRef.current = null;
-      setSpeakingId(null);
-      showToast(t('chat.toastSpeakingStop'));
+  // ---------- 文本转语音（TTS）----------
+  // v2.3.44 播放状态机（与主窗一致）：播放中点击=暂停；暂停/播完后点击=从停止处续播（播完则从头），均复用已加载音频不重新合成。
+  // forceRegenerate=true（右键「重新生成语音」）时忽略已加载音频，强制重新合成。
+  const speak = async (msg: ChatMessage, forceRegenerate = false) => {
+    const cur = audioRef.current;
+    if (!forceRegenerate && speakingId === msg.id && cur) {
+      if (!cur.paused && !cur.ended) {
+        cur.pause();
+        setTtsPlaying(false);
+        setTtsPaused(true);
+        return;
+      }
+      try {
+        if (cur.ended) cur.currentTime = 0;
+        await cur.play();
+        setTtsPlaying(true);
+        setTtsPaused(false);
+      } catch {
+        /* 忽略 */
+      }
       return;
     }
     try {
-      audioRef.current?.pause();
+      cur?.pause();
+      audioRef.current = null;
+      setTtsPlaying(false);
+      setTtsPaused(false);
       setSpeakingId(msg.id);
       showToast(t('chat.toastSpeaking'));
-      const src = await api.textToSpeech(msg.content, msg.role_id);
+      // 解析说话角色 id：单聊=当前聊天角色；群聊=按发送者名匹配成员
+      const ttsRoleId =
+        current?.chat_type === 'single'
+          ? members.find((r) => r.id === current.chat_id || current.chat_id.includes(r.id))?.id || current.chat_id
+          : members.find((r) => r.name === msg.sender_name)?.id;
+      // 朗读范围过滤（全局设置）：只朗读勾选的类别（对话/旁白/人物心理），默认仅对话
+      const scopes = (await api.getSettings())?.voice?.ttsScopes;
+      const text = filterSpeechText(msg.content || '', scopes);
+      if (!text.trim()) {
+        setSpeakingId(null);
+        showToast(t('chat.ttsNothingInScope'));
+        return;
+      }
+      const src = await api.textToSpeech(text, ttsRoleId, forceRegenerate);
       const audio = new Audio(src);
       audioRef.current = audio;
-      audio.onended = () => setSpeakingId((id) => (id === msg.id ? null : id));
+      audio.onended = () => {
+        setTtsPlaying(false);
+        setTtsPaused(false);
+      };
+      audio.onpause = () => setTtsPlaying(false);
+      audio.onplay = () => {
+        setTtsPlaying(true);
+        setTtsPaused(false);
+      };
       await audio.play();
     } catch (e: any) {
       setSpeakingId(null);
+      setTtsPlaying(false);
+      setTtsPaused(false);
       showToast(t('chat.ttsFailed', { msg: e?.message || String(e) }), { error: true });
     }
+  };
+
+  // 重播：复用已加载音频从头播放（不重新生成语音）
+  const replayTts = async (msg: ChatMessage) => {
+    const cur = audioRef.current;
+    if (speakingId === msg.id && cur) {
+      try {
+        cur.currentTime = 0;
+        await cur.play();
+        setTtsPlaying(true);
+        setTtsPaused(false);
+      } catch {
+        /* 忽略 */
+      }
+      return;
+    }
+    await speak(msg);
+  };
+
+  // 全局 TTS 一键开关（抽屉菜单内；写入 settings.voice.ttsEnabled，主窗/小窗同步）
+  const toggleGlobalTts = async () => {
+    const next = !ttsEnabled;
+    setTtsEnabled(next);
+    const s = await api.getSettings();
+    await api.saveSettings({ voice: { ...(s.voice || {}), ttsEnabled: next } as any });
+    showToast(next ? t('chat.ttsGlobalOn') : t('chat.ttsGlobalOff'), { duration: 2000, animation: 'linear' });
   };
 
   const onInputChange = (v: string) => {
@@ -1661,7 +1828,7 @@ export const MiniChat: React.FC = () => {
   };
 
   const fmtTime = (iso: string) =>
-    new Date(iso).toLocaleString(lang === 'en' ? 'en-US' : 'zh-CN', {
+    new Date(iso).toLocaleString(localeOf(lang), {
       month: 'numeric',
       day: 'numeric',
       hour: '2-digit',
@@ -1678,6 +1845,7 @@ export const MiniChat: React.FC = () => {
   for (const m of allMessages) uniqueMessages.set(m.id, m);
   const allMessagesUnique = Array.from(uniqueMessages.values());
 
+  // 是否处于「对方正在回复」状态：发送中，或仍有流式占位气泡在飞
   const replying = sending || Object.keys(streamingMsgs).length > 0;
   const isStreaming = Object.keys(streamingMsgs).length > 0;
   const totalTokens = messages.reduce((s, m) => s + (m.token_used || 0), 0);
@@ -1762,6 +1930,7 @@ export const MiniChat: React.FC = () => {
                 title={t('chat.idleReplyTip')}
                 style={!idleReplyOn ? { flex: 1, justifyContent: 'center' } : undefined}
                 onClick={async () => {
+                  // v2.3.28：当前聊天的独立开关（经典 / NHPP 引擎通用——NHPP 调度同样遵守 chatIdleEnabled）
                   const settings = await api.getSettings();
                   if (settings.idleEnabled === false) return;
                   const next = !idleReplyOn;
@@ -1775,11 +1944,18 @@ export const MiniChat: React.FC = () => {
                 <span className="idle-toggle-knob" />
                 <span className="idle-toggle-label">{t('chat.idleReply')}</span>
               </button>
-              {idleReplyOn && idleCountdown > 0 && (
-                <span className="idle-countdown" title={t('chat.idleCountdownTip')} style={{ fontSize: 11, textAlign: 'center', marginTop: 1 }}>
-                  {idleCountdown >= 60
-                    ? `${Math.floor(idleCountdown / 60)}m${idleCountdown % 60}s`
-                    : `${idleCountdown}s`}
+              {/* v2.3.26：右侧小字显示当前开启的主动消息机制；经典机制下附带倒计时 */}
+              {idleReplyOn && (
+                <span
+                  className="idle-countdown"
+                  title={nhppActive ? t('chat.idleReplyNhpp') : t('chat.idleCountdownTip')}
+                  style={{ fontSize: 11, textAlign: 'center', marginTop: 1 }}
+                >
+                  {nhppActive
+                    ? t('chat.idleReplyNhppShort')
+                    : idleCountdown > 0
+                      ? `${t('chat.idleReplyLegacyShort')} · ${idleCountdown >= 60 ? `${Math.floor(idleCountdown / 60)}m${idleCountdown % 60}s` : `${idleCountdown}s`}`
+                      : t('chat.idleReplyLegacyShort')}
                 </span>
               )}
             </div>
@@ -1854,7 +2030,11 @@ export const MiniChat: React.FC = () => {
         )}
         {allMessagesUnique.map((m) => {
           const sid = (m as any).streamId || streamMsgIdRef.current[String(m.id)];
-          const sr = sid ? searchResultsByStream[sid] : undefined;
+          // 搜索结果优先取随消息持久化的 search_results（重启后历史消息仍可点击引用），
+          // 否则回退到本次会话内存中按 streamId 分桶的结果
+          const msgSr = (m as any).search_results as SearchResultItem[] | undefined;
+          const sr = msgSr && msgSr.length ? msgSr : sid ? searchResultsByStream[sid] : undefined;
+          const expKey = sid || `msg-${m.id}`;
           return (
             <Fragment key={m.id}>
               <MiniMessageRow
@@ -1862,13 +2042,22 @@ export const MiniChat: React.FC = () => {
                 msg={m}
                 onImage={setPreview}
                 fmtTime={fmtTime}
-                modelName={m.sender_type === 'ai' ? modelMap[m.sender_name] : undefined}
                 avatarPath={m.sender_type === 'ai' ? avatarMap[m.sender_name] : undefined}
                 userAvatarPath={userAvatarPath}
-                showTts={voiceCfg.tts && m.sender_type === 'ai' && !!m.content}
-                speaking={speakingId === m.id}
+                showTts={ttsEnabled && voiceCfg.tts && m.sender_type === 'ai' && !!m.content}
+                ttsState={
+                  speakingId !== m.id
+                    ? 'idle'
+                    : ttsPlaying
+                      ? 'playing'
+                      : ttsPaused
+                        ? 'paused'
+                        : 'ready'
+                }
                 hideReasoning={observerPrivate ? false : hideReasoning}
                 onSpeak={() => speak(m)}
+                onReplayTts={() => replayTts(m)}
+                onRegenerateTts={ttsEnabled && voiceCfg.tts ? () => speak(m, true) : undefined}
                 onReasoningCopied={() => showToast(t('toast.reasoningCopied'))}
                 onQuickMemory={(text) => handleQuickMemory(m, text)}
                 onSaveImageMemory={handleSaveImageMemory}
@@ -1877,22 +2066,28 @@ export const MiniChat: React.FC = () => {
                 onCopy={(text) => { navigator.clipboard.writeText(text); showToast(t('toast.copied')); }}
                 onTranslate={handleTranslate}
                 onMarkNode={storyOn ? markNode : undefined}
+                onViewPrompt={setPromptView}
                 failed={failed}
                 searchResults={sr}
+                // 伪流式仅在流式输出（生效值：模型覆盖优先）关闭时生效；流式开启 → 正文实时显示
+                pseudoOn={pseudoCfg.on && !enableStreaming}
+                pseudoSpeed={pseudoCfg.speed}
+                pseudoKey={`${m.chat_id}:${m.id}`}
+                onOpenSearch={sr && sr.length > 0 ? () => setExpandedStreams((v) => ({ ...v, [expKey]: true })) : undefined}
               />
               {sr && sr.length > 0 && (
                 <div className="search-result-bubble" key={`sr-${m.id}`}>
                   <button
                     type="button"
                     className="srb-head"
-                    onClick={() => setExpandedStreams((v) => ({ ...v, [sid]: !v[sid] }))}
+                    onClick={() => setExpandedStreams((v) => ({ ...v, [expKey]: !v[expKey] }))}
                     title={t('chat.webSearchResultToggle')}
                   >
                     <span className="srb-icon">🌐</span>
                     <span className="srb-title">{t('chat.webSearchResultTitle', { n: sr.length })}</span>
-                    <span className="srb-chevron">{expandedStreams[sid] ? '▾' : '▸'}</span>
+                    <span className="srb-chevron">{expandedStreams[expKey] ? '▾' : '▸'}</span>
                   </button>
-                  {expandedStreams[sid] && (
+                  {expandedStreams[expKey] && (
                     <div className="srb-list">
                       {sr.map((r, i2) => (
                         <div
@@ -2030,11 +2225,26 @@ export const MiniChat: React.FC = () => {
         </button>
         <button
           className={`mini-btn${enableStreaming ? ' active' : ''}`}
-          title={t('settings.enableStreaming')}
+          title={
+            streamPref.source === 'model'
+              ? t('chat.streamTipModel', { state: enableStreaming ? t('common.on') : t('common.off') })
+              : t('chat.streamTipGlobal', { state: enableStreaming ? t('common.on') : t('common.off') })
+          }
           onClick={() => {
             const next = !enableStreaming;
             setEnableStreaming(next);
-            api.saveSettings({ enableStreaming: next });
+            // 写到「生效来源」：模型已独立设置→写该模型；否则写全局
+            if (current) persistStreamToggle(current.chat_type, current.chat_id, next).catch(() => {});
+            else api.saveSettings({ enableStreaming: next }).catch(() => {});
+            // 本地立即重算来源提示
+            if (current) {
+              resolveStreamInfo(current.chat_type, current.chat_id)
+                .then((info) => {
+                  setEnableStreaming(info.on);
+                  setStreamPref(info);
+                })
+                .catch(() => {});
+            }
             showToast(t(next ? 'settings.streamingEnabled' : 'settings.streamingDisabled'), {
               duration: 3000,
               animation: 'linear',
@@ -2168,6 +2378,16 @@ export const MiniChat: React.FC = () => {
                 💞 {t('bond.title')}
               </div>
             )}
+            {/* 聊天级模型切换（v2.3.41，仅单聊）：勾选=跟随人物（或默认）模型；取消勾选可仅本聊天切换。
+                抽屉点任意处即关闭，故内层需阻止冒泡，否则点击模型控件会连带关闭抽屉、选择器弹不出 */}
+            {current?.chat_type === 'single' && (
+              <div
+                style={{ display: 'flex', flexDirection: 'column', width: '100%' }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <ChatModelPicker chatType={current.chat_type} chatId={current.chat_id} />
+              </div>
+            )}
             {current?.chat_type === 'group' && (
               <div className="mini-drawer-item" onClick={() => { setDrawerOpen(false); openGroupEditorLocked(); }}>
                 👥✎ {t('group.edit')}
@@ -2185,6 +2405,13 @@ export const MiniChat: React.FC = () => {
             )}
             <div className="mini-drawer-item" onClick={() => { setDrawerOpen(false); scrollToBottom(); }}>
               🔝 {t('chat.scrollToBottom')}
+            </div>
+            <div
+              className="mini-drawer-item"
+              onClick={(e) => { e.stopPropagation(); void toggleGlobalTts(); }}
+              title={ttsEnabled ? t('chat.ttsGlobalOnTip') : t('chat.ttsGlobalOffTip')}
+            >
+              {ttsEnabled ? '🔊' : '🔇'} {ttsEnabled ? t('chat.ttsGlobalOn') : t('chat.ttsGlobalOff')}
             </div>
             <div className="mini-drawer-item" onClick={() => { setDrawerOpen(false); setClearOpen(true); }}>
               🧹 {t('chat.clearMessages')}
@@ -2297,7 +2524,7 @@ export const MiniChat: React.FC = () => {
           event={eventState}
           loading={eventLoading && !eventState}
           onChoose={(opt) => chooseOption(opt)}
-          onAutoChoose={(opt) => chooseOption(opt, { error: true })}
+          onAutoChoose={(opt) => chooseOption(opt, true)}
           onClose={() => {
             setEventState(null);
             setEventLoading(false);
@@ -2355,13 +2582,13 @@ export const MiniChat: React.FC = () => {
       {/* 自适应故事线：悬停自动弹出、移开收回的侧边栏（不占聊天区） */}
       {storyOn && (
         <div
+          ref={storiesRef}
           className="stories"
           onMouseEnter={() => setShowStories(true)}
-          onMouseLeave={() => setShowStories(false)}
+          onMouseLeave={() => { if (editingNodeId === null) setShowStories(false); }}
         >
           <div className="stories-tab" title={t('chat.stories')}>{t('chat.stories')}</div>
-          {showStories && (
-            <div className="stories-panel">
+          <div className={`stories-panel${showStories ? ' open' : ''}`}>
               <div className="stories-head">
                 <span>{t('chat.stories')}</span>
                 <span className="stories-count">{storyNodes.length}</span>
@@ -2374,23 +2601,73 @@ export const MiniChat: React.FC = () => {
                     <div
                       key={n.id}
                       className="story-node"
-                      onClick={() => gotoNode(n.msg_id)}
+                      onClick={() => { if (editingNodeId !== n.id) gotoNode(n); }}
                       title={n.title}
                     >
-                      <span className="story-title">{n.title}</span>
-                      <button
-                        className="story-del"
-                        onClick={(e) => { e.stopPropagation(); removeNode(n.id); }}
-                        title={t('msg.recall')}
-                      >✕</button>
+                      {editingNodeId === n.id ? (
+                        <>
+                          <input
+                            className="story-rename-input"
+                            autoFocus
+                            value={editingTitle}
+                            onChange={(e) => setEditingTitle(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                renameNode(n.id, editingTitle);
+                                setEditingNodeId(null);
+                              } else if (e.key === 'Escape') setEditingNodeId(null);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <button
+                            className="story-del"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              renameNode(n.id, editingTitle);
+                              setEditingNodeId(null);
+                            }}
+                            title={t('common.save')}
+                          >✓</button>
+                          <button
+                            className="story-del"
+                            onClick={(e) => { e.stopPropagation(); setEditingNodeId(null); }}
+                            title={t('common.cancel')}
+                          >✕</button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="story-title">{n.title}</span>
+                          <button
+                            className="story-del"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingNodeId(n.id);
+                              setEditingTitle(n.title);
+                            }}
+                            title={t('chat.renameNode')}
+                          >✏</button>
+                          <button
+                            className="story-del"
+                            disabled={forking}
+                            onClick={(e) => { e.stopPropagation(); forkFromNode(n); }}
+                            title={t('chat.forkFromNode')}
+                          >🌱</button>
+                          <button
+                            className="story-del"
+                            onClick={(e) => { e.stopPropagation(); removeNode(n.id); }}
+                            title={t('msg.recall')}
+                          >✕</button>
+                        </>
+                      )}
                     </div>
                   ))
                 )}
               </div>
             </div>
-          )}
         </div>
       )}
+      {/* 剧情节点横幅（1s 弹入 → 3.5s 停留 → 渐隐 + 音效，v2.3.37） */}
+      <NodeBanner banner={nodeBanner} onDone={() => setNodeBanner(null)} />
     </div>
   );
 };
@@ -2399,11 +2676,12 @@ const MiniMessageRow: React.FC<{
   msg: ChatMessage;
   onImage: (src: string) => void;
   fmtTime: (iso: string) => string;
-  modelName?: string;
   avatarPath?: string;
   userAvatarPath?: string;
   showTts?: boolean;
-  speaking?: boolean;
+  ttsState?: 'idle' | 'playing' | 'paused' | 'ready';
+  onReplayTts?: () => void;
+  onRegenerateTts?: () => void;
   hideReasoning?: boolean;
   onSpeak?: () => void;
   onReasoningCopied?: () => void;
@@ -2414,11 +2692,19 @@ const MiniMessageRow: React.FC<{
   onCopy?: (text: string) => void;
   onTranslate?: (text: string) => void;
   onMarkNode?: (msg: ChatMessage) => void;
+  onViewPrompt?: (prompt: string) => void; // 右键「查看提示词」：由父组件打开弹窗
   failed?: { content: string; imagePaths: string[]; phase: 'full' | 'ai'; error: string } | null;
   searchResults?: SearchResultItem[];
+  // 点击越界引用编号时展开本条回复下方的联网搜索结果列表
+  onOpenSearch?: () => void;
+  // ===== 伪流式输出（v2.3.34；v2.3.36 单一「动画速度」= 单字渐显时长，触发间隔自动推导）=====
+  pseudoOn?: boolean;
+  pseudoSpeed?: number; // 动画速度（秒/字 = 单字渐显时长）
+  pseudoKey?: string;
 }> = ({
-  msg, onImage, fmtTime, modelName, avatarPath, userAvatarPath, showTts, speaking, hideReasoning, onSpeak, onReasoningCopied,
-  onQuickMemory, onSaveImageMemory, onRollback, onRecall, onCopy, onTranslate, onMarkNode, failed, searchResults,
+  msg, onImage, fmtTime, avatarPath, userAvatarPath, showTts, ttsState, hideReasoning, onSpeak, onReplayTts, onRegenerateTts, onReasoningCopied,
+  onQuickMemory, onSaveImageMemory, onRollback, onRecall, onCopy, onTranslate, onMarkNode, onViewPrompt, failed, searchResults, onOpenSearch,
+  pseudoOn, pseudoSpeed, pseudoKey,
 }) => {
   const { t } = useI18n();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -2476,6 +2762,23 @@ const MiniMessageRow: React.FC<{
     return () => window.removeEventListener('nianyu:closeCtxMenu', onCloseOthers);
   }, [msg.id]);
 
+  // ===== 伪流式输出（v2.3.34）=====
+  // 注意：本组 hook 必须放在下方任何 early-return 之前（规则：hook 调用顺序不可变）。
+  // 判定：开启伪流式 + AI 消息 + 已定稿（不在流式中）+ 有正文 + 该消息被标记为「待逐字放出」
+  const pseudoText = msg.content || '';
+  const pseudoIsUser = msg.sender_type === 'user';
+  const pseudoStreaming = msg.sender_type === 'ai' && (msg.id as number) < 0;
+  const pseudoActive = !!pseudoOn && !pseudoIsUser && !pseudoStreaming && !!pseudoText.trim() && isPseudoPending(pseudoKey || '');
+  const pseudoState = usePseudoReveal(pseudoText, pseudoActive, pseudoSpeed ?? 0.2);
+  // 放完即清除标记，避免切换聊天回来后二次重播
+  useEffect(() => {
+    if (pseudoActive && !pseudoState.revealing) clearPseudoPending(pseudoKey || '');
+  }, [pseudoActive, pseudoState.revealing, pseudoKey]);
+  // 流式进行中：伪流式开启时气泡内先不显示正文（留到全部生成完毕后逐字放出），思维链照常实时显示
+  const pseudoHideLive = !!pseudoOn && !!pseudoStreaming && !pseudoIsUser && !!pseudoText.trim();
+  // 单字渐显动画时长 = 「动画速度」设置（pseudoSpeed 即 D，秒）；触发间隔由 usePseudoReveal 按 D/4 自动推导
+  const pseudoCharDur = `${clampPseudoSpeed(pseudoSpeed ?? 0.8)}s`;
+
   if (msg.sender_type === 'system') {
     return <div className="system-msg" style={{ padding: '2px 8px' }}>{msg.content}</div>;
   }
@@ -2487,19 +2790,33 @@ const MiniMessageRow: React.FC<{
     );
   }
   const isUser = msg.sender_type === 'user';
-  const streaming = msg.sender_type === 'ai' && (msg.id as number) < 0;
-  const typing = streaming && !msg.content && !msg.reasoning;
+    const streaming = msg.sender_type === 'ai' && (msg.id as number) < 0;
+    const typing = streaming && !msg.content && !msg.reasoning;
+    // 流式逐字渐显（v2.3.19）：每个新字固定 0.3s 渐显；输出停滞时仅最后一个字闪烁过渡（同主窗口逻辑）
+    const [tailStalled, setTailStalled] = useState(false);
+    useEffect(() => {
+      const has = !!(msg.content && msg.content.trim());
+      if (!streaming || !has) { setTailStalled(false); return; }
+      setTailStalled(false);
+      const t = window.setTimeout(() => setTailStalled(true), 340);
+      return () => window.clearTimeout(t);
+    }, [streaming, msg.content]);
+    const streamTailClass = `stream-char${tailStalled ? ' stall' : ''}`;
   // 多图优先
   const imgs = msg.images && msg.images.length ? msg.images : msg.image_path ? [msg.image_path] : [];
   const hasText = !!(msg.content && msg.content.trim());
 
-  // 联网搜索内联引用：仅 AI 消息、且本消息对应 stream 有搜索结果时启用 [n] 可点击
-  const citeCitations = (!isUser && searchResults && searchResults.length)
-    ? Object.fromEntries(searchResults.map((r, idx) => [idx + 1, r.url]))
+  // 联网搜索内联引用：仅 AI 消息启用 [n] 可点击。资料来源优先取随消息持久化的 search_results，
+  // 缺失时回退到本次会话内存中按 streamId 分桶的搜索结果（两者顺序都与注入模型的编号一致）
+  const msgSrSelf = (msg as any).search_results as SearchResultItem[] | undefined;
+  const citeSrc = msgSrSelf && msgSrSelf.length ? msgSrSelf : searchResults && searchResults.length ? searchResults : undefined;
+  const citeCitations = (!isUser && citeSrc && citeSrc.length)
+    ? Object.fromEntries(citeSrc.map((r, idx) => [idx + 1, r.url]))
     : undefined;
   const citeOnClick = citeCitations
     ? (url: string) => { try { api?.openExternal?.(url); } catch { /* web/Capacitor 构建无此接口时忽略 */ } }
     : undefined;
+  const citeOnMiss = citeCitations && onOpenSearch ? onOpenSearch : undefined;
   return (
     <div className={`msg-row ${isUser ? 'user' : 'ai'}`} data-mid={msg.id} onContextMenu={handleContextMenu}>
       {!isUser ? (
@@ -2515,7 +2832,9 @@ const MiniMessageRow: React.FC<{
         {!isUser && (
           <div className="sender">
             {msg.sender_name}
-            {modelName && <span className="model-tag">{t('chat.modelTag', { name: modelName })}</span>}
+            {msg.from_proactive && (
+              <span className="proactive-tag" title={t('msg.proactiveTitle')}>{t('msg.proactiveTag')}</span>
+            )}
           </div>
         )}
         {typing ? (
@@ -2527,7 +2846,11 @@ const MiniMessageRow: React.FC<{
         ) : (
           <>
             {(!isUser && msg.reasoning) || hasText ? (
-              <div className={`bubble ${failed ? 'bubble-failed' : ''}`} onMouseUp={handleMouseUp}>
+              <div
+                className={`bubble ${failed ? 'bubble-failed' : ''}`}
+                onMouseUp={handleMouseUp}
+                style={pseudoActive ? ({ ['--pseudo-char-dur' as any]: pseudoCharDur }) : undefined}
+              >
                 {!isUser && msg.reasoning && (
                   <ReasoningBlock
                     reasoning={msg.reasoning}
@@ -2536,7 +2859,16 @@ const MiniMessageRow: React.FC<{
                     onCopied={onReasoningCopied}
                   />
                 )}
-                {hasText && renderMarkdown(msg.content, { citations: citeCitations, onCite: citeOnClick })}
+                {hasText && !pseudoHideLive && renderMarkdown(pseudoActive ? pseudoState.text : msg.content, {
+                  citations: citeCitations,
+                  onCite: citeOnClick,
+                  onCiteMiss: citeOnMiss,
+                  // 伪流式：单 tail 会被逐字触发频繁换字打断动画（字只渐显 1/4 就定格，观感为蹦字），
+                  // 改用「5 字尾窗」：窗口内每个字挂载时各自渐显，落出窗口时动画已播完（v2.3.36）
+                  streamTail: pseudoActive ? false : !!streaming,
+                  pseudoTailCount: pseudoActive ? PSEUDO_QUEUE : 0,
+                  streamTailClass: pseudoActive ? 'pseudo-char' : streamTailClass,
+                })}
                 {/* F6 修复：流式进行中始终在气泡内显示加载动画 */}
                 {streaming && (
                   <span className="typing-inline" aria-label={t('chat.replying')} />
@@ -2556,9 +2888,29 @@ const MiniMessageRow: React.FC<{
           <span>{fmtTime(msg.timestamp)}</span>
           {!isUser && msg.token_used > 0 && <span>{t('chat.tokensUsed', { n: msg.token_used })}</span>}
           {showTts && (
-            <a onClick={onSpeak} style={{ cursor: 'pointer', userSelect: 'none' }} title={speaking ? t('chat.ttsStop') : t('chat.ttsPlay')}>
-              {speaking ? '⏹' : '🔊'}
-            </a>
+            <>
+              {/* v2.3.44：播放 / 暂停（再点续播），播完后点击从头重播——均复用缓存，不重新合成 */}
+              <a
+                onClick={onSpeak}
+                style={{ cursor: 'pointer', userSelect: 'none' }}
+                title={
+                  ttsState === 'playing'
+                    ? t('chat.ttsPause')
+                    : ttsState === 'paused'
+                      ? t('chat.ttsResume')
+                      : ttsState === 'ready'
+                        ? t('chat.ttsReplay')
+                        : t('chat.ttsPlay')
+                }
+              >
+                {ttsState === 'playing' ? '⏸' : ttsState === 'paused' ? '▶' : '🔊'}
+              </a>
+              {onReplayTts && (ttsState === 'playing' || ttsState === 'paused' || ttsState === 'ready') && (
+                <a onClick={onReplayTts} style={{ cursor: 'pointer', userSelect: 'none' }} title={t('chat.ttsReplayTip')}>
+                  ⟳
+                </a>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -2575,10 +2927,24 @@ const MiniMessageRow: React.FC<{
         >
           <button className="ctx-menu-item" onClick={() => { onCopy?.(msg.content); closeMenu(); }}>{t('msg.copy')}</button>
           {msg.genPrompt && (
-            <button className="ctx-menu-item" onClick={() => { setPromptView(msg.genPrompt!); closeMenu(); }}>{t('msg.viewPrompt')}</button>
+            <button className="ctx-menu-item" onClick={() => { onViewPrompt?.(msg.genPrompt!); closeMenu(); }}>{t('msg.viewPrompt')}</button>
           )}
           {onQuickMemory && <button className="ctx-menu-item" onClick={() => { onQuickMemory(msg.content); closeMenu(); }}>{t('msg.quickMemory')}</button>}
           {onTranslate && <button className="ctx-menu-item" onClick={() => { onTranslate(msg.content); closeMenu(); }}>{t('msg.translate')}</button>}
+          {/* 朗读：任何有文本的气泡都可右键朗读（同主窗口） */}
+          {hasText && (
+            <>
+              <button className="ctx-menu-item" onClick={() => { onSpeak?.(); closeMenu(); }}>
+                {ttsState === 'playing' ? t('chat.ttsPause') : t('chat.ttsPlay')}
+              </button>
+              {/* v2.3.44：强制重新合成语音（忽略缓存）；平时播放/重播一律复用缓存 */}
+              {onRegenerateTts && (
+                <button className="ctx-menu-item" onClick={() => { onRegenerateTts(); closeMenu(); }}>
+                  {t('msg.regenerateTts')}
+                </button>
+              )}
+            </>
+          )}
           {onMarkNode && <button className="ctx-menu-item" onClick={() => { onMarkNode(msg); closeMenu(); }}>{t('chat.markNode')}</button>}
           {onSaveImageMemory && (msg.images?.length || msg.image_path) && (
             <button className="ctx-menu-item" onClick={() => { onSaveImageMemory(msg); closeMenu(); }}>{t('chat.drawMemory')}</button>
