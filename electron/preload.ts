@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
+  UpdateStatus,
   Role,
   ChatMessage,
   Group,
@@ -44,6 +45,13 @@ export interface NianyuAPI {
     content: string;
     imagePath?: string | null;
   }) => Promise<SendMessageResult>;
+  // 当前聊天生效模型（群聊返回 null）；用于流式开关显示/写入生效来源
+  getChatModel: (chatType: string, chatId: string) => Promise<ModelConfig | null>;
+  // MCP 服务器管理
+  mcpStatus: () => Promise<any[]>;
+  mcpAdd: (p: { key: string; config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean } }) => Promise<{ ok: boolean }>;
+  mcpRemove: (key: string) => Promise<{ ok: boolean }>;
+  mcpToggle: (key: string, enabled: boolean) => Promise<{ ok: boolean }>;
   sendUserMessage: (p: {
     chatType: string;
     chatId: string;
@@ -134,7 +142,7 @@ export interface NianyuAPI {
 
   // 消息操作
   recallMessage: (msgId: number) => Promise<{ ok: boolean; deletedMems: number }>;
-  rollbackMessages: (p: { chatType: string; chatId: string; fromMsgId: number }) => Promise<{ deletedMsgs: number; deletedMems: number }>;
+  rollbackMessages: (p: { chatType: string; chatId: string; fromMsgId: number }) => Promise<{ deletedMsgs: number; deletedMems: number; deletedMoments: number }>;
   addQuickMemory: (p: { roleId: string; content: string }) => Promise<any>;
 
   onStreamChunk: (cb: (e: any, data: any) => void) => () => void;
@@ -189,6 +197,8 @@ export interface NianyuAPI {
   addStoryNode: (chatType: string, chatId: string, msgId: number, title: string) => Promise<number>;
   listStoryNodes: (chatType: string, chatId: string) => Promise<any[]>;
   removeStoryNode: (id: number) => Promise<void>;
+  renameStoryNode: (id: number, title: string) => Promise<void>;
+  forkChatFromNode: (chatType: string, chatId: string, nodeId: number) => Promise<{ chat_type: string; chat_id: string; name: string }>;
   addMoment: (roleId: string, content: string, images: string[], scheduledAt?: string | null, selfRoleId?: string) => Promise<number>;
   listMoments: (roleId?: string, includeUnpublished?: boolean, selfRoleId?: string, favoritedOnly?: boolean) => Promise<any[]>;
   removeMoment: (id: number) => Promise<void>;
@@ -264,7 +274,7 @@ export interface NianyuAPI {
   importCharacterCard: () => Promise<ImportCharacterResult | null>;
 
   pickBackupTarget: () => Promise<string | null>;
-  createBackup: (destPath: string) => Promise<void>;
+  createBackup: (destPath: string) => Promise<string>;
   pickRestoreFile: () => Promise<string | null>;
   restoreBackup: (zipPath: string) => Promise<void>;
   pickBackupDir: () => Promise<string | null>;
@@ -282,7 +292,8 @@ export interface NianyuAPI {
 
   listModels: (cfg: ModelConfig) => Promise<string[]>;
   testModel: (cfg: ModelConfig) => Promise<{ ok: boolean; message: string }>;
-  detectModel: (id: string, opts?: ProbeOptions) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
+  detectModel: (id: string, opts?: ProbeOptions, qpsOverride?: number) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
+  detectModelConfig: (cfg: Partial<ModelConfig>, opts?: ProbeOptions) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
   detectAllModels: (opts?: ProbeOptions) => Promise<{
     results: Array<{
       id: string;
@@ -293,13 +304,17 @@ export interface NianyuAPI {
       supportsTools: boolean | null;
       supportsJson: boolean | null;
       supportsNsfw: boolean | null;
+      supportsThinkLevel: boolean | null;
       maxContext: number | null;
       undetected: string[];
     }>;
   }>;
 
+  debugStart: () => Promise<{ ok: boolean; already?: boolean; error?: string }>;
+  debugTrigger: (kind: string, chatType: string, chatId: string) => Promise<{ ok: boolean; message?: string; error?: string }>;
+  debugEnd: () => Promise<{ ok: boolean; restored?: number; error?: string; report?: Record<string, { time: string; message: string }[]> }>;
   transcribeAudio: (data: Uint8Array) => Promise<string>;
-  textToSpeech: (text: string, roleId?: string) => Promise<string>;
+  textToSpeech: (text: string, roleId?: string, forceRegenerate?: boolean) => Promise<string>;
   listVoices: () => Promise<string[]>;
 
   miniOpen: (p?: {
@@ -336,6 +351,9 @@ export interface NianyuAPI {
   onBallUnread: (cb: (data: { count: number; items: BallUnreadItem[] }) => void) => () => void;
   offBallUnread: (cb: (data: any) => void) => void;
   onBallBlur: (cb: () => void) => () => void;
+  // 系统光标是否在悬浮球窗口内（主进程轮询推送；false=已移出窗口，渲染端据此隐去动态光标）
+  onBallCursorWindow: (cb: (inside: boolean) => void) => () => void;
+  onBallVideoProgress: (cb: (data: { percent: number; statusText: string }) => void) => () => void;
   offBallBlur: (cb: () => void) => void;
 
   // ===== 世界书 =====
@@ -370,6 +388,16 @@ export interface NianyuAPI {
   removePlugin: (id: string) => Promise<{ ok: boolean }>;
   togglePlugin: (id: string, enabled: boolean) => Promise<{ ok: boolean; plugin?: import('../src/types').Plugin }>;
   callPluginTool: (pluginId: string, toolName: string, arg: string) => Promise<{ ok: boolean; text?: string }>;
+
+  // ===== 软件更新（v2.3.45）=====
+  checkUpdate: (manual?: boolean) => Promise<UpdateStatus>;
+  updateStatus: () => Promise<UpdateStatus>;
+  downloadUpdate: () => Promise<UpdateStatus>;
+  openUpdateFolder: () => Promise<boolean>;
+  installUpdate: () => Promise<boolean>;
+  openReleasePage: () => Promise<boolean>;
+  dismissUpdate: (version: string) => Promise<boolean>;
+  onUpdateStatus: (cb: (e: any, data: UpdateStatus) => void) => () => void;
 
   // ===== 确认对话框 =====
   showConfirm: (message: string, title?: string) => Promise<boolean>;
@@ -410,6 +438,11 @@ const api: NianyuAPI = {
   getChatList: () => ipcRenderer.invoke('chats:list'),
   getMessages: (type, id) => ipcRenderer.invoke('chats:messages', type, id),
   sendMessage: (p) => ipcRenderer.invoke('chats:send', p),
+  getChatModel: (chatType: string, chatId: string) => ipcRenderer.invoke('chat:getModel', chatType, chatId),
+  mcpStatus: () => ipcRenderer.invoke('mcp:status'),
+  mcpAdd: (p) => ipcRenderer.invoke('mcp:add', p),
+  mcpRemove: (key: string) => ipcRenderer.invoke('mcp:remove', key),
+  mcpToggle: (key: string, enabled: boolean) => ipcRenderer.invoke('mcp:toggle', key, enabled),
   sendUserMessage: (p) => ipcRenderer.invoke('chats:sendUser', p),
   sendAIMessages: (p) => ipcRenderer.invoke('chats:sendAI', p),
   startStream: (p) => ipcRenderer.invoke('chats:stream', p),
@@ -569,6 +602,8 @@ const api: NianyuAPI = {
   addStoryNode: (chatType, chatId, msgId, title) => ipcRenderer.invoke('chats:addStoryNode', chatType, chatId, msgId, title),
   listStoryNodes: (chatType, chatId) => ipcRenderer.invoke('chats:listStoryNodes', chatType, chatId),
   removeStoryNode: (id) => ipcRenderer.invoke('chats:removeStoryNode', id),
+  renameStoryNode: (id, title) => ipcRenderer.invoke('chats:renameStoryNode', id, title),
+  forkChatFromNode: (chatType, chatId, nodeId) => ipcRenderer.invoke('chats:forkFromNode', chatType, chatId, nodeId),
   addMoment: (roleId, content, images, scheduledAt, selfRoleId) => ipcRenderer.invoke('moments:add', roleId, content, images, scheduledAt, selfRoleId),
   listMoments: (roleId, includeUnpublished, selfRoleId, favoritedOnly) => ipcRenderer.invoke('moments:list', roleId, includeUnpublished, selfRoleId, favoritedOnly),
   removeMoment: (id) => ipcRenderer.invoke('moments:remove', id),
@@ -674,11 +709,15 @@ const api: NianyuAPI = {
 
   listModels: (cfg) => ipcRenderer.invoke('models:list', cfg),
   testModel: (cfg) => ipcRenderer.invoke('models:test', cfg),
-  detectModel: (id, opts) => ipcRenderer.invoke('models:detect', id, opts),
+  detectModel: (id, opts, qpsOverride) => ipcRenderer.invoke('models:detect', id, opts, qpsOverride),
+  detectModelConfig: (cfg, opts) => ipcRenderer.invoke('models:detectConfig', cfg, opts),
   detectAllModels: (opts) => ipcRenderer.invoke('models:detectAll', opts),
 
   transcribeAudio: (data) => ipcRenderer.invoke('audio:transcribe', data),
-  textToSpeech: (text, roleId) => ipcRenderer.invoke('audio:tts', text, roleId),
+  textToSpeech: (text, roleId, forceRegenerate) => ipcRenderer.invoke('audio:tts', text, roleId, forceRegenerate),
+  debugStart: () => ipcRenderer.invoke('debug:start'),
+  debugTrigger: (kind, chatType, chatId) => ipcRenderer.invoke('debug:trigger', kind, chatType, chatId),
+  debugEnd: () => ipcRenderer.invoke('debug:end'),
   listVoices: () => ipcRenderer.invoke('audio:listVoices'),
 
   miniOpen: (p) => ipcRenderer.invoke('mini:open', p),
@@ -728,6 +767,11 @@ const api: NianyuAPI = {
     ipcRenderer.on('ball:unread', listener);
     return () => ipcRenderer.removeListener('ball:unread', listener);
   },
+  onBallVideoProgress: (cb) => {
+    const listener = (_e: any, data: any) => cb(data);
+    ipcRenderer.on('ball:videoProgress', listener);
+    return () => ipcRenderer.removeListener('ball:videoProgress', listener);
+  },
   offBallUnread: () => {},
   onBallBlur: (cb) => {
     const listener = () => cb();
@@ -735,6 +779,11 @@ const api: NianyuAPI = {
     return () => ipcRenderer.removeListener('ball:blur', listener);
   },
   offBallBlur: () => {},
+  onBallCursorWindow: (cb) => {
+    const listener = (_e: any, inside: boolean) => cb(inside);
+    ipcRenderer.on('ball:cursor-window', listener);
+    return () => ipcRenderer.removeListener('ball:cursor-window', listener);
+  },
 
   // ===== 世界书 =====
   listWorldBooks: () => ipcRenderer.invoke('worldbooks:list'),
@@ -776,6 +825,20 @@ const api: NianyuAPI = {
     ipcRenderer.invoke('plugin:callTool', pluginId, toolName, arg),
 
   // ===== 确认对话框 =====
+  // ===== 软件更新（v2.3.45）=====
+  checkUpdate: (manual) => ipcRenderer.invoke('update:check', manual),
+  updateStatus: () => ipcRenderer.invoke('update:status'),
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
+  openUpdateFolder: () => ipcRenderer.invoke('update:openFolder'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  openReleasePage: () => ipcRenderer.invoke('update:openRelease'),
+  dismissUpdate: (version) => ipcRenderer.invoke('update:dismiss', version),
+  onUpdateStatus: (cb) => {
+    const listener = (e: any, data: any) => cb(e, data);
+    ipcRenderer.on('update:status', listener);
+    return () => ipcRenderer.removeListener('update:status', listener);
+  },
+
   showConfirm: (message, title) => ipcRenderer.invoke('app:confirm', message, title),
 
   // ===== 后台消息提醒卡片 =====

@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { api } from '../ipc';
 import type { AppSettings } from '../types';
-import { translate, type Lang } from './translations';
+import { LANGS, translate, type Lang } from './translations';
 
 interface I18nCtx {
   lang: Lang;
@@ -22,15 +22,18 @@ export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     api.getSettings().then((s: AppSettings) => {
-      if (s.lang === 'en' || s.lang === 'zh') {
-        setLangState(s.lang);
-        api.setMenuLang(s.lang);
+      // v2.3.38：支持全部 10 种语言（zh/en/fr/de/ja/ko/es/pt/ru/zh-Hant）
+      if (LANGS.some((l) => l.key === s.lang)) {
+        setLangState(s.lang as Lang);
+        api.setMenuLang(s.lang as string);
       }
     });
   }, []);
 
   const setLang = (l: Lang) => {
     setLangState(l);
+    // 同步 <html lang>，供全局错误处理等非 React 模块读取当前语言
+    try { document.documentElement.lang = l; } catch { /* ignore */ }
     api.saveSettings({ lang: l } as Partial<AppSettings>);
     api.setMenuLang(l);
   };
