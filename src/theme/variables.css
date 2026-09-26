@@ -27,6 +27,17 @@
   --titlebar-close-hover-icon: #ffffff;
   --titlebar-border: #e3e3e3;
   --titlebar-blur: 0px;
+  /* 兜底值（v2.3.43）：主题属性尚未应用的首帧也不至于透明/不可读；各主题会覆盖 */
+  --color-panel: #ffffff;
+  --color-panel-alt: #f7f7f7;
+  --color-text: #1a1a1a;
+  --color-text-secondary: #888888;
+  --color-border: #e3e3e3;
+  --color-input-bg: #ffffff;
+  --color-select-bg: #ffffff;
+  --color-select-text: #1a1a1a;
+  --color-hover: #ececec;
+  --shadow-panel: 0 1px 3px rgba(0, 0, 0, 0.06);
   /* 语义化辅助色（可被具体主题覆盖） */
   --color-text-muted: #8a8a8a;
   --color-danger: #ff4d4f;
