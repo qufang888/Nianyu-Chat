@@ -2,7 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../ipc';
 import { useTheme } from '../theme/ThemeContext';
 import { useI18n } from '../i18n/I18nContext';
+import { LANGS, localeOf, type Lang } from '../i18n/translations';
 import {
+  type UpdateStatus,
   PROVIDER_DEFAULTS,
   DEFAULT_SETTINGS,
   type ThemeName,
@@ -19,14 +21,29 @@ import {
   MODEL_GROUP_COLORS,
   MODEL_GROUP_NAME_MAX,
   MODEL_GROUP_MAX,
+  TTS_PROVIDERS,
+  TTS_SPEED_MIN,
+  TTS_SPEED_MAX,
+  TTS_SPEED_DEFAULT,
+  TTS_PITCH_MIN,
+  TTS_PITCH_MAX,
+  TTS_PITCH_DEFAULT,
+  PSEUDO_SPEED_MIN,
+  PSEUDO_SPEED_MAX,
+  PSEUDO_SPEED_DEFAULT,
+  clampPseudoSpeed,
 } from '../types';
+import { DEFAULT_MEMORY_SUMMARIZE_PROMPT, DEFAULT_MEMORY_INJECT_PROMPT } from '../utils/builtinPrompts';
+import { Hint } from './Hint';
 import { ModelEditor } from './ModelEditor';
 import { FontSettings } from './FontSettings';
 import { GuideView } from './GuideView';
 import { SelfRoleSettings } from './SelfRoleSettings';
 import { useToast, ToastView } from './Toast';
 import SelectMenu from './SelectMenu';
+import ComboBox from './ComboBox';
 import { invalidateSoundCache, previewSound, type SoundType } from '../utils/sound';
+import { compareVersions } from '../utils/versionCompare';
 import cursorPngUrl from '../assets/cursor/cursor.png';
 
 export const THEMES: { key: ThemeName; nameKey: string; swatch: string }[] = [
@@ -47,33 +64,45 @@ export const THEMES: { key: ThemeName; nameKey: string; swatch: string }[] = [
 ];
 
 // 设置分类区块（左侧导航 + 右侧分组），顺序即展示顺序
+// 注：模型管理已独立为二级页（sub='models'），不再出现在左侧分类导航中
 const SETTING_CATS: { id: string; labelKey: string }[] = [
   { id: 'cat-general', labelKey: 'settings.catGeneral' },
-  { id: 'cat-models', labelKey: 'settings.catModels' },
+  { id: 'cat-chat', labelKey: 'settings.catChat' },
+  { id: 'cat-proactive', labelKey: 'settings.catProactive' },
+  { id: 'cat-social', labelKey: 'settings.catSocial' },
   { id: 'cat-appearance', labelKey: 'settings.catAppearance' },
   { id: 'cat-generation', labelKey: 'settings.catGeneration' },
   { id: 'cat-translation', labelKey: 'settings.catTranslation' },
   { id: 'cat-window', labelKey: 'settings.catWindow' },
 ];
 
-// 设置搜索索引：每项含锚点 id、i18n 键、中英文关键词；搜索框据此给出「百度建议」式候选
-type SettingSearchItem = { id: string; key: string; kw: string[] };
+// 设置搜索索引：每项含锚点 id、i18n 键、中英文关键词；可选 sub=目标二级页（'models'|'font'|'self'）。
+// 带 sub 的条目：点击/回车后先切入对应二级页，再滚动到锚点并高亮（二级页内锚点此时才存在于 DOM）。
+type SettingSearchItem = { id: string; key: string; kw: string[]; sub?: 'models' | 'font' | 'self' };
 const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'cat-general', key: 'settings.catGeneral', kw: ['通用', '常规', '基础', 'general', 'basic'] },
-  { id: 'cat-models', key: 'settings.catModels', kw: ['模型', 'model', '模型配置'] },
+  { id: 'cat-chat', key: 'settings.catChat', kw: ['聊天', '群聊', '群组', '互聊', '情绪', '思维链', 'chat', 'group'] },
+  { id: 'cat-proactive', key: 'settings.catProactive', kw: ['主动消息', '空闲', '定时', '勿扰', 'nhpp', '回访', 'proactive'] },
+  { id: 'cat-social', key: 'settings.catSocial', kw: ['记忆', '世界书', '朋友圈', '社交', 'memory', 'moments'] },
   { id: 'cat-appearance', key: 'settings.catAppearance', kw: ['外观', '主题', '界面', 'appearance', 'theme'] },
   { id: 'cat-generation', key: 'settings.catGeneration', kw: ['生成', '生图', '生视频', 'generation', 'image', 'video'] },
   { id: 'cat-translation', key: 'settings.catTranslation', kw: ['翻译', 'translation'] },
   { id: 'cat-window', key: 'settings.catWindow', kw: ['窗口', '小窗', '悬浮球', 'window', '迷你'] },
   { id: 'sec-language', key: 'settings.language', kw: ['语言', 'language', '界面语言', '中文', '英文'] },
-  { id: 'sec-streaming', key: 'settings.enableStreaming', kw: ['流式', 'stream', '打字机'] },
   { id: 'sec-animations', key: 'settings.animations', kw: ['动画', 'animation', '动效'] },
-  { id: 'sec-font', key: 'settings.font', kw: ['字体', 'font', '字号'] },
-  { id: 'sec-self', key: 'self.title', kw: ['自我', '身份', 'self', '角色'] },
+  { id: 'sec-update', key: 'settings.updateTitle', kw: ['更新', '升级', '版本', '检查更新', '自动更新', '下载更新', 'github', 'update', 'upgrade', 'version', 'release'] },
+  // ===== 模型管理（二级页 sub='models'）=====
+  { id: 'sec-globalparams', key: 'settings.globalModelParams', sub: 'models', kw: ['全局参数', '全局模型参数', '默认参数', '温度', 'temperature', 'top p', 'topp', 'top k', 'topk', '采样', '流式', 'stream', '打字机'] },
+  { id: 'sec-pseudostream', key: 'settings.pseudoStream', sub: 'models', kw: ['伪流式', '伪流式输出', '打字机', '动画速度', '渐显', 'pseudo', 'fake stream', 'typewriter', 'animation speed'] },
+  { id: 'sec-modelmanage', key: 'settings.modelManage', sub: 'models', kw: ['模型', 'model', 'baseurl', 'base url', 'api key', 'apikey', '接口', 'provider', '模型列表', '添加模型', '新建模型', '默认模型', 'deepseek', 'openai', 'anthropic', '本地模型', '深度思考', '推理', 'qps', '限速', '分组', 'group', '标签', 'tags'] },
+  { id: 'sec-modeldetect', key: 'settings.modelCapability', sub: 'models', kw: ['能力', '检测', '探针', 'capability', 'detect', '视觉', '工具', 'json', 'nsfw', '上下文', '流式检测'] },
+  { id: 'sec-mcp', key: 'settings.mcp', sub: 'models', kw: ['mcp', '服务器', '工具', 'tool', '协议', '扩展', 'function calling', '工具调用'] },
+  // ===== 常规区 =====
+  { id: 'sec-font', key: 'settings.font', sub: 'font', kw: ['字体', 'font', '字号'] },
+  { id: 'sec-self', key: 'self.title', sub: 'self', kw: ['自我', '身份', 'self', '角色'] },
   { id: 'sec-worldbook', key: 'worldbook.title', kw: ['世界书', 'worldbook', '背景设定'] },
-  { id: 'sec-groupchat', key: 'settings.groupChat', kw: ['群聊', 'group', '多人', '群组'] },
-  { id: 'sec-modelmanage', key: 'settings.modelManage', kw: ['模型管理', 'model manage', '添加模型'] },
-  { id: 'sec-modeldetect', key: 'settings.detectAllModels', kw: ['检测', '能力', '模型能力', 'detect', 'capability', '探针', 'probe', '视觉', '工具', 'json', '上下文窗口'] },
+  { id: 'sec-groupchat', key: 'settings.groupChat', kw: ['群聊', 'group', '多人', '群组', '互聊', '并行'] },
+  { id: 'sec-launch', key: 'settings.launchOnBoot', kw: ['开机', '自启', '启动', 'launch', 'boot', 'startup'] },
   { id: 'sec-theme', key: 'settings.theme', kw: ['主题', 'theme', '配色', '皮肤'] },
   { id: 'sec-radius', key: 'settings.radius', kw: ['圆角', 'radius', '边角'] },
   { id: 'sec-uizoom', key: 'settings.uiZoom', kw: ['缩放', 'zoom', '等比', '基准尺寸', '上下限'] },
@@ -82,6 +111,7 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-cursor', key: 'settings.cursor', kw: ['光标', 'cursor', '鼠标指针', '自定义光标'] },
   { id: 'sec-glassbg', key: 'settings.glassBg', kw: ['毛玻璃', 'glass', '背景', '虚化', '颜色', '字体', '边框', '气泡', '透明', 'frost', 'blur', 'color', 'border', 'bubble', 'font'] },
   { id: 'sec-voice', key: 'settings.voice', kw: ['语音', 'voice', 'tts', '朗读', '播报', 'asr', '识别', '语音输入'] },
+  { id: 'sec-debug', key: 'settings.debugMode', kw: ['调试', '测试', 'debug', '快照', '错误报告', '手动触发', '触发'] },
   { id: 'sec-imagegen', key: 'settings.imageGen', kw: ['生图', '画图', 'image', '图像生成', '文生图'] },
   { id: 'sec-videogen', key: 'settings.videoGen', kw: ['视频', 'video', '生视频', '文生视频'] },
   { id: 'sec-sceneimage', key: 'settings.sceneImage', kw: ['场景图', 'scene', '配图'] },
@@ -180,10 +210,25 @@ function CursorHotspotPreview({
   );
 }
 
-export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => void }> = ({
+export const Settings: React.FC<{
+  onRerunWizard?: () => void;
+  onAbout?: () => void;
+  // 模型管理独立二级页面模式：只渲染「模型管理」分区 + 模型配置搜索框（不渲染其余设置分区）
+  modelsOnly?: boolean;
+  // 导航重置信号：再次点击左侧「设置」图标时从二级页退回设置主界面
+  navResetTick?: number;
+}> = ({
   onRerunWizard,
   onAbout,
+  modelsOnly,
+  navResetTick,
 }) => {
+  const [sub, setSub] = useState<'main' | 'font' | 'self' | 'models'>('main');
+  // 点击左侧「设置」图标：无论当前在哪个二级页，都退回设置主界面
+  useEffect(() => {
+    setSub('main');
+  }, [navResetTick]);
+  const onlyModels = modelsOnly === true || sub === 'models';
   const { toast, showToast } = useToast();
   const { theme, setTheme, settings, reloadSettings } = useTheme();
   const { t, lang, setLang } = useI18n();
@@ -191,6 +236,11 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
   const catRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [activeCat, setActiveCat] = useState(SETTING_CATS[0].id);
   const scrollToCat = (id: string) => {
+    // 「模型与群聊」分类：直接进入模型管理二级页（该区块已不在主页渲染，滚动无目标）
+    if (id === 'cat-models') {
+      setSub('models');
+      return;
+    }
     catRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     setActiveCat(id);
   };
@@ -224,11 +274,20 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
   const [status, setStatus] = useState('');
 
   // 一键检测所有模型能力：逐个发送探针请求，探测视觉/工具/JSON 支持与上下文窗口
-  const detectAllModels = async (opts?: { images: boolean; tools: boolean; json: boolean; nsfw: boolean }) => {
+  const detectAllModels = async (opts?: { images: boolean; tools: boolean; json: boolean; nsfw: boolean; thinkLevel: boolean }) => {
     if (detectingAll) return;
     setDetectingAll(true);
     try {
       const res = await api.detectAllModels(opts);
+      const undetLabel = (k: string): string =>
+        ({
+          supportsImages: t('model.capImages'),
+          supportsTools: t('model.capTools'),
+          supportsJson: t('model.capJson'),
+          supportsNsfw: t('model.capNsfw'),
+          supportsStream: t('model.capStream'),
+          supportsThinkLevel: t('model.capThinkLevel'),
+        } as Record<string, string>)[k] || k;
       const lines = (res.results || [])
         .map((r: any) => {
           const caps = [
@@ -241,12 +300,21 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               `${t('model.capNsfw')}:${r.supportsNsfw === null ? t('model.capUnknown') : r.supportsNsfw ? t('model.capYes') : t('model.capNo')}`
             );
           }
-          return `· ${r.name}（${caps.join(' ')}）`;
+          if (opts?.thinkLevel) {
+            caps.push(
+              `${t('model.capThinkLevel')}:${r.supportsThinkLevel === null ? t('model.capUnknown') : r.supportsThinkLevel ? t('model.capYes') : t('model.capNo')}`
+            );
+          }
+          // 未判定项明细（v2.3.38）：明确区分「未判定」与「判定为不支持」
+          const undet = Array.isArray(r.undetected) && r.undetected.length
+            ? `（${t('model.capUnknownAt', { items: r.undetected.map(undetLabel).join('、') })}）`
+            : '';
+          return `· ${r.name}（${caps.join(' ')}）${undet}`;
         })
         .join('\n');
       showToast(`${t('settings.detectAllDone', { count: (res.results || []).length })}\n${lines}`);
     } catch (e: any) {
-      showToast(t('settings.detectAllFail', { msg: e?.message || String(e) }), true);
+      showToast(t('settings.detectAllFail', { msg: e?.message || String(e) }), { error: true });
     } finally {
       setDetectingAll(false);
     }
@@ -262,12 +330,52 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
   const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
   // 探测项选择弹窗（一键检测全部前让用户勾选，NSFW 默认不勾）
   const [detectOptsOpen, setDetectOptsOpen] = useState(false);
-  const [detectOpts, setDetectOpts] = useState<{ images: boolean; tools: boolean; json: boolean; nsfw: boolean }>({
+  const [detectOpts, setDetectOpts] = useState<{ images: boolean; tools: boolean; json: boolean; nsfw: boolean; thinkLevel: boolean }>({
     images: true,
     tools: true,
     json: true,
     nsfw: false,
+    thinkLevel: true,
   });
+
+  // ===== 调试模式（v2.3.19）：快照/恢复 + 手动触发 + 错误报告 =====
+  const [debugSession, setDebugSession] = useState(false);
+  const [debugBusy, setDebugBusy] = useState(false);
+  const [debugChat, setDebugChat] = useState('');
+  const [debugReport, setDebugReport] = useState<Record<string, { time: string; message: string }[]> | null>(null);
+  const runDebugTrigger = async (kind: string) => {
+    if (!debugChat) {
+      showToast(t('settings.debugPickChatFirst'), { error: true });
+      return;
+    }
+    const [ct, cid] = debugChat.split(':');
+    setDebugBusy(true);
+    try {
+      const r = await api.debugTrigger(kind, ct, cid);
+      showToast(r.ok ? r.message || t('settings.debugTrigDone') : r.error || t('settings.debugTrigFail'), { error: !r.ok });
+    } catch (e: any) {
+      showToast(e?.message || String(e), { error: true });
+    } finally {
+      setDebugBusy(false);
+    }
+  };
+  const endDebug = async () => {
+    setDebugBusy(true);
+    try {
+      const r = await api.debugEnd();
+      if (r.ok) {
+        setDebugSession(false);
+        setDebugReport(r.report || {});
+        showToast(t('settings.debugEndedToast'));
+      } else {
+        showToast(r.error || t('settings.debugTrigFail'), { error: true });
+      }
+    } catch (e: any) {
+      showToast(e?.message || String(e), { error: true });
+    } finally {
+      setDebugBusy(false);
+    }
+  };
 
   // 全部模型用到的标签（去重），用于标签筛选胶囊与编辑器联想
   const allTags = Array.from(
@@ -315,8 +423,20 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
     });
   })();
   const [chatList, setChatList] = useState<ChatListItem[]>([]);
-  const [sub, setSub] = useState<'main' | 'font' | 'self'>('main');
   const [worldBooks, setWorldBooks] = useState<WorldBook[]>([]);
+  // ===== MCP 服务器管理（sec-mcp）=====
+  const [mcpStatusList, setMcpStatusList] = useState<any[]>([]);
+  const [mcpDraft, setMcpDraft] = useState<{ key: string; command: string; args: string }>({ key: '', command: '', args: '' });
+  const refreshMcpStatus = async () => {
+    try {
+      setMcpStatusList(await api.mcpStatus());
+    } catch {
+      /* ignore */
+    }
+  };
+  useEffect(() => {
+    if (sub === 'models') void refreshMcpStatus();
+  }, [sub]);
   const [resetOpen, setResetOpen] = useState(false);
   const [deleteAllOpen, setDeleteAllOpen] = useState(false);
   // 应用数据保存路径（实时数据，非备份）
@@ -364,13 +484,23 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
   const [searchQ, setSearchQ] = useState('');
   const [showSuggest, setShowSuggest] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
+  // ===== 模型管理页（独立二级菜单）搜索：模糊搜索模型配置，点击结果跳转并高亮闪动 3 秒 =====
+  const [modelSearchQ, setModelSearchQ] = useState('');
+  // ===== 软件更新（v2.3.45）：状态来自主进程 updater（订阅 update:status 广播）=====
+  const [updateSt, setUpdateSt] = useState<UpdateStatus | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  useEffect(() => {
+    void api.updateStatus().then(setUpdateSt).catch(() => {});
+    const off = api.onUpdateStatus((_e, data) => setUpdateSt(data));
+    return off;
+  }, []);
   // 搜索索引：基础为静态分区/分类（含中英文关键词），再于挂载后运行时补全所有
   // 具体控件（勾选框 / 滑块 / 下拉 / 各分区标题），保证「所有设置项」均可被搜到并跳转。
   const [searchIndex, setSearchIndex] = useState<SettingSearchItem[]>(SETTING_SEARCH_INDEX);
   const draftReady = !!draft;
   React.useEffect(() => {
     const root = panelRef.current;
-    if (!root || !draftReady) return;
+    if (!root || !draftReady || onlyModels) return; // 模型管理独立页不用设置搜索索引
     const dyn: SettingSearchItem[] = [];
     const seen = new Set<string>();
     const clean = (s: string) => s.replace(/\s+/g, ' ').trim();
@@ -492,14 +622,24 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
       )
     );
   };
-  const goToSetting = (id: string) => {
-    const el = document.getElementById(id);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.classList.remove('setting-flash');
-      void el.offsetWidth; // 触发重排以重启动画
-      el.classList.add('setting-flash');
-      window.setTimeout(() => el.classList.remove('setting-flash'), 5000);
+  const goToSetting = (id: string, sub?: SettingSearchItem['sub']) => {
+    const jump = () => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.remove('setting-flash');
+        void el.offsetWidth; // 触发重排以重启动画
+        el.classList.add('setting-flash');
+        window.setTimeout(() => el.classList.remove('setting-flash'), 5000);
+      }
+    };
+    if (id === 'cat-models' || sub) {
+      // 目标在二级页（模型管理/字体/角色卡）：先切入，等渲染后再滚动高亮；
+      // 二级页内不存在该锚点时（如分类入口）仅完成跳转，不再表现为「点了没反应」
+      setSub(sub || 'models');
+      window.setTimeout(jump, 150);
+    } else {
+      jump();
     }
     setShowSuggest(false);
     setSearchQ('');
@@ -545,14 +685,77 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
 
   if (!draft) return <div className="panel">{t('common.loading')}</div>;
 
-  const loc = lang === 'en' ? 'en-US' : 'zh-CN';
+  const loc = localeOf(lang);
   const providerLabel = (p: string) =>
-    p === 'custom' ? t('model.providerCustom') : PROVIDER_DEFAULTS[p as keyof typeof PROVIDER_DEFAULTS]?.label || p;
+    PROVIDER_DEFAULTS[p as keyof typeof PROVIDER_DEFAULTS]?.label || p;
+
+  // ===== 模型管理页搜索：匹配 名称 / 模型 ID / 提供方 / 标签 / 分组名 / Base URL =====
+  // 匹配逻辑与设置搜索一致：多词 AND，前缀命中 > 包含命中 > 全词组命中；大小写不敏感
+  const modelSearchResults = (() => {
+    const raw = modelSearchQ.toLowerCase().trim();
+    const all = draft?.models || [];
+    if (!raw) return [];
+    const tokens = raw.split(/\s+/).filter(Boolean);
+    const groups = draft?.modelGroups || [];
+    const scored = all.map((m) => {
+      const groupNames = (m.groupIds || [])
+        .map((gid) => groups.find((g) => g.id === gid)?.name || '')
+        .filter(Boolean)
+        .join(' ');
+      const hay = [m.name, m.model, providerLabel(m.provider), (m.tags || []).join(' '), groupNames, m.baseUrl || '']
+        .join(' ')
+        .toLowerCase();
+      let score = -1;
+      if (m.name.toLowerCase().startsWith(raw)) score = 100;
+      else if (hay.includes(raw)) score = 80;
+      if (score < 0 && tokens.length > 0 && tokens.every((tk) => hay.includes(tk))) score = 60;
+      return { m, score };
+    });
+    return scored
+      .filter((x) => x.score >= 0)
+      .sort((a, b) => b.score - a.score || a.m.name.localeCompare(b.m.name))
+      .slice(0, 8)
+      .map((x) => x.m);
+  })();
+  // 点击搜索结果：滚动到对应模型卡片并高亮闪动约 3 秒（3 次 1s 脉冲动画）
+  const goToModel = (id: string) => {
+    setModelSearchQ('');
+    const el = document.getElementById(`model-card-${id}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.remove('model-flash');
+      void el.offsetWidth; // 触发重排以重启动画
+      el.classList.add('model-flash');
+      window.setTimeout(() => el.classList.remove('model-flash'), 3200);
+    }
+  };
 
   // 所有改动即时落盘并广播到其他窗口，与全页一致；不再依赖底部「保存」按钮
   const patch = (p: Partial<AppSettings>) => {
     setDraft((d) => ({ ...(d as AppSettings), ...p }));
     api.saveSettings(p).then(reloadSettings);
+  };
+
+  // ===== 记忆提示词（v2.3.36）：本地草稿 + 失焦落盘 =====
+  // textarea 不逐字符即时保存（避免长文本输入时频繁写盘/重载导致卡顿与光标跳动），失焦时一次性 patch。
+  // 清空保护：失焦时若为纯空白，自动填回出厂默认并提示，保证运行时两提示词恒非空。
+  const [summarizePromptLocal, setSummarizePromptLocal] = useState('');
+  const [injectPromptLocal, setInjectPromptLocal] = useState('');
+  useEffect(() => {
+    setSummarizePromptLocal(draft?.memorySummarizePrompt ?? '');
+  }, [draft?.memorySummarizePrompt]);
+  useEffect(() => {
+    setInjectPromptLocal(draft?.memoryInjectPrompt ?? '');
+  }, [draft?.memoryInjectPrompt]);
+  const saveMemoryPrompt = (key: 'memorySummarizePrompt' | 'memoryInjectPrompt', value: string) => {
+    const empty = !value.trim();
+    const filled = empty
+      ? (key === 'memorySummarizePrompt' ? DEFAULT_MEMORY_SUMMARIZE_PROMPT : DEFAULT_MEMORY_INJECT_PROMPT)
+      : value;
+    if (key === 'memorySummarizePrompt') setSummarizePromptLocal(filled);
+    else setInjectPromptLocal(filled);
+    if (empty) showToast(t('settings.memoryPromptsResetToDefault'), { duration: 2500 });
+    patch({ [key]: filled } as Partial<AppSettings>);
   };
   // 随机触发范围保存：钳制 1~86400 秒（1 秒 ~ 24 小时，边界为硬编码），并保证 min <= max
   const saveRandomRange = (rawMin: number, rawMax: number) => {
@@ -595,12 +798,26 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
   const patchSound = (p: Partial<typeof sound>) => patch({ sound: { ...sound, ...p } });
   const patchCursor = (p: Partial<typeof cursor>) => patch({ customCursor: { ...cursor, ...p } });
 
-  // TTS 按角色音色：key=角色 id，value=音色名；空字符串表示回退全局默认（存于 voice 子对象）
+  // TTS 按角色配置：key=角色 id，value=音色名（旧格式，兼容）或 { voice, baseUrl, apiKey, model }（v2.3.19）；
+  // 全部字段为空时删除该角色配置（回退全局默认，存于 voice 子对象）
   const ttsVoices = voice.ttsVoices || {};
-  const patchTtsVoice = (roleId: string, voiceName: string) => {
-    const next = { ...ttsVoices };
-    if (voiceName) next[roleId] = voiceName;
-    else delete next[roleId];
+  type RoleTtsDraft = { voice?: string; baseUrl?: string; apiKey?: string; model?: string; speed?: number; pitch?: number };
+  const getRoleTts = (roleId: string): RoleTtsDraft => {
+    const cur = ttsVoices[roleId];
+    return typeof cur === 'string' ? { voice: cur } : { ...(cur || {}) };
+  };
+  const patchRoleTts = (roleId: string, p: Partial<RoleTtsDraft>) => {
+    const next = { ...ttsVoices } as Record<string, RoleTtsDraft>;
+    const merged = getRoleTts(roleId);
+    for (const [k, val] of Object.entries(p)) {
+      if (val === undefined || val === '') delete (merged as any)[k];
+      else (merged as any)[k] = val;
+    }
+    if (
+      !merged.voice && !merged.baseUrl && !merged.apiKey && !merged.model &&
+      merged.speed === undefined && merged.pitch === undefined
+    ) delete next[roleId];
+    else next[roleId] = merged;
     patchVoice({ ttsVoices: next });
   };
   // 光标子设置必须落盘并触发 reloadSettings，否则 ThemeContext.settings 不会更新，
@@ -608,8 +825,9 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
   const saveCursor = (p: Partial<typeof cursor>) =>
     api.saveSettings({ customCursor: { ...cursor, ...p } }).then(reloadSettings);
 
-  // 生图 / TTS / ASR 模型名拉取：复用 OpenAI 兼容 /models，按类型关键字过滤后填入 datalist，
-  // 用户既能从下拉选也能手填。过滤为空时回退全部列表，避免第三方平台命名不标准时漏掉可用模型。
+  // 生图 / TTS / ASR 模型名拉取：复用 OpenAI 兼容 /models，按类型关键字过滤后填入 ComboBox 建议列表
+  // （v2.3.39 起由原生 datalist 改为可滚动组合框），用户既能从下拉选也能手填。
+  // 过滤为空时回退全部列表，避免第三方平台命名不标准时漏掉可用模型。
   const filterModelsByKind = (list: string[], kind: 'asr' | 'tts' | 'img'): string[] => {
     const test = (id: string) => {
       const s = id.toLowerCase();
@@ -738,7 +956,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
   const addGroup = () => {
     const groups = draft?.modelGroups || [];
     if (groups.length >= MODEL_GROUP_MAX) {
-      showToast(t('settings.groupLimitReached', { n: MODEL_GROUP_MAX }), true);
+      showToast(t('settings.groupLimitReached', { n: MODEL_GROUP_MAX }), { error: true });
       return;
     }
     // 名称去重：从「分组 1」递增，跳过已存在的同名项
@@ -755,16 +973,16 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
   const renameGroup = (id: string, rawName: string) => {
     const name = rawName.trim();
     if (!name) {
-      showToast(t('settings.groupNameEmpty'), true);
+      showToast(t('settings.groupNameEmpty'), { error: true });
       return;
     }
     if (name.length > MODEL_GROUP_NAME_MAX) {
-      showToast(t('settings.groupNameTooLong', { n: MODEL_GROUP_NAME_MAX }), true);
+      showToast(t('settings.groupNameTooLong', { n: MODEL_GROUP_NAME_MAX }), { error: true });
       return;
     }
     const groups = draft?.modelGroups || [];
     if (groups.some((g) => g.id !== id && g.name === name)) {
-      showToast(t('settings.groupNameExists'), true);
+      showToast(t('settings.groupNameExists'), { error: true });
       return;
     }
     patch({ modelGroups: groups.map((g) => (g.id === id ? { ...g, name } : g)) });
@@ -804,18 +1022,41 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
       setStatus('');
       return;
     }
-    await api.createBackup(dest);
+    // v2.3.33：主进程防覆盖后可能改名，状态栏显示实际写入路径
+    const actual = (await api.createBackup(dest)) || dest;
     await reloadSettings();
     setBusy(false);
-    setStatus(t('settings.backupDone', { dest }));
+    setStatus(t('settings.backupDone', { dest: actual }));
   };
 
   const restore = async () => {
-    if (!(await api.showConfirm!(t('settings.confirmRestore')))) return;
     setBusy(true);
     setStatus(t('settings.restorePick'));
     const zip = await api.pickRestoreFile();
     if (!zip) {
+      setBusy(false);
+      setStatus('');
+      return;
+    }
+    // v2.3.48：高版本备份恢复警告——先读备份包内版本清单，高于当前软件版本时先确认
+    try {
+      const bv = await api.peekBackupVersion(zip);
+      const cur = updateSt?.currentVersion || (await api.updateStatus()).currentVersion;
+      if (bv && cur && compareVersions(bv, cur) > 0) {
+        const go = await api.showConfirm!(
+          t('settings.backupVersionWarn', { backup: bv, current: cur }),
+          t('settings.backupVersionWarnTitle')
+        );
+        if (!go) {
+          setBusy(false);
+          setStatus('');
+          return;
+        }
+      }
+    } catch {
+      // 版本探测失败不阻断恢复流程（旧备份无清单属正常情况）
+    }
+    if (!(await api.showConfirm!(t('settings.confirmRestore')))) {
       setBusy(false);
       setStatus('');
       return;
@@ -922,9 +1163,22 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             ? t('settings.font')
             : sub === 'self'
               ? t('self.title')
-              : t('settings.title')}
+              : onlyModels
+                ? t('nav.models')
+                : t('settings.title')}
         </span>
-        {sub === 'main' && (
+        {/* 二级页（字体/角色卡/模型管理）返回按钮：固定在页面名称正右边，不随内容滚动 */}
+        {(sub === 'font' || sub === 'self' || onlyModels) && (
+          <button
+            type="button"
+            className="btn-ghost"
+            style={{ marginLeft: 10, flex: '0 0 auto', padding: '6px 12px', fontSize: 13, whiteSpace: 'nowrap' }}
+            onClick={() => setSub('main')}
+          >
+            ← {t('settings.back')}
+          </button>
+        )}
+        {!onlyModels && sub === 'main' && (
           <div className="settings-header-search">
             <div style={{ position: 'relative', width: 220 }}>
               <input
@@ -940,7 +1194,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 onBlur={() => window.setTimeout(() => setShowSuggest(false), 150)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
-                    if (searchResults[0]) goToSetting(searchResults[0].id);
+                    if (searchResults[0]) goToSetting(searchResults[0].id, searchResults[0].sub);
                   } else if (e.key === 'Escape') {
                     setShowSuggest(false);
                   }
@@ -954,7 +1208,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                       className="settings-suggest-item"
                       onMouseDown={(e) => {
                         e.preventDefault();
-                        goToSetting(r.id);
+                        goToSetting(r.id, r.sub);
                       }}
                     >
                       {renderSearchHL(t(r.key), searchQ)}
@@ -978,9 +1232,45 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             </button>
           </div>
         )}
+        {/* 模型管理独立页：模型配置搜索框 + 结果列表（点击跳转并高亮闪动 3 秒） */}
+        {onlyModels && (
+          <div className="settings-header-search" style={{ position: 'relative', flex: 1, marginLeft: 12, minWidth: 0 }}>
+            <input
+              type="text"
+              className="settings-search-input"
+              style={{ width: '100%' }}
+              placeholder={t('models.searchPh')}
+              value={modelSearchQ}
+              onChange={(e) => setModelSearchQ(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && modelSearchResults[0]) goToModel(modelSearchResults[0].id);
+                else if (e.key === 'Escape') setModelSearchQ('');
+              }}
+            />
+            {modelSearchQ.trim() && (
+              <div className="settings-suggest" style={{ maxHeight: 280 }}>
+                {modelSearchResults.map((m) => (
+                  <div
+                    key={m.id}
+                    className="settings-suggest-item"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      goToModel(m.id);
+                    }}
+                  >
+                    {renderSearchHL(`${m.name} · ${providerLabel(m.provider)} · ${m.model}`, modelSearchQ)}
+                  </div>
+                ))}
+                {modelSearchResults.length === 0 && (
+                  <div className="settings-suggest-empty">{t('models.searchEmpty')}</div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="settings-layout">
-        {sub === 'main' && (
+        {sub === 'main' && !onlyModels && (
           <nav className="settings-nav">
             {SETTING_CATS.map((c) => (
               <button
@@ -1000,10 +1290,9 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             selfRoles={draft.selfRoles || []}
             currentSelfRoleId={draft.currentSelfRoleId || ''}
             onPersist={persistSelf}
-            onBack={() => setSub('main')}
           />
         ) : sub === 'font' ? (
-          <FontSettings draft={draft} patch={patch} onBack={() => setSub('main')} />
+          <FontSettings draft={draft} patch={patch} />
         ) : (
         <>
         {status && (
@@ -1013,31 +1302,16 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         )}
 
         {/* ===== 语言 ===== */}
+        {/* 模型管理独立页：只渲染 cat-models 分区，其余分区跳过 */}
+        {!onlyModels && (<>
         <div id="cat-general" ref={(el) => { catRefs.current['cat-general'] = el; }} className="settings-category">
         <div id="sec-language" className="section-title">{t('settings.language')}</div>
         <div className="field" style={{ maxWidth: 240 }}>
           <SelectMenu
             value={lang}
-            onChange={(v) => setLang(v as 'zh' | 'en')}
-            options={[
-              { value: 'zh', label: t('settings.langZh') },
-              { value: 'en', label: t('settings.langEn') },
-            ]}
+            onChange={(v) => setLang(v as Lang)}
+            options={LANGS.map((l) => ({ value: l.key, label: l.label }))}
           />
-        </div>
-
-        {/* ===== 流式输出 ===== */}
-        <div className="section-title">{t('settings.enableStreaming')}</div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={!!draft.enableStreaming}
-            onChange={(e) => patch({ enableStreaming: e.target.checked })}
-          />
-          <span>{t('settings.enableStreaming')}</span>
-        </label>
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-          {t('settings.streamingDesc')}
         </div>
 
         {/* ===== 界面动效 ===== */}
@@ -1048,30 +1322,119 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             checked={!!draft.enableAnimations}
             onChange={(e) => patch({ enableAnimations: e.target.checked })}
           />
-          <span>{t('settings.animationsOn')}</span>
+          <span>{t('settings.animationsOn')}<Hint text={t('settings.animationsDesc')} /></span>
         </label>
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-          {t('settings.animationsDesc')}
+
+        {/* ===== 软件更新（v2.3.45）：检查 GitHub Releases → 提醒 → 下载安装包 ===== */}
+        <div id="sec-update" className="section-title" style={{ marginTop: 16 }}>{t('settings.updateTitle')}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <button
+            className="btn-ghost"
+            disabled={updateBusy || updateSt?.state === 'checking'}
+            onClick={async () => {
+              setUpdateBusy(true);
+              try {
+                const st = await api.checkUpdate(true);
+                setUpdateSt(st);
+                if (st.state === 'latest') showToast(t('settings.updateIsLatest', { v: st.currentVersion }));
+                else if (st.state === 'available') showToast(t('settings.updateFound', { v: st.latestVersion || '' }));
+                else if (st.state === 'error') showToast(st.message || t('settings.updateCheckFailed'), { error: true });
+              } catch (e: any) {
+                showToast(e?.message || t('settings.updateCheckFailed'), { error: true });
+              } finally {
+                setUpdateBusy(false);
+              }
+            }}
+          >
+            {updateSt?.state === 'checking' || updateBusy ? t('settings.updateChecking') : t('settings.updateCheck')}
+          </button>
+          <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
+            {t('settings.updateCurrent', { v: updateSt?.currentVersion || '' })}
+          </span>
+          {updateSt?.state === 'latest' && (
+            <span style={{ fontSize: 13, color: 'var(--color-success)' }}>{t('settings.updateIsLatestShort')}</span>
+          )}
+          {updateSt?.state === 'error' && updateSt.message && (
+            <span style={{ fontSize: 13, color: 'var(--color-danger)' }}>{updateSt.message}</span>
+          )}
         </div>
 
-        {/* ===== 字体（子页面入口） ===== */}
-        <div id="sec-font" className="section-title" style={{ marginTop: 16 }}>{t('settings.font')}</div>
-        <div
-          className="theme-card"
-          style={{ cursor: 'pointer', maxWidth: 420 }}
-          onClick={() => setSub('font')}
-        >
-          <div
-            className="theme-swatch"
-            style={{ background: 'linear-gradient(135deg,#7a869a,#a0abc0)' }}
-          />
-          <div>
-            <div style={{ fontWeight: 600 }}>{t('settings.font')}</div>
-              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-                {t('settings.fontEnter')}
-              </div>
-            </div>
+        {updateSt?.state === 'available' && (
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, color: 'var(--color-primary)' }}>
+              {t('settings.updateAvailable', { v: updateSt.latestVersion || '' })}
+            </span>
+            <button className="btn-primary" onClick={async () => { setUpdateBusy(true); try { setUpdateSt(await api.downloadUpdate()); } finally { setUpdateBusy(false); } }}>
+              {t('settings.updateDownload')}
+            </button>
+            <button className="btn-ghost" onClick={() => { void api.openReleasePage(); }}>
+              {t('settings.updateOpenRelease')}
+            </button>
           </div>
+        )}
+
+        {updateSt?.state === 'downloading' && (
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'var(--color-hover)', overflow: 'hidden' }}>
+              <div
+                style={{
+                  width: `${updateSt.percent ?? 0}%`,
+                  height: '100%',
+                  background: 'var(--color-primary)',
+                  transition: 'width 0.2s linear',
+                }}
+              />
+            </div>
+            <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+              {t('settings.updateDownloading', {
+                p: String(updateSt.percent ?? 0),
+                mb: ((updateSt.received || 0) / 1048576).toFixed(1),
+              })}
+            </span>
+          </div>
+        )}
+
+        {updateSt?.state === 'downloaded' && (
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, color: 'var(--color-success)' }}>{t('settings.updateDownloaded')}</span>
+            <button className="btn-ghost" onClick={() => { void api.openUpdateFolder(); }}>
+              {t('settings.updateOpenFolder')}
+            </button>
+            <button className="btn-primary" onClick={() => { void api.installUpdate(); }}>
+              {t('settings.updateInstall')}
+            </button>
+          </div>
+        )}
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 10 }}>
+          <input
+            type="checkbox"
+            checked={draft.autoCheckUpdate !== false}
+            onChange={(e) => patch({ autoCheckUpdate: e.target.checked })}
+          />
+          <span>{t('settings.updateAutoCheck')}<Hint text={t('settings.updateAutoCheckDesc')} /></span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 6 }}>
+          <input
+            type="checkbox"
+            checked={draft.autoDownloadUpdate === true}
+            onChange={(e) => patch({ autoDownloadUpdate: e.target.checked })}
+          />
+          <span>{t('settings.updateAutoDownload')}<Hint text={t('settings.updateAutoDownloadDesc')} /></span>
+        </label>
+        {/* v2.3.48：永久关闭更新提醒（弹窗 + 聊天界面提示条都不再出现；手动检查不受影响） */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 6 }}>
+          <input
+            type="checkbox"
+            checked={draft.disableUpdateReminder === true}
+            onChange={(e) => patch({ disableUpdateReminder: e.target.checked })}
+          />
+          <span>{t('settings.updateDisableReminder')}<Hint text={t('settings.updateDisableReminderDesc')} /></span>
+        </label>
+        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 6, lineHeight: 1.6 }}>
+          {t('settings.updateNotesHint', { v: updateSt?.currentVersion || '' })}
+        </div>
+
 
           {/* ===== 我的角色卡（自我身份） ===== */}
           <div id="sec-self" className="section-title" style={{ marginTop: 16 }}>{t('self.title')}</div>
@@ -1085,154 +1448,236 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               style={{ background: 'linear-gradient(135deg,#ff8fb1,#42b4e8)' }}
             />
             <div>
-              <div style={{ fontWeight: 600 }}>{t('self.manage')}</div>
-              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-                {t('self.enter')}
-              </div>
+              <div style={{ fontWeight: 600 }}>{t('self.manage')}<Hint text={t('self.enter')} /></div>
             </div>
           </div>
 
-          {/* ===== 世界书 / 记忆（全局默认 + 自动记忆） ===== */}
-          <div id="sec-worldbook" className="section-title" style={{ marginTop: 16 }}>{t('worldbook.title')}</div>
-          <div className="field" style={{ maxWidth: 340 }}>
-            <label>{t('settings.defaultWorldbook')}</label>
+          {/* ===== 模型管理（子页面入口，类似字体 / 角色卡） ===== */}
+          <div id="sec-models" className="section-title" style={{ marginTop: 16 }}>{t('settings.modelManage')}</div>
+          <div
+            className="theme-card"
+            style={{ cursor: 'pointer', maxWidth: 420 }}
+            onClick={() => setSub('models')}
+          >
+            <div
+              className="theme-swatch"
+              style={{ background: 'linear-gradient(135deg,#6a3aa8,#a1429c)' }}
+            />
+            <div>
+              <div style={{ fontWeight: 600 }}>{t('settings.modelManage')}<Hint text={t('settings.modelManageEnter')} /></div>
+            </div>
+          </div>
+
+          {/* ===== 开机自启动 ===== */}
+          <div id="sec-launch" className="section-title" style={{ marginTop: 16 }}>{t('settings.launchOnBoot')}</div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={!!draft.launchOnBoot}
+              onChange={(e) => patch({ launchOnBoot: e.target.checked })}
+            />
+            <span>{t('settings.launchOnBoot')}<Hint text={t('settings.launchOnBootDesc')} /></span>
+          </label>
+
+          {/* ===== 调试模式（v2.3.19）：数据快照保护 + 手动触发 + 错误报告 ===== */}
+          <div id="sec-debug" className="section-title" style={{ marginTop: 16 }}>{t('settings.debugMode')}<Hint text={t('settings.debugModeDesc')} /></div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {!debugSession ? (
+              <button
+                className="btn-primary"
+                style={{ padding: '4px 12px', fontSize: 12 }}
+                disabled={debugBusy}
+                onClick={async () => {
+                  setDebugBusy(true);
+                  try {
+                    const r = await api.debugStart();
+                    if (r.ok) setDebugSession(true);
+                    else showToast(r.error || t('settings.debugTrigFail'), { error: true });
+                  } finally {
+                    setDebugBusy(false);
+                  }
+                }}
+              >
+                {t('settings.debugStart')}
+              </button>
+            ) : (
+              <button
+                className="btn-primary"
+                style={{ padding: '4px 12px', fontSize: 12 }}
+                disabled={debugBusy}
+                onClick={() => void endDebug()}
+              >
+                {t('settings.debugEnd')}
+              </button>
+            )}
+            <select
+              value={debugChat}
+              onChange={(e) => setDebugChat(e.target.value)}
+              style={{ padding: '4px 8px', borderRadius: 8, fontSize: 12, maxWidth: 240 }}
+            >
+              <option value="">{t('settings.debugPickChat')}</option>
+              {chatList.map((c) => (
+                <option key={`${c.chat_type}:${c.chat_id}`} value={`${c.chat_type}:${c.chat_id}`}>
+                  {c.chat_type === 'group' ? '👥 ' : '👤 '}
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          <Hint text={t('settings.debugHint')} /></div>
+          <div
+            style={{
+              display: 'flex',
+              gap: 6,
+              flexWrap: 'wrap',
+              marginTop: 8,
+              opacity: debugSession ? 1 : 0.5,
+              pointerEvents: debugSession ? 'auto' : 'none',
+            }}
+          >
+            {([
+              ['proactive', 'settings.debugTrigProactive'],
+              ['moments', 'settings.debugTrigMoments'],
+              ['relationship', 'settings.debugTrigRelationship'],
+              ['sceneImage', 'settings.debugTrigSceneImage'],
+            ] as const).map(([k, key]) => (
+              <button
+                key={k}
+                className="btn-ghost"
+                style={{ padding: '3px 10px', fontSize: 12 }}
+                disabled={debugBusy}
+                onClick={() => void runDebugTrigger(k)}
+              >
+                {t(key)}
+              </button>
+            ))}
+          </div>
+
+          {/* 调试报告弹窗：结束调试后展示各功能错误分类汇总 */}
+          {debugReport && (
+            <div
+              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              onClick={() => setDebugReport(null)}
+            >
+              <div
+                style={{
+                  background: 'var(--color-panel)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 12,
+                  width: 580,
+                  maxWidth: '92vw',
+                  maxHeight: '70vh',
+                  overflowY: 'auto',
+                  padding: 14,
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>{t('settings.debugReportTitle')}<Hint text={t('settings.debugReportNote')} /></div>
+                  <button className="btn-ghost" style={{ padding: '2px 10px', fontSize: 12 }} onClick={() => setDebugReport(null)}>
+                    {t('common.cancel')}
+                  </button>
+                </div>
+                {Object.keys(debugReport).length === 0 && (
+                  <div style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>{t('settings.debugReportEmpty')}</div>
+                )}
+                {Object.entries(debugReport).map(([cat, items]) => (
+                  <div key={cat} style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>
+                      {cat === 'functional' ? t('settings.debugCatFunctional') : cat === 'model' ? t('settings.debugCatModel') : t('settings.debugCatOther')}（{items.length}）
+                    </div>
+                    {items.slice(0, 20).map((it, i) => (
+                      <div key={i} style={{ fontSize: 12, color: 'var(--color-text-secondary)', wordBreak: 'break-all' }}>
+                        · [{String(it.time || '').slice(11, 19)}] {it.message}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          </div>{/* end cat-general */}
+        <div id="cat-chat" ref={(el) => { catRefs.current['cat-chat'] = el; }} className="settings-category">
+          {/* ===== 群聊互聊（流式并行 / 调度 / 自动接话 / 主动续聊） ===== */}
+          <div id="sec-groupchat" className="section-title" style={{ marginTop: 16 }}>{t('settings.groupChat')}</div>
+
+          {/* 群聊流式并行数量 */}
+          <div className="field" style={{ maxWidth: 300 }}>
+            <label>{t('settings.streamParallel')}<Hint text={t('settings.streamParallelDesc')} /></label>
             <SelectMenu
-              value={draft.defaultWorldBookId || ''}
-              onChange={(v) => {
-                patch({ defaultWorldBookId: v });
-                api.saveSettings({ defaultWorldBookId: v });
-              }}
+              value={String(draft.streamParallel ?? 1)}
+              onChange={(v) => patch({ streamParallel: Number(v) })}
               options={[
-                { value: '', label: t('worldbook.none') },
-                ...worldBooks.map((w) => ({ value: w.id, label: w.name })),
+                { value: '1', label: t('settings.streamSeq') },
+                { value: '3', label: t('settings.streamMod') },
+                { value: '999', label: t('settings.streamAll') },
               ]}
             />
           </div>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-            {t('settings.defaultWorldbookDesc')}
+
+          <div className="field" style={{ maxWidth: 300 }}>
+            <label>{t('settings.groupScheduler')}<Hint text={t('settings.groupSchedulerDesc')} /></label>
+            <SelectMenu
+              value={draft.groupScheduler || 'director'}
+              onChange={(v) => patch({ groupScheduler: v as 'director' | 'roundRobin' })}
+              options={[
+                { value: 'director', label: t('settings.schedulerDirector') },
+                { value: 'roundRobin', label: t('settings.schedulerRoundRobin') },
+              ]}
+            />
+          </div>
+          <div className="field" style={{ maxWidth: 300, marginTop: 10 }}>
+            <label>{t('settings.groupAutoRounds')}<Hint text={t('settings.groupAutoRoundsDesc')} /></label>
+            <SelectMenu
+              value={String(draft.groupAutoRounds ?? 6)}
+              onChange={(v) => patch({ groupAutoRounds: Number(v) })}
+              options={[
+                ...[2, 4, 6, 10, 20, 50].map((n) => ({
+                  value: String(n),
+                  label: t('settings.groupRoundsN', { n }),
+                })),
+                { value: '0', label: t('settings.groupRoundsUnlimited') },
+                ...(![2, 4, 6, 10, 20, 50, 0].includes(Number(draft.groupAutoRounds ?? 6))
+                  ? [{
+                      value: String(draft.groupAutoRounds),
+                      label: t('settings.groupRoundsN', { n: draft.groupAutoRounds }),
+                    }]
+                  : []),
+              ]}
+            />
           </div>
 
-          {/* 自动记忆开关 */}
-          <label
-            style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
-          >
+          {/* AI 主动续聊开关 */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 12 }}>
             <input
               type="checkbox"
-              checked={!!draft.enableAutoMemory}
-              onChange={(e) => {
-                patch({ enableAutoMemory: e.target.checked });
-                api.saveSettings({ enableAutoMemory: e.target.checked });
-              }}
+              checked={!!draft.groupAutoChain}
+              onChange={(e) => patch({ groupAutoChain: e.target.checked, groupSelectReply: e.target.checked ? false : draft.groupSelectReply })}
             />
-            <span>{t('settings.autoMemory')}</span>
+            <span>{t('settings.groupAutoChain')}<Hint text={t('settings.groupAutoChainDesc')} /></span>
           </label>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-            {t('settings.autoMemoryDesc')}
-          </div>
 
-          {/* AI 自动判定关系值开关 */}
-          <label
-            style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
-          >
+          {/* 群聊选人回复：开启后每次发言与 AI 回复后由用户手动选择下一位发言者（与自动接话互斥） */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 12 }}>
             <input
               type="checkbox"
-              checked={draft.autoRelationship !== false}
-              onChange={(e) => {
-                patch({ autoRelationship: e.target.checked });
-                api.saveSettings({ autoRelationship: e.target.checked });
-              }}
+              checked={!!draft.groupSelectReply}
+              onChange={(e) => patch({ groupSelectReply: e.target.checked, groupAutoChain: e.target.checked ? false : draft.groupAutoChain })}
             />
-            <span>{t('settings.autoRelationship')}</span>
+            <span>{t('settings.groupSelectReply')}<Hint text={t('settings.groupSelectReplyDesc')} /></span>
           </label>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-            {t('settings.autoRelationshipDesc')}
-          </div>
 
-          {/* AI 自动发朋友圈开关 */}
-          <label
-            style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
-          >
-            <input
-              type="checkbox"
-              checked={draft.autoMoments !== false}
-              onChange={(e) => {
-                patch({ autoMoments: e.target.checked });
-                api.saveSettings({ autoMoments: e.target.checked });
-              }}
+          {/* 同角色连续发言上限（仅群聊自动接话生效） */}
+          <div className="field" style={{ maxWidth: 300, marginTop: 14 }}>
+            <label>{t('settings.groupMaxConsecutive')}<Hint text={t('settings.groupMaxConsecutiveDesc')} /></label>
+            <SelectMenu
+              value={String(draft.groupMaxConsecutive ?? 1)}
+              onChange={(v) => patch({ groupMaxConsecutive: Number(v) })}
+              options={Array.from({ length: 20 }, (_, i) => i + 1).map((n) => ({
+                value: String(n),
+                label: t('settings.groupMaxConsecutiveN', { n }),
+              }))}
             />
-            <span>{t('settings.autoMoments')}</span>
-          </label>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-            {t('settings.autoMomentsDesc')}
-          </div>
-
-          {/* 朋友圈视频生成开关（独立开关，需配置生视频模型） */}
-          <label
-            style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
-          >
-            <input
-              type="checkbox"
-              checked={draft.momentsVideoEnabled === true}
-              onChange={(e) => {
-                patch({ momentsVideoEnabled: e.target.checked });
-                api.saveSettings({ momentsVideoEnabled: e.target.checked });
-              }}
-            />
-            <span>{t('settings.momentsVideo')}</span>
-          </label>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-            {t('settings.momentsVideoDesc')}
-            {!(draft.videoGen && draft.videoGen.enabled && draft.videoGen.baseUrl && draft.videoGen.apiKey) && (
-              <span style={{ color: '#e6a23c' }}> {t('settings.momentsVideoNoModel')}</span>
-            )}
-          </div>
-
-          {/* 朋友圈每日上限 */}
-          <div style={{ marginTop: 12 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-              <span>{t('settings.dailyMomentLimit')}</span>
-              <span>{draft.dailyMomentLimit === 0 ? t('moments.unlimited') : (draft.dailyMomentLimit ?? 5)}</span>
-            </div>
-            <input
-              type="range"
-              min={1}
-              max={20}
-              step={1}
-              value={draft.dailyMomentLimit ?? 5}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                patch({ dailyMomentLimit: v });
-                api.saveSettings({ dailyMomentLimit: v });
-              }}
-              style={{ width: '100%', marginTop: 6 }}
-            />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.dailyMomentLimitDesc')}
-            </div>
-          </div>
-
-          {/* 朋友圈敏感程度 */}
-          <div style={{ marginTop: 12 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-              <span>{t('settings.momentsSensitivity')}</span>
-              <span>{Math.round((draft.momentsSensitivity ?? 0.5) * 100)}%</span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={5}
-              value={Math.round((draft.momentsSensitivity ?? 0.5) * 100)}
-              onChange={(e) => {
-                const v = Number(e.target.value) / 100;
-                patch({ momentsSensitivity: v });
-                api.saveSettings({ momentsSensitivity: v });
-              }}
-              style={{ width: '100%', marginTop: 6 }}
-            />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.momentsSensitivityDesc')}
-            </div>
           </div>
 
           {/* ===== 隐藏思维链 ===== */}
@@ -1247,11 +1692,8 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 api.saveSettings({ hideReasoning: e.target.checked });
               }}
             />
-            <span>{t('settings.hideReasoning')}</span>
+            <span>{t('settings.hideReasoning')}<Hint text={t('settings.hideReasoningDesc')} /></span>
           </label>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-            {t('settings.hideReasoningDesc')}
-          </div>
 
           <label
             style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
@@ -1264,16 +1706,13 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 api.saveSettings({ enableRandomEvents: e.target.checked });
               }}
             />
-            <span>{t('settings.enableRandomEvents')}</span>
+            <span>{t('settings.enableRandomEvents')}<Hint text={t('settings.enableRandomEventsDesc')} /></span>
           </label>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-            {t('settings.enableRandomEventsDesc')}
-          </div>
 
           {/* 事件影响心情程度 */}
           <div style={{ marginTop: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-              <span>{t('settings.eventMoodImpact')}</span>
+              <span>{t('settings.eventMoodImpact')}<Hint text={t('settings.eventMoodImpactDesc')} /></span>
               <span>{Math.round((draft.eventMoodImpact ?? 1) * 100)}%</span>
             </div>
             <input
@@ -1289,15 +1728,12 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               }}
               style={{ width: '100%', marginTop: 6 }}
             />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.eventMoodImpactDesc')}
-            </div>
           </div>
 
           {/* 对话影响心情程度 */}
           <div style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-              <span>{t('settings.dialogueMoodImpact')}</span>
+              <span>{t('settings.dialogueMoodImpact')}<Hint text={t('settings.dialogueMoodImpactDesc')} /></span>
               <span>{Math.round((draft.dialogueMoodImpact ?? 1) * 100)}%</span>
             </div>
             <input
@@ -1313,15 +1749,12 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               }}
               style={{ width: '100%', marginTop: 6 }}
             />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.dialogueMoodImpactDesc')}
-            </div>
           </div>
 
           {/* 心情过渡指数 */}
           <div style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-              <span>{t('settings.moodSmoothing')}</span>
+              <span>{t('settings.moodSmoothing')}<Hint text={t('settings.moodSmoothingDesc')} /></span>
               <span>{Math.round((draft.moodSmoothing ?? 0.5) * 100)}%</span>
             </div>
             <input
@@ -1337,12 +1770,166 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               }}
               style={{ width: '100%', marginTop: 6 }}
             />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.moodSmoothingDesc')}
-            </div>
           </div>
 
-          {/* 空闲主动回复（全局主开关 + 触发时长 + 记忆控制 + 按聊天覆盖） */}
+          {/* ===== 情绪与事件（高级可调） ===== */}
+          <div id="sec-emoevent" className="section-title" style={{ marginTop: 16 }}>
+            {t('settings.emoEventAdvanced')}
+          </div>
+
+          {/* 心情判定冷却 */}
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span>{t('settings.moodJudgeCooldown')}<Hint text={t('settings.moodJudgeCooldownDesc')} /></span>
+              <span>{Math.round((draft.moodJudgeCooldownMs ?? 20000) / 1000)}s</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={60}
+              step={1}
+              value={Math.round((draft.moodJudgeCooldownMs ?? 20000) / 1000)}
+              onChange={(e) => {
+                const v = Number(e.target.value) * 1000;
+                patch({ moodJudgeCooldownMs: v });
+                api.saveSettings({ moodJudgeCooldownMs: v });
+              }}
+              style={{ width: '100%', marginTop: 6 }}
+            />
+          </div>
+
+          {/* 心情判定回顾轮数 */}
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span>{t('settings.moodJudgeHistory')}<Hint text={t('settings.moodJudgeHistoryDesc')} /></span>
+              <span>{draft.moodJudgeHistory ?? 10}</span>
+            </div>
+            <input
+              type="range"
+              min={4}
+              max={30}
+              step={1}
+              value={draft.moodJudgeHistory ?? 10}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                patch({ moodJudgeHistory: v });
+                api.saveSettings({ moodJudgeHistory: v });
+              }}
+              style={{ width: '100%', marginTop: 6 }}
+            />
+          </div>
+
+          {/* 低好感冲突阈值 */}
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span>{t('settings.eventNegAffinity')}<Hint text={t('settings.eventNegAffinityDesc')} /></span>
+              <span>{draft.eventNegAffinity ?? 30}</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={60}
+              step={1}
+              value={draft.eventNegAffinity ?? 30}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                patch({ eventNegAffinity: v });
+                api.saveSettings({ eventNegAffinity: v });
+              }}
+              style={{ width: '100%', marginTop: 6 }}
+            />
+          </div>
+
+          {/* 高好感甜蜜阈值 */}
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span>{t('settings.eventPosAffinity')}<Hint text={t('settings.eventPosAffinityDesc')} /></span>
+              <span>{draft.eventPosAffinity ?? 70}</span>
+            </div>
+            <input
+              type="range"
+              min={40}
+              max={100}
+              step={1}
+              value={draft.eventPosAffinity ?? 70}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                patch({ eventPosAffinity: v });
+                api.saveSettings({ eventPosAffinity: v });
+              }}
+              style={{ width: '100%', marginTop: 6 }}
+            />
+          </div>
+
+          {/* 事件参考上下文条数 */}
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span>{t('settings.eventHistory')}<Hint text={t('settings.eventHistoryDesc')} /></span>
+              <span>{draft.eventHistory ?? 12}</span>
+            </div>
+            <input
+              type="range"
+              min={4}
+              max={30}
+              step={1}
+              value={draft.eventHistory ?? 12}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                patch({ eventHistory: v });
+                api.saveSettings({ eventHistory: v });
+              }}
+              style={{ width: '100%', marginTop: 6 }}
+            />
+          </div>
+
+          {/* 事件生成长度上限 */}
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span>{t('settings.eventMaxTokens')}<Hint text={t('settings.eventMaxTokensDesc')} /></span>
+              <span>{draft.eventMaxTokens ?? 700}</span>
+            </div>
+            <input
+              type="range"
+              min={200}
+              max={1500}
+              step={100}
+              value={draft.eventMaxTokens ?? 700}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                patch({ eventMaxTokens: v });
+                api.saveSettings({ eventMaxTokens: v });
+              }}
+              style={{ width: '100%', marginTop: 6 }}
+            />
+          </div>
+
+          </div>{/* end cat-chat */}
+        <div id="cat-proactive" ref={(el) => { catRefs.current['cat-proactive'] = el; }} className="settings-category">
+          {/* ===== ① 主动消息机制（最高层决策：先选机制，再配该机制的参数） ===== */}
+          <div id="sec-proactive-engine" className="section-title" style={{ marginTop: 14 }}>{t('settings.proactiveEngine')}<Hint text={t('settings.proactiveEngineDesc')} /><Hint text={t('settings.proactiveNhppDesc')} /></div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {[
+              { v: 'legacy' as const, l: t('settings.proactiveLegacy') },
+              { v: 'nhpp' as const, l: t('settings.proactiveNhpp') },
+            ].map((opt) => {
+              const active = (draft.proactiveEngine ?? 'legacy') === opt.v;
+              return (
+                <button
+                  key={opt.v}
+                  className={active ? 'btn-primary' : 'btn-ghost'}
+                  style={{ padding: '5px 12px', fontSize: 12 }}
+                  onClick={() => {
+                    patch({ proactiveEngine: opt.v });
+                    api.saveSettings({ proactiveEngine: opt.v });
+                  }}
+                >
+                  {opt.l}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* ===== ② 总开关（两种机制共用） ===== */}
           <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
             <input
               type="checkbox"
@@ -1353,13 +1940,17 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               }}
             />
             <div>
-              <div style={{ fontSize: 13 }}>{t('settings.idleEnabled')}</div>
-              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
-                {t('settings.idleEnabledDesc')}
-              </div>
+              <div style={{ fontSize: 13 }}>{t('settings.idleEnabled')}<Hint text={t('settings.idleEnabledDesc')} /></div>
             </div>
           </div>
 
+          {/* ===== ③ 经典定时机制参数（仅 legacy 机制下生效/显示） ===== */}
+          {(draft.proactiveEngine ?? 'legacy') === 'nhpp' ? (
+            <div style={{ marginTop: 14, fontSize: 12, color: 'var(--color-text-secondary)' }}>
+              {t('settings.proactiveLegacyHiddenHint')}
+            </div>
+          ) : (
+            <>
           {/* 触发时机模式：固定间隔 / 随机时间 */}
           <div style={{ marginTop: 12 }}>
             <div style={{ fontSize: 13, marginBottom: 6 }}>{t('settings.idleMode')}</div>
@@ -1391,7 +1982,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           <>
           {/* 触发时长：离散选项 */}
           <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 13, marginBottom: 6 }}>{t('settings.idleInterval')}</div>
+            <div style={{ fontSize: 13, marginBottom: 6 }}>{t('settings.idleInterval')}<Hint text={t('settings.idleIntervalDesc')} /></div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               {[
                 { v: 300, l: t('settings.idleInterval5min') },
@@ -1417,16 +2008,13 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 );
               })}
             </div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.idleIntervalDesc')}
-            </div>
           </div>
           </>
           )}
 
           {(draft.idleTimingMode ?? 'fixed') === 'random' && (
           <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 13, marginBottom: 6 }}>{t('settings.idleRandomTitle')}</div>
+            <div style={{ fontSize: 13, marginBottom: 6 }}>{t('settings.idleRandomTitle')}<Hint text={t('settings.idleRandomDesc')} /></div>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
                 {t('settings.idleRandomMin')}
@@ -1459,22 +2047,19 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 />
               </label>
             </div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.idleRandomDesc')}
-            </div>
           </div>
           )}
 
           {/* 切换聊天时的计时行为 */}
           <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 13, marginBottom: 6 }}>{t('settings.idleSwitchAction')}</div>
+            <div style={{ fontSize: 13, marginBottom: 6 }}>{t('settings.idleSwitchAction')}<Hint text={t('settings.idleSwitchActionDesc')} /></div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               {[
                 { v: 'pause' as const, l: t('settings.idleSwitchPause') },
                 { v: 'reset' as const, l: t('settings.idleSwitchReset') },
                 { v: 'continue' as const, l: t('settings.idleSwitchContinue') },
               ].map((opt) => {
-                const active = (draft.idleSwitchAction || 'pause') === opt.v;
+                const active = (draft.idleSwitchAction || 'continue') === opt.v;
                 return (
                   <button
                     key={opt.v}
@@ -1490,8 +2075,20 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 );
               })}
             </div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.idleSwitchActionDesc')}
+          </div>
+
+          {/* 主动消息冷却：回复上一条主动消息后才发下一条 */}
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={draft.idleCooldownUntilReply !== false}
+              onChange={(e) => {
+                patch({ idleCooldownUntilReply: e.target.checked });
+                api.saveSettings({ idleCooldownUntilReply: e.target.checked });
+              }}
+            />
+            <div>
+              <div style={{ fontSize: 13 }}>{t('settings.idleCooldown')}<Hint text={t('settings.idleCooldownDesc')} /></div>
             </div>
           </div>
 
@@ -1506,21 +2103,96 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               }}
             />
             <div>
-              <div style={{ fontSize: 13 }}>{t('settings.idleWriteMemory')}</div>
-              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
-                {t('settings.idleWriteMemoryDesc')}
-              </div>
+              <div style={{ fontSize: 13 }}>{t('settings.idleWriteMemory')}<Hint text={t('settings.idleWriteMemoryDesc')} /></div>
             </div>
           </div>
 
-          {/* 按聊天单独设置 */}
-          {chatList.length > 0 && (
+          </>
+          )}
+
+          {/* ===== ④ NHPP 智能调度参数（仅 nhpp 机制下显示） ===== */}
+
+          {(draft.proactiveEngine ?? 'legacy') === 'nhpp' && (
+            <div style={{ marginTop: 10, opacity: draft.idleEnabled === false ? 0.4 : 1 }}>
+              {/* 勿扰窗口 */}
+              <div style={{ fontSize: 13, marginBottom: 6 }}>{t('settings.proactiveDnd')}<Hint text={t('settings.proactiveDndDesc')} /></div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <input
+                  type="checkbox"
+                  checked={!!draft.proactiveDnd?.enabled}
+                  onChange={(e) => {
+                    const dnd = { enabled: e.target.checked, start: draft.proactiveDnd?.start || '01:00', end: draft.proactiveDnd?.end || '08:00' };
+                    patch({ proactiveDnd: dnd });
+                    api.saveSettings({ proactiveDnd: dnd });
+                  }}
+                />
+                <input
+                  type="time"
+                  value={draft.proactiveDnd?.start || '01:00'}
+                  onChange={(e) => {
+                    const dnd = { enabled: draft.proactiveDnd?.enabled !== false, start: e.target.value, end: draft.proactiveDnd?.end || '08:00' };
+                    patch({ proactiveDnd: dnd });
+                    api.saveSettings({ proactiveDnd: dnd });
+                  }}
+                  style={{ width: 110 }}
+                />
+                <span style={{ fontSize: 12 }}>—</span>
+                <input
+                  type="time"
+                  value={draft.proactiveDnd?.end || '08:00'}
+                  onChange={(e) => {
+                    const dnd = { enabled: draft.proactiveDnd?.enabled !== false, start: draft.proactiveDnd?.start || '01:00', end: e.target.value };
+                    patch({ proactiveDnd: dnd });
+                    api.saveSettings({ proactiveDnd: dnd });
+                  }}
+                  style={{ width: 110 }}
+                />
+              </div>
+              {/* 每日硬上限 + 新鲜度 */}
+              <div style={{ display: 'flex', gap: 16, marginTop: 12, flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                  {t('settings.proactiveDailyLimit')}
+                  <input
+                    type="number"
+                    min={1}
+                    max={50}
+                    style={{ width: 70 }}
+                    value={draft.proactiveDailyLimit ?? 5}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (Number.isFinite(v) && v >= 1) {
+                        patch({ proactiveDailyLimit: v });
+                        api.saveSettings({ proactiveDailyLimit: v });
+                      }
+                    }}
+                  />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                  {t('settings.proactiveFreshness')}
+                  <input
+                    type="number"
+                    min={1}
+                    max={120}
+                    style={{ width: 70 }}
+                    value={draft.proactiveFreshnessMin ?? 10}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (Number.isFinite(v) && v >= 1) {
+                        patch({ proactiveFreshnessMin: v });
+                        api.saveSettings({ proactiveFreshnessMin: v });
+                      }
+                    }}
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* ===== ⑤ 按聊天单独开关（经典定时机制生效；NHPP 有独立调度，不适用） ===== */}
+          {(draft.proactiveEngine ?? 'legacy') === 'legacy' && chatList.length > 0 && (
             <div style={{ marginTop: 14 }}>
               <div className="section-title" style={{ marginTop: 4 }}>
-                {t('settings.idleAllChats')}
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 6 }}>
-                {t('settings.idleAllChatsDesc')}
+                {t('settings.idleAllChats')}<Hint text={t('settings.idleAllChatsDesc')} />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, opacity: draft.idleEnabled === false ? 0.4 : 1, pointerEvents: draft.idleEnabled === false ? 'none' : 'auto' }}>
                 {draft.idleEnabled === false && (
@@ -1551,265 +2223,271 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             </div>
           )}
 
-          {/* ===== 情绪与事件（高级可调） ===== */}
-          <div id="sec-emoevent" className="section-title" style={{ marginTop: 16 }}>
-            {t('settings.emoEventAdvanced')}
+          </div>{/* end cat-proactive */}
+        <div id="cat-social" ref={(el) => { catRefs.current['cat-social'] = el; }} className="settings-category">
+          {/* ===== 世界书 / 记忆（全局默认 + 自动记忆） ===== */}
+          <div id="sec-worldbook" className="section-title" style={{ marginTop: 16 }}>{t('worldbook.title')}</div>
+          <div className="field" style={{ maxWidth: 340 }}>
+            <label>{t('settings.defaultWorldbook')}<Hint text={t('settings.defaultWorldbookDesc')} /></label>
+            <SelectMenu
+              value={draft.defaultWorldBookId || ''}
+              onChange={(v) => {
+                patch({ defaultWorldBookId: v });
+                api.saveSettings({ defaultWorldBookId: v });
+              }}
+              options={[
+                { value: '', label: t('worldbook.none') },
+                ...worldBooks.map((w) => ({ value: w.id, label: w.name })),
+              ]}
+            />
           </div>
 
-          {/* 心情判定冷却 */}
+          {/* 自动记忆开关 */}
+          <label
+            style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
+          >
+            <input
+              type="checkbox"
+              checked={!!draft.enableAutoMemory}
+              onChange={(e) => {
+                patch({ enableAutoMemory: e.target.checked });
+                api.saveSettings({ enableAutoMemory: e.target.checked });
+              }}
+            />
+            <span>{t('settings.autoMemory')}<Hint text={t('settings.autoMemoryDesc')} /></span>
+          </label>
+
+          {/* ===== 记忆提示词（v2.3.36）：总结/注入两条提示词，AI 自动提炼与手动总结共用，失焦落盘 ===== */}
+          <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px dashed var(--color-border, rgba(128,128,128,0.35))' }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('settings.memoryPromptsTitle')}</div>
+            <div style={{ fontSize: 13, marginBottom: 6 }}>
+              {t('settings.memorySummarizePromptLabel')}<Hint text={t('settings.memorySummarizePromptDesc')} />
+            </div>
+            <textarea
+              value={summarizePromptLocal}
+              onChange={(e) => setSummarizePromptLocal(e.target.value)}
+              onBlur={() => saveMemoryPrompt('memorySummarizePrompt', summarizePromptLocal)}
+              rows={12}
+              spellCheck={false}
+              style={{ width: '100%', maxWidth: 560, display: 'block', fontFamily: 'ui-monospace, Consolas, monospace', fontSize: 12, lineHeight: 1.5, resize: 'vertical' }}
+            />
+            <button
+              onClick={() => saveMemoryPrompt('memorySummarizePrompt', DEFAULT_MEMORY_SUMMARIZE_PROMPT)}
+              style={{ marginTop: 4, fontSize: 12 }}
+            >
+              {t('settings.memoryPromptsReset')}
+            </button>
+            <div style={{ fontSize: 13, margin: '12px 0 6px' }}>
+              {t('settings.memoryInjectPromptLabel')}<Hint text={t('settings.memoryInjectPromptDesc')} />
+            </div>
+            <textarea
+              value={injectPromptLocal}
+              onChange={(e) => setInjectPromptLocal(e.target.value)}
+              onBlur={() => saveMemoryPrompt('memoryInjectPrompt', injectPromptLocal)}
+              rows={10}
+              spellCheck={false}
+              style={{ width: '100%', maxWidth: 560, display: 'block', fontFamily: 'ui-monospace, Consolas, monospace', fontSize: 12, lineHeight: 1.5, resize: 'vertical' }}
+            />
+            <button
+              onClick={() => saveMemoryPrompt('memoryInjectPrompt', DEFAULT_MEMORY_INJECT_PROMPT)}
+              style={{ marginTop: 4, fontSize: 12 }}
+            >
+              {t('settings.memoryPromptsReset')}
+            </button>
+          </div>
+
+          {/* AI 自动判定关系值开关 */}
+          <label
+            style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
+          >
+            <input
+              type="checkbox"
+              checked={draft.autoRelationship !== false}
+              onChange={(e) => {
+                patch({ autoRelationship: e.target.checked });
+                api.saveSettings({ autoRelationship: e.target.checked });
+              }}
+            />
+            <span>{t('settings.autoRelationship')}<Hint text={t('settings.autoRelationshipDesc')} /></span>
+          </label>
+
+          {/* AI 自动发朋友圈开关 */}
+          <label
+            style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
+          >
+            <input
+              type="checkbox"
+              checked={draft.autoMoments !== false}
+              onChange={(e) => {
+                patch({ autoMoments: e.target.checked });
+                api.saveSettings({ autoMoments: e.target.checked });
+              }}
+            />
+            <span>{t('settings.autoMoments')}<Hint text={t('settings.autoMomentsDesc')} /></span>
+          </label>
+
+          {/* 朋友圈视频生成开关（独立开关，需配置生视频模型） */}
+          <label
+            style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
+          >
+            <input
+              type="checkbox"
+              checked={draft.momentsVideoEnabled === true}
+              onChange={(e) => {
+                patch({ momentsVideoEnabled: e.target.checked });
+                api.saveSettings({ momentsVideoEnabled: e.target.checked });
+              }}
+            />
+            <span>{t('settings.momentsVideo')}</span>
+          </label>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+            {t('settings.momentsVideoDesc')}
+            {!(draft.videoGen && draft.videoGen.enabled && draft.videoGen.baseUrl && draft.videoGen.apiKey) && (
+              <span style={{ color: '#e6a23c' }}> {t('settings.momentsVideoNoModel')}</span>
+            )}
+          </div>
+
+          {/* 朋友圈每日上限 */}
           <div style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-              <span>{t('settings.moodJudgeCooldown')}</span>
-              <span>{Math.round((draft.moodJudgeCooldownMs ?? 20000) / 1000)}s</span>
+              <span>{t('settings.dailyMomentLimit')}<Hint text={t('settings.dailyMomentLimitDesc')} /></span>
+              <span>{draft.dailyMomentLimit === 0 ? t('moments.unlimited') : (draft.dailyMomentLimit ?? 5)}</span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={20}
+              step={1}
+              value={draft.dailyMomentLimit ?? 5}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                patch({ dailyMomentLimit: v });
+                api.saveSettings({ dailyMomentLimit: v });
+              }}
+              style={{ width: '100%', marginTop: 6 }}
+            />
+          </div>
+
+          {/* 朋友圈敏感程度 */}
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span>{t('settings.momentsSensitivity')}<Hint text={t('settings.momentsSensitivityDesc')} /></span>
+              <span>{Math.round((draft.momentsSensitivity ?? 0.5) * 100)}%</span>
             </div>
             <input
               type="range"
               min={0}
-              max={60}
-              step={1}
-              value={Math.round((draft.moodJudgeCooldownMs ?? 20000) / 1000)}
-              onChange={(e) => {
-                const v = Number(e.target.value) * 1000;
-                patch({ moodJudgeCooldownMs: v });
-                api.saveSettings({ moodJudgeCooldownMs: v });
-              }}
-              style={{ width: '100%', marginTop: 6 }}
-            />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.moodJudgeCooldownDesc')}
-            </div>
-          </div>
-
-          {/* 心情判定回顾轮数 */}
-          <div style={{ marginTop: 12 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-              <span>{t('settings.moodJudgeHistory')}</span>
-              <span>{draft.moodJudgeHistory ?? 10}</span>
-            </div>
-            <input
-              type="range"
-              min={4}
-              max={30}
-              step={1}
-              value={draft.moodJudgeHistory ?? 10}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                patch({ moodJudgeHistory: v });
-                api.saveSettings({ moodJudgeHistory: v });
-              }}
-              style={{ width: '100%', marginTop: 6 }}
-            />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.moodJudgeHistoryDesc')}
-            </div>
-          </div>
-
-          {/* 低好感冲突阈值 */}
-          <div style={{ marginTop: 12 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-              <span>{t('settings.eventNegAffinity')}</span>
-              <span>{draft.eventNegAffinity ?? 30}</span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={60}
-              step={1}
-              value={draft.eventNegAffinity ?? 30}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                patch({ eventNegAffinity: v });
-                api.saveSettings({ eventNegAffinity: v });
-              }}
-              style={{ width: '100%', marginTop: 6 }}
-            />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.eventNegAffinityDesc')}
-            </div>
-          </div>
-
-          {/* 高好感甜蜜阈值 */}
-          <div style={{ marginTop: 12 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-              <span>{t('settings.eventPosAffinity')}</span>
-              <span>{draft.eventPosAffinity ?? 70}</span>
-            </div>
-            <input
-              type="range"
-              min={40}
               max={100}
-              step={1}
-              value={draft.eventPosAffinity ?? 70}
+              step={5}
+              value={Math.round((draft.momentsSensitivity ?? 0.5) * 100)}
               onChange={(e) => {
-                const v = Number(e.target.value);
-                patch({ eventPosAffinity: v });
-                api.saveSettings({ eventPosAffinity: v });
+                const v = Number(e.target.value) / 100;
+                patch({ momentsSensitivity: v });
+                api.saveSettings({ momentsSensitivity: v });
               }}
               style={{ width: '100%', marginTop: 6 }}
             />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.eventPosAffinityDesc')}
-            </div>
           </div>
 
-          {/* 事件参考上下文条数 */}
-          <div style={{ marginTop: 12 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-              <span>{t('settings.eventHistory')}</span>
-              <span>{draft.eventHistory ?? 12}</span>
-            </div>
-            <input
-              type="range"
-              min={4}
-              max={30}
-              step={1}
-              value={draft.eventHistory ?? 12}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                patch({ eventHistory: v });
-                api.saveSettings({ eventHistory: v });
-              }}
-              style={{ width: '100%', marginTop: 6 }}
-            />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.eventHistoryDesc')}
-            </div>
-          </div>
-
-          {/* 事件生成长度上限 */}
-          <div style={{ marginTop: 12 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-              <span>{t('settings.eventMaxTokens')}</span>
-              <span>{draft.eventMaxTokens ?? 700}</span>
-            </div>
-            <input
-              type="range"
-              min={200}
-              max={1500}
-              step={100}
-              value={draft.eventMaxTokens ?? 700}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                patch({ eventMaxTokens: v });
-                api.saveSettings({ eventMaxTokens: v });
-              }}
-              style={{ width: '100%', marginTop: 6 }}
-            />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.eventMaxTokensDesc')}
-            </div>
-          </div>
-
-          </div>{/* end cat-general */}
+          </div>{/* end cat-social */}
+        </>)}
         {/* ===== 群聊互聊（流式并行 / 调度 / 自动接话 / 主动续聊） ===== */}
+        {/* 模型管理分区已独立为二级菜单页（view=models）：仅 modelsOnly 模式渲染 */}
+        {onlyModels && (<>
         <div id="cat-models" ref={(el) => { catRefs.current['cat-models'] = el; }} className="settings-category">
-        <div id="sec-groupchat" className="section-title" style={{ marginTop: 16 }}>{t('settings.groupChat')}</div>
 
-        {/* 群聊流式并行数量 */}
-        <div className="field" style={{ maxWidth: 300 }}>
-          <label>{t('settings.streamParallel')}</label>
-          <SelectMenu
-            value={String(draft.streamParallel ?? 1)}
-            onChange={(v) => patch({ streamParallel: Number(v) })}
-            options={[
-              { value: '1', label: t('settings.streamSeq') },
-              { value: '3', label: t('settings.streamMod') },
-              { value: '999', label: t('settings.streamAll') },
-            ]}
-          />
+        {/* ===== 全局模型参数（默认值；模型编辑器内可单独覆盖） ===== */}
+        <div id="sec-globalparams" className="section-title">{t('settings.globalModelParams')}<Hint text={t('settings.globalModelParamsDesc')} /></div>
+        <div className="field" style={{ maxWidth: 340 }}>
+          <label>{t('settings.enableStreaming')}<Hint text={t('settings.globalStreamDesc')} /></label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={!!draft.enableStreaming}
+              onChange={(e) => patch({ enableStreaming: e.target.checked })}
+            />
+            <span>{draft.enableStreaming ? t('model.streamOn') : t('model.streamOff')}</span>
+          </label>
         </div>
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-          {t('settings.streamParallelDesc')}
-        </div>
+        {([
+          { key: 'temperature' as const, label: t('settings.globalTemperature'), min: 0, max: 2, step: 0.01, def: 1 },
+          { key: 'topP' as const, label: t('settings.globalTopP'), min: 0, max: 1, step: 0.01, def: 1 },
+          { key: 'topK' as const, label: t('settings.globalTopK'), min: 0, max: 50, step: 1, def: 0 },
+        ]).map((row) => {
+          const val = draft.globalModelParams?.[row.key] ?? row.def;
+          return (
+            <div className="field" style={{ maxWidth: 340 }} key={row.key}>
+              <label>{row.label}</label>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  type="range"
+                  min={row.min}
+                  max={row.max}
+                  step={row.step}
+                  value={val}
+                  onChange={(e) =>
+                    patch({ globalModelParams: { ...(draft.globalModelParams || {}), [row.key]: Number(e.target.value) } })
+                  }
+                  style={{ flex: 1, minWidth: 0 }}
+                />
+                <input
+                  type="number"
+                  min={row.min}
+                  max={row.max}
+                  step={row.step}
+                  value={val}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (!Number.isNaN(v))
+                      patch({ globalModelParams: { ...(draft.globalModelParams || {}), [row.key]: Math.max(row.min, Math.min(row.max, v)) } });
+                  }}
+                  style={{ width: 92 }}
+                />
+              </div>
+            </div>
+          );
+        })}
 
-        <div className="field" style={{ maxWidth: 300 }}>
-          <label>{t('settings.groupScheduler')}</label>
-          <SelectMenu
-            value={draft.groupScheduler || 'director'}
-            onChange={(v) => patch({ groupScheduler: v as 'director' | 'roundRobin' })}
-            options={[
-              { value: 'director', label: t('settings.schedulerDirector') },
-              { value: 'roundRobin', label: t('settings.schedulerRoundRobin') },
-            ]}
-          />
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-          {t('settings.groupSchedulerDesc')}
-        </div>
-        <div className="field" style={{ maxWidth: 300, marginTop: 10 }}>
-          <label>{t('settings.groupAutoRounds')}</label>
-          <SelectMenu
-            value={String(draft.groupAutoRounds ?? 6)}
-            onChange={(v) => patch({ groupAutoRounds: Number(v) })}
-            options={[
-              ...[2, 4, 6, 10, 20, 50].map((n) => ({
-                value: String(n),
-                label: t('settings.groupRoundsN', { n }),
-              })),
-              { value: '0', label: t('settings.groupRoundsUnlimited') },
-              ...(![2, 4, 6, 10, 20, 50, 0].includes(Number(draft.groupAutoRounds ?? 6))
-                ? [{
-                    value: String(draft.groupAutoRounds),
-                    label: t('settings.groupRoundsN', { n: draft.groupAutoRounds }),
-                  }]
-                : []),
-            ]}
-          />
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-          {t('settings.groupAutoRoundsDesc')}
-        </div>
-
-        {/* AI 主动续聊开关 */}
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 12 }}>
+        {/* ===== 伪流式输出（v2.3.39：由常规设置移入模型管理；与流式输出互斥）===== */}
+        <div id="sec-pseudostream" className="section-title" style={{ marginTop: 16 }}>{t('settings.pseudoStream')}</div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: draft.enableStreaming !== false ? 'not-allowed' : 'pointer' }}>
           <input
             type="checkbox"
-            checked={!!draft.groupAutoChain}
-            onChange={(e) => patch({ groupAutoChain: e.target.checked, groupSelectReply: e.target.checked ? false : draft.groupSelectReply })}
+            checked={draft.pseudoStreamEnabled === true}
+            disabled={draft.enableStreaming !== false}
+            onChange={(e) => patch({ pseudoStreamEnabled: e.target.checked })}
           />
-          <span>{t('settings.groupAutoChain')}</span>
+          <span>{t('settings.pseudoStreamOn')}<Hint text={t('settings.pseudoStreamDesc')} /></span>
         </label>
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-          {t('settings.groupAutoChainDesc')}
-        </div>
-
-        {/* 群聊选人回复：开启后每次发言与 AI 回复后由用户手动选择下一位发言者（与自动接话互斥） */}
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 12 }}>
+        {draft.enableStreaming !== false && (
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 6 }}>
+            {t('settings.pseudoStreamStreamOnHint')}
+          </div>
+        )}
+        <div style={{ fontSize: 13, marginTop: 12, marginBottom: 6 }}>{t('settings.pseudoStreamAnimSpeed')}<Hint text={t('settings.pseudoStreamAnimSpeedDesc')} /></div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, maxWidth: 340 }}>
           <input
-            type="checkbox"
-            checked={!!draft.groupSelectReply}
-            onChange={(e) => patch({ groupSelectReply: e.target.checked, groupAutoChain: e.target.checked ? false : draft.groupAutoChain })}
+            type="range"
+            min={PSEUDO_SPEED_MIN}
+            max={PSEUDO_SPEED_MAX}
+            step={0.05}
+            disabled={draft.pseudoStreamEnabled !== true || draft.enableStreaming !== false}
+            value={draft.pseudoStreamSpeed ?? PSEUDO_SPEED_DEFAULT}
+            onChange={(e) => patch({ pseudoStreamSpeed: clampPseudoSpeed(Number(e.target.value)) })}
+            style={{ flex: 1 }}
           />
-          <span>{t('settings.groupSelectReply')}</span>
-        </label>
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-          {t('settings.groupSelectReplyDesc')}
-        </div>
-
-        {/* 同角色连续发言上限（仅群聊自动接话生效） */}
-        <div className="field" style={{ maxWidth: 300, marginTop: 14 }}>
-          <label>{t('settings.groupMaxConsecutive')}</label>
-          <SelectMenu
-            value={String(draft.groupMaxConsecutive ?? 1)}
-            onChange={(v) => patch({ groupMaxConsecutive: Number(v) })}
-            options={Array.from({ length: 20 }, (_, i) => i + 1).map((n) => ({
-              value: String(n),
-              label: t('settings.groupMaxConsecutiveN', { n }),
-            }))}
-          />
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-          {t('settings.groupMaxConsecutiveDesc')}
+          <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 92, textAlign: 'right' }}>
+            {t('settings.pseudoStreamAnimSpeedValue', {
+              s: (draft.pseudoStreamSpeed ?? PSEUDO_SPEED_DEFAULT).toFixed(2),
+            })}
+          </span>
         </div>
 
         {/* ===== 模型管理（含默认模型） ===== */}
-        <div id="sec-modelmanage" className="section-title">{t('settings.modelManage')}</div>
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-          {t('settings.defaultModelHint')}
-        </div>
+        <div id="sec-modelmanage" className="section-title">{t('settings.modelManage')}<Hint text={t('settings.defaultModelHint')} /></div>
 
         {/* 深度思考等级：全局档位，实际仅对「模型管理」中标记为支持推理的模型生效 */}
-        <div style={{ fontSize: 13, fontWeight: 600, marginTop: 4 }}>{t('settings.deepThink')}</div>
+        <div style={{ fontSize: 13, fontWeight: 600, marginTop: 4 }}>{t('settings.deepThink')}<Hint text={t('settings.deepThinkDesc')} /></div>
         <select
           value={draft.deepThinkLevel || 'off'}
           onChange={(e) => patch({ deepThinkLevel: e.target.value as DeepThinkLevel })}
@@ -1820,9 +2498,6 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           <option value="medium">{t('settings.deepThinkMedium')}</option>
           <option value="high">{t('settings.deepThinkHigh')}</option>
         </select>
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-          {t('settings.deepThinkDesc')}
-        </div>
 
         {/* 模型筛选：能力维度（视觉/工具/JSON/推理/NSFW）+ 分类维度（分组/标签），组内 OR、维度间 AND */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
@@ -1964,6 +2639,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             return (
               <div
                 key={m.id}
+                id={`model-card-${m.id}`}
                 style={{
                   border: isDefault
                     ? '2px solid var(--color-primary)'
@@ -2092,10 +2768,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* 模型分组管理：创建 / 重命名 / 改色 / 删除（删除仅移出关联，不删模型） */}
-        <div className="section-title" style={{ marginTop: 18 }}>{t('settings.modelGroups')}</div>
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 8 }}>
-          {t('settings.modelGroupsDesc')}
-        </div>
+        <div className="section-title" style={{ marginTop: 18 }}>{t('settings.modelGroups')}<Hint text={t('settings.modelGroupsDesc')} /></div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 8 }}>
           {modelGroups.map((g) => (
             <div
@@ -2171,10 +2844,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
 
         {/* 模型能力检测：真实探针探测视觉/工具/JSON 支持与上下文窗口（已加入设置搜索索引，id=sec-modeldetect） */}
         <div id="sec-modeldetect" style={{ marginTop: 16 }}>
-          <div className="section-title">{t('settings.modelCapability')}</div>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 8 }}>
-            {t('settings.detectAllDesc')}
-          </div>
+          <div className="section-title">{t('settings.modelCapability')}<Hint text={t('settings.detectAllDesc')} /></div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <button
               type="button"
@@ -2205,6 +2875,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                     ['tools', t('model.capTools')],
                     ['json', t('model.capJson')],
                     ['nsfw', t('model.capNsfw')],
+                    ['thinkLevel', t('model.capThinkLevel')],
                   ] as const).map(([k, label]) => (
                     <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
                       <input
@@ -2216,13 +2887,21 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                     </label>
                   ))}
                 </div>
+                {/* NSFW 探针属于「真实发送成人内容请求」的敏感操作，保留醒目横幅提醒（不做图标化） */}
                 <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', background: 'var(--color-input-bg)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', marginBottom: 10 }}>
                   {t('settings.detectNsfwWarn')}
                 </div>
+                {/* 全不勾时禁止开跑（v2.3.38）：此前会静默跳过所有探针、什么都不测却报告结果，
+                    用户误以为「探针判定全部不支持」 */}
+                {!detectOpts.images && !detectOpts.tools && !detectOpts.json && !detectOpts.nsfw && !detectOpts.thinkLevel && (
+                  <div style={{ fontSize: 12, color: 'var(--color-danger, #e06c75)', marginBottom: 8 }}>
+                    {t('settings.detectNeedOne')}
+                  </div>
+                )}
                 <div className="row-actions">
                   <button
                     className="btn-primary"
-                    disabled={detectingAll}
+                    disabled={detectingAll || (!detectOpts.images && !detectOpts.tools && !detectOpts.json && !detectOpts.nsfw && !detectOpts.thinkLevel)}
                     onClick={() => {
                       setDetectOptsOpen(false);
                       detectAllModels(detectOpts);
@@ -2239,8 +2918,113 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           </div>
         )}
 
+        {/* ===== MCP 服务器（v2.3.17 新增）：stdio 接入，工具注入 supportsTools 模型的非流式请求 ===== */}
+        <div id="sec-mcp" className="section-title" style={{ marginTop: 18 }}>{t('settings.mcp')}<Hint text={t('settings.mcpDesc')} /></div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <button className="btn-ghost" style={{ padding: '3px 10px', fontSize: 12 }} onClick={() => void refreshMcpStatus()}>
+            {t('settings.mcpRefresh')}
+          </button>
+          <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+            {t('settings.mcpToolCount', { n: mcpStatusList.reduce((a, s2) => a + (s2.enabled ? s2.tools.length : 0), 0) })}
+          </span>
+        </div>
+        {mcpStatusList.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+            {mcpStatusList.map((sv) => (
+              <div key={sv.key} className="theme-card" style={{ maxWidth: 560, padding: '8px 12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span
+                    style={{
+                      width: 9, height: 9, borderRadius: '50%', flex: '0 0 auto',
+                      background: !sv.enabled ? '#8a8f9c' : sv.status === 'connected' ? '#4caf72' : '#e06c75',
+                    }}
+                    title={sv.error || sv.status}
+                  />
+                  <strong style={{ fontSize: 13 }}>{sv.key}</strong>
+                  <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {sv.command}
+                  </span>
+                  <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                    {sv.enabled ? t('settings.mcpTools', { n: sv.tools.length }) : t('settings.mcpDisabled')}
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={sv.enabled}
+                    onChange={async (e) => {
+                      await api.mcpToggle(sv.key, e.target.checked);
+                      void refreshMcpStatus();
+                    }}
+                    title={t('settings.mcpToggleTitle')}
+                  />
+                  <button
+                    className="btn-ghost"
+                    style={{ padding: '2px 8px', fontSize: 12, color: '#e06c75' }}
+                    onClick={async () => {
+                      await api.mcpRemove(sv.key);
+                      void refreshMcpStatus();
+                    }}
+                  >
+                    {t('common.delete')}
+                  </button>
+                </div>
+                {sv.error && <div style={{ fontSize: 12, color: '#e06c75', marginTop: 4 }}>{sv.error}</div>}
+                {sv.enabled && sv.tools.length > 0 && (
+                  <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+                    {sv.tools.map((tl: { name: string }) => tl.name).join(' · ')}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {/* 添加 MCP 服务器 */}
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', maxWidth: 640 }}>
+          <input placeholder={t('settings.mcpNamePh')} value={mcpDraft.key} onChange={(e) => setMcpDraft({ ...mcpDraft, key: e.target.value })} style={{ width: 130 }} />
+          <input placeholder={t('settings.mcpCmdPh')} value={mcpDraft.command} onChange={(e) => setMcpDraft({ ...mcpDraft, command: e.target.value })} style={{ width: 200 }} />
+          <input placeholder={t('settings.mcpArgsPh')} value={mcpDraft.args} onChange={(e) => setMcpDraft({ ...mcpDraft, args: e.target.value })} style={{ width: 180 }} />
+          <button
+            className="btn-primary"
+            style={{ padding: '6px 12px', fontSize: 12 }}
+            onClick={async () => {
+              try {
+                await api.mcpAdd({
+                  key: mcpDraft.key,
+                  config: {
+                    command: mcpDraft.command.trim(),
+                    args: mcpDraft.args.trim() ? mcpDraft.args.trim().split(/\s+/) : [],
+                  },
+                });
+                setMcpDraft({ key: '', command: '', args: '' });
+                showToast(t('settings.mcpAdded'));
+                void refreshMcpStatus();
+              } catch (e: any) {
+                showToast(e?.message || String(e), { error: true });
+              }
+            }}
+          >
+            {t('settings.mcpAdd')}
+          </button>
+        <Hint text={t('settings.mcpAddDesc')} /></div>
+
         </div>{/* end cat-models */}
+        </>)}
+        {!onlyModels && (<>
         <div id="cat-appearance" ref={(el) => { catRefs.current['cat-appearance'] = el; }} className="settings-category">
+        {/* ===== 字体（子页面入口） ===== */}
+        <div id="sec-font" className="section-title" style={{ marginTop: 16 }}>{t('settings.font')}</div>
+        <div
+          className="theme-card"
+          style={{ cursor: 'pointer', maxWidth: 420 }}
+          onClick={() => setSub('font')}
+        >
+          <div
+            className="theme-swatch"
+            style={{ background: 'linear-gradient(135deg,#7a869a,#a0abc0)' }}
+          />
+          <div>
+            <div style={{ fontWeight: 600 }}>{t('settings.font')}<Hint text={t('settings.fontEnter')} /></div>
+            </div>
+          </div>
         <div id="sec-theme" className="section-title">{t('settings.theme')}</div>
         <div className="theme-options">
           {THEMES.map((titem) => (
@@ -2264,7 +3048,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== UI 圆角 ===== */}
-        <div id="sec-radius" className="section-title">{t('settings.radius')}</div>
+        <div id="sec-radius" className="section-title">{t('settings.radius')}<Hint text={t('settings.radiusDesc')} /></div>
         <div style={{ maxWidth: 420 }}>
           <div style={{ fontSize: 13, marginBottom: 4 }}>
             {t('settings.uiRadius', { n: draft.uiRadius ?? 10 })}
@@ -2303,11 +3087,8 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               document.documentElement.style.setProperty('--bubble-radius', `${v}px`);
             }}
           />
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-            {t('settings.radiusDesc')}
-          </div>
           <div style={{ fontSize: 13, margin: '10px 0 4px' }}>
-            {t('settings.bubbleOpacity')}
+            {t('settings.bubbleOpacity')}<Hint text={t('settings.bubbleOpacityDesc')} />
           </div>
           <input
             type="range"
@@ -2322,19 +3103,13 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               document.documentElement.style.setProperty('--bubble-opacity', String(v / 100));
             }}
           />
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-            {t('settings.bubbleOpacityDesc')}
-          </div>
         </div>
 
         {/* ===== 窗口整体等比缩放：基准尺寸 + 上下限（主窗/小窗分别配置） ===== */}
         <div id="sec-uizoom" className="section-title" style={{ marginTop: 16 }}>
-          {t('settings.uiZoom')}
+          {t('settings.uiZoom')}<Hint text={t('settings.uiZoomDesc')} />
         </div>
         <div style={{ maxWidth: 480 }}>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 8 }}>
-            {t('settings.uiZoomDesc')}
-          </div>
           {(() => {
             const z = draft.uiZoom || DEFAULT_SETTINGS.uiZoom!;
             const setZoom = (p: Partial<NonNullable<AppSettings['uiZoom']>>) => {
@@ -2387,11 +3162,8 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 输入框外观（文字色 / 背景色）===== */}
-        <div id="sec-inputappearance" className="section-title">{t('settings.inputAppearance')}</div>
+        <div id="sec-inputappearance" className="section-title">{t('settings.inputAppearance')}<Hint text={t('settings.inputColorDesc')} /></div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 2 }}>
-            {t('settings.inputColorDesc')}
-          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 13 }}>{t('settings.inputBgColor')}</span>
@@ -2433,11 +3205,8 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 动态 Canvas 光标 ===== */}
-        <div id="sec-cursor" className="section-title">{t('settings.cursor')}</div>
+        <div id="sec-cursor" className="section-title">{t('settings.cursor')}<Hint text={t('settings.cursorDesc')} /></div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 4 }}>
-            {t('settings.cursorDesc')}
-          </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
             <input
               type="checkbox"
@@ -2602,11 +3371,8 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         {/* ===== 毛玻璃主题背景（仅 glass/frost 主题生效，未开启时隐藏） ===== */}
         {(theme === 'glass' || theme === 'frost') && (
           <>
-            <div id="sec-glassbg" className="section-title" style={{ marginTop: 16 }}>{t('settings.glassBg')}</div>
+            <div id="sec-glassbg" className="section-title" style={{ marginTop: 16 }}>{t('settings.glassBg')}<Hint text={t('settings.glassBgDesc')} /></div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
-              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 2 }}>
-                {t('settings.glassBgDesc')}
-              </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: 13 }}>{t('settings.glassBgColor')}</span>
@@ -2671,13 +3437,15 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           </>
         )}
         </div>{/* end cat-appearance */}
+        </>)}
         {/* ===== 语音功能（ASR + TTS） ===== */}
+        {!onlyModels && (<>
         <div id="cat-generation" ref={(el) => { catRefs.current['cat-generation'] = el; }} className="settings-category">
         <div id="sec-voice" className="section-title">{t('settings.voice')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.asrApi')}
+              {t('settings.asrApi')}<Hint text={t('settings.asrDesc')} />
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <input
@@ -2698,13 +3466,12 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 style={{ width: 180 }}
                 onChange={(e) => patchVoice({ asrApiKey: e.target.value })}
               />
-              <input
-                type="text"
+              <ComboBox
                 placeholder="whisper-1"
                 value={voice.asrModel}
                 style={{ width: 140 }}
-                list="asr-model-options"
-                onChange={(e) => patchVoice({ asrModel: e.target.value })}
+                options={asrModelList}
+                onChange={(v) => patchVoice({ asrModel: v })}
               />
             </div>
             <div style={{ marginTop: 8 }}>
@@ -2717,19 +3484,11 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               >
                 {modelLoading.asr ? t('model.refreshing') : t('model.refreshModels')}
               </button>
-              <datalist id="asr-model-options">
-                {asrModelList.map((m) => (
-                  <option key={m} value={m} />
-                ))}
-              </datalist>
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.asrDesc')}
             </div>
           </div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.ttsTitle')}
+              {t('settings.ttsTitle')}<Hint text={t('settings.ttsDesc')} />
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <input
@@ -2750,17 +3509,16 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 style={{ width: 180 }}
                 onChange={(e) => patchVoice({ ttsApiKey: e.target.value })}
               />
-              <input
-                type="text"
+              <ComboBox
                 placeholder="tts-1"
                 value={voice.ttsModel}
                 style={{ width: 110 }}
-                list="tts-model-options"
-                onChange={(e) => patchVoice({ ttsModel: e.target.value })}
+                options={ttsModelList}
+                onChange={(v) => patchVoice({ ttsModel: v })}
               />
               <input
                 type="text"
-                placeholder="alloy"
+                placeholder={t('settings.ttsVoicePh')}
                 value={voice.ttsVoice}
                 style={{ width: 90 }}
                 onChange={(e) => patchVoice({ ttsVoice: e.target.value })}
@@ -2775,6 +3533,48 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               />
               <span style={{ fontSize: 13 }}>{t('settings.ttsAutoPlay')}</span>
             </label>
+
+            {/* 朗读范围（全局）：对话 / 旁白 / 人物心理，默认仅对话 */}
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 13, marginBottom: 6 }}>{t('settings.ttsScopes')}<Hint text={t('settings.ttsScopeDesc')} /></div>
+              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                {([
+                  ['dialogue', 'settings.ttsScopeDialogue'],
+                  ['narration', 'settings.ttsScopeNarration'],
+                  ['psyche', 'settings.ttsScopePsyche'],
+                ] as const).map(([k, key]) => (
+                  <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={k === 'dialogue' ? voice.ttsScopes?.dialogue !== false : !!voice.ttsScopes?.[k]}
+                      onChange={(e) =>
+                        patchVoice({
+                          ttsScopes: {
+                            dialogue: voice.ttsScopes?.dialogue !== false,
+                            narration: !!voice.ttsScopes?.narration,
+                            psyche: !!voice.ttsScopes?.psyche,
+                            [k]: e.target.checked,
+                          },
+                        })
+                      }
+                    />
+                    {t(key)}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* 朗读缓存：默认复用已合成音频，重复朗读不消耗 token */}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={!!voice.ttsRegenerate}
+                disabled={!voice.ttsBaseUrl}
+                onChange={(e) => patchVoice({ ttsRegenerate: e.target.checked })}
+              />
+              <span style={{ fontSize: 13 }}>{t('settings.ttsRegenerate')}<Hint text={t('settings.ttsRegenerateDesc')} /></span>
+            </label>
+
             <div style={{ marginTop: 8 }}>
               <button
                 type="button"
@@ -2785,61 +3585,190 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               >
                 {modelLoading.tts ? t('model.refreshing') : t('model.refreshModels')}
               </button>
-              <datalist id="tts-model-options">
-                {ttsModelList.map((m) => (
-                  <option key={m} value={m} />
-                ))}
-              </datalist>
             </div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.ttsDesc')}
+
+            {/* ===== 语速 / 音调（v2.3.34）：由提供商原生参数实现，仅对支持该参数的协议生效 ===== */}
+            <div style={{ marginTop: 12, borderTop: '1px solid var(--color-border, rgba(128,128,128,.18))', paddingTop: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, display: 'flex', alignItems: 'center' }}>
+                {t('settings.ttsSpeedPitch')}
+                <Hint text={t('settings.ttsSpeedPitchDesc')} />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, maxWidth: 420 }}>
+                <span style={{ fontSize: 13, minWidth: 56 }}>{t('settings.ttsSpeed')}</span>
+                <input
+                  type="range"
+                  min={TTS_SPEED_MIN}
+                  max={TTS_SPEED_MAX}
+                  step={0.05}
+                  value={voice.ttsSpeed ?? TTS_SPEED_DEFAULT}
+                  onChange={(e) => patchVoice({ ttsSpeed: Number(e.target.value) })}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 52, textAlign: 'right' }}>
+                  {(voice.ttsSpeed ?? TTS_SPEED_DEFAULT).toFixed(2)}×
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, maxWidth: 420, marginTop: 6 }}>
+                <span style={{ fontSize: 13, minWidth: 56 }}>{t('settings.ttsPitch')}</span>
+                <input
+                  type="range"
+                  min={TTS_PITCH_MIN}
+                  max={TTS_PITCH_MAX}
+                  step={1}
+                  value={voice.ttsPitch ?? TTS_PITCH_DEFAULT}
+                  onChange={(e) => patchVoice({ ttsPitch: Number(e.target.value) })}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 52, textAlign: 'right' }}>
+                  {(voice.ttsPitch ?? TTS_PITCH_DEFAULT) > 0 ? '+' : ''}{voice.ttsPitch ?? TTS_PITCH_DEFAULT}
+                </span>
+              </div>
+            </div>
+
+            {/* ===== 已适配的 TTS 提供商（用户明令：界面需列出当前支持的提供商；新增提供商必须同步补描述） ===== */}
+            <div style={{ marginTop: 12, borderTop: '1px solid var(--color-border, rgba(128,128,128,.18))', paddingTop: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, display: 'flex', alignItems: 'center' }}>
+                {t('settings.ttsProviders')}
+                <Hint text={t('settings.ttsProvidersDesc')} />
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                <span>{t('settings.ttsProvidersLegend')}</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
+                {TTS_PROVIDERS.map((p) => (
+                  <div
+                    key={p.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      flexWrap: 'wrap',
+                      padding: '6px 8px',
+                      borderRadius: 8,
+                      background: 'var(--color-panel-alt)',
+                      border: '1px solid var(--color-border)',
+                    }}
+                  >
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>{p.nameKey ? t(p.nameKey) : p.name}</span>
+                    <Hint text={t(p.noteKey)} />
+                    <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>{p.match}</span>
+                    <span className="tts-prov-badge">
+                      {p.site === 'both'
+                        ? t('settings.ttsSiteBoth')
+                        : p.site === 'cn'
+                          ? t('settings.ttsSiteCn')
+                          : p.site === 'intl'
+                            ? t('settings.ttsSiteIntl')
+                            : t('settings.ttsSiteGlobal')}
+                    </span>
+                    <span className={`tts-prov-badge${p.speed ? ' on' : ''}`}>
+                      {t('settings.ttsSpeed')} {p.speed ? '✓' : '✕'}
+                    </span>
+                    <span className={`tts-prov-badge${p.pitch ? ' on' : ''}`}>
+                      {t('settings.ttsPitch')} {p.pitch ? '✓' : '✕'}
+                    </span>
+                    <span className={`tts-prov-badge${p.voiceList ? ' on' : ''}`}>
+                      {t('settings.ttsVoiceListShort')} {p.voiceList ? '✓' : '✕'}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
 
             {/* 按数字人角色分别配置 TTS 音色 */}
             <div style={{ marginTop: 12, borderTop: '1px solid var(--color-border, rgba(128,128,128,.18))', paddingTop: 10 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('settings.ttsVoicePerRole')}</div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('settings.ttsVoicePerRole')}<Hint text={t('settings.ttsVoicePerRoleDesc')} /></div>
               {roleVoiceList.length === 0 ? (
                 <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{t('settings.ttsNoRoles')}</div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto', paddingRight: 4 }}>
-                  {roleVoiceList.map((r) => (
-                    <div key={r.roleId} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span
-                        style={{ fontSize: 12, flex: '0 0 150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                        title={r.name}
-                      >
-                        {r.name}
-                      </span>
-                      <input
-                        type="text"
-                        list="tts-voice-options"
-                        placeholder={voice.ttsVoice || 'alloy'}
-                        value={ttsVoices[r.roleId] || ''}
-                        style={{ flex: 1, minWidth: 120 }}
-                        onChange={(e) => patchTtsVoice(r.roleId, e.target.value)}
-                      />
-                      {ttsVoices[r.roleId] ? (
-                        <button
-                          type="button"
-                          className="btn-ghost"
-                          style={{ padding: '2px 8px', fontSize: 12 }}
-                          onClick={() => patchTtsVoice(r.roleId, '')}
-                        >
-                          {t('settings.ttsVoiceClear')}
-                        </button>
-                      ) : null}
-                    </div>
-                  ))}
-                  <datalist id="tts-voice-options">
-                    {voiceOptions.map((v) => (
-                      <option key={v} value={v} />
-                    ))}
-                  </datalist>
+                  {roleVoiceList.map((r) => {
+                    const rt = getRoleTts(r.roleId);
+                    return (
+                      <div key={r.roleId} style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '4px 0', borderBottom: '1px dashed var(--color-border, rgba(128,128,128,.12))' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span
+                            style={{ fontSize: 12, flex: '0 0 150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                            title={r.name}
+                          >
+                            {r.name}
+                          </span>
+                          <ComboBox
+                            placeholder={t('settings.ttsVoicePh')}
+                            value={rt.voice || ''}
+                            style={{ flex: 1, minWidth: 120 }}
+                            options={voiceOptions}
+                            onChange={(v) => patchRoleTts(r.roleId, { voice: v })}
+                          />
+                          {ttsVoices[r.roleId] ? (
+                            <button
+                              type="button"
+                              className="btn-ghost"
+                              style={{ padding: '2px 8px', fontSize: 12 }}
+                              onClick={() => patchRoleTts(r.roleId, { voice: '', baseUrl: '', apiKey: '', model: '', speed: undefined, pitch: undefined })}
+                            >
+                              {t('settings.ttsVoiceClear')}
+                            </button>
+                          ) : null}
+                        </div>
+                        {/* 该角色专属语音 API：留空回退全局（v2.3.19） */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 158, flexWrap: 'wrap' }}>
+                          <input
+                            type="text"
+                            placeholder={t('settings.ttsRoleApiBaseUrl')}
+                            value={rt.baseUrl || ''}
+                            style={{ flex: 2, minWidth: 150, fontSize: 12 }}
+                            onChange={(e) => patchRoleTts(r.roleId, { baseUrl: e.target.value })}
+                          />
+                          <input
+                            type="password"
+                            placeholder={t('settings.ttsRoleApiApiKey')}
+                            value={rt.apiKey || ''}
+                            style={{ flex: 1, minWidth: 110, fontSize: 12 }}
+                            onChange={(e) => patchRoleTts(r.roleId, { apiKey: e.target.value })}
+                          />
+                          <ComboBox
+                            placeholder={t('settings.ttsRoleApiModel')}
+                            value={rt.model || ''}
+                            style={{ flex: 1, minWidth: 90, fontSize: 12 }}
+                            options={ttsModelList}
+                            onChange={(v) => patchRoleTts(r.roleId, { model: v })}
+                          />
+                          {/* 该角色专属语速 / 音调：留空回退全局（v2.3.34） */}
+                          <input
+                            type="number"
+                            min={TTS_SPEED_MIN}
+                            max={TTS_SPEED_MAX}
+                            step={0.05}
+                            title={t('settings.ttsSpeed')}
+                            placeholder={`${t('settings.ttsSpeed')} ×${TTS_SPEED_DEFAULT}`}
+                            value={rt.speed ?? ''}
+                            style={{ width: 92, fontSize: 12 }}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              patchRoleTts(r.roleId, { speed: v === '' ? undefined : Number(v) });
+                            }}
+                          />
+                          <input
+                            type="number"
+                            min={TTS_PITCH_MIN}
+                            max={TTS_PITCH_MAX}
+                            step={1}
+                            title={t('settings.ttsPitch')}
+                            placeholder={`${t('settings.ttsPitch')} ${TTS_PITCH_DEFAULT}`}
+                            value={rt.pitch ?? ''}
+                            style={{ width: 92, fontSize: 12 }}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              patchRoleTts(r.roleId, { pitch: v === '' ? undefined : Number(v) });
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
-              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 6 }}>
-                {t('settings.ttsVoicePerRoleDesc')}
-              </div>
             </div>
           </div>
         </div>
@@ -2857,7 +3786,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           </label>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.imageGenApi')}
+              {t('settings.imageGenApi')}<Hint text={t('settings.imageGenDesc')} />
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <input
@@ -2874,13 +3803,12 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 style={{ width: 180 }}
                 onChange={(e) => patchImageGen({ apiKey: e.target.value })}
               />
-              <input
-                type="text"
+              <ComboBox
                 placeholder={t('settings.imageGenModelPlaceholder')}
                 value={imageGen.model}
                 style={{ width: 150 }}
-                list="img-model-options"
-                onChange={(e) => patchImageGen({ model: e.target.value })}
+                options={imgModelList}
+                onChange={(v) => patchImageGen({ model: v })}
               />
             </div>
             <div style={{ marginTop: 8 }}>
@@ -2893,19 +3821,11 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               >
                 {modelLoading.img ? t('model.refreshing') : t('model.refreshModels')}
               </button>
-              <datalist id="img-model-options">
-                {imgModelList.map((m) => (
-                  <option key={m} value={m} />
-                ))}
-              </datalist>
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.imageGenDesc')}
             </div>
           </div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.imageGenSize')}
+              {t('settings.imageGenSize')}<Hint text={t('settings.imageGenSizeDesc')} />
             </div>
             <input
               type="text"
@@ -2914,9 +3834,6 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               style={{ width: 150 }}
               onChange={(e) => patchImageGen({ size: e.target.value })}
             />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.imageGenSizeDesc')}
-            </div>
           </div>
         </div>
 
@@ -2933,7 +3850,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           </label>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.videoGenApi')}
+              {t('settings.videoGenApi')}<Hint text={t('settings.videoGenDesc')} />
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <input
@@ -2950,13 +3867,12 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 style={{ width: 180 }}
                 onChange={(e) => patchVideoGen({ apiKey: e.target.value })}
               />
-              <input
-                type="text"
+              <ComboBox
                 placeholder={t('settings.imageGenModelPlaceholder')}
                 value={videoGen.model}
                 style={{ width: 150 }}
-                list="video-model-options"
-                onChange={(e) => patchVideoGen({ model: e.target.value })}
+                options={imgModelList}
+                onChange={(v) => patchVideoGen({ model: v })}
               />
             </div>
             <div style={{ marginTop: 8 }}>
@@ -2969,19 +3885,11 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               >
                 {modelLoading.img ? t('model.refreshing') : t('model.refreshModels')}
               </button>
-              <datalist id="video-model-options">
-                {imgModelList.map((m) => (
-                  <option key={m} value={m} />
-                ))}
-              </datalist>
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.videoGenDesc')}
             </div>
           </div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.videoGenSize')}
+              {t('settings.videoGenSize')}<Hint text={t('settings.videoGenSizeDesc')} />
             </div>
             <input
               type="text"
@@ -2990,13 +3898,10 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               style={{ width: 150 }}
               onChange={(e) => patchVideoGen({ size: e.target.value })}
             />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.imageGenSizeDesc')}
-            </div>
           </div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.videoGenDuration')}
+              {t('settings.videoGenDuration')}<Hint text={t('settings.videoGenDurationDesc')} />
             </div>
             <input
               type="text"
@@ -3005,21 +3910,15 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               style={{ width: 150 }}
               onChange={(e) => patchVideoGen({ duration: e.target.value })}
             />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.videoGenDesc')}
-            </div>
           </div>
         </div>
 
         {/* ===== 异步场景生图 ===== */}
-        <div id="sec-sceneimage" className="section-title">{t('settings.sceneImage')}</div>
+        <div id="sec-sceneimage" className="section-title">{t('settings.sceneImage')}<Hint text={t('settings.sceneImageDesc')} /></div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-            {t('settings.sceneImageDesc')}
-          </div>
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-              <span>{t('settings.sceneImageInterval')}</span>
+              <span>{t('settings.sceneImageInterval')}<Hint text={t('settings.sceneImageIntervalDesc')} /></span>
               <span>{Math.round(draft.sceneImageIntervalSec ?? 120)}s</span>
             </div>
             <input
@@ -3035,9 +3934,6 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               }}
               style={{ width: '100%', marginTop: 6 }}
             />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.sceneImageIntervalDesc')}
-            </div>
           </div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
@@ -3062,19 +3958,40 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               checked={!!draft.asyncImageUseAvatar}
               onChange={(e) => patch({ asyncImageUseAvatar: e.target.checked })}
             />
-            <span style={{ fontSize: 13 }}>{t('settings.asyncImageUseAvatar')}</span>
+            <span style={{ fontSize: 13 }}>{t('settings.asyncImageUseAvatar')}<Hint text={t('settings.asyncImageUseAvatarDesc')} /></span>
           </label>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-            {t('settings.asyncImageUseAvatarDesc')}
+
+          {/* ===== 自动生图 / 生视频调用确认（仅自动流程生效，手动不受影响） ===== */}
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('settings.autoGenConfirm')}<Hint text={t('settings.autoGenConfirmDesc')} /></div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={draft.confirmBeforeAutoImage !== false}
+                onChange={(e) => {
+                  patch({ confirmBeforeAutoImage: e.target.checked });
+                  api.saveSettings({ confirmBeforeAutoImage: e.target.checked });
+                }}
+              />
+              <span style={{ fontSize: 13 }}>{t('settings.confirmBeforeAutoImage')}</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 4 }}>
+              <input
+                type="checkbox"
+                checked={draft.confirmBeforeAutoVideo !== false}
+                onChange={(e) => {
+                  patch({ confirmBeforeAutoVideo: e.target.checked });
+                  api.saveSettings({ confirmBeforeAutoVideo: e.target.checked });
+                }}
+              />
+              <span style={{ fontSize: 13 }}>{t('settings.confirmBeforeAutoVideo')}</span>
+            </label>
           </div>
         </div>
 
         {/* ===== 联网搜索 ===== */}
-        <div id="sec-websearch" className="section-title">{t('settings.webSearch')}</div>
+        <div id="sec-websearch" className="section-title">{t('settings.webSearch')}<Hint text={t('settings.webSearchDesc')} /></div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-            {t('settings.webSearchDesc')}
-          </div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
               {t('settings.searchProvider')}
@@ -3098,7 +4015,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           </div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.searchApiKey')}
+              {t('settings.searchApiKey')}<Hint text={t('settings.searchApiKeyHint')} />
             </div>
             <input
               type="password"
@@ -3111,9 +4028,6 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 api.saveSettings({ searchApiKey: v });
               }}
             />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.searchApiKeyHint')}
-            </div>
           </div>
           <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 4 }}>
             <input
@@ -3127,10 +4041,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               style={{ marginTop: 2 }}
             />
             <div>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.webSearchFetchPages')}</div>
-              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
-                {t('settings.webSearchFetchPagesDesc')}
-              </div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.webSearchFetchPages')}<Hint text={t('settings.webSearchFetchPagesDesc')} /></div>
             </div>
           </label>
           <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginTop: 4 }}>
@@ -3173,11 +4084,8 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </div>
 
         {/* ===== 插件 ===== */}
-        <div id="sec-plugins" className="section-title">{t('settings.plugins')}</div>
+        <div id="sec-plugins" className="section-title">{t('settings.plugins')}<Hint text={t('settings.pluginsDesc')} /></div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 560 }}>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-            {t('settings.pluginsDesc')}
-          </div>
           <label
             style={{
               display: 'flex',
@@ -3202,19 +4110,14 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             />
             <div>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#ff8a8a' }}>
-                {t('settings.pluginAllowJs')}
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
-                {t('settings.pluginAllowJsDesc')}
+                {t('settings.pluginAllowJs')}<Hint text={t('settings.pluginAllowJsDesc')} />
               </div>
             </div>
           </label>
 
           <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.pluginManage')}</div>
           {plugins.length === 0 ? (
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-              {t('settings.pluginEmpty')}
-            </div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{t('settings.pluginEmpty')}</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {plugins.map((p) => (
@@ -3264,8 +4167,10 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           )}
         </div>
 
-        </div>{/* end cat-generation */}
-        {/* ===== 翻译（右键消息翻译文本） ===== */}
+          </div>{/* end cat-generation */}
+          </>)}
+          {/* ===== 翻译（右键消息翻译文本） ===== */}
+          {!onlyModels && (<>
         <div id="cat-translation" ref={(el) => { catRefs.current['cat-translation'] = el; }} className="settings-category">
         <div id="sec-translation" className="section-title">{t('settings.translation')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
@@ -3275,14 +4180,11 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               checked={!!draft.translationEnabled}
               onChange={(e) => patch({ translationEnabled: e.target.checked })}
             />
-            <span style={{ fontSize: 13 }}>{t('settings.translationEnabled')}</span>
+            <span style={{ fontSize: 13 }}>{t('settings.translationEnabled')}<Hint text={t('settings.translationEnabledDesc')} /></span>
           </label>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-            {t('settings.translationEnabledDesc')}
-          </div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.translationModel')}
+              {t('settings.translationModel')}<Hint text={t('settings.translationModelDesc')} />
             </div>
             <SelectMenu
               value={draft.translationModelId || ''}
@@ -3293,9 +4195,6 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 ...(draft.models || []).map((m) => ({ value: m.id, label: m.name })),
               ]}
             />
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {t('settings.translationModelDesc')}
-            </div>
           </div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
@@ -3304,18 +4203,17 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             <SelectMenu
               value={draft.translationLang || 'auto'}
               style={{ width: 200 }}
-              onChange={(v) => patch({ translationLang: v as 'auto' | 'zh' | 'en' })}
+              onChange={(v) => patch({ translationLang: v as 'auto' | Lang })}
               options={[
                 { value: 'auto', label: t('settings.translationLangAuto') },
-                { value: 'zh', label: t('settings.translationLangZh') },
-                { value: 'en', label: t('settings.translationLangEn') },
+                ...LANGS.map((l) => ({ value: l.key, label: l.label })),
               ]}
             />
           </div>
         </div>
 
         {/* ===== 音效 ===== */}
-        <div id="sec-sound" className="section-title">{t('settings.sound')}</div>
+        <div id="sec-sound" className="section-title">{t('settings.sound')}<Hint text={t('settings.soundCustomTip')} /></div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
           <input
             type="checkbox"
@@ -3331,7 +4229,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
         </label>
         <div style={{ marginTop: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-            <span>{t('settings.soundVolume')}</span>
+            <span>{t('settings.soundVolume')}<Hint text={t('settings.soundDesc')} /></span>
             <span>{Math.round((sound.volume ?? 0.7) * 100)}%</span>
           </div>
           <input
@@ -3348,9 +4246,6 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             }}
             style={{ width: '100%', marginTop: 6 }}
           />
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-          {t('settings.soundDesc')}
         </div>
 
         {/* 各音效自定义（MP3 / WAV） */}
@@ -3384,12 +4279,11 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             );
           })}
         </div>
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 10 }}>
-          {t('settings.soundCustomTip')}
-        </div>
 
         </div>{/* end cat-translation */}
+        </>)}
         {/* ===== 快捷聊天小窗 ===== */}
+        {!onlyModels && (<>
         <div id="cat-window" ref={(el) => { catRefs.current['cat-window'] = el; }} className="settings-category">
         <div id="sec-mini" className="section-title">{t('settings.mini')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
@@ -3428,7 +4322,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             <span style={{ fontSize: 13 }}>{t('settings.miniOnTop')}</span>
           </label>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>{t('settings.miniDefaultChat')}</span>
+            <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>{t('settings.miniDefaultChat')}<Hint text={t('settings.miniDesc')} /></span>
             <SelectMenu
               value={mini.defaultChat}
               style={{ flex: 1 }}
@@ -3447,9 +4341,6 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
               {t('settings.miniOpenNow')}
             </button>
           </div>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-            {t('settings.miniDesc')}
-          </div>
         </div>
 
         {/* ===== 桌面悬浮球 ===== */}
@@ -3465,11 +4356,8 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 if (api?.ballSetEnabled) api.ballSetEnabled(enabled);
               }}
             />
-            <span style={{ fontSize: 13 }}>{t('settings.floatingBallEnable')}</span>
+            <span style={{ fontSize: 13 }}>{t('settings.floatingBallEnable')}<Hint text={t('settings.floatingBallDesc')} /></span>
           </label>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-            {t('settings.floatingBallDesc')}
-          </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: 4 }}>
             <input
               type="checkbox"
@@ -3507,11 +4395,8 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
                 });
               }}
             />
-            <span style={{ fontSize: 13 }}>{t('settings.floatingBallAutoHideFullscreen')}</span>
+            <span style={{ fontSize: 13 }}>{t('settings.floatingBallAutoHideFullscreen')}<Hint text={t('settings.floatingBallAutoHideDesc')} /></span>
           </label>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-            {t('settings.floatingBallAutoHideDesc')}
-          </div>
           <button
             type="button"
             className="btn-ghost"
@@ -3666,6 +4551,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           </button>
         </div>
       </div>{/* end cat-window */}
+      </>)}
       </>
         )}
       </div>
@@ -3677,6 +4563,7 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
           onSave={onModelSave}
           groups={modelGroups}
           knownTags={allTags}
+          globalParams={{ ...draft.globalModelParams, streamEnabled: draft.enableStreaming }}
         />
       )}
 
@@ -3830,10 +4717,36 @@ export const Settings: React.FC<{ onRerunWizard?: () => void; onAbout?: () => vo
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
               <div style={{ fontSize: 16, fontWeight: 700, color: '#f0f0f0' }}>{t('settings.errorLog')}</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn-ghost" onClick={clearErrorLogAll} disabled={errorLog.length === 0}>
+                {/* 弹窗底色为固定深色（#1e1e1e），btn-ghost 跟随主题会导致字色≈底色看不清，
+                    这里用显式高对比样式，不随主题变化（v2.3.20 修复） */}
+                <button
+                  onClick={clearErrorLogAll}
+                  disabled={errorLog.length === 0}
+                  style={{
+                    background: '#3a3a3a',
+                    color: '#f0f0f0',
+                    border: '1px solid #555',
+                    borderRadius: 8,
+                    padding: '5px 14px',
+                    fontSize: 13,
+                    cursor: errorLog.length === 0 ? 'not-allowed' : 'pointer',
+                    opacity: errorLog.length === 0 ? 0.55 : 1,
+                  }}
+                >
                   {t('settings.errorLogClear')}
                 </button>
-                <button className="btn-ghost" onClick={() => setErrorLogOpen(false)}>
+                <button
+                  onClick={() => setErrorLogOpen(false)}
+                  style={{
+                    background: '#3a3a3a',
+                    color: '#f0f0f0',
+                    border: '1px solid #555',
+                    borderRadius: 8,
+                    padding: '5px 14px',
+                    fontSize: 13,
+                    cursor: 'pointer',
+                  }}
+                >
                   {t('common.close')}
                 </button>
               </div>

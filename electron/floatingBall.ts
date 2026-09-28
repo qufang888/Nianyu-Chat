@@ -15,7 +15,8 @@ let ballWindow: BrowserWindow | null = null;
 let sessionClosed = false; // 本次运行用户手动关闭悬浮球（不持久化，重启恢复）
 let mainShowFn: (() => void) | null = null; // 由 main.ts 注入：唤出主窗口
 let mainWinRef: BrowserWindow | null = null; // 由 main.ts 注入：主窗口引用（用于跳转会话）
-let activeChatKey = ''; // 由渲染端回传：用户当前正在查看的聊天 `${type}:${id}`
+let activeChatKey = ''; // 由渲染端回传：用户当前正在查看的聊天 `${type}:${id}`（主窗）
+let activeChatKeyMini = ''; // 同上，但来自迷你窗；主窗/迷你窗各自独立记录，互不覆盖
 
 // 悬浮球当前屏幕逻辑坐标（由本模块权威维护，拖拽增量累加，避免渲染端反查坐标）
 let ballX = 0;
@@ -30,6 +31,34 @@ let dragStartY = 0;
 let dragMaxDisp = 0;
 const DRAG_CLAMP = 64; // 悬浮球本体尺寸，钳制时以本体右下角为准
 
+// ===== 光标在窗检测轮询（v2.3.36 修复：动态光标移出悬浮球不隐去）=====
+// 穿透窗 forward 模式只转发 mousemove：鼠标直接移出窗口边界时，渲染端收不到任何
+// mouseleave/mouseout（DOM 合成事件也无从派发），setInteractive(false) 永不执行，
+// 动态光标残留在 alwaysOnTop 画布上。主进程按固定间隔轮询系统光标是否仍在窗口矩形内，
+// 离开瞬间推送 ball:cursor-window=false，渲染端据此走既有隐藏链路（gate-off + 合成 mouseout）。
+// 球↔面板之间的细粒度进出仍由 DOM mouseenter/mouseleave 处理，本轮询仅兜底「出窗」场景。
+const CURSOR_POLL_MS = 200; // 轮询间隔：隐去延迟上限 ≈ 间隔 + 渲染端 120ms 防抖，观感约 0.3s
+let cursorPollTimer: ReturnType<typeof setInterval> | null = null;
+let lastCursorInside = true; // 初始视为在窗内，避免启动瞬间多发一次 false
+function startCursorPoll(): void {
+  if (cursorPollTimer) clearInterval(cursorPollTimer);
+  cursorPollTimer = setInterval(() => {
+    if (!ballWindow || ballWindow.isDestroyed() || !ballWindow.isVisible()) return;
+    try {
+      const p = screen.getCursorScreenPoint();
+      const b = ballWindow.getBounds();
+      const inside =
+        p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height;
+      if (inside !== lastCursorInside) {
+        lastCursorInside = inside;
+        ballWindow.webContents.send('ball:cursor-window', inside);
+      }
+    } catch {
+      /* 轮询失败静默跳过，下一轮重试 */
+    }
+  }, CURSOR_POLL_MS);
+}
+
 export function setBallMainShow(fn: () => void): void {
   mainShowFn = fn;
 }
@@ -37,12 +66,19 @@ export function setBallMainWindow(win: BrowserWindow | null): void {
   mainWinRef = win;
 }
 
-// 渲染端切换当前聊天时回传，用于判断「主动消息」是否应计入未读
-export function setActiveChat(type: string, id: string): void {
-  activeChatKey = `${type}:${id}`;
+// 渲染端切换当前聊天时回传，用于判断「主动消息」是否应计入未读。
+// fromMini=true 表示来自迷你窗（与主窗分别记录，避免两者互相覆盖导致迷你窗当前聊天丢失已读判定）。
+export function setActiveChat(type: string, id: string, fromMini = false): void {
+  if (fromMini) activeChatKeyMini = `${type}:${id}`;
+  else activeChatKey = `${type}:${id}`;
   // 用户打开某会话即视为已读：清除该会话在悬浮球清单中的未读，避免「已读残留」。
   // 同模块内可直接调用 clearUnreadForChat（仅在该会话确有未读时才会触发广播，无未读则为空操作）。
   clearUnreadForChat(type, id);
+}
+
+// 迷你窗关闭时清空其前台聊天标记，避免残留导致「已关闭的迷你窗仍在看的聊天」被误判为已读
+export function clearMiniActiveChat(): void {
+  activeChatKeyMini = '';
 }
 
 // ===== 未读消息存储（主进程权威数据源）=====
@@ -80,6 +116,17 @@ function broadcastUnread(): void {
 // 新增一条未读。fromProactive=true 表示这是角色「主动消息」回复（用户并未发消息请求）：
 // 此类回复只要用户没正盯着该聊天本身，就计入未读（窗口隐藏 / 在看别的聊天都算）；
 // 手动回复（fromProactive=false）维持原行为：仅主窗隐藏/最小化时才计未读。
+// 生视频轮巡进度：仅用于悬浮球显示，不改变悬浮球任何交互逻辑。
+// percent 0~100 表示进度；percent < 0 表示生成结束（完成/失败），球恢复常态图标。
+export function sendBallVideoProgress(percent: number, statusText?: string): void {
+  if (ballWindow && !ballWindow.isDestroyed()) {
+    ballWindow.webContents.send('ball:videoProgress', {
+      percent: Math.max(-1, Math.min(100, Math.round(percent))),
+      statusText: statusText || '',
+    });
+  }
+}
+
 export function pushUnread(
   chatType: string,
   chatId: string,
@@ -91,9 +138,11 @@ export function pushUnread(
   if (settings.floatingBall?.enabled === false) return; // 未启用悬浮球则不维护未读
   const mainVisible =
     mainWinRef && !mainWinRef.isDestroyed() && mainWinRef.isVisible() && !mainWinRef.isMinimized();
-  // 类 IM 未读：仅当用户此刻正盯着该聊天本身（主窗可见且为当前会话）时视为已读；
+  // 类 IM 未读：仅当用户此刻正盯着该聊天本身（主窗可见且为当前会话，或迷你窗正显示该会话）时视为已读；
   // 其余情况（主窗隐藏 / 在看别的聊天 / 手动回复 / 主动消息）均计入未读，悬浮球面板即可看到未读消息。
-  const viewingThis = mainVisible && activeChatKey === `${chatType}:${chatId}`;
+  const viewingThis =
+    (mainVisible && activeChatKey === `${chatType}:${chatId}`) ||
+    activeChatKeyMini === `${chatType}:${chatId}`;
   if (viewingThis) return;
   const key = `${chatType}:${chatId}`;
   const existing = unreadMap.get(key);
@@ -184,6 +233,12 @@ export function createFloatingBall(): void {
   // 透明窗默认整体穿透鼠标，仅不透明区域（球/面板）由渲染端动态切回可交互
   ballWindow.setIgnoreMouseEvents(true, { forward: true });
 
+  // 置顶分层（v2.3.37）：悬浮球用 'screen-saver'（最高层），恒高于小窗的 'floating' 层——
+  // 期望顺序：悬浮球 > 小窗 > 其他软件窗口（构造参数不支持 level，创建后显式设置）
+  ballWindow.setAlwaysOnTop(aot, 'screen-saver');
+
+  startCursorPoll(); // 光标在窗检测轮询（修复动态光标移出不隐去）
+
   const dev = process.env.NIANYU_DEV === '1';
   if (dev) ballWindow.loadURL(`${'http://localhost:5173'}/floating-ball.html`);
   else ballWindow.loadFile(path.join(__dirname, '../../dist/floating-ball.html'));
@@ -206,6 +261,11 @@ export function createFloatingBall(): void {
 }
 
 export function destroyFloatingBall(): void {
+  if (cursorPollTimer) {
+    clearInterval(cursorPollTimer);
+    cursorPollTimer = null;
+    lastCursorInside = true; // 重建窗口后重新从「在窗内」状态起步
+  }
   if (ballWindow && !ballWindow.isDestroyed()) ballWindow.destroy();
   ballWindow = null;
 }
@@ -213,7 +273,7 @@ export function destroyFloatingBall(): void {
 // 切换悬浮球置顶并持久化（保留位置与启用状态）
 export function setBallAlwaysOnTop(v: boolean): void {
   const s = dm.getSettings();
-  if (ballWindow && !ballWindow.isDestroyed()) ballWindow.setAlwaysOnTop(v);
+  if (ballWindow && !ballWindow.isDestroyed()) ballWindow.setAlwaysOnTop(v, 'screen-saver'); // 最高层，恒高于小窗 'floating'（v2.3.37）
   dm.saveSettings({
     floatingBall: { enabled: s.floatingBall?.enabled !== false, x: Math.round(ballX), y: Math.round(ballY), alwaysOnTop: v },
   });
