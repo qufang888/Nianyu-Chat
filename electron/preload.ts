@@ -1,5 +1,6 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
+  UpdateStatus,
   Role,
   ChatMessage,
   Group,
@@ -14,6 +15,8 @@ import type {
   MemoryEntry,
   ErrorLogEntry,
   ProbeOptions,
+  QueueSnapshot,
+  QuickImportResult,
 } from '../src/types';
 import type { ImportCharacterResult } from '../src/utils/characterCard';
 
@@ -44,6 +47,13 @@ export interface NianyuAPI {
     content: string;
     imagePath?: string | null;
   }) => Promise<SendMessageResult>;
+  // 当前聊天生效模型（群聊返回 null）；用于流式开关显示/写入生效来源
+  getChatModel: (chatType: string, chatId: string) => Promise<ModelConfig | null>;
+  // MCP 服务器管理
+  mcpStatus: () => Promise<any[]>;
+  mcpAdd: (p: { key: string; config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean } }) => Promise<{ ok: boolean }>;
+  mcpRemove: (key: string) => Promise<{ ok: boolean }>;
+  mcpToggle: (key: string, enabled: boolean) => Promise<{ ok: boolean }>;
   sendUserMessage: (p: {
     chatType: string;
     chatId: string;
@@ -71,6 +81,10 @@ export interface NianyuAPI {
   }) => Promise<{ userMessage: ChatMessage; members: { streamId: string; roleId: string; roleName: string }[] }>;
   // 请求限速（QPS）状态查询
   rateInfo: (modelId: string) => Promise<{ enabled: boolean; limit: number; waitMs: number }>;
+  // 请求队列（v2.3.46）：贴边排队面板
+  queueSnapshot: () => Promise<QueueSnapshot>;
+  queueReorder: (key: string, orderedIds: string[]) => Promise<{ ok: boolean }>;
+  onQueueChanged: (cb: (data: QueueSnapshot) => void) => () => void;
   // 当前聊天参与限速的代表模型 id（单聊=角色模型；群聊=默认模型）
   getChatModelId: (chatType: string, chatId: string) => Promise<string>;
   // 翻译文本（右键菜单翻译）
@@ -134,7 +148,7 @@ export interface NianyuAPI {
 
   // 消息操作
   recallMessage: (msgId: number) => Promise<{ ok: boolean; deletedMems: number }>;
-  rollbackMessages: (p: { chatType: string; chatId: string; fromMsgId: number }) => Promise<{ deletedMsgs: number; deletedMems: number }>;
+  rollbackMessages: (p: { chatType: string; chatId: string; fromMsgId: number }) => Promise<{ deletedMsgs: number; deletedMems: number; deletedMoments: number }>;
   addQuickMemory: (p: { roleId: string; content: string }) => Promise<any>;
 
   onStreamChunk: (cb: (e: any, data: any) => void) => () => void;
@@ -189,6 +203,8 @@ export interface NianyuAPI {
   addStoryNode: (chatType: string, chatId: string, msgId: number, title: string) => Promise<number>;
   listStoryNodes: (chatType: string, chatId: string) => Promise<any[]>;
   removeStoryNode: (id: number) => Promise<void>;
+  renameStoryNode: (id: number, title: string) => Promise<void>;
+  forkChatFromNode: (chatType: string, chatId: string, nodeId: number) => Promise<{ chat_type: string; chat_id: string; name: string }>;
   addMoment: (roleId: string, content: string, images: string[], scheduledAt?: string | null, selfRoleId?: string) => Promise<number>;
   listMoments: (roleId?: string, includeUnpublished?: boolean, selfRoleId?: string, favoritedOnly?: boolean) => Promise<any[]>;
   removeMoment: (id: number) => Promise<void>;
@@ -255,6 +271,10 @@ export interface NianyuAPI {
   pickImage: () => Promise<string[] | null>;
   getImage: (path: string) => Promise<string | null>;
   saveImage: (dataUrl: string) => Promise<string | null>;
+  // 拖拽文件取本机路径（Electron 32 起 File.path 已移除，用 webUtils.getPathForFile）
+  getPathForFile: (file: File) => string;
+  // 快速导入（v2.3.51）：拖入窗口的文件路径批量导入
+  importDroppedFiles: (paths: string[]) => Promise<QuickImportResult[]>;
 
   pickTextFile: (filters?: { name: string; extensions: string[] }[]) => Promise<{ path: string; content: string } | null>;
   // ===== 自定义音效 =====
@@ -264,11 +284,12 @@ export interface NianyuAPI {
   importCharacterCard: () => Promise<ImportCharacterResult | null>;
 
   pickBackupTarget: () => Promise<string | null>;
-  createBackup: (destPath: string) => Promise<void>;
+  createBackup: (destPath: string) => Promise<string>;
   pickRestoreFile: () => Promise<string | null>;
   restoreBackup: (zipPath: string) => Promise<void>;
   pickBackupDir: () => Promise<string | null>;
   exportBackup: () => Promise<string>;
+  peekBackupVersion: (zipPath: string) => Promise<string | null>;
 
   // ===== 应用数据保存路径（实时数据，非备份）=====
   getDataPath: () => Promise<{ current: string; custom: string | null; def: string }>;
@@ -282,7 +303,8 @@ export interface NianyuAPI {
 
   listModels: (cfg: ModelConfig) => Promise<string[]>;
   testModel: (cfg: ModelConfig) => Promise<{ ok: boolean; message: string }>;
-  detectModel: (id: string, opts?: ProbeOptions) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
+  detectModel: (id: string, opts?: ProbeOptions, qpsOverride?: number) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
+  detectModelConfig: (cfg: Partial<ModelConfig>, opts?: ProbeOptions) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
   detectAllModels: (opts?: ProbeOptions) => Promise<{
     results: Array<{
       id: string;
@@ -293,13 +315,17 @@ export interface NianyuAPI {
       supportsTools: boolean | null;
       supportsJson: boolean | null;
       supportsNsfw: boolean | null;
+      supportsThinkLevel: boolean | null;
       maxContext: number | null;
       undetected: string[];
     }>;
   }>;
 
+  debugStart: () => Promise<{ ok: boolean; already?: boolean; error?: string }>;
+  debugTrigger: (kind: string, chatType: string, chatId: string) => Promise<{ ok: boolean; message?: string; error?: string }>;
+  debugEnd: () => Promise<{ ok: boolean; restored?: number; error?: string; report?: Record<string, { time: string; message: string }[]> }>;
   transcribeAudio: (data: Uint8Array) => Promise<string>;
-  textToSpeech: (text: string, roleId?: string) => Promise<string>;
+  textToSpeech: (text: string, roleId?: string, forceRegenerate?: boolean) => Promise<string>;
   listVoices: () => Promise<string[]>;
 
   miniOpen: (p?: {
@@ -320,11 +346,34 @@ export interface NianyuAPI {
   onShowAbout: (cb: () => void) => void;
   offShowAbout: (cb: () => void) => void;
 
-  // ===== 桌面悬浮球 =====
+  // ===== 桌面悬浮球（双窗口：球窗 + 面板窗共用本 preload，渲染端按 ?role 取用）=====
   ballDragStart: (gx: number, gy: number) => void;
   ballDragEnd: () => Promise<boolean>;
-  // 切换鼠标穿透：true=透明区穿透到下层窗口（仅球/面板可交互），false=整体可交互
+  // 切换球窗鼠标穿透：true=透明区穿透到下层窗口（仅球体/角标可交互），false=整体可交互
   ballSetIgnore: (ignore: boolean) => void;
+  // 切换面板窗鼠标穿透：true=透明区穿透（仅面板/菜单可交互），false=整体可交互
+  panelIgnore: (ignore: boolean) => void;
+  // hover 上报：球体 mouseenter/leave（主进程状态机据此展开/防抖收起面板）
+  ballHoverBall: (v: boolean) => void;
+  // hover 上报：面板 mouseenter/leave/mousemove（只参与收起判定，永不触发展开）
+  panelHoverPanel: (v: boolean) => void;
+  // 球右键：主进程展开面板窗（如未展开）并转发 panel:ctx-menu 到面板窗渲染端
+  ballCtxMenu: () => void;
+  // 面板窗菜单关闭通知：主进程走防抖收起
+  panelCtxMenuClosed: () => void;
+  // 渲染端主动强制收起面板（球左键唤出主窗 / 面板条目跳转小窗后）
+  ballCollapse: () => void;
+  // 主进程推送：面板弹出（携带四向方向，渲染端镜像布局 + linear 弹出）
+  onPanelShow: (cb: (d: { h: 'right' | 'left'; v: 'down' | 'up' }) => void) => () => void;
+  // 主进程推送：面板收回（渲染端播 linear 收回动画，窗口由主进程隐藏）
+  onPanelHide: (cb: () => void) => () => void;
+  // 主进程推送：拖动中换向重弹（携带新方向，渲染端镜像布局 + 重播弹出动画）
+  onPanelLayout: (cb: (d: { h: 'right' | 'left'; v: 'down' | 'up' }) => void) => () => void;
+  // 主进程推送：球右键菜单请求（面板窗渲染端在窗内固定位置显示应用菜单）
+  onPanelCtxMenu: (cb: () => void) => () => void;
+  // 主进程推送：拖拽中 mouseup 丢失自愈（球贴边钳制时窗外 mouseup 穿透丢失），
+  // 渲染端据此复位拖拽状态（dragging=false、移除 .dragging、解绑 window mouseup）
+  onBallDragForceEnd: (cb: () => void) => () => void;
   ballActivate: () => void;
   ballQuit: () => void;
   ballSetEnabled: (enabled: boolean) => void;
@@ -336,6 +385,9 @@ export interface NianyuAPI {
   onBallUnread: (cb: (data: { count: number; items: BallUnreadItem[] }) => void) => () => void;
   offBallUnread: (cb: (data: any) => void) => void;
   onBallBlur: (cb: () => void) => () => void;
+  // 系统光标是否在悬浮球窗口内（主进程轮询推送；false=已移出窗口，渲染端据此隐去动态光标）
+  onBallCursorWindow: (cb: (inside: boolean) => void) => () => void;
+  onBallVideoProgress: (cb: (data: { percent: number; statusText: string }) => void) => () => void;
   offBallBlur: (cb: () => void) => void;
 
   // ===== 世界书 =====
@@ -370,6 +422,16 @@ export interface NianyuAPI {
   removePlugin: (id: string) => Promise<{ ok: boolean }>;
   togglePlugin: (id: string, enabled: boolean) => Promise<{ ok: boolean; plugin?: import('../src/types').Plugin }>;
   callPluginTool: (pluginId: string, toolName: string, arg: string) => Promise<{ ok: boolean; text?: string }>;
+
+  // ===== 软件更新（v2.3.45）=====
+  checkUpdate: (manual?: boolean) => Promise<UpdateStatus>;
+  updateStatus: () => Promise<UpdateStatus>;
+  downloadUpdate: () => Promise<UpdateStatus>;
+  openUpdateFolder: () => Promise<boolean>;
+  installUpdate: () => Promise<boolean>;
+  openReleasePage: () => Promise<boolean>;
+  dismissUpdate: (version: string) => Promise<boolean>;
+  onUpdateStatus: (cb: (e: any, data: UpdateStatus) => void) => () => void;
 
   // ===== 确认对话框 =====
   showConfirm: (message: string, title?: string) => Promise<boolean>;
@@ -410,10 +472,23 @@ const api: NianyuAPI = {
   getChatList: () => ipcRenderer.invoke('chats:list'),
   getMessages: (type, id) => ipcRenderer.invoke('chats:messages', type, id),
   sendMessage: (p) => ipcRenderer.invoke('chats:send', p),
+  getChatModel: (chatType: string, chatId: string) => ipcRenderer.invoke('chat:getModel', chatType, chatId),
+  mcpStatus: () => ipcRenderer.invoke('mcp:status'),
+  mcpAdd: (p) => ipcRenderer.invoke('mcp:add', p),
+  mcpRemove: (key: string) => ipcRenderer.invoke('mcp:remove', key),
+  mcpToggle: (key: string, enabled: boolean) => ipcRenderer.invoke('mcp:toggle', key, enabled),
   sendUserMessage: (p) => ipcRenderer.invoke('chats:sendUser', p),
   sendAIMessages: (p) => ipcRenderer.invoke('chats:sendAI', p),
   startStream: (p) => ipcRenderer.invoke('chats:stream', p),
   rateInfo: (modelId) => ipcRenderer.invoke('chats:rateInfo', modelId),
+  // ===== 请求队列（v2.3.46）=====
+  queueSnapshot: () => ipcRenderer.invoke('queue:snapshot'),
+  queueReorder: (key: string, orderedIds: string[]) => ipcRenderer.invoke('queue:reorder', key, orderedIds),
+  onQueueChanged: (cb: (data: QueueSnapshot) => void) => {
+    const listener = (_e: any, data: any) => cb(data);
+    ipcRenderer.on('queue:changed', listener);
+    return () => ipcRenderer.removeListener('queue:changed', listener);
+  },
   getChatModelId: (chatType, chatId) => ipcRenderer.invoke('chats:activeModel', chatType, chatId),
   translate: (text) => ipcRenderer.invoke('chats:translate', text),
   interruptStream: (chatId) => ipcRenderer.invoke('chats:interrupt', chatId),
@@ -569,6 +644,8 @@ const api: NianyuAPI = {
   addStoryNode: (chatType, chatId, msgId, title) => ipcRenderer.invoke('chats:addStoryNode', chatType, chatId, msgId, title),
   listStoryNodes: (chatType, chatId) => ipcRenderer.invoke('chats:listStoryNodes', chatType, chatId),
   removeStoryNode: (id) => ipcRenderer.invoke('chats:removeStoryNode', id),
+  renameStoryNode: (id, title) => ipcRenderer.invoke('chats:renameStoryNode', id, title),
+  forkChatFromNode: (chatType, chatId, nodeId) => ipcRenderer.invoke('chats:forkFromNode', chatType, chatId, nodeId),
   addMoment: (roleId, content, images, scheduledAt, selfRoleId) => ipcRenderer.invoke('moments:add', roleId, content, images, scheduledAt, selfRoleId),
   listMoments: (roleId, includeUnpublished, selfRoleId, favoritedOnly) => ipcRenderer.invoke('moments:list', roleId, includeUnpublished, selfRoleId, favoritedOnly),
   removeMoment: (id) => ipcRenderer.invoke('moments:remove', id),
@@ -651,6 +728,14 @@ const api: NianyuAPI = {
   pickImage: () => ipcRenderer.invoke('dialog:pickImage'),
   getImage: (path) => ipcRenderer.invoke('image:get', path),
   saveImage: (dataUrl) => ipcRenderer.invoke('image:save', dataUrl),
+  getPathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file);
+    } catch {
+      return '';
+    }
+  },
+  importDroppedFiles: (paths) => ipcRenderer.invoke('import:dropFiles', paths),
 
   pickTextFile: (filters) => ipcRenderer.invoke('file:pickText', filters),
   pickAudioFile: () => ipcRenderer.invoke('sound:pick'),
@@ -664,6 +749,7 @@ const api: NianyuAPI = {
   restoreBackup: (zipPath) => ipcRenderer.invoke('backup:restore', zipPath),
   pickBackupDir: () => ipcRenderer.invoke('backup:pickDir'),
   exportBackup: () => ipcRenderer.invoke('backup:export'),
+  peekBackupVersion: (zipPath: string) => ipcRenderer.invoke('backup:peekVersion', zipPath),
 
   getDataPath: () => ipcRenderer.invoke('data:getPath'),
   setDataPath: (dir) => ipcRenderer.invoke('data:setPath', dir),
@@ -674,11 +760,15 @@ const api: NianyuAPI = {
 
   listModels: (cfg) => ipcRenderer.invoke('models:list', cfg),
   testModel: (cfg) => ipcRenderer.invoke('models:test', cfg),
-  detectModel: (id, opts) => ipcRenderer.invoke('models:detect', id, opts),
+  detectModel: (id, opts, qpsOverride) => ipcRenderer.invoke('models:detect', id, opts, qpsOverride),
+  detectModelConfig: (cfg, opts) => ipcRenderer.invoke('models:detectConfig', cfg, opts),
   detectAllModels: (opts) => ipcRenderer.invoke('models:detectAll', opts),
 
   transcribeAudio: (data) => ipcRenderer.invoke('audio:transcribe', data),
-  textToSpeech: (text, roleId) => ipcRenderer.invoke('audio:tts', text, roleId),
+  textToSpeech: (text, roleId, forceRegenerate) => ipcRenderer.invoke('audio:tts', text, roleId, forceRegenerate),
+  debugStart: () => ipcRenderer.invoke('debug:start'),
+  debugTrigger: (kind, chatType, chatId) => ipcRenderer.invoke('debug:trigger', kind, chatType, chatId),
+  debugEnd: () => ipcRenderer.invoke('debug:end'),
   listVoices: () => ipcRenderer.invoke('audio:listVoices'),
 
   miniOpen: (p) => ipcRenderer.invoke('mini:open', p),
@@ -711,10 +801,41 @@ const api: NianyuAPI = {
   onShowAbout: (cb) => ipcRenderer.on('app:showAbout', cb),
   offShowAbout: (cb) => ipcRenderer.off('app:showAbout', cb),
 
-  // ===== 桌面悬浮球 =====
+  // ===== 桌面悬浮球（双窗口）=====
   ballDragStart: (gx, gy) => ipcRenderer.send('ball:drag-start', gx, gy),
   ballDragEnd: () => ipcRenderer.invoke('ball:drag-end'),
   ballSetIgnore: (ignore) => ipcRenderer.send('ball:ignore', ignore),
+  panelIgnore: (ignore) => ipcRenderer.send('panel:ignore', ignore),
+  ballHoverBall: (v) => ipcRenderer.send('ball:hover-ball', v),
+  panelHoverPanel: (v) => ipcRenderer.send('panel:hover-panel', v),
+  ballCtxMenu: () => ipcRenderer.send('ball:ctx-menu'),
+  panelCtxMenuClosed: () => ipcRenderer.send('panel:ctx-menu-closed'),
+  ballCollapse: () => ipcRenderer.send('ball:collapse'),
+  onPanelShow: (cb) => {
+    const listener = (_e: any, d: any) => cb(d);
+    ipcRenderer.on('panel:show', listener);
+    return () => ipcRenderer.removeListener('panel:show', listener);
+  },
+  onPanelHide: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('panel:hide', listener);
+    return () => ipcRenderer.removeListener('panel:hide', listener);
+  },
+  onPanelLayout: (cb) => {
+    const listener = (_e: any, d: any) => cb(d);
+    ipcRenderer.on('panel:layout', listener);
+    return () => ipcRenderer.removeListener('panel:layout', listener);
+  },
+  onPanelCtxMenu: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('panel:ctx-menu', listener);
+    return () => ipcRenderer.removeListener('panel:ctx-menu', listener);
+  },
+  onBallDragForceEnd: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('ball:drag-force-end', listener);
+    return () => ipcRenderer.removeListener('ball:drag-force-end', listener);
+  },
   ballActivate: () => ipcRenderer.send('ball:activate'),
   ballQuit: () => ipcRenderer.send('ball:quit'),
   ballSetEnabled: (enabled) => ipcRenderer.send('ball:set-enabled', enabled),
@@ -728,6 +849,11 @@ const api: NianyuAPI = {
     ipcRenderer.on('ball:unread', listener);
     return () => ipcRenderer.removeListener('ball:unread', listener);
   },
+  onBallVideoProgress: (cb) => {
+    const listener = (_e: any, data: any) => cb(data);
+    ipcRenderer.on('ball:videoProgress', listener);
+    return () => ipcRenderer.removeListener('ball:videoProgress', listener);
+  },
   offBallUnread: () => {},
   onBallBlur: (cb) => {
     const listener = () => cb();
@@ -735,6 +861,11 @@ const api: NianyuAPI = {
     return () => ipcRenderer.removeListener('ball:blur', listener);
   },
   offBallBlur: () => {},
+  onBallCursorWindow: (cb) => {
+    const listener = (_e: any, inside: boolean) => cb(inside);
+    ipcRenderer.on('ball:cursor-window', listener);
+    return () => ipcRenderer.removeListener('ball:cursor-window', listener);
+  },
 
   // ===== 世界书 =====
   listWorldBooks: () => ipcRenderer.invoke('worldbooks:list'),
@@ -776,6 +907,20 @@ const api: NianyuAPI = {
     ipcRenderer.invoke('plugin:callTool', pluginId, toolName, arg),
 
   // ===== 确认对话框 =====
+  // ===== 软件更新（v2.3.45）=====
+  checkUpdate: (manual) => ipcRenderer.invoke('update:check', manual),
+  updateStatus: () => ipcRenderer.invoke('update:status'),
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
+  openUpdateFolder: () => ipcRenderer.invoke('update:openFolder'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  openReleasePage: () => ipcRenderer.invoke('update:openRelease'),
+  dismissUpdate: (version) => ipcRenderer.invoke('update:dismiss', version),
+  onUpdateStatus: (cb) => {
+    const listener = (e: any, data: any) => cb(e, data);
+    ipcRenderer.on('update:status', listener);
+    return () => ipcRenderer.removeListener('update:status', listener);
+  },
+
   showConfirm: (message, title) => ipcRenderer.invoke('app:confirm', message, title),
 
   // ===== 后台消息提醒卡片 =====
