@@ -6,14 +6,16 @@ import { playSoundSync } from './sound';
 interface ShowErrorOptions {
   error: Error | string;
   source?: string;
-  lang?: 'zh' | 'en';
+  lang?: 'zh' | 'en' | 'fr' | 'de' | 'ja' | 'ko' | 'es' | 'pt' | 'ru' | 'zh-Hant';
   fatal?: boolean; // 致命错误（允许重启）
 }
 
 // 获取当前界面语言（从设置或 HTML 属性）
+// v2.3.38：诊断文案仅有 zh/en 两套——zh 系（含繁体）归 zh，其余语言归 en 回退
 function detectLang(): 'zh' | 'en' {
   try {
-    return (document.documentElement.lang as 'zh' | 'en') || 'zh';
+    const l = (document.documentElement.lang || 'zh') as string;
+    return l.startsWith('zh') ? 'zh' : 'en';
   } catch {
     return 'zh';
   }
@@ -41,7 +43,9 @@ function getDialogContainer(): HTMLDivElement {
 
 export function showErrorDialog(options: ShowErrorOptions) {
   const { error, fatal = false, source = '' } = options;
-  const lang = options.lang || detectLang();
+  const rawLang = options.lang || detectLang();
+  // 诊断文案仅有 zh/en 两套：zh 系归 zh，其余语言回退 en
+  const lang: 'zh' | 'en' = rawLang.startsWith('zh') ? 'zh' : 'en';
   // 报错弹窗音效
   playSoundSync('error');
   const message = typeof error === 'string' ? error : error.message || String(error);

@@ -3,10 +3,17 @@
 // 本端在悬浮球/面板上方时切回可交互（ballSetIgnore(false)），离开时恢复穿透。
 // 拖拽：主进程每 16ms 轮询系统光标直接 setPosition，渲染端仅发出起止信号。
 import './theme/variables.css';
+import { sortChats, togglePinnedChat, applyDragOrder } from './utils/chatOrdering';
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { ThemeProvider } from './theme/ThemeContext';
+import CustomCursor from './components/CustomCursor';
 
 const api = (window as any).api;
 
 const WIN_W = 320;
+// 窗口高度与主进程联动：展开态 460（面板最大高度依据），收起态 88（见 electron/floatingBall.ts
+// 的 WIN_H_COLLAPSED）。渲染端仅用展开态计算面板 max-height，收起/展开经 ballSetExpanded 通知主进程。
 const WIN_H = 460;
 const BALL = 60;
 const BALL_L = 18; // 球相对窗口左上内边距
@@ -38,6 +45,8 @@ function baseCSS(): string {
   html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden;
     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
     -webkit-user-select:none;user-select:none;}
+  /* 动态光标启用时隐藏原生光标（主窗口由 index.css 提供，悬浮球为独立窗口需自带此规则） */
+  body.cursor-hidden, body.cursor-hidden *{cursor:none !important;}
   #root{width:100%;height:100%;position:relative;}
 
   .fb-ball{position:absolute;left:${BALL_L}px;top:${BALL_T}px;width:${BALL}px;height:${BALL}px;
@@ -48,6 +57,19 @@ function baseCSS(): string {
   .fb-ball:active{cursor:grabbing;transform:scale(.94);}
   .fb-ball svg{width:30px;height:30px;fill:var(--color-primary-text);}
   .fb-ball.dragging{cursor:grabbing;transform:scale(.96);}
+
+  /* 生视频轮巡进度：外圈环形进度 + 中心百分比（纯显示层，pointer-events:none 不影响交互） */
+  .fb-prog{position:absolute;inset:0;pointer-events:none;display:none;}
+  .fb-prog.show{display:block;}
+  .fb-prog svg{width:100%;height:100%;transform:rotate(-90deg);fill:none;}
+  .fb-prog circle{fill:none;stroke-width:4;}
+  .fb-prog .bg{stroke:rgba(255,255,255,0.25);}
+  .fb-prog .fg{stroke:#ffffff;stroke-linecap:round;transition:stroke-dashoffset .25s linear;}
+  .fb-prog-txt{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    font-size:15px;font-weight:800;color:#fff;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.45);}
+  .fb-prog-txt.show{display:flex;}
+  /* 进度显示时隐藏球内图标，让中心百分比数字清晰可读 */
+  .fb-ball.gen > svg{visibility:hidden;}
 
   .fb-badge{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 5px;
     box-sizing:border-box;border-radius:9px;background:#ff4d4f;color:#fff;
@@ -60,8 +82,17 @@ function baseCSS(): string {
     border:1px solid var(--color-border);border-radius:var(--radius);
     color:var(--color-text);display:flex;flex-direction:column;overflow:hidden;
     opacity:0;transform:translateY(-8px) scale(.98);pointer-events:none;
-    transition:opacity .16s ease, transform .16s ease;}
+    /* linear 为硬性要求：收回（reflip）与重新弹出两阶段动画共用同一缓动 */
+    transition:opacity .16s linear, transform .16s linear;}
   .fb-panel.show{opacity:1;transform:translateY(0) scale(1);pointer-events:auto;}
+  /* ===== 弹出方向镜像（挂在 #root 的 data-h / data-v 上，由主进程边界检测结果驱动）=====
+     水平：left 模式球贴窗口右侧（窗口内偏移 242,18），面板水平位置恒 left:18 无需镜像；
+     垂直：up 模式球贴窗口底部（窗口内偏移 *,382），面板改挂 bottom:90（面板底缘=球顶-12），
+     且浮现方向反向（translateY(8px)→0，与 down 模式对称） */
+  #root[data-h='left'] .fb-ball{left:auto;right:18px;}
+  #root[data-v='up'] .fb-ball{top:auto;bottom:18px;}
+  #root[data-v='up'] .fb-panel{top:auto;bottom:90px;transform:translateY(8px) scale(.98);}
+  #root[data-v='up'] .fb-panel.show{transform:translateY(0) scale(1);}
   .fb-panel-h{display:flex;align-items:center;justify-content:space-between;
     padding:12px 14px 8px;font-size:13px;font-weight:700;letter-spacing:.5px;}
   .fb-panel-h .cnt{font-size:11px;font-weight:600;color:var(--color-primary);
@@ -82,6 +113,13 @@ function baseCSS(): string {
   .fb-row-content{font-size:12px;color:var(--color-text-secondary);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .fb-row-cnt{flex:0 0 auto;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;
     background:#ff4d4f;color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center;}
+  /* 置顶与拖拽排序指示 */
+  .fb-row{position:relative;}
+  .fb-row .fb-pin{flex:0 0 auto;font-size:11px;line-height:1;opacity:.95;}
+  .fb-row.fb-pinned{background:var(--color-hover);}
+  .fb-row.fb-dragging{opacity:.45;}
+  .fb-row.fb-drag-over{box-shadow:inset 0 2px 0 var(--color-primary);}
+  [data-theme='glass'] .fb-row.fb-pinned{background:rgba(255,255,255,0.10);}
   .fb-empty{padding:22px 12px;text-align:center;font-size:12.5px;color:var(--color-text-secondary);}
   .fb-foot{padding:8px 14px 10px;font-size:11px;color:var(--color-text-secondary);text-align:center;border-top:1px solid var(--color-border);}
 
@@ -129,6 +167,17 @@ function mount(): void {
   let panelOpen = false;
   let dragging = false;
   let chatList: ChatItem[] = [];
+  // 面板弹出方向（渲染端本地记忆上次方向，初始 right/down；实际方向以主进程边界检测结果为准）
+  let panelDirLocal: 'right' | 'left' = 'right';
+  let panelVDirLocal: 'down' | 'up' = 'down';
+
+  // 同步弹出方向到 #root data 属性（驱动 CSS 镜像布局），并更新本地记忆
+  function setRootDir(h: 'right' | 'left', v: 'down' | 'up'): void {
+    root.dataset.h = h;
+    root.dataset.v = v;
+    panelDirLocal = h;
+    panelVDirLocal = v;
+  }
 
   const ball = document.createElement('div');
   ball.className = 'fb-ball';
@@ -139,6 +188,40 @@ function mount(): void {
   badge.style.display = 'none';
   ball.appendChild(badge);
   root.appendChild(ball);
+
+  // ===== 生视频轮巡进度（仅显示：外圈环形 + 中心百分比；悬浮球交互逻辑完全不变）=====
+  const PROG_C = 2 * Math.PI * 27; // r=27 的周长，用于 stroke-dashoffset
+  const prog = document.createElement('div');
+  prog.className = 'fb-prog';
+  prog.innerHTML =
+    `<svg viewBox="0 0 60 60"><circle class="bg" cx="30" cy="30" r="27"/>` +
+    `<circle class="fg" cx="30" cy="30" r="27" stroke-dasharray="${PROG_C}" stroke-dashoffset="${PROG_C}"/></svg>`;
+  ball.appendChild(prog);
+  const progTxt = document.createElement('div');
+  progTxt.className = 'fb-prog-txt';
+  ball.appendChild(progTxt);
+
+  function setVideoProgress(percent: number, statusText?: string): void {
+    if (percent < 0) {
+      // 生成结束（完成/失败）：悬浮球图标恢复常态
+      prog.classList.remove('show');
+      progTxt.classList.remove('show');
+      ball.classList.remove('gen');
+      ball.title = '左键打开念语 · 右键退出';
+      return;
+    }
+    const p = Math.max(0, Math.min(100, Math.round(percent)));
+    ball.classList.add('gen');
+    prog.classList.add('show');
+    progTxt.classList.add('show');
+    progTxt.textContent = `${p}%`;
+    const fg = prog.querySelector('.fg') as SVGCircleElement | null;
+    if (fg) fg.style.strokeDashoffset = String(PROG_C * (1 - p / 100));
+    ball.title = statusText ? `生视频中 ${p}% · ${statusText}` : `生视频中 ${p}%`;
+  }
+  if (api && api.onBallVideoProgress) {
+    api.onBallVideoProgress((data: any) => setVideoProgress(data?.percent ?? -1, data?.statusText));
+  }
 
   const panel = document.createElement('div');
   panel.className = 'fb-panel';
@@ -155,7 +238,11 @@ function mount(): void {
   }
   refreshTheme();
   if (api && api.onSettingsChanged) {
-    api.onSettingsChanged(() => refreshTheme());
+    api.onSettingsChanged(() => {
+      refreshTheme();
+      // 主窗口改了置顶/拖动顺序时，悬浮球面板同步刷新排序
+      if (api && api.getChatList) fetchChats();
+    });
   }
 
   // ===== 未读角标（保留：后台来消息仍给角标提示）=====
@@ -168,14 +255,41 @@ function mount(): void {
     }
   }
 
-  // ===== 拉取聊天列表（单聊 + 群聊）=====
-  function fetchChats(): void {
-    if (api && api.getChatList) {
-      api.getChatList().then((list: ChatItem[]) => {
-        chatList = list || [];
-        if (panelOpen) renderPanel();
-      }).catch(() => {});
+  // ===== 拉取聊天列表（单聊 + 群聊，置顶/手动顺序与主界面一致）=====
+  let pinnedChats: string[] = [];
+  let chatOrder: string[] = [];
+  async function loadOrdering(): Promise<void> {
+    try {
+      const s = api && api.getSettings ? await api.getSettings() : null;
+      pinnedChats = (s && (s.pinnedChats || [])) || [];
+      chatOrder = (s && (s.chatOrder || [])) || [];
+    } catch {
+      pinnedChats = [];
+      chatOrder = [];
     }
+  }
+  async function fetchChats(): Promise<void> {
+    if (api && api.getChatList) {
+      try {
+        const [list] = await Promise.all([api.getChatList(), loadOrdering()]);
+        chatList = sortChats(list || [], pinnedChats, chatOrder);
+        if (panelOpen) renderPanel();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  async function savePin(key: string): Promise<void> {
+    pinnedChats = togglePinnedChat(pinnedChats, key);
+    if (api && api.saveSettings) await api.saveSettings({ pinnedChats });
+    await fetchChats();
+  }
+
+  async function saveRowOrder(next: string[]): Promise<void> {
+    chatOrder = next;
+    if (api && api.saveSettings) await api.saveSettings({ chatOrder: next });
+    await fetchChats();
   }
 
   function renderPanel(): void {
@@ -185,12 +299,14 @@ function mount(): void {
         <div class="fb-foot">滚轮可滚动查看更多 · 右键悬浮球可退出念语</div>`;
       return;
     }
+    const pinSet = new Set(pinnedChats || []);
     const rows = chatList
       .map((it) => {
         const isGroup = it.chat_type === 'group';
+        const key = `${it.chat_type}:${it.chat_id}`;
         const name = it.chat_name || it.name;
         const tag = isGroup ? '群聊' : '单聊';
-        return `<div class="fb-row" data-chat='${JSON.stringify({
+        return `<div class="fb-row${pinSet.has(key) ? ' fb-pinned' : ''}" draggable="true" data-key="${key}" data-chat='${JSON.stringify({
           chatType: it.chat_type,
           chatId: it.chat_id,
           name,
@@ -200,12 +316,13 @@ function mount(): void {
             <div class="fb-row-name">${escapeHTML(name)}</div>
             <div class="fb-row-content">${isGroup ? '👥 ' : '💬 '}${escapeHTML(tag)}${it.last_message ? ' · ' + escapeHTML(it.last_message) : ''}</div>
           </div>
+          ${pinSet.has(key) ? '<span class="fb-pin" title="置顶">📌</span>' : ''}
         </div>`;
       })
       .join('');
     panel.innerHTML = `<div class="fb-panel-h"><span>快捷聊天</span><span class="cnt">${chatList.length}</span></div>
       <div class="fb-list">${rows}</div>
-      <div class="fb-foot">滚轮可滚动查看更多 · 右键悬浮球可退出念语</div>`;
+      <div class="fb-foot">拖动可调整顺序 · 右键条目可置顶 · 滚轮查看更多</div>`;
 
     panel.querySelectorAll<HTMLElement>('.fb-av').forEach((el) => {
       const p = el.getAttribute('data-av');
@@ -219,8 +336,12 @@ function mount(): void {
       }
     });
 
+    // 面板内拖拽状态（每次 render 后重新绑定）
+    let dragKey: string | null = null;
     panel.querySelectorAll<HTMLElement>('.fb-row').forEach((row) => {
+      const key = row.getAttribute('data-key') || '';
       row.addEventListener('click', () => {
+        if (suppressClick) return; // 拖拽结束后的误触保护
         try {
           const chat = JSON.parse(row.getAttribute('data-chat') || '{}');
           hidePanel();
@@ -229,7 +350,59 @@ function mount(): void {
           /* ignore */
         }
       });
+      // 拖拽排序（与主界面一致：写入 chatOrder）
+      row.addEventListener('dragstart', () => {
+        dragKey = key;
+        row.classList.add('fb-dragging');
+        suppressClick = true;
+      });
+      row.addEventListener('dragend', () => {
+        row.classList.remove('fb-dragging');
+        dragKey = null;
+        window.setTimeout(() => { suppressClick = false; }, 120);
+      });
+      row.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (dragKey && dragKey !== key) row.classList.add('fb-drag-over');
+      });
+      row.addEventListener('dragleave', () => {
+        if (dragKey !== key) row.classList.remove('fb-drag-over');
+      });
+      row.addEventListener('drop', (e) => {
+        e.preventDefault();
+        row.classList.remove('fb-drag-over');
+        const visibleKeys = Array.from(panel.querySelectorAll<HTMLElement>('.fb-row'))
+          .map((r) => r.getAttribute('data-key') || '');
+        const next = applyDragOrder(visibleKeys, dragKey || '', key);
+        dragKey = null;
+        void saveRowOrder(next);
+      });
+      // 右键条目：置顶 / 取消置顶
+      row.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showRowCtxMenu((e as MouseEvent).clientX, (e as MouseEvent).clientY, key);
+      });
     });
+  }
+
+  // 条目右键菜单（复用 .fb-ctx 样式与 closeCtxMenu 关闭逻辑）
+  let suppressClick = false;
+  function showRowCtxMenu(x: number, y: number, key: string): void {
+    closeCtxMenu();
+    const isPinned = (pinnedChats || []).includes(key);
+    const menu = document.createElement('div');
+    menu.className = 'fb-ctx';
+    menu.innerHTML = `<div class="fb-ctx-item" data-act="pin">${isPinned ? '取消置顶' : '📌 置顶'}</div>`;
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    document.body.appendChild(menu);
+    ctxMenu = menu;
+    menu.querySelector('[data-act="pin"]')?.addEventListener('click', () => {
+      closeCtxMenu();
+      void savePin(key);
+    });
+    setTimeout(() => document.addEventListener('mousedown', onDocDown, true), 0);
   }
 
   function escapeHTML(s: string): string {
@@ -238,22 +411,71 @@ function mount(): void {
     );
   }
 
-  function showPanel(): void {
-    if (panelOpen) return;
-    panelOpen = true;
-    fetchChats(); // 每次展开都拉取最新聊天列表
+  // 旧通道兜底：主进程 / preload 无 ball:expand-panel 时沿用当前布局展开
+  function fallbackExpandPanel(): void {
+    api?.ballSetExpanded?.(true);
+    fetchChats();
     renderPanel();
     requestAnimationFrame(() => panel.classList.add('show'));
     setInteractive(true);
+  }
+
+  function showPanel(): void {
+    if (panelOpen) return;
+    panelOpen = true; // 先置 true 防重入；两条路径均以 !panelOpen 复查防 hidePanel 竞态
+    Promise.resolve(api?.ballExpandPanel?.())
+      .then((d: any) => {
+        if (!panelOpen) return; // promise 未决期间已 hidePanel（快速 hover 进出）
+        if (d && d.h) {
+          setRootDir(d.h, d.v); // 主进程边界检测出的方向（窗口已按该方向重设 bounds）
+          fetchChats(); // 每次展开都拉取最新聊天列表
+          renderPanel();
+          requestAnimationFrame(() => panel.classList.add('show'));
+          setInteractive(true);
+        } else {
+          fallbackExpandPanel(); // 通道不存在（返回 undefined）
+        }
+      })
+      .catch(() => {
+        if (panelOpen) fallbackExpandPanel(); // invoke 无对应 handler 而 reject
+      });
   }
   function hidePanel(): void {
     if (!panelOpen) return;
     panelOpen = false;
     panel.classList.remove('show');
+    // 延迟收缩窗口高度：等收起动画（160ms）播完；执行时复查 panelOpen，
+    // 防止与快速重开 showPanel 的竞态（重开后不收缩）；ctxMenu 仍开着时保持展开，
+    // 由 closeCtxMenu 的既有收缩逻辑统一回收（避免菜单被收缩后的窗口裁切）
+    window.setTimeout(() => {
+      if (!panelOpen && !ctxMenu) {
+        // 收起同时复位方向镜像：收起态窗口 88x88 恒以 (18,18) 包住球，
+        // 复位前后球屏幕位置均为 (ballX+18, ballY+18)，视觉零跳动
+        setRootDir('right', 'down');
+        api?.ballSetExpanded?.(false);
+      }
+    }, 200);
   }
 
+  // 交互/穿透切换，同时驱动动态光标门控：
+  // - on=true（鼠标在球/面板上）：关闭穿透，正常收事件 → 光标门控解除，动态光标正常显示
+  // - on=false（鼠标离开）：恢复穿透。穿透模式主进程只转发 mousemove，窗口收不到 mouseleave，
+  //   光标会残留，故加 cursor-gate-off 门控类（CustomCursor 忽略 mousemove），
+  //   并派发合成 mouseout 触发 CustomCursor 立即淡出、恢复原生光标。
+  let gateTimer = 0;
   function setInteractive(on: boolean): void {
     if (api?.ballSetIgnore) api.ballSetIgnore(!on);
+    if (gateTimer) { clearTimeout(gateTimer); gateTimer = 0; }
+    if (on) {
+      document.body.classList.remove('cursor-gate-off');
+    } else {
+      // 120ms 防抖：球→面板间移动会短暂离开球，避免光标闪隐
+      gateTimer = window.setTimeout(() => {
+        gateTimer = 0;
+        document.body.classList.add('cursor-gate-off');
+        document.dispatchEvent(new MouseEvent('mouseout'));
+      }, 120);
+    }
   }
 
   // 未读仅用于角标提示（保留原有后台消息提示能力），不再渲染未读列表
@@ -264,6 +486,40 @@ function mount(): void {
 
   if (api && api.onBallUnread) api.onBallUnread((_e: any, data: any) => onUnread(data));
   if (api && api.onBallBlur) api.onBallBlur(() => { hidePanel(); closeCtxMenu(); });
+  // 主进程轮询兜底（v2.3.36）：穿透 forward 模式下鼠标直接移出窗口边界时，DOM 收不到任何
+  // mouseleave/mouseout，setInteractive(false) 不会执行，动态光标会残留在置顶画布上。
+  // 光标离开窗口矩形 → 主进程推送 false → 收起面板并走既有隐藏链路（gate-off + 合成 mouseout）。
+  if (api && api.onBallCursorWindow) {
+    api.onBallCursorWindow((inside: boolean) => {
+      if (inside) return;
+      hidePanel();
+      setInteractive(false);
+    });
+  }
+  // ===== 拖动中面板出界翻转（主进程 16ms tick 检测，两阶段推送）=====
+  if (api && api.onBallPanelReflip) {
+    api.onBallPanelReflip(() => {
+      if (panelOpen) hidePanel(); // 第一阶段：linear 收回面板（渲染端 200ms 后收缩窗口）
+    });
+  }
+  if (api && api.onBallPanelLayout) {
+    api.onBallPanelLayout((d: any) => {
+      if (!dragging) {
+        // 双保险：主进程 drag-end 已作废未完成的翻转，若布局消息仍晚于 mouseup 到达，
+        // 不重弹面板，并通知主进程收回到 88x88，避免残留展开态透明窗
+        if (panelOpen) hidePanel();
+        else api?.ballSetExpanded?.(false);
+        return;
+      }
+      // 第二阶段：按新方向重新弹出（仅发生在拖拽进行中）；d 缺失时沿用本地记忆方向兜底
+      setRootDir(d?.h || panelDirLocal, d?.v || panelVDirLocal);
+      panelOpen = true;
+      fetchChats();
+      renderPanel();
+      requestAnimationFrame(() => panel.classList.add('show'));
+      setInteractive(true);
+    });
+  }
   if (api && api.ballGetUnread) {
     api.ballGetUnread().then((d: any) => onUnread(d)).catch(() => {});
   }
@@ -297,6 +553,11 @@ function mount(): void {
     if (ctxMenu) {
       ctxMenu.remove();
       ctxMenu = null;
+      // 菜单关闭后，若面板也未展开则收缩窗口并复位方向镜像（同 hidePanel，球位置零跳动）
+      if (!panelOpen) {
+        setRootDir('right', 'down');
+        api?.ballSetExpanded?.(false);
+      }
     }
     document.removeEventListener('mousedown', onDocDown, true);
   }
@@ -305,6 +566,15 @@ function mount(): void {
   }
   function showCtxMenu(x: number, y: number): void {
     closeCtxMenu();
+    // 菜单可能向下/向对侧延伸超出球区：走 expand-panel 通道按边界检测恢复完整窗口并同步方向
+    Promise.resolve(api?.ballExpandPanel?.())
+      .then((d: any) => {
+        if (!ctxMenu) return; // promise 未决期间菜单已被关闭
+        if (d && d.h) setRootDir(d.h, d.v);
+      })
+      .catch(() => {
+        if (ctxMenu) api?.ballSetExpanded?.(true); // 旧通道兜底
+      });
     const menu = document.createElement('div');
     menu.className = 'fb-ctx';
     let aot = true;
@@ -322,8 +592,9 @@ function mount(): void {
         <input type="checkbox" class="fb-ctx-aot" ${aot ? 'checked' : ''}/>
         <span>悬浮球置顶</span>
       </label>`;
-    menu.style.left = `${x}px`;
-    menu.style.top = `${y}px`;
+    // clamp 防镜像布局（球贴右侧/底部）下菜单溢出窗口
+    menu.style.left = `${Math.max(6, Math.min(x, WIN_W - 160))}px`;
+    menu.style.top = `${Math.max(6, Math.min(y, WIN_H - 120))}px`;
     document.body.appendChild(menu);
     ctxMenu = menu;
     menu.querySelector('[data-act="quit"]')?.addEventListener('click', () => {
@@ -378,3 +649,32 @@ function mount(): void {
 }
 
 mount();
+
+// ===== 动态光标（CustomCursor）=====
+// 悬浮球为原生 DOM 窗口，无 React 根。单独挂一个 React 根只为渲染
+// <ThemeProvider> + <CustomCursor>，光标画布 portal 到 document.body（pointer-events:none，
+// 不影响透明区的鼠标穿透）。配置与总开关复用 settings.customCursor，与主界面/小窗一致。
+function mountCursor(): void {
+  try {
+    // 初始即为穿透区（鼠标不在球/面板上）：门控开启，动态光标不显示、原生光标不受影响
+    document.body.classList.add('cursor-gate-off');
+    let host = document.getElementById('cursor-root');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'cursor-root';
+      host.style.position = 'fixed';
+      host.style.inset = '0';
+      host.style.pointerEvents = 'none';
+      host.style.zIndex = '2147483646';
+      document.body.appendChild(host);
+    }
+    const root = createRoot(host);
+    root.render(
+      React.createElement(ThemeProvider, null, React.createElement(CustomCursor)),
+    );
+  } catch (e) {
+    console.error('[floating-ball] mount Cursor failed', e);
+  }
+}
+
+mountCursor();
