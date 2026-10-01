@@ -674,6 +674,9 @@ const CustomCursor: React.FC = () => {
     };
 
     const onMouseMove = (e: MouseEvent) => {
+      // 门控（悬浮球窗口专用）：body 带 cursor-gate-off 类时表示鼠标位于穿透区（球/面板之外），
+      // 忽略 mousemove —— 穿透模式下窗口收不到 mouseleave，靠门控阻止光标在透明区显示/残留
+      if (document.body.classList.contains('cursor-gate-off')) return;
       // 首次移动直接吸附到目标，避免从离屏位置长距离缓动
       if (renderXRef.current < OFFSCREEN) {
         renderXRef.current = e.clientX;

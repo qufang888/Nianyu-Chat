@@ -118,6 +118,21 @@ export function playSoundSync(type: SoundType, opts?: { characterSound?: string 
   void playSound(type, opts);
 }
 
+// 剧情节点横幅音效（v2.3.37）：固定内置文件（public/sounds/），跟随音效总开关与音量；
+// 不进自定义音效类型系统，避免牵连设置页 UI。
+const NODE_BANNER_SOUND = 'sounds/universfield-achievement-unlock-243762.mp3';
+export async function playNodeBannerSound(): Promise<void> {
+  const s = await getSettings();
+  if (!s.enabled || s.volume <= 0) return;
+  const audio = new Audio(NODE_BANNER_SOUND);
+  audio.volume = s.volume;
+  try {
+    await audio.play();
+  } catch {
+    /* 自动播放策略/文件缺失时静默 */
+  }
+}
+
 /** 试听：忽略「音效总开关」，但尊重音量设置（设置页 / 角色页预览用） */
 export async function previewSound(type: SoundType, characterSound?: string | null): Promise<void> {
   const s = await getSettings();
