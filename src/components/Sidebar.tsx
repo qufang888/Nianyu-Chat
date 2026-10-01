@@ -13,9 +13,10 @@ const items: { key: View; icon: string; labelKey: string }[] = [
   { key: 'settings', icon: '⚙️', labelKey: 'nav.settings' },
 ];
 
-export const Sidebar: React.FC<{ view: View; onChange: (v: View) => void }> = ({
+export const Sidebar: React.FC<{ view: View; onChange: (v: View) => void; extra?: React.ReactNode }> = ({
   view,
   onChange,
+  extra,
 }) => {
   const { t } = useI18n();
   return (
@@ -31,6 +32,8 @@ export const Sidebar: React.FC<{ view: View; onChange: (v: View) => void }> = ({
           {it.icon}
         </div>
       ))}
+      {/* 附加按钮（如聊天侧边栏收起后的恢复按钮）：渲染在导航图标列底部（设置图标下方） */}
+      {extra}
     </div>
   );
 };
