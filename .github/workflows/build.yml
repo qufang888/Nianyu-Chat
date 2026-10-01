@@ -30,11 +30,23 @@ jobs:
           CSC_LINK="" CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist -- --publish never
         shell: bash
 
+      - name: Generate checksum
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          EXE=$(ls release/*.exe | grep -m1 "$VERSION" || ls release/*.exe | head -1)
+          if [ -z "$EXE" ]; then echo "ERROR: no exe found in release/"; exit 1; fi
+          HASH=$(certutil -hashfile "$EXE" SHA256 | sed -n '2p' | tr -d '\r' | tr -d ' ')
+          echo "$HASH  $(basename "$EXE")" > "$EXE.sha256"
+          echo "wrote $(basename "$EXE.sha256") ($HASH)"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: release/*.exe
+          files: |
+            release/*.exe
+            release/*.sha256
           draft: false
           prerelease: false
         env:

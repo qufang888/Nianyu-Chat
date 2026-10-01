@@ -8,6 +8,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { registerGlobalErrorHandlers, showErrorDialog } from './utils/globalErrorHandler';
 import { api } from './ipc';
 import { installGlobalSoundListeners } from './utils/sound';
+import type { Lang } from './i18n/translations';
 import './styles/index.css';
 
 // 注册全局错误监听（独立于 React 树，捕获未捕获错误和未处理 Promise rejection）
@@ -20,7 +21,7 @@ installGlobalSoundListeners();
 api.onAppError?.((data) => {
   showErrorDialog({
     error: new Error(data.message),
-    lang: data.lang as 'zh' | 'en',
+    lang: data.lang as Lang,
     source: 'main',
     fatal: false,
   });
