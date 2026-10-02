@@ -127,6 +127,10 @@ function mount(): void {
       html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden;
         font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;}
       #root{width:100%;height:100%;}
+      /* 动效开关（enableAnimations=false 时根元素挂 .anim-off）：禁用卡片滑入/滑出等全部 CSS 动画/过渡 */
+      .anim-off, .anim-off *, .anim-off *::before, .anim-off *::after {
+        animation: none !important; transition: none !important;
+      }
       ${cardCSS(dark)}
     `;
   }
@@ -164,6 +168,14 @@ function mount(): void {
   function show(data: any): void {
     // 每次显示时同步主题（支持运行时切换主题后下次弹出即时适配）
     if (data.theme && data.theme !== currentTheme) applyTheme(data.theme);
+    // 每次显示时读取当前动效开关（通知窗生命周期短，无需订阅 settings 变更）
+    if (api && api.getSettings) {
+      api.getSettings()
+        .then((s: any) => {
+          document.documentElement.classList.toggle('anim-off', s?.enableAnimations === false);
+        })
+        .catch(() => {});
+    }
     // 消息提示音效（角色自定义音效优先）
     void playNotifySound(data.chat);
     (window as any).__nyChat = data.chat;

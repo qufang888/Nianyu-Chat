@@ -7,6 +7,7 @@ import { THEMES } from './Settings';
 import { ModelEditor } from './ModelEditor';
 import { SelfRoleEditor } from './SelfRoleEditor';
 import { type ParsedCharacter } from '../utils/characterCard';
+import { compareVersions } from '../utils/versionCompare';
 import { useToast, ToastView } from './Toast';
 
 const TOTAL = 5;
@@ -120,9 +121,26 @@ export const OnboardingWizard: React.FC<{ onDone: () => void }> = ({ onDone }) =
   const canNext = step !== 2 || models.length > 0;
 
   // 从备份恢复：选择备份 zip 后由主进程还原数据并重启（还原后备份中的 firstRunDone 为真，自动跳过向导）
+  // v2.3.48：恢复前读取备份包内版本清单，备份由更高版本创建时先弹窗确认
   const restoreFromBackup = async () => {
     const zip = await api.pickRestoreFile();
     if (!zip) return;
+    try {
+      const bv = await api.peekBackupVersion(zip);
+      const cur = (await api.updateStatus()).currentVersion;
+      if (bv && cur && compareVersions(bv, cur) > 0) {
+        if (
+          !(await api.showConfirm!(
+            t('settings.backupVersionWarn', { backup: bv, current: cur }),
+            t('settings.backupVersionWarnTitle')
+          ))
+        ) {
+          return;
+        }
+      }
+    } catch {
+      // 版本探测失败不阻断恢复流程（旧备份无清单属正常情况）
+    }
     try {
       await api.restoreBackup(zip);
     } catch (e: any) {
