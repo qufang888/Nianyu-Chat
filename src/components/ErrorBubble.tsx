@@ -23,6 +23,7 @@ interface ModelErrorItem {
 const ErrorBubble: React.FC = () => {
   const { t } = useI18n();
   const [items, setItems] = useState<ModelErrorItem[]>([]);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const timers = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
@@ -69,6 +70,25 @@ const ErrorBubble: React.FC = () => {
     setItems((prev) => prev.map((x) => (x.id === id ? { ...x, expanded: !x.expanded } : x)));
   };
 
+  // 快捷复制完整错误信息（v2.3.38）：标题 + 消息 + 原因 + 解决方案 + 错误码 + 详情
+  const copyError = async (it: ModelErrorItem) => {
+    const parts = [
+      `${t('errorBubble.modelReply')}${it.roleName ? ` · ${it.roleName}` : ''}`,
+      it.message,
+      it.cause ? `${t('errorBubble.cause')}: ${it.cause}` : '',
+      it.solution ? `${t('errorBubble.solution')}: ${it.solution}` : '',
+      `${t('errorBubble.code')}: ${it.code}`,
+      it.detail ? `detail: ${it.detail}` : '',
+    ].filter(Boolean);
+    try {
+      await navigator.clipboard.writeText(parts.join('\n'));
+      setCopiedId(it.id);
+      window.setTimeout(() => setCopiedId((cur) => (cur === it.id ? null : cur)), 1500);
+    } catch {
+      /* 剪贴板不可用时静默 */
+    }
+  };
+
   if (!items.length) return null;
 
   return createPortal(
@@ -85,6 +105,19 @@ const ErrorBubble: React.FC = () => {
             <span className="error-bubble-title">
               {it.roleName ? `${it.roleName} · ${t('errorBubble.modelReply')}` : t('errorBubble.modelReply')}
             </span>
+            {/* 快捷复制错误信息（v2.3.38）：复制成功后短暂显示 ✓ */}
+            <button
+              className="error-bubble-close"
+              aria-label={t('errorBubble.copy')}
+              title={t('errorBubble.copy')}
+              onClick={(e) => {
+                e.stopPropagation();
+                void copyError(it);
+              }}
+              style={copiedId === it.id ? { color: '#2e9e5b' } : undefined}
+            >
+              {copiedId === it.id ? '✓' : '⧉'}
+            </button>
             <button
               className="error-bubble-close"
               aria-label={t('errorBubble.close')}
