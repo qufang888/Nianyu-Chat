@@ -13,6 +13,9 @@ import type {
   MemoryEntry,
   Plugin,
   ProbeOptions,
+  UpdateStatus,
+  QueueSnapshot,
+  QuickImportResult,
 } from './types';
 import type { ImportCharacterResult } from './utils/characterCard';
 export type { ImportCharacterResult };
@@ -59,8 +62,19 @@ export interface NianyuAPI {
   }) => Promise<{ userMessage: ChatMessage; members: { streamId: string; roleId: string; roleName: string }[] }>;
   // 请求限速（QPS）状态查询
   rateInfo: (modelId: string) => Promise<{ enabled: boolean; limit: number; waitMs: number }>;
+  // 请求队列（v2.3.46）：贴边排队面板
+  queueSnapshot: () => Promise<QueueSnapshot>;
+  queueReorder: (key: string, orderedIds: string[]) => Promise<{ ok: boolean }>;
+  onQueueChanged: (cb: (data: QueueSnapshot) => void) => () => void;
   // 当前聊天参与限速的代表模型 id（单聊=角色模型；群聊=默认模型）
   getChatModelId: (chatType: string, chatId: string) => Promise<string>;
+  // 当前聊天生效模型配置（单聊=角色绑定/默认模型，已应用全局参数回退；群聊=null）
+  getChatModel: (chatType: string, chatId: string) => Promise<ModelConfig | null>;
+  // MCP 服务器管理
+  mcpStatus: () => Promise<any[]>;
+  mcpAdd: (p: { key: string; config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean } }) => Promise<{ ok: boolean }>;
+  mcpRemove: (key: string) => Promise<{ ok: boolean }>;
+  mcpToggle: (key: string, enabled: boolean) => Promise<{ ok: boolean }>;
   // 翻译文本（右键菜单翻译）
   translate: (text: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
   // 打断生成：中止某聊天当前流式输出（已生成内容保留）
@@ -116,9 +130,12 @@ export interface NianyuAPI {
   // 群聊选人回复：主进程广播「请选择下一位发言者」
   onNeedSpeaker: (cb: (data: { chatId: string; members: { id: string; name: string; avatar?: string }[] }) => void) => () => void;
 
-  // 消息操作
-  recallMessage: (msgId: number) => Promise<{ ok: boolean; deletedMems: number }>;
-  rollbackMessages: (p: { chatType: string; chatId: string; fromMsgId: number }) => Promise<{ deletedMsgs: number; deletedMems: number }>;
+  // 消息操作（v2.3.63：移除 recallMessage，新增 deleteMessageOnly / rollbackForEdit / aiAction）
+  deleteMessageOnly: (msgId: number) => Promise<{ ok: boolean }>;
+  rollbackMessages: (p: { chatType: string; chatId: string; fromMsgId: number }) => Promise<{ deletedMsgs: number; deletedMems: number; deletedMoments: number; deletedNodes: number }>;
+  rollbackForEdit: (p: { chatType: string; chatId: string; fromMsgId: number }) => Promise<{ deletedMsgs: number; deletedMems: number; deletedMoments: number; deletedNodes: number }>;
+  // 续写 / 重写 / AI 代写回复（replyForUser 只回填输入框，不落库）
+  aiAction: (p: { chatType: string; chatId: string; action: 'continue' | 'rewrite' | 'replyForUser' }) => Promise<{ ok: boolean; content?: string; error?: string; message?: any }>;
   // 快捷记忆（选中文本一键存入）
   addQuickMemory: (p: { roleId: string; content: string }) => Promise<any>;
 
@@ -181,6 +198,8 @@ export interface NianyuAPI {
   addStoryNode: (chatType: string, chatId: string, msgId: number, title: string) => Promise<number>;
   listStoryNodes: (chatType: string, chatId: string) => Promise<any[]>;
   removeStoryNode: (id: number) => Promise<void>;
+  renameStoryNode: (id: number, title: string) => Promise<void>;
+  forkChatFromNode: (chatType: string, chatId: string, nodeId: number) => Promise<{ chat_type: string; chat_id: string; name: string }>;
   addMoment: (roleId: string, content: string, images: string[], scheduledAt?: string | null, selfRoleId?: string) => Promise<number>;
   listMoments: (roleId?: string, includeUnpublished?: boolean, selfRoleId?: string, favoritedOnly?: boolean) => Promise<any[]>;
   removeMoment: (id: number) => Promise<void>;
@@ -205,7 +224,7 @@ export interface NianyuAPI {
   saveImageMemory: (p: { roleId: string; imagePath: string; note?: string }) => Promise<any>;
   clearChatMessages: (chatType: string, chatId: string, withMemories: boolean) => Promise<{ deletedMsgs: number; deletedMems: number }>;
   syncAutoChat: (p: { chatId: string; action: 'start' | 'stop' }) => Promise<void>;
-  syncMessages: (p: { chatType: string; chatId: string; action: 'cleared' | 'recalled' | 'rolledBack' }) => Promise<void>;
+  syncMessages: (p: { chatType: string; chatId: string; action: 'cleared' | 'deleted' | 'rolledBack' }) => Promise<void>;
   onAutoChatSync: (cb: (data: { chatId: string; action: 'start' | 'stop' }) => void) => () => void;
   onMessagesSync: (cb: (data: { chatType: string; chatId: string; action: string }) => void) => () => void;
   onStreamRoundDone: (cb: (data: { chatId: string; chatType: string }) => void) => () => void;
@@ -244,6 +263,10 @@ export interface NianyuAPI {
   pickImage: () => Promise<string[] | null>;
   getImage: (path: string) => Promise<string | null>;
   saveImage: (dataUrl: string) => Promise<string | null>;
+  // 拖拽文件取本机路径（Electron 32 起 File.path 已移除，经 preload webUtils）
+  getPathForFile: (file: File) => string;
+  // 快速导入（v2.3.51）：拖入窗口的文件路径批量导入
+  importDroppedFiles: (paths: string[]) => Promise<QuickImportResult[]>;
 
   pickTextFile: (filters?: { name: string; extensions: string[] }[]) => Promise<{ path: string; content: string } | null>;
   // ===== 自定义音效 =====
@@ -253,15 +276,17 @@ export interface NianyuAPI {
   importCharacterCard: () => Promise<ImportCharacterResult | null>;
 
   pickBackupTarget: () => Promise<string | null>;
-  createBackup: (destPath: string) => Promise<void>;
+  createBackup: (destPath: string) => Promise<string>;
   pickRestoreFile: () => Promise<string | null>;
   restoreBackup: (zipPath: string) => Promise<void>;
   pickBackupDir: () => Promise<string | null>;
   exportBackup: () => Promise<string>;
+  peekBackupVersion: (zipPath: string) => Promise<string | null>;
 
   listModels: (cfg: ModelConfig) => Promise<string[]>;
   testModel: (cfg: ModelConfig) => Promise<{ ok: boolean; message: string }>;
-  detectModel: (id: string, opts?: ProbeOptions) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
+  detectModel: (id: string, opts?: ProbeOptions, qpsOverride?: number) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
+  detectModelConfig: (cfg: Partial<ModelConfig>, opts?: ProbeOptions) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
   detectAllModels: (opts?: ProbeOptions) => Promise<{
     results: Array<{
       id: string;
@@ -278,7 +303,10 @@ export interface NianyuAPI {
   }>;
 
   transcribeAudio: (data: Uint8Array, format?: string, language?: string) => Promise<string>;
-  textToSpeech: (text: string, roleId?: string) => Promise<string>;
+  textToSpeech: (text: string, roleId?: string, forceRegenerate?: boolean) => Promise<string>;
+  debugStart: () => Promise<{ ok: boolean; already?: boolean; error?: string }>;
+  debugTrigger: (kind: string, chatType: string, chatId: string) => Promise<{ ok: boolean; message?: string; error?: string }>;
+  debugEnd: () => Promise<{ ok: boolean; restored?: number; error?: string; report?: Record<string, { time: string; message: string }[]> }>;
   listVoices: () => Promise<string[]>;
 
   miniOpen: (p?: {
@@ -334,6 +362,16 @@ export interface NianyuAPI {
   togglePlugin: (id: string, enabled: boolean) => Promise<{ ok: boolean; plugin?: Plugin }>;
   callPluginTool: (pluginId: string, toolName: string, arg: string) => Promise<{ ok: boolean; text?: string }>;
 
+  // ===== 软件更新（v2.3.45）=====
+  checkUpdate: (manual?: boolean) => Promise<UpdateStatus>;
+  updateStatus: () => Promise<UpdateStatus>;
+  downloadUpdate: () => Promise<UpdateStatus>;
+  openUpdateFolder: () => Promise<boolean>;
+  installUpdate: () => Promise<boolean>;
+  openReleasePage: () => Promise<boolean>;
+  dismissUpdate: (version: string) => Promise<boolean>;
+  onUpdateStatus: (cb: (e: any, data: UpdateStatus) => void) => () => void;
+
   // ===== 确认对话框 =====
   showConfirm?: (message: string, title?: string) => Promise<boolean>;
 
@@ -384,7 +422,15 @@ export const api: NianyuAPI = {
   getModelStats: () => raw.getModelStats(),
   ballOpenChat: (chat) => raw.ballOpenChat(chat),
   rateInfo: (modelId) => raw.rateInfo(modelId),
+  queueSnapshot: () => raw.queueSnapshot(),
+  queueReorder: (key, orderedIds) => raw.queueReorder(key, orderedIds),
+  onQueueChanged: (cb) => raw.onQueueChanged(cb),
   getChatModelId: (chatType, chatId) => raw.getChatModelId(chatType, chatId),
+  getChatModel: (chatType, chatId) => raw.getChatModel(chatType, chatId),
+  mcpStatus: () => raw.mcpStatus(),
+  mcpAdd: (p) => raw.mcpAdd(p),
+  mcpRemove: (key) => raw.mcpRemove(key),
+  mcpToggle: (key, enabled) => raw.mcpToggle(key, enabled),
   translate: (text) => raw.translate(text),
   interruptStream: (chatId) => raw.interruptStream(chatId),
   copyChat: (type, id) => raw.copyChat(type, id),
@@ -401,6 +447,8 @@ export const api: NianyuAPI = {
   addStoryNode: (chatType, chatId, msgId, title) => raw.addStoryNode(chatType, chatId, msgId, title),
   listStoryNodes: (chatType, chatId) => raw.listStoryNodes(chatType, chatId),
   removeStoryNode: (id) => raw.removeStoryNode(id),
+  renameStoryNode: (id, title) => raw.renameStoryNode(id, title),
+  forkChatFromNode: (chatType, chatId, nodeId) => raw.forkChatFromNode(chatType, chatId, nodeId),
   addMoment: (roleId, content, images, scheduledAt, selfRoleId) => raw.addMoment(roleId, content, images, scheduledAt, selfRoleId),
   listMoments: (roleId, includeUnpublished, selfRoleId, favoritedOnly) => raw.listMoments(roleId, includeUnpublished, selfRoleId, favoritedOnly),
   removeMoment: (id) => raw.removeMoment(id),
@@ -413,14 +461,18 @@ export const api: NianyuAPI = {
   generateImageFromImage: (chatType, chatId, prompt, imagePath, kind) => raw.generateImageFromImage(chatType, chatId, prompt, imagePath, kind),
   autocompletePrompt: (type, text) => raw.autocompletePrompt(type, text),
   saveImageMemory: (p) => raw.saveImageMemory(p),
-  recallMessage: (msgId) => raw.recallMessage(msgId),
+  deleteMessageOnly: (msgId) => raw.deleteMessageOnly(msgId),
   rollbackMessages: (p) => raw.rollbackMessages(p),
+  rollbackForEdit: (p) => raw.rollbackForEdit(p),
+  aiAction: (p) => raw.aiAction(p),
   addQuickMemory: (p) => raw.addQuickMemory(p),
   pickTextFile: (filters) => raw.pickTextFile(filters),
   pickAudioFile: () => raw.pickAudioFile(),
   setCustomSound: (p) => raw.setCustomSound(p),
   saveTextFile: (content, defaultName) => raw.saveTextFile(content, defaultName),
   importCharacterCard: () => raw.importCharacterCard(),
+  getPathForFile: (file) => raw.getPathForFile(file),
+  importDroppedFiles: (paths) => raw.importDroppedFiles(paths),
   resetSettings: (keepKeys) => raw.resetSettings(keepKeys),
   deleteAllData: () => raw.deleteAllData(),
   showConfirm: async (message, title) => {
