@@ -7,16 +7,13 @@ import SelectMenu from './SelectMenu';
 interface Props {
   draft: AppSettings;
   patch: (p: Partial<AppSettings>) => void;
-  onBack: () => void;
 }
 
-export const FontSettings: React.FC<Props> = ({ draft, patch, onBack }) => {
+export const FontSettings: React.FC<Props> = ({ draft, patch }) => {
   const { t } = useI18n();
   return (
     <div style={{ paddingBottom: 20 }}>
-      <button className="btn-ghost" onClick={onBack} style={{ marginBottom: 14 }}>
-        ← {t('settings.back')}
-      </button>
+      {/* 返回按钮已固定在设置页 header（页面名称右侧），此处不再渲染 */}
 
       {/* 字体大小 */}
       <div className="section-title">{t('settings.fontSize', { n: draft.fontSize ?? 14 })}</div>

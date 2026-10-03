@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
+import { useTheme } from '../theme/ThemeContext';
 
 interface VideoTask {
   id: string; // chatType|chatId|prompt
@@ -20,6 +21,9 @@ interface VideoTask {
 // 订阅 video:progress / video:done；可拖动；任务完成后 8 秒自动消失，也可点 ✕ 关闭。
 const VideoBubble: React.FC = () => {
   const { t } = useI18n();
+  // v2.3.77：动效开关——生成进度条用内联 transition，需内联判定（内联优先级高于 .anim-off 的 !important）
+  const { settings } = useTheme();
+  const animOn = settings?.enableAnimations !== false;
   const [tasks, setTasks] = useState<VideoTask[]>([]);
   const [pos, setPos] = useState<{ x: number; y: number }>(() => ({
     x: Math.max(12, window.innerWidth - 320),
@@ -163,7 +167,7 @@ const VideoBubble: React.FC = () => {
                     height: '100%',
                     width: `${Math.max(2, Math.min(100, task.percent))}%`,
                     background: 'linear-gradient(90deg,#7c6cf0,#4fc3f7)',
-                    transition: 'width .3s ease',
+                    transition: animOn ? 'width .3s ease' : 'none',
                     borderRadius: 3,
                   }}
                 />
