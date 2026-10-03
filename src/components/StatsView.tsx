@@ -1,12 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
+import { useTheme } from '../theme/ThemeContext';
 import type { Role, RoleStat } from '../types';
 import { AvatarImg } from './ChatList';
 import { normalizeRelation, RELATION_LABELS } from '../types';
 
 export const StatsView: React.FC = () => {
   const { t } = useI18n();
+  // v2.3.77：动效开关——token 占比条用内联 transition，需内联判定（内联优先级高于 .anim-off 的 !important）
+  const { settings } = useTheme();
+  const animOn = settings?.enableAnimations !== false;
   const [stats, setStats] = useState<RoleStat[]>([]);
   const [global, setGlobal] = useState(0);
   const [roles, setRoles] = useState<Record<string, { avatar: string; affinity: number; mood: string; relation: string }>>({});
@@ -80,7 +84,7 @@ export const StatsView: React.FC = () => {
                     width: `${(s.tokens / maxTokens) * 100}%`,
                     height: '100%',
                     background: 'var(--color-primary)',
-                    transition: 'width var(--transition)',
+                    transition: animOn ? 'width var(--transition)' : 'none',
                   }}
                 />
               </div>
@@ -115,7 +119,7 @@ export const StatsView: React.FC = () => {
                       width: `${(m.tokens / maxModelTokens) * 100}%`,
                       height: '100%',
                       background: 'linear-gradient(90deg, #7c6cf0, #4fc3f7)',
-                      transition: 'width var(--transition)',
+                      transition: animOn ? 'width var(--transition)' : 'none',
                     }}
                   />
                 </div>

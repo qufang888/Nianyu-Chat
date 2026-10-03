@@ -61,6 +61,11 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
   const { settings } = useTheme();
   const isMini = variant === 'mini';
   const [isMax, setIsMax] = useState(maximized);
+
+  // v2.3.77：动效开关（内联 transition 的 CSS 类逃逸问题——`.anim-off *` 的 !important 只作用于
+  // 类选择器，而**内联 style 优先级更高**，关闭动效时内联过渡仍会播放，故此处需内联判定）。
+  // 与 QueueDock.tsx 同思路。
+  const animOn = settings?.enableAnimations !== false;
   const [showClosePrompt, setShowClosePrompt] = useState(false);
   const [dontShowAgain, setDontShowAgain] = useState(false);
   // 弹窗内临时选择的行为（默认跟随当前设置，用户可在弹窗内切换）
@@ -244,7 +249,7 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
                     cursor: 'pointer',
                     border: promptCloseToTray ? '2px solid var(--color-primary)' : '2px solid transparent',
                     background: promptCloseToTray ? 'var(--color-hover)' : 'transparent',
-                    transition: 'all 0.15s',
+                    transition: animOn ? 'all 0.15s' : 'none',
                   }}
                   onClick={() => setPromptCloseToTray(true)}
                 >
@@ -270,7 +275,7 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
                     cursor: 'pointer',
                     border: !promptCloseToTray ? '2px solid var(--color-primary)' : '2px solid transparent',
                     background: !promptCloseToTray ? 'var(--color-hover)' : 'transparent',
-                    transition: 'all 0.15s',
+                    transition: animOn ? 'all 0.15s' : 'none',
                   }}
                   onClick={() => setPromptCloseToTray(false)}
                 >

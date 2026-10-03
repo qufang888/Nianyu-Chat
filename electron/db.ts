@@ -550,19 +550,129 @@ class DataManager {
     return { ok: true, deletedMems };
   }
 
-  // 回滚：删除 id >= msgId 的所有消息及其关联记忆
-  rollbackMessages(chatType: string, chatId: string, fromMsgId: number): { deletedMsgs: number; deletedMems: number } {
+  // 该聊天参与角色的 id 集合（单聊=角色本身（chatId 即 roleId）；群聊=群成员角色）
+  private chatRoleIds(chatType: string, chatId: string): string[] {
+    if (chatType === 'single') return [chatId];
+    const g = this.store.groups.find((x) => x.group_id === chatId);
+    if (!g) return [];
+    return g.member_ids.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+
+  // 删除「该时间点之后」的未关联消息的记忆（纯手写快捷记忆/面板记忆等）：
+  // 范围 = 该聊天角色的对话记忆（chatId 匹配）+ 角色级共享记忆（无 chatId）；
+  // 不区分 source（手动/自动都删）、不管是否被人工修改过——以创建时间为准。
+  deleteMemoriesSince(chatType: string, chatId: string, sinceTs: number): number {
+    const roles = new Set(this.chatRoleIds(chatType, chatId));
+    if (roles.size === 0) return 0;
+    const before = this.store.memories.length;
+    this.store.memories = this.store.memories.filter((m) => {
+      if (!roles.has(m.roleId)) return true;
+      const t = Date.parse(m.created_at || '');
+      if (!(Number.isFinite(t) && t >= sinceTs)) return true;
+      // 有 chatId 的对话记忆必须属于本聊天；无 chatId 的角色级共享记忆无法区分产生聊天，一并删除
+      if (m.chatId && m.chatId !== chatId) return true;
+      return false;
+    });
+    return before - this.store.memories.length;
+  }
+
+  // 删除「该时间点之后」该聊天角色的朋友圈动态（不论点赞/收藏/定时未发布）
+  deleteMomentsSince(chatType: string, chatId: string, sinceTs: number): number {
+    const roles = new Set(this.chatRoleIds(chatType, chatId));
+    if (roles.size === 0) return 0;
+    const before = this.store.moments.length;
+    this.store.moments = this.store.moments.filter((m) => {
+      if (!roles.has(m.roleId)) return true;
+      const t = Date.parse(m.created_at || '');
+      return !(Number.isFinite(t) && t >= sinceTs);
+    });
+    return before - this.store.moments.length;
+  }
+
+  // 回滚：删除 id >= msgId 的所有消息、其关联记忆（无论手动/自动/人工修改过），
+  // 以及「该时间点之后」该聊天角色的全部记忆（含纯手写未关联的）与朋友圈动态（不论点赞收藏）
+  rollbackMessages(
+    chatType: string,
+    chatId: string,
+    fromMsgId: number,
+    withStoryNodes = false
+  ): { deletedMsgs: number; deletedMems: number; deletedMoments: number; deletedNodes: number } {
     const target = this.store.messages.filter(
       (m) => m.chat_type === chatType && m.chat_id === chatId && m.id >= fromMsgId
     );
     const ids = new Set(target.map((m) => m.id));
+    // 时间锚点：被回滚消息中最早的时间戳（即回滚起点消息的时刻）
+    const tsList = target.map((m) => Date.parse(m.timestamp)).filter((t) => Number.isFinite(t));
+    const fromTs = tsList.length ? Math.min(...tsList) : 0;
     this.store.messages = this.store.messages.filter((m) => !ids.has(m.id));
     let deletedMems = 0;
     for (const id of ids) {
       deletedMems += this.deleteMemoriesByMsgId(id);
     }
+    if (fromTs > 0) {
+      deletedMems += this.deleteMemoriesSince(chatType, chatId, fromTs);
+    }
+    const deletedMoments = fromTs > 0 ? this.deleteMomentsSince(chatType, chatId, fromTs) : 0;
+    // 剧情节点：v2.3.63 起「修改重发」场景需要；v2.3.79 起普通回滚也需要（withStoryNodes=true）。
+    // v2.3.80 修正：msg_id 精确删除**不依赖时间戳**（节点 timestamp 是「创建时刻」，
+    // 且历史数据可能存在无法解析的时间戳），故不能被 `fromTs > 0` 一起短路掉——
+    // 否则消息时间戳全不可解析时，msg_id 明明能命中的节点也删不掉。
+    // 时间戳路径仅在 fromTs 有效时作为补充。
+    const deletedNodes = withStoryNodes
+      ? this.deleteStoryNodesByMsgIds(chatType, chatId, ids) + (fromTs > 0 ? this.deleteStoryNodesSince(chatType, chatId, fromTs) : 0)
+      : 0;
     this.saveStore();
-    return { deletedMsgs: ids.size, deletedMems };
+    return { deletedMsgs: ids.size, deletedMems, deletedMoments, deletedNodes };
+  }
+
+  // 仅删除该条消息，**不动**记忆 / 朋友圈动态 / 剧情节点（v2.3.63「删除消息」语义）
+  // 与 deleteMessage 的区别：后者会连带 deleteMemoriesByMsgId 删掉该消息关联的记忆
+  deleteMessageOnly(msgId: number): { ok: boolean } {
+    const idx = this.store.messages.findIndex((m) => m.id === msgId);
+    if (idx < 0) return { ok: false };
+    this.store.messages.splice(idx, 1);
+    this.saveStore();
+    return { ok: true };
+  }
+
+  // 按消息 id 精确删除剧情节点（v2.3.80，**回滚节点残留的主修复路径**）
+  // 为什么必须走 msg_id：节点 timestamp 取的是「节点创建时刻」（addStoryNode 里的 new Date()），
+  // 与消息 timestamp 并不相等 —— 纯时间戳过滤无法可靠命中被回滚消息自带的那个节点。
+  // msg_id 是节点与消息的唯一确定关联，无歧义。
+  // ⚠️ 必须同时按 chat_type/chat_id 过滤：消息 id 是**全局自增**的（nextId），
+  // 不同聊天的 id 空间不隔离。若不过滤，回滚 A 聊天的消息会误删 B 聊天里同 id 的节点。
+  deleteStoryNodesByMsgIds(chatType: string, chatId: string, msgIds: Set<number> | number[]): number {
+    const set = msgIds instanceof Set ? msgIds : new Set(msgIds);
+    if (set.size === 0) return 0;
+    const before = this.store.storyNodes.length;
+    this.store.storyNodes = this.store.storyNodes.filter((n) => {
+      if (n.chat_type !== chatType || n.chat_id !== chatId) return true; // 其他聊天/群聊的节点保留
+      // msg_id 缺失（历史脏数据）→ 保守保留，宁可漏删不误删
+      if (n.msg_id == null) return true;
+      return !set.has(n.msg_id);
+    });
+    const removed = before - this.store.storyNodes.length;
+    if (removed > 0) this.saveStore();
+    return removed;
+  }
+
+  // 删除「该时间点之后」的剧情节点（v2.3.63，供「修改重发」联动清理）
+  // 保守策略：时间戳无法解析（NaN）的节点一律保留，宁可漏删也不误删
+  // v2.3.80：边界由 `t < sinceTs` 改为 `t <= sinceTs` —— 原先严格小于会把
+  //「时间戳恰好等于回滚起点」的节点保留下来（用户反馈的残留即此），少删了它自己那一条。
+  deleteStoryNodesSince(chatType: string, chatId: string, sinceTs: number): number {
+    if (!(sinceTs > 0)) return 0;
+    const before = this.store.storyNodes.length;
+    this.store.storyNodes = this.store.storyNodes.filter((n) => {
+      if (n.chat_type !== chatType || n.chat_id !== chatId) return true; // 其他聊天/群聊的节点保留
+      const t = Date.parse(n.timestamp);
+      if (!Number.isFinite(t)) return true; // 时间戳不可解析 → 保守保留
+      // 保留「严格早于起点」的节点 → 等价于删除 t >= sinceTs（含边界那条，即被回滚消息自带的节点）
+      return t < sinceTs;
+    });
+    const removed = before - this.store.storyNodes.length;
+    if (removed > 0) this.saveStore();
+    return removed;
   }
 
   // ---------- 聊天记录 ----------
@@ -717,6 +827,8 @@ class DataManager {
         const groupIds = new Set(merged.modelGroups.map((g) => g.id));
         merged.models = merged.models.map((m) => ({
           ...m,
+          // v2.3.44：已移除「自定义」提供商；老配置统一迁移为「OpenAI 兼容」（同一套协议，仅标签/默认值不同）
+          provider: ((m.provider as string) === 'custom' ? 'openai-compatible' : m.provider) || 'openai-compatible',
           groupIds: (Array.isArray(m.groupIds) ? m.groupIds : []).filter((id: string) => groupIds.has(id)),
           tags: Array.isArray(m.tags) ? m.tags.filter((x: any) => typeof x === 'string') : [],
         }));
@@ -991,6 +1103,106 @@ class DataManager {
     const before = this.store.storyNodes.length;
     this.store.storyNodes = this.store.storyNodes.filter((n) => n.id !== id);
     if (this.store.storyNodes.length !== before) this.saveStore();
+  }
+
+  // 重命名剧情节点（v2.3.37）：非破坏式，仅改 title
+  renameStoryNode(id: number, title: string): void {
+    const t = (title || '').trim();
+    if (!t) return;
+    const n = this.store.storyNodes.find((x) => x.id === id);
+    if (n) {
+      n.title = t;
+      this.saveStore();
+    }
+  }
+
+  /**
+   * 从剧情节点处分叉新聊天（v2.3.37）：原聊天不动，新聊天包含「节点消息及之前」的消息，
+   * 记忆按口径截取——自动记忆（sourceMsgIds 全部指向节点前消息）保留；
+   * 手动/无关联记忆按 created_at ≤ 节点消息 timestamp 保留。
+   * 群聊复制整组成员；单聊绑定原角色（不复制角色卡）。per-chat 设置复制式带到新聊（不影响原聊）。
+   */
+  forkChatFromNode(chatType: string, chatId: string, msgId: number): { chat_type: string; chat_id: string; name: string } {
+    const now = new Date().toISOString();
+    const all = this.store.messages.filter((m) => m.chat_type === chatType && m.chat_id === chatId);
+    const idx = all.findIndex((m) => m.id === msgId);
+    if (idx < 0) throw new Error('node message not found');
+    const before = all.slice(0, idx + 1); // 含节点消息本身
+    const beforeIds = new Set(before.map((m) => m.id));
+    const nodeMsg = before[before.length - 1];
+    const nodeTitle = this.store.storyNodes.find((n) => n.msg_id === msgId && n.chat_type === chatType && n.chat_id === chatId)?.title || '节点';
+
+    // 记忆截取口径：sourceMsgIds 非空 → 关联消息全部在节点前才保留；否则按 created_at ≤ 节点消息时间
+    const memKeep = (m: (typeof this.store.memories)[number]): boolean => {
+      if (m.sourceMsgIds && m.sourceMsgIds.length) return m.sourceMsgIds.every((id) => beforeIds.has(id));
+      if (m.sourceMsgId != null) return beforeIds.has(m.sourceMsgId);
+      return (m.created_at || '') <= nodeMsg.timestamp;
+    };
+
+    const srcSession = this.store.chatSessions.find(
+      (x) => x.chat_type === chatType && x.chat_id === chatId
+    );
+
+    if (chatType === 'group') {
+      const g = this.getGroup(chatId);
+      if (!g) throw new Error('group not found');
+      const newId = this.genId('group');
+      const newName = `${g.group_name} · ${nodeTitle.slice(0, 12)}`;
+      this.store.groups.push({ ...g, group_id: newId, group_name: newName, created_at: now });
+      for (const m of before) {
+        this.store.messages.push({ ...m, id: this.nextId(), chat_id: newId });
+      }
+      for (const m of this.store.memories.filter((mm) => mm.chatId === chatId && memKeep(mm))) {
+        this.store.memories.push({ ...m, id: this.genId('mem'), chatId: newId, created_at: now, updated_at: now });
+      }
+      // per-chat 设置：复制式带到新聊（不影响原聊）
+      this.copyChatSettings(`group:${chatId}`, `group:${newId}`);
+      this.store.chatSessions.push({ chat_type: 'group', chat_id: newId, last_time: now, storyEnabled: true });
+      this.saveStore();
+      return { chat_type: 'group', chat_id: newId, name: newName };
+    }
+
+    // single：绑定原角色（不复制角色卡，语义为「回到该节点重新开始」）
+    const roleId = this.resolveSingleRoleId('single', chatId);
+    const newId = `single_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`;
+    const baseName = srcSession?.chat_name || this.getRole(roleId)?.name || roleId;
+    const newName = `${baseName} · ${nodeTitle.slice(0, 12)}`;
+    for (const m of before) {
+      this.store.messages.push({ ...m, id: this.nextId(), chat_id: newId });
+    }
+    for (const m of this.store.memories.filter((mm) => mm.roleId === roleId && mm.chatId === chatId && memKeep(mm))) {
+      this.store.memories.push({ ...m, id: this.genId('mem'), roleId, chatId: newId, created_at: now, updated_at: now });
+    }
+    this.copyChatSettings(`single:${chatId}`, `single:${newId}`);
+    this.store.chatSessions.push({
+      chat_type: 'single',
+      chat_id: newId,
+      role_id: roleId,
+      chat_name: newName,
+      last_time: now,
+      storyEnabled: true,
+    });
+    this.saveStore();
+    return { chat_type: 'single', chat_id: newId, name: newName };
+  }
+
+  // per-chat 设置：复制式重映射（与 remapChatSettings 的「移动」语义不同，源聊 key 保留）
+  private copyChatSettings(srcKey: string, newKey: string): void {
+    const maps: Record<string, any>[] = [
+      this.settings.chatWorldBooks,
+      this.settings.chatIdleEnabled,
+      this.settings.chatSoundPaths,
+      this.settings.chatBackgrounds,
+      this.settings.chatSelfRoles,
+      this.settings.autoSceneImageChats,
+      this.settings.webSearchChats,
+    ];
+    for (const map of maps) {
+      if (map && Object.prototype.hasOwnProperty.call(map, srcKey)) {
+        map[newKey] = map[srcKey];
+      }
+    }
+    this.saveSettings({});
   }
 
   // ===== 朋友圈动态（人物养成/社交） =====
