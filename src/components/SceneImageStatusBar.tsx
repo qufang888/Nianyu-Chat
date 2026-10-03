@@ -108,7 +108,13 @@ export function useSceneImageStatus(
       //   遮挡档根本到不了本行的 return。切勿照旧结论理解本段。
       //   （macOS 上 Electron 的可见性会跟踪遮挡状态、与 Windows 不同，但本项目只发 Windows 版：
       //     package.json 的 build.win.target = ["nsis"]。）
-      // 删除本行会导致「窗口已隐藏/最小化时仍弹出无人看得见的 Toast」——真正的新问题。
+      // 综上：**在本项目当前配置下本行永不命中**（backgroundThrottling:false ⇒ document.hidden 恒
+      // false），故失败提醒不存在静默档 —— 窗口可见时由站内 Toast 承担，不在后台时由卡片承担（③）。
+      // 仍保留本行是为**防御性**：若日后为省电把 backgroundThrottling 改回 true，本行即刻生效。
+      // 但注意其作用范围仅限 **success** 路径 —— failed 已由 ③ 的 cardShown 兜住
+      // （`data.status === 'failed' && data.cardShown` 见下方），删掉本行对 failed 无影响；
+      // 而 success 无 cardShown 去重，删掉本行会在「窗口隐藏但仍停在生成该图的会话」时
+      // 额外弹出一条无人看得见的 Toast，与卡片重复。故要删也需先给 success 补去重。
       if (typeof document !== 'undefined' && document.hidden) return;
       // v2.3.82：失败时若主进程已用后台卡片告知（软件在后台、或窗口可见但用户在看别的聊天，
       // 两种情况主进程都会 force 弹卡片），这里跳过 Toast，避免「卡片 + Toast」双重打扰。
