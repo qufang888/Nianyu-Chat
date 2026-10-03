@@ -2918,7 +2918,7 @@ export const translations: Record<Lang, Dict> = {
     'queue.laneTip': 'Queues of different models are independent and timed separately',
     // ===== 异步场景生图状态提醒（v2.3.81）=====
     'sceneImage.generating': 'Generating image…',
-    'sceneImage.success': 'Image ready',
+    'sceneImage.success': 'Image generated',
     'sceneImage.failed': 'Image generation failed: {msg}',
     'sceneImage.elapsed': '{sec}s elapsed',
   },

@@ -95,6 +95,10 @@ export function useSceneImageStatus(
       // 窗口不可见（最小化 / 隐藏到托盘 / 被遮挡）时不弹站内 Toast，
       // 交由主进程的后台提醒卡片处理，避免「看不见的 Toast」与卡片重复打扰。
       if (typeof document !== 'undefined' && document.hidden) return;
+      // v2.3.82：失败时若主进程已用后台卡片告知（软件在后台、或窗口可见但用户在看别的聊天，
+      // 两种情况主进程都会 force 弹卡片），这里跳过 Toast，避免「卡片 + Toast」双重打扰。
+      // 静默模式下主进程会把 cardShown 置 false（卡片实际未展示），此时仍由本处兜底提示。
+      if (data.status === 'failed' && data.cardShown) return;
       if (data.status === 'success') {
         toastRef.current(translate('sceneImage.success'), { duration: SUCCESS_TOAST_DURATION_MS });
       } else {
@@ -106,6 +110,15 @@ export function useSceneImageStatus(
     });
     return off;
   }, [chatType, chatId, enabled]);
+
+  // v2.3.82：切换会话时清空「正在生图中」状态。
+  // 否则会出现「A 聊天正在生图 → 切到 B 聊天 → B 聊天顶部仍显示正在生图中」的错位残留
+  // （订阅回调按 chatType/chatId 过滤，B 不会再收到 A 的事件，但 A 留下的 generating=true 不会自己复位）。
+  useEffect(() => {
+    setGenerating(false);
+    setStartedAt(0);
+    setRoleName('');
+  }, [chatType, chatId]);
 
   // 超时兜底：进行中超过 SCENE_IMAGE_TIMEOUT_MS 自动清除（防止生图挂起导致状态条永久卡住）
   useEffect(() => {

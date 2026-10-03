@@ -1074,5 +1074,8 @@ export interface SceneImageStatusEvent {
   roleId: string;
   roleName: string; // AI 名字（单聊=角色名，群聊=群名或'AI'）
   error?: string; // 仅 failed：给用户看的简短原因（已截断）
+  // v2.3.82：仅 failed。为 true 表示主进程已用后台提醒卡片告知过失败（软件在后台、或窗口可见
+  // 但用户在看别的聊天时都会强制弹卡片），渲染端据此跳过站内 Toast，避免「卡片 + Toast」双弹。
+  cardShown?: boolean;
   ts: number; // 事件发出时的 Date.now()
 }

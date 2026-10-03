@@ -447,6 +447,20 @@ export function sendBallVideoProgress(percent: number, statusText?: string): voi
   });
 }
 
+/**
+ * 用户此刻是否正盯着这个会话（主窗可见且为当前会话，或小窗正显示该会话）。
+ * 悬浮球未读的「已读判定」与主进程生图失败提醒的「该不该弹卡片」共用此判定，
+ * 避免同一语义在两处各写一份、日后改动漂移。
+ */
+export function isViewingChat(chatType: string, chatId: string): boolean {
+  const mainVisible =
+    mainWinRef && !mainWinRef.isDestroyed() && mainWinRef.isVisible() && !mainWinRef.isMinimized();
+  return (
+    (mainVisible && activeChatKey === `${chatType}:${chatId}`) ||
+    activeChatKeyMini === `${chatType}:${chatId}`
+  );
+}
+
 export function pushUnread(
   chatType: string,
   chatId: string,
@@ -456,14 +470,9 @@ export function pushUnread(
 ): void {
   const settings = dm.getSettings();
   if (settings.floatingBall?.enabled === false) return; // 未启用悬浮球则不维护未读
-  const mainVisible =
-    mainWinRef && !mainWinRef.isDestroyed() && mainWinRef.isVisible() && !mainWinRef.isMinimized();
-  // 类 IM 未读：仅当用户此刻正盯着该聊天本身（主窗可见且为当前会话，或迷你窗正显示该会话）时视为已读；
+  // 类 IM 未读：仅当用户此刻正盯着该聊天本身时视为已读；
   // 其余情况（主窗隐藏 / 在看别的聊天 / 手动回复 / 主动消息）均计入未读，悬浮球面板即可看到未读消息。
-  const viewingThis =
-    (mainVisible && activeChatKey === `${chatType}:${chatId}`) ||
-    activeChatKeyMini === `${chatType}:${chatId}`;
-  if (viewingThis) return;
+  if (isViewingChat(chatType, chatId)) return;
   const key = `${chatType}:${chatId}`;
   const existing = unreadMap.get(key);
   if (existing) {

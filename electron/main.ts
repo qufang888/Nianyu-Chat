@@ -90,6 +90,7 @@ import {
   clearMiniActiveChat,
   sendBallVideoProgress,
   setBallSessionClosed,
+  isViewingChat,
 } from './floatingBall';
 import { seedBuiltinContent } from './builtinContent';
 import {
@@ -1609,28 +1610,45 @@ function emitSceneImageStatus(
     error: status === 'failed' ? raw.slice(0, SCENE_IMAGE_ERROR_MAX_LEN) || fallback : undefined,
     ts: Date.now(),
   };
-  broadcast(SCENE_IMAGE_STATUS_CHANNEL, payload);
-
-  // v2.3.81：失败时补一张「生图失败」提醒卡片。
-  // 可见性判断**不在这里重复实现**——showNotifyCard(force=false) 内部已按「主窗与小窗均隐藏/
-  // 最小化才弹」的同一条件拦截（两处逻辑若各写一份，日后改一处就会与另一处漂移）。
-  // 故这里必须传 force=false：窗口可见时由渲染端 showToast 就地提示，避免同一失败弹两次。
-  // 静默模式 silent 由 showNotifyCard 内部直接 return，无需重复判断。
-  // 集中在本函数而非各失败分支，保证任何 failed 事件都不会漏掉卡片提醒。
+  // 失败提醒：保证「任何窗口状态下都不会完全静默」，且**任何一档都只提醒一次**。
+  // 四档矩阵（viewingThis = 用户此刻是否正盯着这个会话，由悬浮球模块的 activeChat 状态判定，
+  // 与 pushUnread 的已读判定同源，保证两处语义一致）：
+  //   · 双窗都隐藏            → force=false，showNotifyCard 默认放行 → 弹卡片（cardShown=true，
+  //                            渲染端窗口不可见本来就不弹 Toast，不会双弹）
+  //   · 窗口可见 + 正看着该会话 → force=false，showNotifyCard 因窗口可见而拦截 → 不弹卡片
+  //                            （cardShown=false → 渲染端弹站内 Toast，就地提示不打扰）
+  //   · 窗口可见 + 在看别的会话 → force=true，强制弹卡片（cardShown=true → 渲染端跳过 Toast）
+  // 修复说明：v2.3.81 漏掉了「窗口可见但在看别的会话」这一档 —— 渲染端按 chatId 过滤不弹 Toast，
+  // 主进程因窗口可见也不弹卡片，两者错位形成**完全静默**。失败比成功更需要被知晓，故补上。
+  // 成功路径不这样做：成功有图片消息落入聊天流、图片本身即可见结果，强制弹卡片会在用户
+  // 正看着该会话时造成「卡片 + Toast」双重打扰。
+  // 静默模式 silent 由 showNotifyCard 内部直接 return（此时卡片并未展示），
+  // 故 cardShown 需排除静默，否则渲染端会以为已提醒而不再兜底。
   if (status === 'failed') {
     try {
-      showNotifyCard({
-        chatType,
-        chatId,
-        name: chatDisplayName(chatType, chatId),
-        roleName,
-        content: payload.error || '',
-        label: NOTIFY_IMAGE_FAILED[lang],
-      });
+      const anyWindowVisible =
+        (mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized()) ||
+        (miniWindow && miniWindow.isVisible() && !miniWindow.isMinimized());
+      const viewingThis = isViewingChat(chatType, chatId);
+      showNotifyCard(
+        {
+          chatType,
+          chatId,
+          name: chatDisplayName(chatType, chatId),
+          roleName,
+          content: payload.error || '',
+          label: NOTIFY_IMAGE_FAILED[lang],
+        },
+        !!(anyWindowVisible && !viewingThis)
+      );
+      // 卡片真正会展示的两种情况：双窗全隐藏（默认放行），或窗口可见但用户没在看该会话（force）。
+      const cardWillShow = !anyWindowVisible || !viewingThis;
+      payload.cardShown = cardWillShow && dm.getSettings().silent !== true;
     } catch {
       /* 通知卡片失败不影响状态广播 */
     }
   }
+  broadcast(SCENE_IMAGE_STATUS_CHANNEL, payload);
 }
 
 // 失败后进入冷却，返回 true 表示「应跳过本次」；冷却已过则顺带清理记录并放行。
