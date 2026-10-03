@@ -699,25 +699,31 @@ function createMiniWindow(): void {
   // 有交互时恢复不透明
   miniWindow.on('focus', () => miniWindow?.setOpacity(1));
 
-  // v2.3.83：小窗一旦隐藏就等于用户不再看它，必须清掉前台聊天标记。
-  // 挂在 `hide` 而非 `closed`：小窗「关闭」只做 hide()、窗口不销毁（见上方 close 处理），
-  // 所以 `closed` 在正常使用中永不触发。挂在 `hide` 上可**一处覆盖全部收起路径**
-  // （关闭按钮 / 托盘 toggleMiniWindow / IPC mini:hide …），不必逐条路径补清理、也不会漏。
-  // 残留标记会让 isViewingChat 把「已收起的小窗」误判为用户正在看该会话，
-  // 进而使生图失败的提醒卡片被窗口可见性拦掉、Toast 又被 chatId 过滤 → 彻底静默。
-  miniWindow.on('hide', () => {
-    activeChatKeyMini = '';
-    clearMiniActiveChat();
-  });
+  // v2.3.85：此处**刻意不再挂 `hide` 清理**（v2.3.84 曾挂过，已撤回）。
+  // 原因：v2.3.84 误把「小窗隐藏后 activeChatKeyMini 残留」当成根因。但真正修掉残留误判的是
+  //   floatingBall.isViewingChat() 的**可见性守卫**（两支都要求窗口真实可见）：
+  //   不可见窗口残留的 key 本就不该代表「用户正在看着」，这一条已被完整解决，无需靠清 key。
+  // 反倒是在 `hide` 上清理会引入两个**超出生图范围**的副作用：
+  //   1) 处理器里的 `activeChatKeyMini = ''` 写的是 main.ts 本文件的那一份（见下方 closed 处说明），
+  //      它供类 IM 已读回执判定与空闲计时「切走冻结/切回解冻」簿记使用 —— 收起时清空会让
+  //      已读回执误判、空闲计时记错账，属于改动既有功能；
+  //   2) clearMiniActiveChat() 只清 floatingBall 那份、不碰驱动，但把它挂在 `hide`
+  //      （"暂时收起"）而非 `closed`（"真的没了"）属语义误用。
+  // 故小窗前台标记的清理维持原状（仅 `closed` 时清），静默问题由可见性守卫独立解决。
 
   miniWindow.on('closed', () => {
     miniWindow = null;
     clearAutoChatDriverByWindow(miniWindowWcId, 'closed');
     clearGroupEditorLockByWindow(miniWindowWcId);
-    // 迷你窗关闭即失去前台聊天标记，避免残留把已关闭迷你窗的聊天误判为前台
-    activeChatKeyMini = '';
-    clearMiniActiveChat();
-    setBallMiniWindow(null); // v2.3.83：释放小窗引用，避免 isViewingChat 拿到已销毁窗口
+    // 迷你窗真正销毁即失去前台聊天标记。⚠️ 这里有两个**同名但互相独立**的模块级变量：
+    //   · main.ts 本文件的 activeChatKeyMini（本文件 L25xx，供本文件的自动接话 driver / 换会话判定用）
+    //   · floatingBall.ts 的 activeChatKeyMini（供 isViewingChat / pushUnread 的已读判定用）
+    // 二者必须**各自**清空。只清其一会编译通过、也不立刻报错，但会让另一套判定静默失准
+    // （典型症状：未读红点该消不消、或自动接话莫名停了），属极难排查的隐性 bug。
+    // 故此处保留「看起来重复」的双写，并显式标注，防止后人做「清理冗余」时删掉一行。
+    activeChatKeyMini = ''; // 清 main.ts 这一份
+    clearMiniActiveChat(); // 清 floatingBall.ts 那一份
+    setBallMiniWindow(null); // v2.3.84：释放小窗引用，避免 isViewingChat 拿到已销毁窗口
   });
 }
 

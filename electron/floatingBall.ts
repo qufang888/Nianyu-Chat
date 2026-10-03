@@ -387,8 +387,11 @@ export function setBallMainWindow(win: BrowserWindow | null): void {
   mainWinRef = win;
 }
 
-// v2.3.83：注入快捷小窗引用。小窗「关闭」只做 hide()、窗口并不销毁（见 main.ts 的 close 处理），
-// 故 activeChatKeyMini 在小窗收起后仍会残留；isViewingChat 需要小窗可见性才能判断用户是否在看它。
+// 注入快捷小窗引用。小窗「关闭」只做 hide()、窗口并不销毁（见 main.ts 的 close 处理），
+// 故 activeChatKeyMini 在小窗**收起**后仍会保留 —— 这是刻意保留的：
+// v2.3.85 确认真正的修复是 isViewingChat 的可见性守卫（不可见窗口的 key 不代表「正在看着」），
+// 无需靠清 key 解决；而在 `hide` 上清理会误停该会话的自动消息驱动（收起 ≠ 关闭），
+// 属于超范围的行为变更。注入小窗引用正是为了让可见性守卫拿得到「小窗是否真的可见」。
 export function setBallMiniWindow(win: BrowserWindow | null): void {
   miniWinRef = win;
 }
@@ -403,7 +406,10 @@ export function setActiveChat(type: string, id: string, fromMini = false): void 
   clearUnreadForChat(type, id);
 }
 
-// 迷你窗关闭时清空其前台聊天标记，避免残留导致「已关闭的迷你窗仍在看的聊天」被误判为已读
+// 迷你窗**真正关闭（窗口销毁）**时清空其前台聊天标记。
+// 注意是「真正关闭」而非「收起」：小窗收起只 hide()、窗口仍在，此时清 key 会误停
+// 自动消息驱动（用户重新打开小窗时本应继续）。故本函数只由 `closed` 事件调用。
+// 「小窗收起后 key 残留导致误判」的问题由 isViewingChat 的可见性守卫解决，不靠清 key。
 export function clearMiniActiveChat(): void {
   activeChatKeyMini = '';
 }
