@@ -1396,5 +1396,11 @@
   "sceneImage.generating": "正在生圖中…",
   "sceneImage.success": "圖片已生成",
   "sceneImage.failed": "生圖失敗：{msg}",
-  "sceneImage.elapsed": "已進行 {sec} 秒"
+  "sceneImage.elapsed": "已進行 {sec} 秒",
+  "momentMedia.image.started": "正在生成朋友圈配圖…",
+  "momentMedia.image.success": "朋友圈配圖已生成",
+  "momentMedia.image.failed": "朋友圈配圖失敗：{msg}",
+  "momentMedia.video.started": "正在生成朋友圈配影片…",
+  "momentMedia.video.success": "朋友圈配影片已生成",
+  "momentMedia.video.failed": "朋友圈配影片失敗：{msg}"
 }

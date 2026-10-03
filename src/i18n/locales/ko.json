@@ -1396,5 +1396,11 @@
   "sceneImage.generating": "이미지 생성 중…",
   "sceneImage.success": "이미지가 생성되었습니다",
   "sceneImage.failed": "이미지 생성 실패: {msg}",
-  "sceneImage.elapsed": "{sec}초 경과"
+  "sceneImage.elapsed": "{sec}초 경과",
+  "momentMedia.image.started": "모멘트 이미지 생성 중…",
+  "momentMedia.image.success": "모멘트 이미지가 생성되었습니다",
+  "momentMedia.image.failed": "모멘트 이미지 생성 실패: {msg}",
+  "momentMedia.video.started": "모멘트 동영상 생성 중…",
+  "momentMedia.video.success": "모멘트 동영상이 생성되었습니다",
+  "momentMedia.video.failed": "모멘트 동영상 생성 실패: {msg}"
 }

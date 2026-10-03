@@ -1396,5 +1396,11 @@
   "sceneImage.generating": "Generando imagen…",
   "sceneImage.success": "Imagen generada",
   "sceneImage.failed": "Error al generar la imagen: {msg}",
-  "sceneImage.elapsed": "hace {sec} s"
+  "sceneImage.elapsed": "hace {sec} s",
+  "momentMedia.image.started": "Generando imagen de Moments…",
+  "momentMedia.image.success": "Imagen de Moments generada",
+  "momentMedia.image.failed": "Error en la imagen de Moments: {msg}",
+  "momentMedia.video.started": "Generando vídeo de Moments…",
+  "momentMedia.video.success": "Vídeo de Moments generado",
+  "momentMedia.video.failed": "Error en el vídeo de Moments: {msg}"
 }

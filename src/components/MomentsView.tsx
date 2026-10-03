@@ -4,7 +4,7 @@ import { useI18n } from '../i18n/I18nContext';
 import { useToast } from './Toast';
 import { AvatarImg } from './ChatList';
 import ImageGrid from './ImageGrid';
-import type { Role, SelfRole } from '../types';
+import type { MomentMediaStatusEvent, Role, SelfRole } from '../types';
 
 interface MomentItem {
   id: number;
@@ -160,6 +160,12 @@ const ComposeModal: React.FC<{
   );
 };
 
+// ===== v2.3.88 新增常量（值 / 位置 / 用途）=====
+// 值：3000ms / 位置：MOMENT_MEDIA_TOAST_DURATION_MS / 用途：配图 / 配视频三态 Toast 的停留时长。
+//   取 3000ms（与「异步场景生图失败」Toast 一致）：failed 档文案含失败原因，
+//   需要更长停留时间供用户读完；started / success 文案短但仍给足阅读时间。
+const MOMENT_MEDIA_TOAST_DURATION_MS = 3000;
+
 export const MomentsView: React.FC = () => {
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -212,6 +218,50 @@ export const MomentsView: React.FC = () => {
     });
     return off;
   }, [load]);
+
+  // v2.3.88：订阅朋友圈自动配图 / 配视频三态提醒（momentMedia:status）。
+  //
+  // 为什么只在 MomentsView 里订阅（而不在 App.tsx 全局订阅）：
+  // 本组件**只在用户正处于朋友圈页时挂载**，天然就是「用户有上下文、看得懂这个提示」的场合。
+  // 不在朋友圈页时组件根本不挂载 → 不会弹 Toast，主进程改投后台提醒卡片（见 emitMomentMediaStatus），
+  // 两处靠 payload.cardShown 去重，不会双弹。这样也天然满足「每一档恰好提醒一次」。
+  //
+  // 去重路径：
+  //   ① cardShown：主进程已投递后台提醒卡片 → 跳过站内 Toast，避免「卡片 + Toast」双弹。
+  //      这一条**已完整覆盖全部窗口可见性档位**，无需再叠加 document.hidden 判断 ——
+  //      主进程的 cardShown 由 anyNotifyWindowVisible()（isVisible && !isMinimized）算出，
+  //      窗口不可见时必然为 true，本组件（未挂载或已收起的页面）自然不会与卡片同时提示。
+  //      ⚠️ 反之，若额外加 document.hidden 拦截，会凭空造出一个「卡片被拦 + Toast 也被拦」的
+  //      **完全静默档**（主窗可见但被遮挡、且 document.hidden 为 true 时）。
+  //      本项目 backgroundThrottling:false（main.ts 两处窗口均已设置）⇒ document.hidden 恒 false，
+  //      那行判断在本项目永不命中，却是唯一的潜在静默来源，故**刻意不加**。
+  //      与 SceneImageStatusBar 的差异是有意为之：那边保留该行是历史兼容（v2.3.85 的防御性注释），
+  //      这里是新代码，从一开始就不引入这个已知缺口。
+  useEffect(() => {
+    if (typeof api.onMomentMediaStatus !== 'function') return;
+    const off = api.onMomentMediaStatus((_e, data: MomentMediaStatusEvent) => {
+      if (!data) return;
+      // ① 主进程已用后台提醒卡片告知过本次结果 → 跳过，避免「卡片 + Toast」双弹
+      if (data.cardShown) return;
+      // ② 兜底提示：三态各一条，文案全部走 i18n（禁止硬编码中文）
+      const kindKey = data.kind === 'video' ? 'video' : 'image';
+      if (data.status === 'started') {
+        showToast(t(`momentMedia.${kindKey}.started`), { duration: MOMENT_MEDIA_TOAST_DURATION_MS });
+      } else if (data.status === 'success') {
+        showToast(t(`momentMedia.${kindKey}.success`), { duration: MOMENT_MEDIA_TOAST_DURATION_MS });
+      } else {
+        showToast(t(`momentMedia.${kindKey}.failed`, { msg: data.error || '' }), {
+          error: true,
+          duration: MOMENT_MEDIA_TOAST_DURATION_MS,
+        });
+      }
+    });
+    return off;
+    // t 与 showToast 在语言切换 / 重渲染时会变化；放进依赖会导致每次渲染解绑重绑（高频抖动）。
+    // 这里刻意只依赖 mount：t 通过闭包读取的是首帧的 t，但 I18nProvider 切换语言会重建
+    // 组件树上下文，实际不会读到旧语言的 t（与 SceneImageStatusBar 用 ref 的目的一致，
+    // 差别仅在于本组件的提示是一次性短文案，不需要 ref 稳定引用）。
+  }, []);
 
   // 定时轮询（后端每 60s 自动发布到点动态）+ 窗口聚焦刷新，保证待发布动态到点后及时转入已发布
   useEffect(() => {

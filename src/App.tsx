@@ -126,6 +126,14 @@ export default function App() {
     return off;
   }, []);
 
+  // v2.3.88：上报主窗当前一级视图。朋友圈自动配图 / 配视频的状态提醒需要据此判断
+  // 「用户此刻是否正停在朋友圈页」——在该页弹站内 Toast（有上下文），不在该页弹后台提醒卡片。
+  // 视图切换即上报（含首帧），主进程侧还额外要求窗口真实可见才算「正在看」。
+  useEffect(() => {
+    if (typeof api.setActiveView !== 'function') return;
+    api.setActiveView(view);
+  }, [view]);
+
   const loadMembers = async (type: string, id: string): Promise<Role[]> => {
     if (type !== 'group') return [];
     const g = await api.getGroup(id);

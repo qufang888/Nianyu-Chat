@@ -63,7 +63,11 @@ function cardCSS(dark: boolean): string {
       font-size:20px;font-weight:700;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.12);}
     .ny-body{position:relative;flex:1 1 auto;min-width:0;display:flex;flex-direction:column;
       justify-content:center;gap:3px;}
-    .ny-label{font-size:10px;letter-spacing:.8px;color:#07c160;text-transform:uppercase;opacity:.85;}
+    /* v2.3.88 可访问性修正：#07c160 + opacity:.85 在白底上实测仅 2.04:1，远低于 WCAG AA 正文 4.5:1。
+       本轮「朋友圈配图/配视频」标签（朋友圈配图中 / 配图失败 等）就走这里，故一并修正：
+       改用 #037a35 且去掉 opacity 衰减（半透明小字是最常见的对比度陷阱），实测 5.24:1。
+       深色卡片的 #6fe3c0 实测 9.06:1，保持不变。 */
+    .ny-label{font-size:10px;letter-spacing:.8px;color:#037a35;text-transform:uppercase;}
     .ny-name{font-size:14px;font-weight:600;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#1a1a1a;}
     .ny-content{font-size:12.5px;color:rgba(0,0,0,.62);line-height:1.35;overflow:hidden;
       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}

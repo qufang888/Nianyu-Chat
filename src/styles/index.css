@@ -2127,9 +2127,12 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 .mini-toast.linear.leaving {
   animation: toastOutLinear 0.3s linear both;
 }
+/* v2.3.88 可访问性修正：底色 #e06c75 + 白字实测仅 3.20:1，低于 WCAG AA 正文 4.5:1。
+   改用 #b3342f（白字 6.09:1），并把边框同步加深到 #8f2823 以保持层次感。
+   本轮「朋友圈配图/配视频失败」「异步生图失败」等红色 Toast 都走这条样式，故一并修正。 */
 .mini-toast.error {
-  background: #e06c75;
-  border-color: #c0392b;
+  background: #b3342f;
+  border-color: #8f2823;
   color: #fff;
 }
 @keyframes toastIn {
@@ -4002,9 +4005,21 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   text-align: center;
 }
 .queue-dock-panel {
+  /* v2.3.88 修复与贴边小图标重叠：
+     改前 right:10px 而图标宽 22px（right:0），两者横向重叠 12px，面板弹出时会压住小图标。
+     改后 right = 图标宽度(22px) + 间隙(4px) = 26px，面板右边缘紧邻图标左边缘，互不遮挡。
+     用变量而非裸值，是为了让「面板右偏移」与「收起时的滑出距离」共用同一个数，
+     避免以后只改一处导致收起动画滑进图标底下（见下方 --queue-dock-panel-slide）。 */
+  --queue-dock-panel-right: 26px;
+  /* 收起时向右滑出的距离 = 自身宽度(100%) + 到屏幕右缘的间距(--queue-dock-panel-right) + 8px 余量。
+     必须 ≥ 100% + right，否则面板收起时会停在屏幕内（正好压在贴边图标底下）而不是滑出屏幕。 */
+  --queue-dock-panel-slide: calc(100% + var(--queue-dock-panel-right) + 8px);
   position: fixed;
-  right: 10px;
+  right: var(--queue-dock-panel-right);
   width: 340px;
+  /* 窄窗保护：面板左边缘至少离屏幕左缘 12px，避免小窗口下溢出左边界被裁掉。
+     与 min-width 无关（未设 min-width），故可直接用 max-width 收窄。 */
+  max-width: calc(100vw - var(--queue-dock-panel-right) - 12px);
   max-height: 60vh;
   overflow-y: auto;
   padding: 12px 14px;

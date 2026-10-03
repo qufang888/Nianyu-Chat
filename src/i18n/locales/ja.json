@@ -1396,5 +1396,11 @@
   "sceneImage.generating": "画像を生成中…",
   "sceneImage.success": "画像を生成しました",
   "sceneImage.failed": "画像生成に失敗しました：{msg}",
-  "sceneImage.elapsed": "経過 {sec} 秒"
+  "sceneImage.elapsed": "経過 {sec} 秒",
+  "momentMedia.image.started": "モーメント画像を生成中…",
+  "momentMedia.image.success": "モーメント画像を生成しました",
+  "momentMedia.image.failed": "モーメント画像の生成に失敗しました：{msg}",
+  "momentMedia.video.started": "モーメント動画を生成中…",
+  "momentMedia.video.success": "モーメント動画を生成しました",
+  "momentMedia.video.failed": "モーメント動画の生成に失敗しました：{msg}"
 }

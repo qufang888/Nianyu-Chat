@@ -1480,6 +1480,13 @@ export const translations: Record<Lang, Dict> = {
     'sceneImage.success': '图片已生成',
     'sceneImage.failed': '生图失败：{msg}',
     'sceneImage.elapsed': '已进行 {sec} 秒',
+    // ===== 朋友圈自动配图 / 配视频状态提醒（v2.3.88）=====
+    'momentMedia.image.started': '正在生成朋友圈配图…',
+    'momentMedia.image.success': '朋友圈配图已生成',
+    'momentMedia.image.failed': '朋友圈配图失败：{msg}',
+    'momentMedia.video.started': '正在生成朋友圈配视频…',
+    'momentMedia.video.success': '朋友圈配视频已生成',
+    'momentMedia.video.failed': '朋友圈配视频失败：{msg}',
   },
 
   en: {
@@ -2921,6 +2928,13 @@ export const translations: Record<Lang, Dict> = {
     'sceneImage.success': 'Image generated',
     'sceneImage.failed': 'Image generation failed: {msg}',
     'sceneImage.elapsed': '{sec}s elapsed',
+    // ===== 朋友圈自动配图 / 配视频状态提醒（v2.3.88）=====
+    'momentMedia.image.started': 'Generating moments image…',
+    'momentMedia.image.success': 'Moments image generated',
+    'momentMedia.image.failed': 'Moments image failed: {msg}',
+    'momentMedia.video.started': 'Generating moments video…',
+    'momentMedia.video.success': 'Moments video generated',
+    'momentMedia.video.failed': 'Moments video failed: {msg}',
   },
   // ===== v2.3.38 新增语言（LLM 批量翻译，缺键运行时回退 zh/en） =====
   fr: frDict as Dict,
