@@ -4,6 +4,8 @@
 // 「正在生图中…」，成功 / 失败后自动消失。成功与失败的**提醒**由本模块一并处理：
 //   - 当前窗口正在看该会话 → 站内 Toast（低噪音，不打断输入）
 //   - 当前窗口不在该会话 / 不可见 → 交给主进程的后台提醒卡片（showNotifyCard），此处不重复打扰
+//   （主进程对 success / failed 用**同一口径**判定要不要弹卡片，并回传 cardShown，
+//     故这里只需按 cardShown 统一去重，无需分状态讨论）
 //
 // 设计要点：
 // 1) **单一数据源**：主界面与小窗共用本文件的 useSceneImageStatus，避免两端逻辑漂移。
@@ -111,15 +113,17 @@ export function useSceneImageStatus(
       // 综上：**在本项目当前配置下本行永不命中**（backgroundThrottling:false ⇒ document.hidden 恒
       // false），故失败提醒不存在静默档 —— 窗口可见时由站内 Toast 承担，不在后台时由卡片承担（③）。
       // 仍保留本行是为**防御性**：若日后为省电把 backgroundThrottling 改回 true，本行即刻生效。
-      // 但注意其作用范围仅限 **success** 路径 —— failed 已由 ③ 的 cardShown 兜住
-      // （`data.status === 'failed' && data.cardShown` 见下方），删掉本行对 failed 无影响；
-      // 而 success 无 cardShown 去重，删掉本行会在「窗口隐藏但仍停在生成该图的会话」时
-      // 额外弹出一条无人看得见的 Toast，与卡片重复。故要删也需先给 success 补去重。
+      // 但注意其作用范围 —— ③ 的 cardShown 去重已覆盖 success 与 failed 两态（v2.3.87），
+      // 删掉本行在「双窗都隐藏但仍停在生成该图的会话」时会在无人看得见处多弹一条 Toast。
       if (typeof document !== 'undefined' && document.hidden) return;
-      // v2.3.82：失败时若主进程已用后台卡片告知（软件在后台、或窗口可见但用户在看别的聊天，
-      // 两种情况主进程都会 force 弹卡片），这里跳过 Toast，避免「卡片 + Toast」双重打扰。
+      // v2.3.82（failed）/ v2.3.87（success）：若主进程已用后台卡片告知过本次结果
+      // （软件在后台、或窗口可见但用户在看别的聊天，两种情况主进程都会 force 弹卡片），
+      // 这里跳过 Toast，避免「卡片 + Toast」双重打扰。
+      // ⚠️ 判定不能只看 status：success 从 v2.3.87 起也可能投递卡片，若仍写
+      // `data.status === 'failed' && data.cardShown`，「窗口可见 + 看别的会话」这一档
+      // 会同时弹卡片和 Toast（双弹）。主进程对两态用同一口径置位 cardShown，故此处统一判。
       // 静默模式下主进程会把 cardShown 置 false（卡片实际未展示），此时仍由本处兜底提示。
-      if (data.status === 'failed' && data.cardShown) return;
+      if (data.cardShown) return;
       if (data.status === 'success') {
         toastRef.current(translate('sceneImage.success'), { duration: SUCCESS_TOAST_DURATION_MS });
       } else {
