@@ -997,6 +997,7 @@
   "memory.empty": "Записей пока нет",
   "memory.chatSpecific": "Только для этого чата ({name})",
   "memory.shared": "Общая",
+  "memory.searchPlaceholder": "Искать содержимое, чат или источник памяти…",
   "toast.worldbookSaved": "Мировая книга сохранена",
   "toast.worldbookDeleted": "Мировая книга удалена",
   "toast.worldbookImported": "Мировая книга импортирована",

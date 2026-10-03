@@ -1102,6 +1102,7 @@
   "memory.empty": "Aucun souvenir pour le moment",
   "memory.chatSpecific": "Spécifique à cette conversation ({name})",
   "memory.shared": "Partagé",
+  "memory.searchPlaceholder": "Rechercher contenu, chat ou source de mémoire…",
   "toast.worldbookSaved": "Livre du monde enregistré",
   "toast.worldbookDeleted": "Livre du monde supprimé",
   "toast.worldbookImported": "Importation du livre du monde réussie",

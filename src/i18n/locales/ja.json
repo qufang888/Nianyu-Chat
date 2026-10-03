@@ -1015,6 +1015,7 @@
   "memory.empty": "記憶はありません",
   "memory.chatSpecific": "このチャット専用（{name}）",
   "memory.shared": "共有",
+  "memory.searchPlaceholder": "メモリの内容・チャット・来源を検索…",
   "toast.worldbookSaved": "ワールドブックを保存しました",
   "toast.worldbookDeleted": "ワールドブックを削除しました",
   "toast.worldbookImported": "ワールドブックのインポートに成功しました",

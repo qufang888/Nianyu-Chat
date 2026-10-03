@@ -1135,6 +1135,7 @@
   "memory.empty": "Nenhuma memória ainda",
   "memory.chatSpecific": "Específico deste chat ({name})",
   "memory.shared": "Compartilhado",
+  "memory.searchPlaceholder": "Buscar conteúdo, chat ou origem da memória…",
   "toast.worldbookSaved": "Livro do mundo salvo",
   "toast.worldbookDeleted": "Livro do mundo excluído",
   "toast.worldbookImported": "Livro do mundo importado",
