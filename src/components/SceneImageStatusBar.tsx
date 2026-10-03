@@ -92,19 +92,23 @@ export function useSceneImageStatus(
       // success / failed：先清状态条，再按需提示
       setGenerating(false);
       setStartedAt(0);
-      // 窗口不可见时不弹站内 Toast。⚠️ 本行**不是冗余、不可删除**（v2.3.85 核对各档实际行为后补注）：
+      // 窗口不可见时不弹站内 Toast。⚠️ 本行**不是冗余、不可删除**：
       // 渲染端抑制 Toast 共有三条路径 —— ① 事件按 chatType/chatId 过滤（不是当前会话）；
-      // ② 本行 document.hidden（窗口不可见）；③ 下方 cardShown（主进程已投递卡片，由卡片承担）。
-      // 逐档核对「本行 return 后，谁来兜底」：
-      //   · 窗口最小化      → 主进程 isMinimized=true 判为不可见 → 卡片放行 → **卡片兜底**✓
-      //   · 隐藏到托盘      → isVisible=false 判为不可见   → 卡片放行 → **卡片兜底**✓
-      //   · 被其它窗口遮挡  → isVisible=true 且 isMinimized=false，主进程判为「可见」→
-      //     showNotifyCard 被窗口可见性拦截、**卡片不会弹**；本行又拦掉 Toast → **无人兜底（静默）**。
-      // 也就是说：前两档「交由卡片处理」成立，**遮挡档不成立** —— 这正是唯一可能真正静默的档位。
-      // 对遮挡档的取舍是**产品权衡，不是「不可能发生」**：遮挡多因用户临时切到别的程序，
-      // 此时打断成本大于收益，故不打扰（与托盘「静默模式」同属一类的主动不打扰）。
-      // 若产品日后要求「遮挡也算后台、必须提醒」，需改的是主进程可见性判据（把遮挡计入不可见），
-      // 而不是删掉本行——删掉会导致「窗口已隐藏时仍弹出无人看得见的 Toast」这个新问题。
+      // ② 本行 document.hidden；③ 下方 cardShown（主进程已投递卡片，由卡片承担）。
+      // 「本行 return 后由谁兜底」逐档核对（v2.3.85 修正过一次错误前提，见下）：
+      //   · 窗口最小化    → 主进程 isMinimized=true 判为不可见 → 卡片放行 → **卡片兜底** ✓
+      //   · 隐藏到托盘    → isVisible=false 判为不可见   → 卡片放行 → **卡片兜底** ✓
+      //   · 被其它窗口遮挡 → **本项目不可能发生**：主窗与快捷小窗都设了
+      //     `backgroundThrottling: false`（main.ts），而 Electron 文档明确 —
+      //     「backgroundThrottling 被禁用时，可见性状态保持 visible，即使窗口被最小化、
+      //       遮挡或隐藏」。故遮挡时 isVisible=true、主进程判为「可见」，而本行**不会** return，
+      //       站内 Toast 照常弹出（用户切回来即可看到），不存在静默。
+      // ⚠️ v2.3.85 曾在此处写下「遮挡档是唯一可能静默的档位，属产品权衡」——**该前提是错的**：
+      //   当时误以为遮挡时 document.hidden 会变 true。实际上因 backgroundThrottling:false，
+      //   遮挡档根本到不了本行的 return。切勿照旧结论理解本段。
+      //   （macOS 上 Electron 的可见性会跟踪遮挡状态、与 Windows 不同，但本项目只发 Windows 版：
+      //     package.json 的 build.win.target = ["nsis"]。）
+      // 删除本行会导致「窗口已隐藏/最小化时仍弹出无人看得见的 Toast」——真正的新问题。
       if (typeof document !== 'undefined' && document.hidden) return;
       // v2.3.82：失败时若主进程已用后台卡片告知（软件在后台、或窗口可见但用户在看别的聊天，
       // 两种情况主进程都会 force 弹卡片），这里跳过 Toast，避免「卡片 + Toast」双重打扰。
