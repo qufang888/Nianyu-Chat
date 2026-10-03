@@ -1396,5 +1396,11 @@
   "sceneImage.generating": "Bild wird erzeugt…",
   "sceneImage.success": "Bild erstellt",
   "sceneImage.failed": "Bildgenerierung fehlgeschlagen: {msg}",
-  "sceneImage.elapsed": "{sec} s vergangen"
+  "sceneImage.elapsed": "{sec} s vergangen",
+  "momentMedia.image.started": "Moments-Bild wird erzeugt…",
+  "momentMedia.image.success": "Moments-Bild erstellt",
+  "momentMedia.image.failed": "Moments-Bild fehlgeschlagen: {msg}",
+  "momentMedia.video.started": "Moments-Video wird erzeugt…",
+  "momentMedia.video.success": "Moments-Video erstellt",
+  "momentMedia.video.failed": "Moments-Video fehlgeschlagen: {msg}"
 }

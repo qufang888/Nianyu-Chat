@@ -1396,5 +1396,11 @@
   "sceneImage.generating": "Создание изображения…",
   "sceneImage.success": "Изображение готово",
   "sceneImage.failed": "Не удалось создать изображение: {msg}",
-  "sceneImage.elapsed": "прошло {sec} с"
+  "sceneImage.elapsed": "прошло {sec} с",
+  "momentMedia.image.started": "Создание картинки Moments…",
+  "momentMedia.image.success": "Картинка Moments готова",
+  "momentMedia.image.failed": "Не удалось создать картинку Moments: {msg}",
+  "momentMedia.video.started": "Создание видео Moments…",
+  "momentMedia.video.success": "Видео Moments готово",
+  "momentMedia.video.failed": "Не удалось создать видео Moments: {msg}"
 }

@@ -1083,3 +1083,23 @@ export interface SceneImageStatusEvent {
   cardShown?: boolean;
   ts: number; // 事件发出时的 Date.now()
 }
+
+// ===== 朋友圈自动配图 / 配视频状态提醒（v2.3.88）=====
+// 主进程在「朋友圈自动发动态」流程里为 AI 自动配图 / 配视频的三个关键节点广播，
+// 渲染端（MomentsView）据此弹站内 Toast，主进程在用户不在朋友圈页时改用后台提醒卡片。
+//
+// ⚠️ 为什么不复用 SceneImageStatusEvent：那条通道是**会话维度**的，字段带 chatType/chatId 语义
+// （悬浮球未读、点卡片跳会话、渲染端按会话过滤都依赖它），而朋友圈没有「聊天」这个概念，
+// 硬塞 chatType='moments' 会让 isViewingChat / pushUnread 等既有语义变得含糊。故另开一条通道。
+export type MomentMediaStatus = 'started' | 'success' | 'failed';
+export interface MomentMediaStatusEvent {
+  status: MomentMediaStatus;
+  kind: 'image' | 'video'; // 配图 / 配视频
+  roleId: string; // 发动态的角色 id（也用作朋友圈维度的定位键）
+  roleName: string; // 角色名，展示用
+  error?: string; // 仅 failed：给用户看的简短原因（按码点安全截断）
+  // 与 SceneImageStatusEvent.cardShown 同义：为 true 表示主进程已用提醒卡片告知过本次结果，
+  // 渲染端据此跳过站内 Toast，避免「卡片 + Toast」双弹。仅在卡片**确实会展示**时为 true。
+  cardShown?: boolean;
+  ts: number; // 事件发出时的 Date.now()
+}

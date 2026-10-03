@@ -234,7 +234,12 @@ export default function QueueDock() {
         className="queue-dock-panel"
         style={{
           top: panelTop,
-          transform: expanded ? 'none' : 'translateX(calc(100% + 24px))',
+          // v2.3.88：收起时的滑出距离改用 CSS 变量 --queue-dock-panel-slide
+          // （= 100% + right(26px) + 8px 余量，与新的 right 自洽）。
+          // 改前这里是写死的 calc(100% + 24px)：配 right:10px 时恰好够滑出屏幕，
+          // 但 right 改成 26px 后就不够了 —— 面板会停在屏幕内 2px，
+          // 正好压在贴边小图标底下（handle 在 right:0、宽 22px，是常驻可见的）。
+          transform: expanded ? 'none' : 'translateX(var(--queue-dock-panel-slide))',
           opacity: expanded ? 1 : 0,
           pointerEvents: expanded ? 'auto' : 'none',
           transition: anim ? 'transform .18s linear, opacity .18s linear' : 'none',

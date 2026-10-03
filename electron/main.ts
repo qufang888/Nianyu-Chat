@@ -51,6 +51,11 @@ import {
 import { createBackup, restoreBackup, peekBackupVersion } from './backup';
 import { parseCharacterCard, parseCharacterCardText } from '../src/utils/characterCard';
 import { diagnoseError } from '../src/utils/errorDiagnosis';
+// v2.3.88：复用渲染端 i18n 字典给朋友圈配图/配视频的提醒卡片取文案。
+// 此前该卡片文案在主进程另建了一套 zh/en 两语言表，其余 8 种语言会回退成中文；
+// 改用同一份字典后 10 语言齐全，且与站内 Toast 逐字一致、不会漂移。
+// （translations.ts 只是纯数据模块 + JSON 导入，主进程引入无副作用、不引入 React。）
+import { translate } from '../src/i18n/translations';
 import {
   DEFAULT_MEMORY_INJECT_PROMPT,
   DEFAULT_MEMORY_SUMMARIZE_PROMPT,
@@ -73,6 +78,8 @@ import type {
   Plugin,
   PluginTool,
   SceneImageStatusEvent,
+  MomentMediaStatus,
+  MomentMediaStatusEvent,
 } from '../src/types';
 import { normalizeRelation } from '../src/types';
 import { RELATION_TYPES, RELATION_LABELS } from '../src/types';
@@ -624,6 +631,8 @@ function createWindow(opts?: { coldStart?: boolean }): void {
     clearGroupEditorLockByWindow(mainWindowWcId);
     // 主窗关闭即失去前台聊天标记，避免残留把已关闭主窗的聊天误判为前台
     activeChatKeyMain = '';
+    // 同理清掉一级视图标记，避免主窗重开后残留旧 view 让朋友圈提醒误判「用户在朋友圈页」
+    activeViewMain = '';
   });
 
   // 还原最大化状态
@@ -1039,6 +1048,142 @@ const NOTIFY_IMAGE_FAILED: Record<Lang, string> = {
   'zh-Hant': '生圖失敗',
 };
 
+// ===== 朋友圈自动配图 / 配视频状态提醒（v2.3.88）=====
+// 主进程侧的通知卡「标签」（卡片顶部那行小字）。与「聊天消息 / 异步生图」区分，
+// 让用户一眼看出这条来自朋友圈自动配图 / 配视频，而不是某条聊天消息。
+const NOTIFY_MOMENT_IMAGE_STARTED: Record<Lang, string> = {
+  zh: '朋友圈配图中',
+  en: 'Moments image',
+  fr: 'Image pour Moments',
+  de: 'Moments-Bild',
+  ja: 'モーメント画像',
+  ko: '모멘트 이미지',
+  es: 'Imagen de Moments',
+  pt: 'Imagem do Moments',
+  ru: 'Картинка Moments',
+  'zh-Hant': '朋友圈配圖中',
+};
+const NOTIFY_MOMENT_IMAGE_SUCCESS: Record<Lang, string> = {
+  zh: '朋友圈配图已生成',
+  en: 'Moments image ready',
+  fr: 'Image Moments prête',
+  de: 'Moments-Bild fertig',
+  ja: 'モーメント画像完成',
+  ko: '모멘트 이미지 완료',
+  es: 'Imagen de Moments lista',
+  pt: 'Imagem do Moments pronta',
+  ru: 'Картинка Moments готова',
+  'zh-Hant': '朋友圈配圖已生成',
+};
+const NOTIFY_MOMENT_IMAGE_FAILED: Record<Lang, string> = {
+  zh: '朋友圈配图失败',
+  en: 'Moments image failed',
+  fr: 'Échec de l’image Moments',
+  de: 'Moments-Bild fehlgeschlagen',
+  ja: 'モーメント画像に失敗',
+  ko: '모멘트 이미지 실패',
+  es: 'Error en la imagen de Moments',
+  pt: 'Falha na imagem do Moments',
+  ru: 'Ошибка картинки Moments',
+  'zh-Hant': '朋友圈配圖失敗',
+};
+const NOTIFY_MOMENT_VIDEO_STARTED: Record<Lang, string> = {
+  zh: '朋友圈配视频中',
+  en: 'Moments video',
+  fr: 'Vidéo pour Moments',
+  de: 'Moments-Video',
+  ja: 'モーメント動画',
+  ko: '모멘트 동영상',
+  es: 'Vídeo de Moments',
+  pt: 'Vídeo do Moments',
+  ru: 'Видео Moments',
+  'zh-Hant': '朋友圈配影片中',
+};
+const NOTIFY_MOMENT_VIDEO_SUCCESS: Record<Lang, string> = {
+  zh: '朋友圈配视频已生成',
+  en: 'Moments video ready',
+  fr: 'Vidéo Moments prête',
+  de: 'Moments-Video fertig',
+  ja: 'モーメント動画完成',
+  ko: '모멘트 동영상 완료',
+  es: 'Vídeo de Moments listo',
+  pt: 'Vídeo do Moments pronto',
+  ru: 'Видео Moments готово',
+  'zh-Hant': '朋友圈配影片已生成',
+};
+const NOTIFY_MOMENT_VIDEO_FAILED: Record<Lang, string> = {
+  zh: '朋友圈配视频失败',
+  en: 'Moments video failed',
+  fr: 'Échec de la vidéo Moments',
+  de: 'Moments-Video fehlgeschlagen',
+  ja: 'モーメント動画に失敗',
+  ko: '모멘트 동영상 실패',
+  es: 'Error en el vídeo de Moments',
+  pt: 'Falha no vídeo do Moments',
+  ru: 'Ошибка видео Moments',
+  'zh-Hant': '朋友圈配影片失敗',
+};
+
+// 朋友圈自动配图 / 配视频的**提醒卡片正文**文案（三态 × 两类 = 6 键）。
+//
+//⚠️ 这里**不另建一套 10 语言表**，而是直接复用渲染端 i18n 字典（src/i18n/translations.ts，
+//   它已通过 JSON 导入覆盖全部 10 语言）。两个理由：
+//   ① 若只备 zh/en 两张表，其余 8 种语言的卡片会**回退成中文**——用户选了德语，
+//      却收到一条中文提醒卡片，比英文还糟。
+//   ② 卡片正文与站内 Toast 必须逐字一致。两处各写一份文案表，日后改一处忘另一处，
+//      就会出现「卡片说 A、Toast 说 B」。共用同一份字典从根上消除漂移。
+const MOMENT_MEDIA_TEXT_KEYS: Record<
+  MomentMediaStatus,
+  Record<'image' | 'video', string>
+> = {
+  started: { image: 'momentMedia.image.started', video: 'momentMedia.video.started' },
+  success: { image: 'momentMedia.image.success', video: 'momentMedia.video.success' },
+  failed: { image: 'momentMedia.image.failed', video: 'momentMedia.video.failed' },
+};
+
+// 朋友圈配图 / 配视频失败原因的兜底文案（error 为空时使用）。10 语言齐全。
+const MOMENT_MEDIA_ERR_UNKNOWN: Record<Lang, string> = {
+  zh: '未知原因',
+  en: 'Unknown error',
+  fr: 'Erreur inconnue',
+  de: 'Unbekannter Fehler',
+  ja: '不明なエラー',
+  ko: '알 수 없는 오류',
+  es: 'Error desconocido',
+  pt: 'Erro desconhecido',
+  ru: 'Неизвестная ошибка',
+  'zh-Hant': '未知原因',
+};
+
+// 朋友圈配图「接口正常返回但没拿到可用图片」的兜底原因（b64 为空或落盘失败）。
+// 与「接口抛异常」区分开：前者用户重试往往也没用（配置/额度问题），值得明确告知。
+const MOMENT_MEDIA_ERR_NO_IMAGE: Record<Lang, string> = {
+  zh: '接口未返回可用图片',
+  en: 'No usable image returned',
+  fr: 'Aucune image exploitable renvoyée',
+  de: 'Kein nutzbares Bild zurückgegeben',
+  ja: '利用可能な画像が返されませんでした',
+  ko: '사용 가능한 이미지가 반환되지 않았습니다',
+  es: 'No se devolvió ninguna imagen utilizable',
+  pt: 'Nenhuma imagem utilizável foi retornada',
+  ru: 'Изображение не получено',
+  'zh-Hant': '介面未回傳可用圖片',
+};
+
+// 朋友圈配视频「接口正常返回但没拿到可用视频」的兜底原因（url 为空或下载失败）。
+const MOMENT_MEDIA_ERR_NO_VIDEO: Record<Lang, string> = {
+  zh: '接口未返回可用视频',
+  en: 'No usable video returned',
+  fr: 'Aucune vidéo exploitable renvoyée',
+  de: 'Kein nutzbares Video zurückgegeben',
+  ja: '利用可能な動画が返されませんでした',
+  ko: '사용 가능한 동영상이 반환되지 않았습니다',
+  es: 'No se devolvió ningún vídeo utilizable',
+  pt: 'Nenhum vídeo utilizável foi retornado',
+  ru: 'Видео не получено',
+  'zh-Hant': '介面未回傳可用影片',
+};
+
 // 异步场景生图失败原因的固定文案（v2.3.81）：`error` 为空或下载失败等无法归因的场景使用，
 // 避免把原始英文异常直接抛给用户。10 语言齐全。
 const SCENE_IMAGE_ERR_DOWNLOAD: Record<Lang, string> = {
@@ -1064,6 +1209,21 @@ const SCENE_IMAGE_ERR_UNKNOWN: Record<Lang, string> = {
   pt: 'Erro desconhecido',
   ru: 'Неизвестная ошибка',
   'zh-Hant': '未知原因',
+};
+
+// 异步场景生图 started 档的**卡片正文**（v2.3.88：started 也要弹提醒）。
+// 与渲染端 i18n 的 sceneImage.startedCardable 保持同一句式，避免「卡片说 A、状态条说 B」。
+const SCENE_IMAGE_STARTING_TEXT: Record<Lang, string> = {
+  zh: '开始生成图片…',
+  en: 'Generating image…',
+  fr: 'Génération de l’image…',
+  de: 'Bild wird erzeugt…',
+  ja: '画像を生成しています…',
+  ko: '이미지를 생성하는 중…',
+  es: 'Generando imagen…',
+  pt: 'Gerando imagem…',
+  ru: 'Создание изображения…',
+  'zh-Hant': '開始生成圖片…',
 };
 
 // 切换静默模式：持久化到设置、重建托盘菜单（更新勾选态）、广播给渲染进程同步
@@ -1579,6 +1739,9 @@ async function judgeAndPostMoments(
     const images: string[] = [];
     // 自动生图前先取得用户许可（未获许可则降级为纯文字动态；手动生图不受影响）
     if (mm.needImage && igCfg && (await allowAutoGeneration('image', '朋友圈自动配图'))) {
+      // v2.3.88：配图三态提醒。started 在真正调用生图接口**之前**发，
+      // 保证「未真正开始（如用户拒绝许可 / 未配置）」时不会有任何提示（与异步场景生图同口径）。
+      emitMomentMediaStatus('started', 'image', role.id, role.name);
       try {
         const { b64 } = await generateImage(
           { baseUrl: igCfg.baseUrl, apiKey: igCfg.apiKey },
@@ -1590,8 +1753,17 @@ async function judgeAndPostMoments(
           const p = saveGeneratedImage(b64);
           if (p) images.push(p);
         }
-      } catch {
-        // 配图失败则降级为纯文字动态，不阻塞
+        // b64 为空 / 落盘失败都属「配图没成功」，与抛异常同等对待：都要告知用户，
+        // 否则又回到「静默降级成纯文字动态而用户不知情」的老问题。
+        if (images.length > 0) {
+          emitMomentMediaStatus('success', 'image', role.id, role.name);
+        } else {
+          emitMomentMediaStatus('failed', 'image', role.id, role.name, MOMENT_MEDIA_ERR_NO_IMAGE[getAppLang()]);
+        }
+      } catch (e: any) {
+        // 配图失败则降级为纯文字动态，不阻塞（既有行为不变）；
+        // v2.3.88 额外告知用户「配图失败」，让降级不再是无声无息的。
+        emitMomentMediaStatus('failed', 'image', role.id, role.name, e?.message || String(e));
       }
     }
     const momentId = dm.addMoment(role.id, mm.content.trim(), images, undefined, selfRoleId);
@@ -1680,8 +1852,9 @@ function emitSceneImageStatus(
   // 故 cardShown 需排除静默，否则渲染端会以为已提醒而不再兜底。
   // ⚠️ success 的卡片由 pushMediaUnread 投递（携带 label「图片已生成」），本函数只**判定**它会不会弹，
   //    不重复调用 showNotifyCard —— 否则同一次成功弹两张卡片。
-  //    started 无需判定：此时结果未出，任何窗口状态都还没有提醒可发。
-  if (status === 'failed' || status === 'success') {
+  // v2.3.88：started 也纳入同一套判定（此前 started 完全不判定，导致「不在该会话时开始生图无人知晓」）。
+  //    started 与 success 不同档的是：卡片由**本函数**直接投递（success 那张由 pushMediaUnread 投递）。
+  if (status === 'failed' || status === 'success' || status === 'started') {
     try {
       const anyWindowVisible = anyNotifyWindowVisible();
       const viewingThis = isViewingChat(chatType, chatId);
@@ -1697,6 +1870,20 @@ function emitSceneImageStatus(
           },
           !!(anyWindowVisible && !viewingThis)
         );
+      } else if (status === 'started') {
+        // v2.3.88：只在「用户不在这个会话」时弹卡片。正看着该会话时**不弹**——
+        // 那条内联状态条（SceneImageStatusBar）本身就是 started 的提醒，同屏再弹一个就成了双弹。
+        showNotifyCard(
+          {
+            chatType,
+            chatId,
+            name: chatDisplayName(chatType, chatId),
+            roleName,
+            content: SCENE_IMAGE_STARTING_TEXT[lang] || '开始生成图片…',
+            label: NOTIFY_IMAGE_STARTING[lang],
+          },
+          !!(anyWindowVisible && !viewingThis)
+        );
       }
       // 卡片真正会展示的两种情况：双窗全隐藏（默认放行），或窗口可见但用户没在看该会话（force）。
       // ⚠️ 另有一档会让 showNotifyCard 提前 return：1.5s 内的同签名防抖去重（showNotifyCard 内部）。
@@ -1709,6 +1896,128 @@ function emitSceneImageStatus(
     }
   }
   broadcast(SCENE_IMAGE_STATUS_CHANNEL, payload);
+}
+
+// ===== 异步场景生图「开始」态也要提醒（v2.3.88）=====
+// 背景：v2.3.81~87 的 started 档只在**目标会话内**显示一条内联状态条
+// （SceneImageStatusBar）。若用户此刻不在那个会话，started 对他完全不可见 ——
+// 他不知道生图已经开始，只在结束时才收到通知，体感上「凭空等了很久」。
+// v2.3.88 让 started 也走与 success/failed **同一套四档矩阵**：
+//   · 双窗都隐藏            → 弹卡片（force=false，showNotifyCard 默认放行）
+//   · 窗口可见 + 正看着该会话 → **不弹卡片**（内联状态条已经在了，避免同屏两个提示）
+//   · 窗口可见 + 在看别的会话 → 强制弹卡片（force=true）
+//   · 静默模式             → 一律不弹（showNotifyCard 首行 return）
+// 去重口径与 success/failed 完全一致（同一个 needCard 表达式、同一处 cardShown 置位），
+// 避免出现「started 弹了、success 没弹」这类错位。
+// ⚠️ 判定仍复用 isViewingChat（与 pushMediaUnread 的 force 透传同源），
+//    三档必须同口径，否则会出现「cardShown=true 但卡片没弹」或反之的双弹/静默。
+const NOTIFY_IMAGE_STARTING: Record<Lang, string> = {
+  zh: '开始生图',
+  en: 'Image starting',
+  fr: 'Début de génération',
+  de: 'Bildgenerierung startet',
+  ja: '画像生成を開始',
+  ko: '이미지 생성 시작',
+  es: 'Iniciando imagen',
+  pt: 'Iniciando imagem',
+  ru: 'Начало генерации',
+  'zh-Hant': '開始生圖',
+};
+
+// ===== 朋友圈自动配图 / 配视频状态提醒（v2.3.88）=====
+// 背景：朋友圈自动配图 / 配视频此前**完全静默** —— 生图中无反馈、成功无提醒、
+// 失败只被 catch 吞掉（用户完全不知情，只能看到一条没配图的朋友圈）。
+// 本函数给三态都加上提醒，且**每一档恰好提醒一次**，口径与 emitSceneImageStatus 完全一致。
+//
+// 为什么不复用 sceneImage:status：那条通道是**会话维度**的，字段带 chatType/chatId 语义
+// （悬浮球未读、点卡片跳会话、渲染端按会话过滤都依赖它）。朋友圈没有「聊天」这个概念，
+// 硬塞 chatType='moments' 会让 isViewingChat / pushUnread 的既有语义变含糊，故另开一条通道。
+//
+// 四档矩阵（与 sceneImage 逐档同构，唯一差别是「用户是否在看朋友圈页」由 isViewingMoments() 判定）：
+//   · 双窗都隐藏              → force=false，showNotifyCard 默认放行 → 弹卡片（cardShown=true）
+//   · 主窗可见 + 正在朋友圈页 → force=false，被窗口可见性拦 → 不弹卡片，渲染端弹站内 Toast
+//   · 主窗可见 + 不在朋友圈页 → force=true，强制弹卡片（cardShown=true → 渲染端跳过 Toast）
+//   · 静默模式               → 一律不弹（showNotifyCard 首行 return，cardShown 置 false）
+// 朋友圈没有「会话内状态条」这个载体，故 Toast 只在朋友圈页内弹（有明确的上下文），其余情况走卡片。
+const MOMENT_MEDIA_STATUS_CHANNEL = 'momentMedia:status';
+// 朋友圈配图 / 配视频失败原因截断长度（字符）。给用户看的文案不能是整段英文堆栈。
+const MOMENT_MEDIA_ERROR_MAX_LEN = 120;
+
+/**
+ * 广播一次朋友圈配图 / 配视频状态事件。
+ *
+ * @param status   三态之一
+ * @param kind     'image'（配图）| 'video'（配视频）
+ * @param roleId   发动态的角色 id（朋友圈维度的定位键）
+ * @param roleName 角色名（卡片与 Toast 展示用）
+ * @param error    仅 failed：失败原因；留空则用本地化兜底文案
+ */
+function emitMomentMediaStatus(
+  status: MomentMediaStatus,
+  kind: 'image' | 'video',
+  roleId: string,
+  roleName: string,
+  error?: string
+): void {
+  const lang = getAppLang();
+  const fallback = status === 'failed' ? MOMENT_MEDIA_ERR_UNKNOWN[lang] : '';
+  const raw = (error || '').trim();
+  const truncated = truncateByCodePoint(raw, MOMENT_MEDIA_ERROR_MAX_LEN) || fallback;
+  // 卡片正文走渲染端同一份 i18n 字典（10 语言齐全），与站内 Toast 逐字一致
+  const content = translate(
+    lang,
+    MOMENT_MEDIA_TEXT_KEYS[status][kind],
+    status === 'failed' ? { msg: truncated || fallback } : undefined
+  );
+  const payload: MomentMediaStatusEvent = {
+    status,
+    kind,
+    roleId,
+    roleName,
+    // 仅 failed 携带原因（按码点安全截断，空则用本地化兜底文案）
+    error: status === 'failed' ? truncated : undefined,
+    ts: Date.now(),
+  };
+  try {
+    const anyWindowVisible = anyNotifyWindowVisible();
+    // 用户此刻是否正停在朋友圈页（主窗可见且当前 view === 'moments'）。
+    // ⚠️ 口径与 emitSceneImageStatus 的 isViewingChat 同构：都要求「窗口真实可见」，
+    //    否则主窗最小化后残留的 view 会把卡片误判为「不需要弹」造成静默。
+    const viewingMoments = isViewingMoments();
+    const labelTable =
+      kind === 'image'
+        ? {
+            started: NOTIFY_MOMENT_IMAGE_STARTED,
+            success: NOTIFY_MOMENT_IMAGE_SUCCESS,
+            failed: NOTIFY_MOMENT_IMAGE_FAILED,
+          }
+        : {
+            started: NOTIFY_MOMENT_VIDEO_STARTED,
+            success: NOTIFY_MOMENT_VIDEO_SUCCESS,
+            failed: NOTIFY_MOMENT_VIDEO_FAILED,
+          };
+    // 三态统一投递卡片。force 只在「窗口可见但用户不在朋友圈页」时为 true：
+    // 那正是「软件开着但用户不会注意到」的一档，必须强制弹，否则完全静默。
+    showNotifyCard(
+      {
+        chatType: 'moments',
+        chatId: roleId,
+        name: roleName,
+        roleName,
+        content,
+        label: labelTable[status][lang],
+      },
+      !!(anyWindowVisible && !viewingMoments)
+    );
+    // 卡片真正会展示的两种情况：双窗全隐藏（默认放行），或窗口可见但用户不在朋友圈页（force）。
+    // 与 cardWillShow 同口径算出 cardShown，渲染端据此跳过 Toast，避免「卡片 + Toast」双弹。
+    // 静默模式 showNotifyCard 首行就 return（卡片未展示），故 cardShown 需排除静默。
+    const cardWillShow = !anyWindowVisible || !viewingMoments;
+    payload.cardShown = cardWillShow && dm.getSettings().silent !== true;
+  } catch {
+    /* 通知卡片失败不影响状态广播 */
+  }
+  broadcast(MOMENT_MEDIA_STATUS_CHANNEL, payload);
 }
 
 // 失败后进入冷却，返回 true 表示「应跳过本次」；冷却已过则顺带清理记录并放行。
@@ -2615,6 +2924,27 @@ function waitNote(waitMs: number): string {
 let activeChatKeyMain = '';
 // 迷你窗前台聊天 key（与主窗独立记录，互不覆盖，避免一方上报把另一方当前聊天挤出前台）
 let activeChatKeyMini = '';
+// 主窗当前一级视图（v2.3.88 新增）：'chats' | 'contacts' | 'compare' | 'settings' | 'stats' | 'library' | 'moments'。
+// 由渲染端 App.tsx 在 view 变化时通过 'app:active-view' 上报，仅主窗上报（小窗无一级视图概念）。
+// 用途：朋友圈自动配图 / 配视频的状态提醒需要判断「用户此刻是否正停在朋友圈页」——
+// 该页有上下文（用户正在刷朋友圈），适合弹站内 Toast；不在该页则应走后台提醒卡片。
+let activeViewMain = '';
+
+/**
+ * 用户此刻是否正停在主窗的朋友圈页（主窗可见、未最小化、当前 view === 'moments'）。
+ * 与 isViewingChat 一样要求「窗口真实可见」：否则主窗最小化后残留的 view='moments'
+ * 会让 emitMomentMediaStatus 误判为「用户在朋友圈页」→ 不弹卡片，而渲染端此时也不弹 Toast
+ * （页面不可见）→ 造成完全静默。
+ */
+function isViewingMoments(): boolean {
+  return !!(
+    activeViewMain === 'moments' &&
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    mainWindow.isVisible() &&
+    !mainWindow.isMinimized()
+  );
+}
 
 // 前台聊天判定：主窗或迷你窗正在查看的聊天均算前台。
 // 修复 bug：此前主窗与迷你窗共用同一变量，任一方上报都会覆盖另一方，
@@ -4673,7 +5003,12 @@ async function runMomentVideoJob(roleId: string, momentId: number, prompt: strin
   const s = dm.getSettings();
   const vg = s.videoGen;
   if (!s.momentsVideoEnabled || !vg || !vg.enabled || !vg.baseUrl || !vg.apiKey) return;
+  // v2.3.88：取角色名供三态提醒展示（取不到时回退 'AI'，与既有卡片文案口径一致）
+  const roleName = dm.getRole(roleId)?.name || 'AI';
   try {
+    // v2.3.88：配视频三态提醒。started 在真正调用生视频接口**之前**发；
+    // 开关 / 配置校验已在上方 return，故走到这里即代表「真的要开始生成了」。
+    emitMomentMediaStatus('started', 'video', roleId, roleName);
     broadcast('video:progress', { chatType: 'moments', chatId: roleId, prompt, percent: 0, status: 'queued' });
     sendBallVideoProgress(0, 'queued'); // 悬浮球显示轮巡进度（仅显示）
     const { url } = await generateVideo(
@@ -4705,22 +5040,22 @@ async function runMomentVideoJob(roleId: string, momentId: number, prompt: strin
       const m = dm.listMoments(roleId, true).find((x) => x.id === momentId);
       if (m) dm.updateMoment(momentId, { videos: [...(m.videos || []), videoPath] });
       broadcast('moments:changed', { roleId });
-      // 桌面提示：朋友圈视频已生成完成，点击卡片跳到朋友圈对应位置
-      const lang2 = dm.getSettings().lang === 'en' ? 'en' : 'zh';
-      const r2 = dm.getRole(roleId);
-      showNotifyCard({
-        chatType: 'moments',
-        chatId: roleId,
-        roleName: r2?.name || 'AI',
-        name: r2?.name || 'AI',
-        content: lang2 === 'en' ? 'Moments video generated' : '朋友圈视频已生成完成',
-      });
+      // v2.3.88：原先此处直接调 showNotifyCard（且硬编码中英双语、只在双窗隐藏时才弹）。
+      // 现统一改走 emitMomentMediaStatus —— 它内部同样投递 showNotifyCard，但
+      //   ① 文案走 i18n（不再硬编码）；② 补上「窗口可见但用户不在朋友圈页」时 force 弹卡片这一档；
+      //   ③ 同时广播 momentMedia:status，让朋友圈页内的用户能收到站内 Toast。
+      // ⚠️ 必须**替换**而非叠加调用，否则同一次成功会弹两张卡片（双弹）。
+      emitMomentMediaStatus('success', 'video', roleId, roleName);
       broadcast('video:done', { chatType: 'moments', chatId: roleId, prompt, ok: true, imagePath: videoPath });
     } else {
+      // v2.3.88：未取到视频数据也算失败，补一次 failed 提醒（此前这一档完全静默）
+      emitMomentMediaStatus('failed', 'video', roleId, roleName, MOMENT_MEDIA_ERR_NO_VIDEO[getAppLang()]);
       broadcast('video:done', { chatType: 'moments', chatId: roleId, prompt, ok: false, error: '生视频失败：未获取到视频数据' });
     }
   } catch (e: any) {
     console.error('[nianyu] 朋友圈视频失败', e?.message || e);
+    // v2.3.88：异常路径补 failed 提醒（此前只 console.error + 广播，用户无从得知）
+    emitMomentMediaStatus('failed', 'video', roleId, roleName, e?.message || String(e));
     broadcast('video:done', { chatType: 'moments', chatId: roleId, prompt, ok: false, error: e?.message || String(e) });
   } finally {
     sendBallVideoProgress(-1); // 生成结束（成功/失败）：悬浮球图标恢复常态
@@ -6638,6 +6973,14 @@ function registerIPC(): void {
       // 注意：类 IM 已读水位线不再在「打开」时立即前移，改由渲染端在用户滚动到底部（真正读完）后标记，
       // 这样返回有未读消息的聊天时，能先看到「未读分隔线 / 标记」，符合类 IM 体验。
     }
+  });
+  // v2.3.88：主窗一级视图上报（供朋友圈配图 / 配视频提醒判断「用户是否正停在朋友圈页」）。
+  // 只接受主窗上报（小窗无一级视图概念）；视图切换时渲染端即上报，无需等业务动作触发。
+  ipcMain.on('app:active-view', (e, p: { view: string }) => {
+    if (!p || typeof p.view !== 'string') return;
+    const isMini = miniWindow != null && e.sender.id === miniWindow.webContents.id;
+    if (isMini) return; // 小窗上报无意义，直接忽略（避免污染主窗视图状态）
+    activeViewMain = p.view;
   });
   // 设置中切换悬浮球开关：启用则创建、关闭则销毁。
   // 显式设置操作覆盖会话级关闭标记（P1-C）：「本次关闭悬浮球」后仍可从设置重新开启。

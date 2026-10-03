@@ -17,6 +17,7 @@ import type {
   QueueSnapshot,
   QuickImportResult,
   SceneImageStatusEvent,
+  MomentMediaStatusEvent,
 } from './types';
 import type { ImportCharacterResult } from './utils/characterCard';
 export type { ImportCharacterResult };
@@ -227,6 +228,11 @@ export interface NianyuAPI {
   // 用于显示「正在生图中…」内联状态条并对成功失败给出提醒。返回退订函数。
   onSceneImageStatus: (cb: (e: any, data: SceneImageStatusEvent) => void) => () => void;
   offSceneImageStatus: (cb: (e: any, data: any) => void) => void;
+  // ===== 朋友圈自动配图 / 配视频状态提醒（v2.3.88）=====
+  // 主进程在朋友圈自动配图 / 配视频的开始 / 成功 / 失败节点广播；主界面朋友圈页（MomentsView）订阅，
+  // 在朋友圈页内弹站内 Toast，用户不在该页时由主进程投递后台提醒卡片（cardShown 去重）。返回退订函数。
+  onMomentMediaStatus: (cb: (e: any, data: MomentMediaStatusEvent) => void) => () => void;
+  offMomentMediaStatus: (cb: (e: any, data: any) => void) => void;
   saveImageMemory: (p: { roleId: string; imagePath: string; note?: string }) => Promise<any>;
   clearChatMessages: (chatType: string, chatId: string, withMemories: boolean) => Promise<{ deletedMsgs: number; deletedMems: number }>;
   syncAutoChat: (p: { chatId: string; action: 'start' | 'stop' }) => Promise<void>;
@@ -393,6 +399,9 @@ export interface NianyuAPI {
   ballCloseSession: () => void; // 本次关闭悬浮球（不持久化，重启恢复）
   ballOpenChat: (chat: { chatType: string; chatId: string; name?: string }) => void; // 悬浮球面板点击聊天 → 呼出对应小窗
   setActiveChat: (type: string, id: string) => void; // 通知主进程当前聊天（主动消息未读判断）
+  // v2.3.88：上报主窗当前一级视图（'chats' | 'contacts' | ... | 'moments'）。
+  // 供朋友圈自动配图 / 配视频的状态提醒判断「用户此刻是否正停在朋友圈页」。
+  setActiveView: (view: string) => void;
 
   // ===== 主进程错误推送 =====
   onAppError?: (cb: (data: { message: string; cause: string; solution: string; lang: string }) => void) => () => void;

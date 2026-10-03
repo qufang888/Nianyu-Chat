@@ -18,6 +18,7 @@ import type {
   QueueSnapshot,
   QuickImportResult,
   SceneImageStatusEvent,
+  MomentMediaStatusEvent,
 } from '../src/types';
 import type { ImportCharacterResult } from '../src/utils/characterCard';
 
@@ -236,6 +237,10 @@ export interface NianyuAPI {
   // 订阅函数返回退订函数，组件 unmount 时调用即可，无需再走 off。
   onSceneImageStatus: (cb: (e: any, data: SceneImageStatusEvent) => void) => () => void;
   offSceneImageStatus: (cb: (e: any, data: any) => void) => void;
+  // 朋友圈自动配图 / 配视频状态广播（v2.3.88）：started / success / failed 三态。
+  // 与 sceneImage:status 一样，订阅函数返回退订函数，组件 unmount 时调用即可。
+  onMomentMediaStatus: (cb: (e: any, data: MomentMediaStatusEvent) => void) => () => void;
+  offMomentMediaStatus: (cb: (e: any, data: any) => void) => void;
   saveImageMemory: (p: { roleId: string; imagePath: string; note?: string }) => Promise<any>;
   clearChatMessages: (chatType: string, chatId: string, withMemories: boolean) => Promise<{ deletedMsgs: number; deletedMems: number }>;
   syncAutoChat: (p: { chatId: string; action: 'start' | 'stop' }) => Promise<void>;
@@ -392,6 +397,10 @@ export interface NianyuAPI {
   ballSetAlwaysOnTop: (v: boolean) => void; // 切换悬浮球置顶
   ballCloseSession: () => void; // 本次关闭悬浮球（不持久化，重启恢复）
   setActiveChat: (type: string, id: string) => void; // 通知主进程当前聊天（主动消息未读判断）
+  // v2.3.88：上报主窗当前一级视图（'chats' | 'contacts' | ... | 'moments'）。
+  // 供朋友圈自动配图 / 配视频的状态提醒判断「用户此刻是否正停在朋友圈页」——
+  // 在该页弹站内 Toast，不在该页则由主进程弹后台提醒卡片。
+  setActiveView: (view: string) => void;
   ballOpenChat: (chat: { chatType: string; chatId: string; name: string }) => void;
   ballGetUnread: () => Promise<{ count: number; items: BallUnreadItem[] }>;
   onBallUnread: (cb: (data: { count: number; items: BallUnreadItem[] }) => void) => () => void;
@@ -598,6 +607,12 @@ const api: NianyuAPI = {
     return () => ipcRenderer.removeListener('sceneImage:status', listener);
   },
   offSceneImageStatus: () => {},
+  onMomentMediaStatus: (cb) => {
+    const listener = (e: any, data: any) => cb(e, data);
+    ipcRenderer.on('momentMedia:status', listener);
+    return () => ipcRenderer.removeListener('momentMedia:status', listener);
+  },
+  offMomentMediaStatus: () => {},
   onEventChosen: (cb) => {
     const listener = (e: any, data: any) => cb(e, data);
     ipcRenderer.on('event:chosen', listener);
@@ -868,6 +883,8 @@ const api: NianyuAPI = {
   ballSetAlwaysOnTop: (v) => ipcRenderer.send('ball:set-always-on-top', v),
   ballCloseSession: () => ipcRenderer.send('ball:close-session'),
   setActiveChat: (type, id) => ipcRenderer.send('app:active-chat', { type, id }),
+    // v2.3.88：上报主窗当前一级视图（供朋友圈配图 / 配视频提醒判断用户是否正停在朋友圈页）
+    setActiveView: (view: string) => ipcRenderer.send('app:active-view', { view }),
   ballOpenChat: (chat) => ipcRenderer.send('ball:open-chat', chat),
   ballGetUnread: () => ipcRenderer.invoke('ball:get-unread'),
   onBallUnread: (cb) => {
