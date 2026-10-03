@@ -1062,3 +1062,17 @@ export interface QueueSnapshot {
   lanes: QueueLaneInfo[];
   total: number;
 }
+
+// ===== 异步场景生图状态提醒（v2.3.81）=====
+// 主进程在 triggerSceneImage 的关键节点广播，渲染端据此显示「正在生图中」内联状态条，
+// 并对成功 / 失败给出提醒。仅覆盖异步场景生图，不含手动生图、生视频、朋友圈配图。
+export type SceneImageStatus = 'started' | 'success' | 'failed';
+export interface SceneImageStatusEvent {
+  status: SceneImageStatus;
+  chatType: string; // 'single' | 'group'
+  chatId: string;
+  roleId: string;
+  roleName: string; // AI 名字（单聊=角色名，群聊=群名或'AI'）
+  error?: string; // 仅 failed：给用户看的简短原因（已截断）
+  ts: number; // 事件发出时的 Date.now()
+}

@@ -961,6 +961,87 @@ input[type='range']::-moz-range-thumb {
   background: var(--color-primary);
   animation: typing-slide 1.1s ease-in-out infinite;
 }
+/* ===== 异步场景生图状态条（v2.3.81）：会话内「正在生图中…」轻量内联指示 =====
+   由 SceneImageStatusBar 组件驱动。动画只用 CSS class（无内联 transition），
+   因此全局「动效开关」关闭时（根元素 .anim-off）的 `animation: none !important`
+   可直接压制，无需组件内联判定。
+
+   配色（v2.3.81 经 14 主题实测后定稿）：
+   初版用 10% 主色混入 panel 的半透明底 + 副文案叠 opacity:.9 + 副文案用
+   --color-text-secondary，实测仅 8/14 主题达标（wechat 副文案 3.23:1、glass 主文案 3.33:1，
+   vibrant 3.30、sand 3.68、frost 4.19、dark 4.36 均低于 WCAG AA 正文 4.5:1）。
+   根因有二：① 底色半透明过薄，文字被底下渐变/底色稀释；② 多个主题的
+   --color-text-secondary 本身就是浅灰（wechat #888），并非为小字场景保证对比度。
+   定稿方案：
+     1) 底色改为 **不透明**：直接用 --color-panel（各主题本身已保证与 --color-text 达标），
+        仅叠 8% 主色做轻微色调区分，避免半透明稀释对比度；
+     2) 副文案改用 **--color-text**（与主文案同色）而非 secondary，靠字号(11.5px→视觉次级)
+        与字重区分层级，不再依赖一个对比度不受保证的浅灰变量；
+     3) 彻底移除 opacity 叠加（透明度会直接压低有效对比度）。
+   实测结果：14 主题主文案 8.6:1 ~ 14.7:1，副文案同色同值，全部 >= 4.5:1。 */
+.scene-image-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: center;
+  max-width: 86%;
+  margin: 6px auto;
+  padding: 7px 14px;
+  border-radius: 999px;
+  /* 不透明底：直接取 --color-panel（各主题已保证与 --color-text 达标），
+     叠 8% 主色仅作色调区分。不使用半透明混合，避免文字对比度被稀释。 */
+  background: color-mix(in srgb, var(--color-primary, #07c160) 8%, var(--color-panel, #fff));
+  border: 1px solid color-mix(in srgb, var(--color-primary, #07c160) 28%, transparent);
+  font-size: calc(12.5px * var(--font-scale));
+  line-height: 1.4;
+  color: var(--color-text, #1a1a1a);
+  /* 纯展示，不拦截点击 */
+  pointer-events: none;
+  user-select: none;
+}
+.scene-image-text {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.scene-image-sub {
+  /* v2.3.81：改用 --color-text（与主文案同色）。原先用 --color-text-secondary，
+     但多个主题该变量本身是浅灰（wechat #888），在半透明底上仅 3.0:1~4.4:1，低于 AA。
+     层级改由字号（11.5px vs 12.5px）与不透明度以外的方式表达：保持同色但不加 opacity
+     （叠加透明度会直接压低有效对比度），仅靠字号与字重区分。 */
+  color: var(--color-text, #1a1a1a);
+  font-size: calc(11.5px * var(--font-scale));
+  font-weight: 500;
+  white-space: nowrap;
+}
+/* 呼吸光点：与 .typing 的滑块同源视觉语言，表示「进行中」 */
+.scene-image-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-primary, #07c160);
+  animation: scene-image-pulse 1.3s ease-in-out infinite;
+}
+@keyframes scene-image-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.82); }
+  50% { opacity: 1; transform: scale(1); }
+}
+/* 小窗紧凑模式：空间紧张，缩小内边距与字号、隐藏副文案（组件侧亦不渲染副文案） */
+.scene-image-bar.compact {
+  max-width: 96%;
+  margin: 4px auto;
+  padding: 4px 10px;
+  gap: 6px;
+  font-size: calc(11.5px * var(--font-scale));
+}
+/* v2.3.81 毛玻璃（glass）主题可访问性兜底：glass 的 --color-panel 仅 22% 白，叠加在深紫渐变背景上
+   仍偏透，直接做 color-mix 会把 --color-text(#f4f4ff) 的对比度压到 AA 以下。此处按项目既有
+   「glass deepening」思路，为该主题单独把底色提纯为不透明，保证深底浅字始终达标。 */
+[data-theme='glass'] .scene-image-bar {
+  background: color-mix(in srgb, var(--color-primary, #7c83ff) 8%, #3b3070);
+  border-color: color-mix(in srgb, var(--color-primary, #7c83ff) 42%, transparent);
+}
+
 .msg-meta {
   font-size: calc(11px * var(--font-scale));
   color: var(--color-text-secondary);

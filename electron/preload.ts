@@ -17,6 +17,7 @@ import type {
   ProbeOptions,
   QueueSnapshot,
   QuickImportResult,
+  SceneImageStatusEvent,
 } from '../src/types';
 import type { ImportCharacterResult } from '../src/utils/characterCard';
 
@@ -231,6 +232,10 @@ export interface NianyuAPI {
   offVideoProgress: (cb: (e: any, data: any) => void) => void;
   onVideoDone: (cb: (e: any, data: { chatType: string; chatId: string; prompt: string; ok: boolean; imagePath?: string; error?: string }) => void) => () => void;
   offVideoDone: (cb: (e: any, data: any) => void) => void;
+  // 异步场景生图状态广播（v2.3.81）：started / success / failed 三态，主界面与小窗都订阅。
+  // 订阅函数返回退订函数，组件 unmount 时调用即可，无需再走 off。
+  onSceneImageStatus: (cb: (e: any, data: SceneImageStatusEvent) => void) => () => void;
+  offSceneImageStatus: (cb: (e: any, data: any) => void) => void;
   saveImageMemory: (p: { roleId: string; imagePath: string; note?: string }) => Promise<any>;
   clearChatMessages: (chatType: string, chatId: string, withMemories: boolean) => Promise<{ deletedMsgs: number; deletedMems: number }>;
   syncAutoChat: (p: { chatId: string; action: 'start' | 'stop' }) => Promise<void>;
@@ -587,6 +592,12 @@ const api: NianyuAPI = {
     return () => ipcRenderer.removeListener('video:done', listener);
   },
   offVideoDone: () => {},
+  onSceneImageStatus: (cb) => {
+    const listener = (e: any, data: any) => cb(e, data);
+    ipcRenderer.on('sceneImage:status', listener);
+    return () => ipcRenderer.removeListener('sceneImage:status', listener);
+  },
+  offSceneImageStatus: () => {},
   onEventChosen: (cb) => {
     const listener = (e: any, data: any) => cb(e, data);
     ipcRenderer.on('event:chosen', listener);

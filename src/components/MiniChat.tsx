@@ -27,6 +27,7 @@ import { ChatModelPicker } from './ChatModelPicker';
 // 拖拽添加接受的图片扩展名（v2.3.51）：与主进程 dialog:pickImage 的过滤器保持一致
 const IMAGE_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp)$/i;
 import { useToast, ToastView } from './Toast';
+import { SceneImageStatusBar, useSceneImageStatus } from './SceneImageStatusBar';
 import SelectMenu from './SelectMenu';
 import { ReasoningBlock } from './ReasoningBlock';
 import RandomEventModal, { RandomEventData } from './RandomEventModal';
@@ -103,6 +104,14 @@ export const MiniChat: React.FC = () => {
   // 自我身份（用户自己的角色卡）：按会话覆盖
   const [selfRoles, setSelfRoles] = useState<SelfRole[]>([]);
   const { toast, showToast } = useToast();
+  // v2.3.81：订阅异步场景生图三态（sceneImage:status）。小窗未打开任何会话时不订阅（enabled=false），
+  // 避免空会话下无谓监听；其余逻辑与主界面共用同一个 hook，保证两端行为一致。
+  const sceneImage = useSceneImageStatus(
+    current?.chat_type || '',
+    current?.chat_id || '',
+    showToast,
+    !!current
+  );
   const [defaultSelfId, setDefaultSelfId] = useState('');
   const [selfRoleId, setSelfRoleId] = useState('default');
   // 本对话世界书（''=继承；'none'=不使用；其它=具体ID）
@@ -2110,6 +2119,13 @@ export const MiniChat: React.FC = () => {
         backgroundSize: 'cover',
         backgroundPosition: 'center'
       } : { flex: 1 }}>
+        {/* v2.3.81：异步场景生图「正在生图中…」状态条（小窗用 compact 紧凑排版，省纵向空间）*/}
+        <SceneImageStatusBar
+          active={sceneImage.generating}
+          startedAt={sceneImage.startedAt}
+          roleName={sceneImage.roleName}
+          compact
+        />
         {allMessages.length === 0 && (
           <div className="empty-state" style={{ fontSize: 12 }}>
             {current ? t('chat.empty', { name: current.name }) : t('mini.empty')}

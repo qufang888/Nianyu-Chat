@@ -1392,5 +1392,9 @@
   "msg.collapseAll": "Alle Nachrichten einklappen",
   "msg.expandAll": "Alle Nachrichten ausklappen",
   "msg.collapseCount": "{n} Nachrichten insgesamt",
-  "chat.deleteNode": "Diesen Story-Knoten löschen"
+  "chat.deleteNode": "Diesen Story-Knoten löschen",
+  "sceneImage.generating": "Bild wird erzeugt…",
+  "sceneImage.success": "Bild erstellt",
+  "sceneImage.failed": "Bildgenerierung fehlgeschlagen: {msg}",
+  "sceneImage.elapsed": "{sec} s vergangen"
 }

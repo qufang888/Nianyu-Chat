@@ -1392,5 +1392,9 @@
   "msg.collapseAll": "折疊全部訊息",
   "msg.expandAll": "展開全部訊息",
   "msg.collapseCount": "共 {n} 條訊息",
-  "chat.deleteNode": "刪除該劇情節點"
+  "chat.deleteNode": "刪除該劇情節點",
+  "sceneImage.generating": "正在生圖中…",
+  "sceneImage.success": "圖片已生成",
+  "sceneImage.failed": "生圖失敗：{msg}",
+  "sceneImage.elapsed": "已進行 {sec} 秒"
 }

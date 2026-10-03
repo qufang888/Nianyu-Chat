@@ -16,6 +16,7 @@ import type {
   UpdateStatus,
   QueueSnapshot,
   QuickImportResult,
+  SceneImageStatusEvent,
 } from './types';
 import type { ImportCharacterResult } from './utils/characterCard';
 export type { ImportCharacterResult };
@@ -221,6 +222,11 @@ export interface NianyuAPI {
   // 生视频进度/完成广播（主窗 + 小窗悬浮气泡订阅）
   onVideoProgress: (cb: (e: any, data: { chatType: string; chatId: string; prompt: string; percent: number; status?: string }) => void) => () => void;
   onVideoDone: (cb: (e: any, data: { chatType: string; chatId: string; prompt: string; ok: boolean; imagePath?: string; error?: string }) => void) => () => void;
+  // ===== 异步场景生图状态提醒（v2.3.81）=====
+  // 主进程在异步场景生图的开始 / 成功 / 失败节点广播；主界面与小窗都订阅，
+  // 用于显示「正在生图中…」内联状态条并对成功失败给出提醒。返回退订函数。
+  onSceneImageStatus: (cb: (e: any, data: SceneImageStatusEvent) => void) => () => void;
+  offSceneImageStatus: (cb: (e: any, data: any) => void) => void;
   saveImageMemory: (p: { roleId: string; imagePath: string; note?: string }) => Promise<any>;
   clearChatMessages: (chatType: string, chatId: string, withMemories: boolean) => Promise<{ deletedMsgs: number; deletedMems: number }>;
   syncAutoChat: (p: { chatId: string; action: 'start' | 'stop' }) => Promise<void>;
@@ -425,6 +431,8 @@ export const api: NianyuAPI = {
   queueSnapshot: () => raw.queueSnapshot(),
   queueReorder: (key, orderedIds) => raw.queueReorder(key, orderedIds),
   onQueueChanged: (cb) => raw.onQueueChanged(cb),
+  // v2.3.81：异步场景生图三态订阅（started / success / failed）
+  onSceneImageStatus: (cb) => raw.onSceneImageStatus(cb),
   getChatModelId: (chatType, chatId) => raw.getChatModelId(chatType, chatId),
   getChatModel: (chatType, chatId) => raw.getChatModel(chatType, chatId),
   mcpStatus: () => raw.mcpStatus(),

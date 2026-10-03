@@ -1392,5 +1392,9 @@
   "msg.collapseAll": "Replier tous les messages",
   "msg.expandAll": "Déplier tous les messages",
   "msg.collapseCount": "{n} messages au total",
-  "chat.deleteNode": "Supprimer ce nœud de récit"
+  "chat.deleteNode": "Supprimer ce nœud de récit",
+  "sceneImage.generating": "Génération de l’image…",
+  "sceneImage.success": "Image générée",
+  "sceneImage.failed": "Échec de la génération de l’image : {msg}",
+  "sceneImage.elapsed": "{sec} s écoulées"
 }

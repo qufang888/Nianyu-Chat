@@ -1392,5 +1392,9 @@
   "msg.collapseAll": "모든 메시지 접기",
   "msg.expandAll": "모든 메시지 펼치기",
   "msg.collapseCount": "총 {n}개의 메시지",
-  "chat.deleteNode": "이 스토리 노드 삭제"
+  "chat.deleteNode": "이 스토리 노드 삭제",
+  "sceneImage.generating": "이미지 생성 중…",
+  "sceneImage.success": "이미지가 생성되었습니다",
+  "sceneImage.failed": "이미지 생성 실패: {msg}",
+  "sceneImage.elapsed": "{sec}초 경과"
 }

@@ -1392,5 +1392,9 @@
   "msg.collapseAll": "Свернуть все сообщения",
   "msg.expandAll": "Развернуть все сообщения",
   "msg.collapseCount": "Всего сообщений: {n}",
-  "chat.deleteNode": "Удалить этот узел сюжета"
+  "chat.deleteNode": "Удалить этот узел сюжета",
+  "sceneImage.generating": "Создание изображения…",
+  "sceneImage.success": "Изображение готово",
+  "sceneImage.failed": "Не удалось создать изображение: {msg}",
+  "sceneImage.elapsed": "прошло {sec} с"
 }

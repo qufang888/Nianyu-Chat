@@ -72,6 +72,7 @@ import type {
   Group,
   Plugin,
   PluginTool,
+  SceneImageStatusEvent,
 } from '../src/types';
 import { normalizeRelation } from '../src/types';
 import { RELATION_TYPES, RELATION_LABELS } from '../src/types';
@@ -101,26 +102,45 @@ import {
   reorderQueue,
 } from './queueManager';
 
+// 会话显示名：群聊取群名、单聊取角色名，取不到时回退 chatId。
+// v2.3.81 抽出为独立函数，供 pushMediaUnread 与生图失败提醒卡片共用，避免两处各写一遍。
+function chatDisplayName(chatType: string, chatId: string): string {
+  return chatType === 'group'
+    ? ((dm.getGroup(chatId)?.group_name as string) || chatId)
+    : ((dm.getRole(chatId)?.name as string) || chatId);
+}
+
 // 媒体生成（生图/生视频）完成写入 AI 消息后补未读：仅主窗不可见 / 未正盯该聊天时计入，
 // 防止「结果已生成但悬浮球未读清单没显示」。头像按聊天类型解析（单聊取角色，群聊无头像留空）。
 // 内容用占位文案，渲染端点击未读项跳回对应聊天即可看到实际图片/视频。
-function pushMediaUnread(chatType: string, chatId: string, aiName: string, kind: 'image' | 'video'): void {
+// v2.3.81：notifyLabel 用于给后台提醒卡片一个语义化标签（异步场景生图传「图片已生成」），
+// 缺省为 undefined → showNotifyCard 回退通用「新消息」，既有调用点行为不变。
+function pushMediaUnread(
+  chatType: string,
+  chatId: string,
+  aiName: string,
+  kind: 'image' | 'video',
+  notifyLabel?: string
+): void {
   const settings = dm.getSettings();
-  if (settings.floatingBall?.enabled === false) return;
+  // v2.3.81：未读清单（悬浮球）受 floatingBall 开关控制，但**后台提醒卡片不应被它牵连** ——
+  // 悬浮球与生图提醒卡片是两个独立功能。若在此提前 return，关闭悬浮球的用户将完全收不到
+  // 「图片已生成 / 生图失败」提醒（属功能缺失）。故：悬浮球关闭时只跳过未读入列，
+  // 提醒卡片仍照常走下面的 showNotifyCard（其内部另有静默模式与窗口可见性判断）。
+  const floatingBallOn = settings.floatingBall?.enabled !== false;
   const content = kind === 'image' ? '[图片]' : '[视频]';
-  let avatar = '';
-  if (chatType === 'single') {
-    const rid = dm.resolveSingleRoleId(chatType, chatId);
-    avatar = (rid && dm.getRole(rid)?.avatar_path) || '';
+  if (floatingBallOn) {
+    let avatar = '';
+    if (chatType === 'single') {
+      const rid = dm.resolveSingleRoleId(chatType, chatId);
+      avatar = (rid && dm.getRole(rid)?.avatar_path) || '';
+    }
+    pushUnread(chatType, chatId, aiName, content, avatar);
   }
-  pushUnread(chatType, chatId, aiName, content, avatar);
   // 后台消息提醒卡片：主窗/小窗均隐藏时由 showNotifyCard 内部判断并弹出（与渲染端互补，覆盖未挂载聊天）
   try {
-    const name =
-      chatType === 'group'
-        ? ((dm.getGroup(chatId)?.group_name as string) || chatId)
-        : ((dm.getRole(chatId)?.name as string) || chatId);
-    showNotifyCard({ chatType, chatId, name, roleName: aiName, content });
+    const name = chatDisplayName(chatType, chatId);
+    showNotifyCard({ chatType, chatId, name, roleName: aiName, content, label: notifyLabel });
   } catch {
     /* 通知卡片失败不影响消息下发 */
   }
@@ -770,6 +790,8 @@ function positionNotifyWindow(): void {
 // 收到一条 AI 消息：默认「主窗与小窗均隐藏或最小化（软件在后台）」才弹提醒卡片。
 // 例外（v2.3.63）：**主动消息无条件弹卡片**——用户可能正在看别的聊天/在设置页，
 // 主动消息是「没人触发的情况下自己发来的」，漏掉提醒等于凭空消失，必须弹。
+// v2.3.81：item.label 可由调用方指定语义化标签（如生图成功传「图片已生成」），
+// 缺省仍为 NOTIFY_NEW_MESSAGE「新消息」，保持既有行为不变。
 function showNotifyCard(item: any, force = false): void {
   // 静默模式：暂停后台消息卡片通知（提示音由渲染进程在播放前拦截）
   if (dm.getSettings().silent === true) return;
@@ -804,7 +826,8 @@ function processNotifyQueue(): void {
   notifyWindow.showInactive();
   safeSend(notifyWindow, 'notify:data', {
     action: 'show',
-    label: NOTIFY_NEW_MESSAGE[lang] || '新消息',
+    // v2.3.81：调用方给了语义化标签就用它（如生图成功「图片已生成」），否则回退通用「新消息」
+    label: item.label || NOTIFY_NEW_MESSAGE[lang] || '新消息',
     roleName: item.roleName,
     content: item.content,
     chat: {
@@ -943,6 +966,62 @@ const NOTIFY_NEW_MESSAGE: Record<Lang, string> = {
   pt: 'Nova mensagem',
   ru: 'Новое сообщение',
   'zh-Hant': '新訊息',
+};
+
+// 通知卡「图片已生成」标签（v2.3.81：异步场景生图成功）。与「新消息」区分，
+// 让用户一眼看出这条不是聊天消息而是后台生图产物。
+const NOTIFY_IMAGE_READY: Record<Lang, string> = {
+  zh: '图片已生成',
+  en: 'Image ready',
+  fr: 'Image générée',
+  de: 'Bild erstellt',
+  ja: '画像生成完了',
+  ko: '이미지 생성 완료',
+  es: 'Imagen generada',
+  pt: 'Imagem gerada',
+  ru: 'Изображение готово',
+  'zh-Hant': '圖片已生成',
+};
+
+// 通知卡「生图失败」标签（v2.3.81）
+const NOTIFY_IMAGE_FAILED: Record<Lang, string> = {
+  zh: '生图失败',
+  en: 'Image failed',
+  fr: 'Échec de la génération',
+  de: 'Bildfehler',
+  ja: '画像生成に失敗',
+  ko: '이미지 생성 실패',
+  es: 'Error al generar la imagen',
+  pt: 'Falha ao gerar a imagem',
+  ru: 'Ошибка генерации',
+  'zh-Hant': '生圖失敗',
+};
+
+// 异步场景生图失败原因的固定文案（v2.3.81）：`error` 为空或下载失败等无法归因的场景使用，
+// 避免把原始英文异常直接抛给用户。10 语言齐全。
+const SCENE_IMAGE_ERR_DOWNLOAD: Record<Lang, string> = {
+  zh: '图片下载失败',
+  en: 'Image download failed',
+  fr: 'Échec du téléchargement de l’image',
+  de: 'Bild-Download fehlgeschlagen',
+  ja: '画像のダウンロードに失敗しました',
+  ko: '이미지 다운로드 실패',
+  es: 'Error al descargar la imagen',
+  pt: 'Falha ao baixar a imagem',
+  ru: 'Не удалось загрузить изображение',
+  'zh-Hant': '圖片下載失敗',
+};
+const SCENE_IMAGE_ERR_UNKNOWN: Record<Lang, string> = {
+  zh: '未知原因',
+  en: 'Unknown error',
+  fr: 'Erreur inconnue',
+  de: 'Unbekannter Fehler',
+  ja: '不明なエラー',
+  ko: '알 수 없는 오류',
+  es: 'Error desconocido',
+  pt: 'Erro desconhecido',
+  ru: 'Неизвестная ошибка',
+  'zh-Hant': '未知原因',
 };
 
 // 切换静默模式：持久化到设置、重建托盘菜单（更新勾选态）、广播给渲染进程同步
@@ -1498,6 +1577,70 @@ async function judgeAndPostMoments(
 
 // ===== 异步场景生图：AI 判定当前对话是否值得配一张场景图（指令不进聊天界面） =====
 const lastSceneImageAt = new Map<string, number>(); // `${chatType}:${chatId}` -> 上次生图时间戳
+// v2.3.81 异步生图三态提醒（仅 triggerSceneImage 异步场景生图；手动生图/生视频/朋友圈配图不涉及）
+// 1) SCENE_IMAGE_FAIL_COOLDOWN_MS = 60_000：生图失败后的冷却窗口（60 秒）。期间直接静默 return，
+//    防止「接口坏了 → 反复失败 → 反复弹错 + 生图 API 被打爆」。失败时记录，冷却到期自动放行。
+// 2) SCENE_IMAGE_ERROR_MAX_LEN = 120：失败原因截断长度（字符）。给用户看的文案不能是整段英文堆栈。
+// 3) SCENE_IMAGE_STATUS_CHANNEL = 'sceneImage:status'：广播频道名，主进程 → 所有窗口（主界面 + 小窗）。
+const SCENE_IMAGE_FAIL_COOLDOWN_MS = 60_000;
+const SCENE_IMAGE_ERROR_MAX_LEN = 120;
+const SCENE_IMAGE_STATUS_CHANNEL = 'sceneImage:status';
+const sceneImageFailAt = new Map<string, number>(); // `${chatType}:${chatId}` -> 上次生图失败时间戳
+
+// 广播一次生图状态事件（v2.3.81）。error 为空时用调用方给的默认文案兜底。
+function emitSceneImageStatus(
+  status: 'started' | 'success' | 'failed',
+  chatType: string,
+  chatId: string,
+  roleId: string,
+  roleName: string,
+  error?: string
+): void {
+  const lang = getAppLang();
+  const fallback = status === 'failed' ? SCENE_IMAGE_ERR_UNKNOWN[lang] : '';
+  const raw = (error || '').trim();
+  const payload: SceneImageStatusEvent = {
+    status,
+    chatType,
+    chatId,
+    roleId,
+    roleName,
+    // 仅 failed 携带原因：截断到 120 字符，空则用本地化兜底文案
+    error: status === 'failed' ? raw.slice(0, SCENE_IMAGE_ERROR_MAX_LEN) || fallback : undefined,
+    ts: Date.now(),
+  };
+  broadcast(SCENE_IMAGE_STATUS_CHANNEL, payload);
+
+  // v2.3.81：失败时补一张「生图失败」提醒卡片。
+  // 可见性判断**不在这里重复实现**——showNotifyCard(force=false) 内部已按「主窗与小窗均隐藏/
+  // 最小化才弹」的同一条件拦截（两处逻辑若各写一份，日后改一处就会与另一处漂移）。
+  // 故这里必须传 force=false：窗口可见时由渲染端 showToast 就地提示，避免同一失败弹两次。
+  // 静默模式 silent 由 showNotifyCard 内部直接 return，无需重复判断。
+  // 集中在本函数而非各失败分支，保证任何 failed 事件都不会漏掉卡片提醒。
+  if (status === 'failed') {
+    try {
+      showNotifyCard({
+        chatType,
+        chatId,
+        name: chatDisplayName(chatType, chatId),
+        roleName,
+        content: payload.error || '',
+        label: NOTIFY_IMAGE_FAILED[lang],
+      });
+    } catch {
+      /* 通知卡片失败不影响状态广播 */
+    }
+  }
+}
+
+// 失败后进入冷却，返回 true 表示「应跳过本次」；冷却已过则顺带清理记录并放行。
+function sceneImageInFailCooldown(key: string): boolean {
+  const at = sceneImageFailAt.get(key);
+  if (!at) return false;
+  if (Date.now() - at < SCENE_IMAGE_FAIL_COOLDOWN_MS) return true;
+  sceneImageFailAt.delete(key); // 冷却已过，清理以便下次失败重新计时
+  return false;
+}
 
 // LLM 判定：是否该生成场景图 + 英文生图提示词
 async function judgeSceneImageLLM(
@@ -1584,6 +1727,8 @@ async function triggerSceneImage(chatType: string, chatId: string, roleId: strin
   const last = lastSceneImageAt.get(key) || 0;
   const interval = Math.max(5, Math.min(3600, settings.sceneImageIntervalSec || 120)) * 1000;
   if (now - last < interval) return; // 节流：两次生图间隔不足则跳过
+  // v2.3.81：上次失败仍在冷却窗口内则直接静默返回（防连续失败反复弹错 + 打爆生图 API）
+  if (sceneImageInFailCooldown(key)) return;
   const role = dm.getRole(roleId);
   if (!role) return;
   const history = dm.getMessages(chatType, chatId).slice(-(settings.moodJudgeHistory ?? 10));
@@ -1611,7 +1756,13 @@ async function triggerSceneImage(chatType: string, chatId: string, roleId: strin
       referenceImages = [avatar];
     }
   }
+  // AI 显示名：单聊取角色名，群聊取群名（v2.3.81：提前算出，供 started/success/failed 三态复用）
+  const aiName = chatType === 'single' ? role.name : dm.getGroup(chatId)?.group_name || 'AI';
   try {
+    // v2.3.81：真正开始生图前才广播「进行中」。以上所有提前 return（未开开关 / 未配置 API /
+    // 节流 / 失败冷却 / 角色不存在 / 判定不该生图 / 用户拒绝许可）都**不发** started，
+    // 避免用户看到并不存在的「正在生图中」。
+    emitSceneImageStatus('started', chatType, chatId, roleId, aiName);
     const { b64, url } = await generateImage(
       { baseUrl: ig.baseUrl!, apiKey: ig.apiKey! },
       judge.prompt,
@@ -1630,11 +1781,18 @@ async function triggerSceneImage(chatType: string, chatId: string, roleId: strin
         fs.writeFileSync(dest, buf);
         imagePath = dest;
       } catch {
-        /* 下载失败则放弃 */
+        /* 下载失败则放弃 —— 下方 !imagePath 分支统一按 failed 上报 */
       }
     }
-    if (!imagePath) return;
-    const aiName = chatType === 'single' ? role.name : dm.getGroup(chatId)?.group_name || 'AI';
+    // v2.3.81：原来这里是**静默 return**（生图成功但图片没落地，用户完全无感知）。
+    // 现在按 failed 上报，让用户至少知道「这次没成」，并进入失败冷却。
+    if (!imagePath) {
+      const lang = getAppLang();
+      sceneImageFailAt.set(key, Date.now());
+      lastSceneImageAt.delete(key); // 回退节流，允许冷却期后重试
+      emitSceneImageStatus('failed', chatType, chatId, roleId, aiName, SCENE_IMAGE_ERR_DOWNLOAD[lang]);
+      return;
+    }
     const aiMsg = dm.addMessage({
       chat_type: chatType as any,
       chat_id: chatId,
@@ -1647,10 +1805,18 @@ async function triggerSceneImage(chatType: string, chatId: string, roleId: strin
       genPrompt: judge.prompt,
     });
     broadcast('stream:user', aiMsg); // 主窗/小窗同时收到，只生一次
-    pushMediaUnread(chatType, chatId, aiName, 'image'); // 主窗不可见/未盯该聊天则补未读
+    // 成功：清掉失败冷却记录，让后续生图恢复正常节奏
+    sceneImageFailAt.delete(key);
+    // v2.3.81：成功通知**只走这一条**（pushMediaUnread → showNotifyCard 内部按窗口可见性判断），
+    // 不额外再调 showNotifyCard，避免同一件事弹两次。标签传「图片已生成」而非通用「新消息」。
+    pushMediaUnread(chatType, chatId, aiName, 'image', NOTIFY_IMAGE_READY[getAppLang()]);
+    emitSceneImageStatus('success', chatType, chatId, roleId, aiName);
   } catch (e) {
     console.error('[nianyu] 场景生图失败', e);
     lastSceneImageAt.delete(key); // 失败则回退节流，允许下次重试
+    // v2.3.81：失败也上报 + 进入 60s 冷却，防止连续失败反复打扰
+    sceneImageFailAt.set(key, Date.now());
+    emitSceneImageStatus('failed', chatType, chatId, roleId, aiName, (e as Error)?.message);
   }
 }
 

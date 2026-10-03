@@ -34,6 +34,9 @@ import { ChatModelPicker } from './ChatModelPicker';
 
 import { useToast, ToastView } from './Toast';
 
+// v2.3.81：异步场景生图状态条（「正在生图中…」+ 成功/失败站内 Toast）
+import { SceneImageStatusBar, useSceneImageStatus } from './SceneImageStatusBar';
+
 import { ReasoningBlock } from './ReasoningBlock';
 
 import RandomEventModal, { RandomEventData } from './RandomEventModal';
@@ -531,6 +534,10 @@ export const ChatWindow: React.FC<{
   // 轻提示（自动出现又自动缩回，无需手动关闭）
 
   const { toast, showToast } = useToast();
+
+  // v2.3.81：订阅异步场景生图三态（sceneImage:status）。仅跟踪「当前打开的会话」，
+  // 收到 success / failed 时由 hook 内部弹站内 Toast；窗口不可见时改由主进程后台卡片负责。
+  const sceneImage = useSceneImageStatus(chatType, chatId, showToast);
 
   const openMini = async () => {
 
@@ -5326,6 +5333,13 @@ export const ChatWindow: React.FC<{
 
 
       <CustomScrollArea className="messages" scrollRef={scrollRef} style={chatBg ? { backgroundImage: `url(${chatBg})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}>
+
+        {/* v2.3.81：异步场景生图「正在生图中…」状态条（仅当前会话进行中时出现，完成/失败即消失）*/}
+        <SceneImageStatusBar
+          active={sceneImage.generating}
+          startedAt={sceneImage.startedAt}
+          roleName={sceneImage.roleName}
+        />
 
         {allMessages.length === 0 && (
 

@@ -1475,6 +1475,11 @@ export const translations: Record<Lang, Dict> = {
     'queue.locked': '倒计时中',
     'queue.dragHint': '拖动条目或用 ↑↓ 调整发送顺序；首个请求倒计时中不可移动',
     'queue.laneTip': '不同模型的队列相互独立、分开计时',
+    // ===== 异步场景生图状态提醒（v2.3.81）=====
+    'sceneImage.generating': '正在生图中…',
+    'sceneImage.success': '图片已生成',
+    'sceneImage.failed': '生图失败：{msg}',
+    'sceneImage.elapsed': '已进行 {sec} 秒',
   },
 
   en: {
@@ -2911,6 +2916,11 @@ export const translations: Record<Lang, Dict> = {
     'queue.locked': 'Counting down',
     'queue.dragHint': 'Drag items or use ↑↓ to reorder; the first request is counting down and locked',
     'queue.laneTip': 'Queues of different models are independent and timed separately',
+    // ===== 异步场景生图状态提醒（v2.3.81）=====
+    'sceneImage.generating': 'Generating image…',
+    'sceneImage.success': 'Image ready',
+    'sceneImage.failed': 'Image generation failed: {msg}',
+    'sceneImage.elapsed': '{sec}s elapsed',
   },
   // ===== v2.3.38 新增语言（LLM 批量翻译，缺键运行时回退 zh/en） =====
   fr: frDict as Dict,

@@ -1392,5 +1392,9 @@
   "msg.collapseAll": "Plegar todos los mensajes",
   "msg.expandAll": "Desplegar todos los mensajes",
   "msg.collapseCount": "{n} mensajes en total",
-  "chat.deleteNode": "Eliminar este nodo de historia"
+  "chat.deleteNode": "Eliminar este nodo de historia",
+  "sceneImage.generating": "Generando imagen…",
+  "sceneImage.success": "Imagen generada",
+  "sceneImage.failed": "Error al generar la imagen: {msg}",
+  "sceneImage.elapsed": "hace {sec} s"
 }

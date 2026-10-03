@@ -1392,5 +1392,9 @@
   "msg.collapseAll": "Recolher todas as mensagens",
   "msg.expandAll": "Expandir todas as mensagens",
   "msg.collapseCount": "{n} mensagens no total",
-  "chat.deleteNode": "Excluir este nó de história"
+  "chat.deleteNode": "Excluir este nó de história",
+  "sceneImage.generating": "Gerando imagem…",
+  "sceneImage.success": "Imagem gerada",
+  "sceneImage.failed": "Falha ao gerar a imagem: {msg}",
+  "sceneImage.elapsed": "{sec}s decorridos"
 }

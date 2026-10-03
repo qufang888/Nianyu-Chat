@@ -1392,5 +1392,9 @@
   "msg.collapseAll": "すべてのメッセージを折りたたむ",
   "msg.expandAll": "すべてのメッセージを展開",
   "msg.collapseCount": "全 {n} 件のメッセージ",
-  "chat.deleteNode": "このストーリーノードを削除"
+  "chat.deleteNode": "このストーリーノードを削除",
+  "sceneImage.generating": "画像を生成中…",
+  "sceneImage.success": "画像を生成しました",
+  "sceneImage.failed": "画像生成に失敗しました：{msg}",
+  "sceneImage.elapsed": "経過 {sec} 秒"
 }
