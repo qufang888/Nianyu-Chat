@@ -1588,6 +1588,15 @@ const SCENE_IMAGE_ERROR_MAX_LEN = 120;
 const SCENE_IMAGE_STATUS_CHANNEL = 'sceneImage:status';
 const sceneImageFailAt = new Map<string, number>(); // `${chatType}:${chatId}` -> 上次生图失败时间戳
 
+// 按码点安全截断（v2.3.83）：直接 String.slice 可能把代理对（emoji、部分生僻字）切成半个，
+// 显示为乱码「�」。这里只在截断点恰好落在高位代理（0xD800~0xDBFF）时回退 1 个码点。
+function truncateByCodePoint(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const code = s.charCodeAt(max - 1);
+  const isHighSurrogate = code >= 0xd800 && code <= 0xdbff;
+  return s.slice(0, isHighSurrogate ? max - 1 : max);
+}
+
 // 广播一次生图状态事件（v2.3.81）。error 为空时用调用方给的默认文案兜底。
 function emitSceneImageStatus(
   status: 'started' | 'success' | 'failed',
@@ -1606,8 +1615,9 @@ function emitSceneImageStatus(
     chatId,
     roleId,
     roleName,
-    // 仅 failed 携带原因：截断到 120 字符，空则用本地化兜底文案
-    error: status === 'failed' ? raw.slice(0, SCENE_IMAGE_ERROR_MAX_LEN) || fallback : undefined,
+    // 仅 failed 携带原因：按码点安全截断到 120 字符（v2.3.83），空则用本地化兜底文案
+    error:
+      status === 'failed' ? truncateByCodePoint(raw, SCENE_IMAGE_ERROR_MAX_LEN) || fallback : undefined,
     ts: Date.now(),
   };
   // 失败提醒：保证「任何窗口状态下都不会完全静默」，且**任何一档都只提醒一次**。

@@ -1071,11 +1071,14 @@ export interface SceneImageStatusEvent {
   status: SceneImageStatus;
   chatType: string; // 'single' | 'group'
   chatId: string;
-  roleId: string;
+  roleId: string; // 触发本次生图的角色 id。预留字段：渲染端当前未消费，供后续「点状态条定位角色」等扩展
   roleName: string; // AI 名字（单聊=角色名，群聊=群名或'AI'）
-  error?: string; // 仅 failed：给用户看的简短原因（已截断）
-  // v2.3.82：仅 failed。为 true 表示主进程已用后台提醒卡片告知过失败（软件在后台、或窗口可见
-  // 但用户在看别的聊天时都会强制弹卡片），渲染端据此跳过站内 Toast，避免「卡片 + Toast」双弹。
+  error?: string; // 仅 failed：给用户看的简短原因（v2.3.83 起按码点安全截断，不会切坏 emoji）
+  // v2.3.82：仅 failed。为 true 表示主进程已用提醒卡片告知过本次失败，渲染端据此跳过站内 Toast，
+  // 避免「卡片 + Toast」双弹。仅在卡片**确实会展示**时为 true：双窗全隐藏（默认放行），
+  // 或窗口可见但用户正看着**别的**会话（此时 force=true 强制弹）。
+  // 若用户正看着该会话，showNotifyCard 会被窗口可见性拦截、卡片不弹，故为 false，由渲染端弹 Toast。
+  // 静默模式下面板一律被拦截，也为 false。
   cardShown?: boolean;
   ts: number; // 事件发出时的 Date.now()
 }
