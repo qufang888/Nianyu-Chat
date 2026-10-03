@@ -26,6 +26,20 @@ const CustomScrollArea: React.FC<{
   const [thumbTop, setThumbTop] = useState(0);
   const [showBar, setShowBar] = useState(false);
   const dragging = useRef(false);
+  // v2.3.77：动效开关——滚动条透明度过渡是**内联 style**，优先级高于 `.anim-off *` 的 !important，
+  // 故必须内联判定（与 SplashScreen.tsx 同一套路，直接读根元素 class，避免给本组件引入 ThemeContext 依赖）。
+  const [animOn, setAnimOn] = useState(true);
+
+  // 动效开关变化时同步（读根元素 class，与 SplashScreen 同思路）
+  useEffect(() => {
+    const root = document.documentElement;
+    const read = () => setAnimOn(!root.classList.contains('anim-off'));
+    read();
+    // 用 MutationObserver 监听根元素 class 变化（比轮询精准且无定时器开销）
+    const mo = new MutationObserver(read);
+    mo.observe(root, { attributes: true, attributeFilter: ['class'] });
+    return () => mo.disconnect();
+  }, []);
   const dragStartY = useRef(0);
   const dragStartScroll = useRef(0);
 
@@ -142,7 +156,7 @@ const CustomScrollArea: React.FC<{
               borderRadius: barWidth / 2,
               cursor: 'default',
               pointerEvents: 'auto',
-              transition: dragging.current ? 'none' : 'opacity 0.15s ease',
+              transition: !animOn || dragging.current ? 'none' : 'opacity 0.15s ease',
               opacity: 0.6,
             }}
             onMouseDown={onThumbMouseDown}
