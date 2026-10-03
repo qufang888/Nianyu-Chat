@@ -1066,6 +1066,7 @@
   "memory.empty": "Noch kein Gedächtnis",
   "memory.chatSpecific": "Chatspezifisch ({name})",
   "memory.shared": "Gemeinsam",
+  "memory.searchPlaceholder": "Memory-Inhalt, Chat oder Quelle suchen…",
   "toast.worldbookSaved": "Weltbuch gespeichert",
   "toast.worldbookDeleted": "Weltbuch gelöscht",
   "toast.worldbookImported": "Weltbuch importiert",

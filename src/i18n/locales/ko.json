@@ -997,6 +997,7 @@
   "memory.empty": "기억이 없습니다",
   "memory.chatSpecific": "채팅 전용 ({name})",
   "memory.shared": "공유",
+  "memory.searchPlaceholder": "메모리 내용·채팅·출처 검색…",
   "toast.worldbookSaved": "월드북이 저장되었습니다",
   "toast.worldbookDeleted": "월드북이 삭제되었습니다",
   "toast.worldbookImported": "월드북 가져오기 성공",

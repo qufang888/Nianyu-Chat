@@ -1251,6 +1251,7 @@
   "role.soundClear": "清除",
   "memory.add": "新增",
   "memory.shared": "共享",
+  "memory.searchPlaceholder": "搜尋記憶內容、聊天或來源…",
   "chat.reasoningThinking": "正在思考…",
   "settings.idleRandomMin": "最短",
   "settings.idleInterval10min": "10 分鐘",
