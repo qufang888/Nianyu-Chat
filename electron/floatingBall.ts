@@ -67,6 +67,7 @@ let menuWindow: BrowserWindow | null = null; // 球右键应用菜单窗（180x1
 let sessionClosed = false; // 本次运行用户手动关闭悬浮球（不持久化，重启恢复）
 let mainShowFn: (() => void) | null = null; // 由 main.ts 注入：唤出主窗口
 let mainWinRef: BrowserWindow | null = null; // 由 main.ts 注入：主窗口引用（用于跳转会话）
+let miniWinRef: BrowserWindow | null = null; // 由 main.ts 注入：快捷小窗引用（v2.3.83：判断小窗是否真的可见）
 let activeChatKey = ''; // 由渲染端回传：用户当前正在查看的聊天 `${type}:${id}`（主窗）
 let activeChatKeyMini = ''; // 同上，但来自迷你窗；主窗/迷你窗各自独立记录，互不覆盖
 
@@ -386,6 +387,12 @@ export function setBallMainWindow(win: BrowserWindow | null): void {
   mainWinRef = win;
 }
 
+// v2.3.83：注入快捷小窗引用。小窗「关闭」只做 hide()、窗口并不销毁（见 main.ts 的 close 处理），
+// 故 activeChatKeyMini 在小窗收起后仍会残留；isViewingChat 需要小窗可见性才能判断用户是否在看它。
+export function setBallMiniWindow(win: BrowserWindow | null): void {
+  miniWinRef = win;
+}
+
 // 渲染端切换当前聊天时回传，用于判断「主动消息」是否应计入未读。
 // fromMini=true 表示来自迷你窗（与主窗分别记录，避免两者互相覆盖导致迷你窗当前聊天丢失已读判定）。
 export function setActiveChat(type: string, id: string, fromMini = false): void {
@@ -448,17 +455,35 @@ export function sendBallVideoProgress(percent: number, statusText?: string): voi
 }
 
 /**
- * 用户此刻是否正盯着这个会话（主窗可见且为当前会话，或小窗正显示该会话）。
+ * 用户此刻是否正盯着这个会话（主窗可见且为当前会话，或小窗可见且正显示该会话）。
  * 悬浮球未读的「已读判定」与主进程生图失败提醒的「该不该弹卡片」共用此判定，
  * 避免同一语义在两处各写一份、日后改动漂移。
+ *
+ * v2.3.83 修复：第二支原为 `activeChatKeyMini === key`，**不要求小窗可见**。而小窗「关闭」
+ * 只做 `hide()`、窗口并不销毁（`clearMiniActiveChat` 挂在 `closed` 上，正常使用中永不触发），
+ * 于是「小窗打开过 A 并收起」后 `activeChatKeyMini` 残留为 A。此时若主窗开着在看 B，
+ * 判 A 为「用户正在看」→ 生图失败时 `force=false`（卡片被窗口可见性拦掉）、
+ * 渲染端又按 chatId 过滤掉 Toast → **彻底静默**（即 v2.3.82 修掉的那个洞被残留 key 重新打开）。
+ * 根因是「不可见窗口的 key 不该代表用户在看着」，故两支统一要求对应窗口真实可见。
+ * 另：此处同时修好 `pushUnread` 的已读判定——该残留是更早就存在的问题，
+ * 本函数被生图链路复用后把它一并带了进来。
  */
 export function isViewingChat(chatType: string, chatId: string): boolean {
-  const mainVisible =
-    mainWinRef && !mainWinRef.isDestroyed() && mainWinRef.isVisible() && !mainWinRef.isMinimized();
-  return (
-    (mainVisible && activeChatKey === `${chatType}:${chatId}`) ||
-    activeChatKeyMini === `${chatType}:${chatId}`
+  const key = `${chatType}:${chatId}`;
+  // 用 !! 显式收敛为 boolean：mainWinRef/miniWinRef 为 null 时 `&&` 会把 null 透出到返回值
+  const mainVisible = !!(
+    mainWinRef &&
+    !mainWinRef.isDestroyed() &&
+    mainWinRef.isVisible() &&
+    !mainWinRef.isMinimized()
   );
+  const miniVisible = !!(
+    miniWinRef &&
+    !miniWinRef.isDestroyed() &&
+    miniWinRef.isVisible() &&
+    !miniWinRef.isMinimized()
+  );
+  return (mainVisible && activeChatKey === key) || (miniVisible && activeChatKeyMini === key);
 }
 
 export function pushUnread(
