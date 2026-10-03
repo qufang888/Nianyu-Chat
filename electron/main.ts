@@ -112,17 +112,34 @@ function chatDisplayName(chatType: string, chatId: string): string {
     : ((dm.getRole(chatId)?.name as string) || chatId);
 }
 
+// 「此刻是否有任一窗口真正可见（未最小化）」—— 与 showNotifyCard 内部那两道拦截判断完全同源，
+// v2.3.87 抽出为独立函数，供 pushMediaUnread 的 force 透传与 emitSceneImageStatus 的 cardShown 共用，
+// 避免两处各写一遍导致语义漂移（一旦漂移，会出现「判定说弹、实际被拦」的双弹或静默）。
+// ⚠️ 语义与 isViewingChat 里的可见性口径保持一致（isVisible() && !isMinimized()），
+//    但**不做** isDestroyed 检查 —— 与 showNotifyCard 内部写法一致，它也没有。
+function anyNotifyWindowVisible(): boolean {
+  return !!(
+    (mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized()) ||
+    (miniWindow && miniWindow.isVisible() && !miniWindow.isMinimized())
+  );
+}
+
 // 媒体生成（生图/生视频）完成写入 AI 消息后补未读：仅主窗不可见 / 未正盯该聊天时计入，
 // 防止「结果已生成但悬浮球未读清单没显示」。头像按聊天类型解析（单聊取角色，群聊无头像留空）。
 // 内容用占位文案，渲染端点击未读项跳回对应聊天即可看到实际图片/视频。
 // v2.3.81：notifyLabel 用于给后台提醒卡片一个语义化标签（异步场景生图传「图片已生成」），
 // 缺省为 undefined → showNotifyCard 回退通用「新消息」，既有调用点行为不变。
+// v2.3.87：notifyForce 用于透传 showNotifyCard 的第二个参数（force）。缺省为 undefined →
+// 透传 undefined 走 showNotifyCard 的默认值 force=false，**既有调用点行为完全不变**。
+// 仅「异步场景生图成功」这一个调用点会传 true（判定见 triggerSceneImage 成功分支）；
+// 生视频 / 朋友圈配图等调用点一律不传，保持原有「仅双窗隐藏才弹卡片」的行为。
 function pushMediaUnread(
   chatType: string,
   chatId: string,
   aiName: string,
   kind: 'image' | 'video',
-  notifyLabel?: string
+  notifyLabel?: string,
+  notifyForce?: boolean
 ): void {
   const settings = dm.getSettings();
   // v2.3.81：未读清单（悬浮球）受 floatingBall 开关控制，但**后台提醒卡片不应被它牵连** ——
@@ -139,10 +156,12 @@ function pushMediaUnread(
     }
     pushUnread(chatType, chatId, aiName, content, avatar);
   }
-  // 后台消息提醒卡片：主窗/小窗均隐藏时由 showNotifyCard 内部判断并弹出（与渲染端互补，覆盖未挂载聊天）
+  // 后台消息提醒卡片：默认（notifyForce 未传）时主窗/小窗均隐藏才由 showNotifyCard 内部放行
+  // （与渲染端互补，覆盖未挂载聊天）。notifyForce=true 时跳过该可见性拦截强制弹卡片，
+  // 用于消除「窗口可见但用户在看别的会话」这一档的静默（此时渲染端 Toast 已被会话过滤挡掉）。
   try {
     const name = chatDisplayName(chatType, chatId);
-    showNotifyCard({ chatType, chatId, name, roleName: aiName, content, label: notifyLabel });
+    showNotifyCard({ chatType, chatId, name, roleName: aiName, content, label: notifyLabel }, notifyForce);
   } catch {
     /* 通知卡片失败不影响消息下发 */
   }
@@ -1642,38 +1661,47 @@ function emitSceneImageStatus(
       status === 'failed' ? truncateByCodePoint(raw, SCENE_IMAGE_ERROR_MAX_LEN) || fallback : undefined,
     ts: Date.now(),
   };
-  // 失败提醒：保证「任何窗口状态下都不会完全静默」，且**任何一档都只提醒一次**。
-  // 四档矩阵（viewingThis = 用户此刻是否正盯着这个会话，由悬浮球模块的 activeChat 状态判定，
-  // 与 pushUnread 的已读判定同源，保证两处语义一致）：
+  // 提醒去重（v2.3.82 起 failed，v2.3.87 起 success）：保证「任何窗口状态下都不会完全静默」，
+  // 且**任何一档都只提醒一次**。四档矩阵（viewingThis = 用户此刻是否正盯着这个会话，
+  // 由悬浮球模块的 activeChat 状态判定，与 pushUnread 的已读判定同源，保证两处语义一致）：
   //   · 双窗都隐藏            → force=false，showNotifyCard 默认放行 → 弹卡片（cardShown=true，
   //                            渲染端窗口不可见本来就不弹 Toast，不会双弹）
   //   · 窗口可见 + 正看着该会话 → force=false，showNotifyCard 因窗口可见而拦截 → 不弹卡片
   //                            （cardShown=false → 渲染端弹站内 Toast，就地提示不打扰）
   //   · 窗口可见 + 在看别的会话 → force=true，强制弹卡片（cardShown=true → 渲染端跳过 Toast）
   // 修复说明：v2.3.81 漏掉了「窗口可见但在看别的会话」这一档 —— 渲染端按 chatId 过滤不弹 Toast，
-  // 主进程因窗口可见也不弹卡片，两者错位形成**完全静默**。失败比成功更需要被知晓，故补上。
-  // 成功路径不这样做：成功有图片消息落入聊天流、图片本身即可见结果，强制弹卡片会在用户
-  // 正看着该会话时造成「卡片 + Toast」双重打扰。
+  // 主进程因窗口可见也不弹卡片，两者错位形成**完全静默**。
+  //   · failed：v2.3.82 补上（失败比成功更需要被知晓）。
+  //   · success：v2.3.87 补上（上一轮只在 pushMediaUnread 里走 showNotifyCard 且**不传 force**，
+  //     故这一档仍是静默的，仅靠未读角标兜底）。v2.3.87 同时让 triggerSceneImage 成功分支给
+  //     pushMediaUnread 传入与本处**同口径**的 force（anyNotifyWindowVisible() && !isViewingChat），
+  //     两处判定必须一致，否则会出现「cardShown=true 但卡片没弹」或反之的错位。
   // 静默模式 silent 由 showNotifyCard 内部直接 return（此时卡片并未展示），
   // 故 cardShown 需排除静默，否则渲染端会以为已提醒而不再兜底。
-  if (status === 'failed') {
+  // ⚠️ success 的卡片由 pushMediaUnread 投递（携带 label「图片已生成」），本函数只**判定**它会不会弹，
+  //    不重复调用 showNotifyCard —— 否则同一次成功弹两张卡片。
+  //    started 无需判定：此时结果未出，任何窗口状态都还没有提醒可发。
+  if (status === 'failed' || status === 'success') {
     try {
-      const anyWindowVisible =
-        (mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized()) ||
-        (miniWindow && miniWindow.isVisible() && !miniWindow.isMinimized());
+      const anyWindowVisible = anyNotifyWindowVisible();
       const viewingThis = isViewingChat(chatType, chatId);
-      showNotifyCard(
-        {
-          chatType,
-          chatId,
-          name: chatDisplayName(chatType, chatId),
-          roleName,
-          content: payload.error || '',
-          label: NOTIFY_IMAGE_FAILED[lang],
-        },
-        !!(anyWindowVisible && !viewingThis)
-      );
+      if (status === 'failed') {
+        showNotifyCard(
+          {
+            chatType,
+            chatId,
+            name: chatDisplayName(chatType, chatId),
+            roleName,
+            content: payload.error || '',
+            label: NOTIFY_IMAGE_FAILED[lang],
+          },
+          !!(anyWindowVisible && !viewingThis)
+        );
+      }
       // 卡片真正会展示的两种情况：双窗全隐藏（默认放行），或窗口可见但用户没在看该会话（force）。
+      // ⚠️ 另有一档会让 showNotifyCard 提前 return：1.5s 内的同签名防抖去重（showNotifyCard 内部）。
+      //   连续两次同会话同内容的 success 理论上可能落在该窗口内，属既有行为、且极罕见
+      //   （需要 1.5s 内对同一会话连续生图两次成功），此处不额外处理以免过度设计。
       const cardWillShow = !anyWindowVisible || !viewingThis;
       payload.cardShown = cardWillShow && dm.getSettings().silent !== true;
     } catch {
@@ -1857,9 +1885,20 @@ async function triggerSceneImage(chatType: string, chatId: string, roleId: strin
     broadcast('stream:user', aiMsg); // 主窗/小窗同时收到，只生一次
     // 成功：清掉失败冷却记录，让后续生图恢复正常节奏
     sceneImageFailAt.delete(key);
-    // v2.3.81：成功通知**只走这一条**（pushMediaUnread → showNotifyCard 内部按窗口可见性判断），
-    // 不额外再调 showNotifyCard，避免同一件事弹两次。标签传「图片已生成」而非通用「新消息」。
-    pushMediaUnread(chatType, chatId, aiName, 'image', NOTIFY_IMAGE_READY[getAppLang()]);
+    // v2.3.81：成功通知**只走这一条**（pushMediaUnread → showNotifyCard），不额外再调
+    // showNotifyCard，避免同一件事弹两次。标签传「图片已生成」而非通用「新消息」。
+    // v2.3.87：补传 force，消除「窗口可见但用户在看别的会话」这一档的静默 ——
+    // 该档下渲染端 Toast 被会话过滤挡掉、showNotifyCard 又因窗口可见被拦，两边都空。
+    // 判定与 emitSceneImageStatus 里算 cardShown 的那行**同口径**（同一对函数），
+    // 两者必须一致，否则会出现「cardShown=true 但卡片没弹」的静默或反之的双弹。
+    pushMediaUnread(
+      chatType,
+      chatId,
+      aiName,
+      'image',
+      NOTIFY_IMAGE_READY[getAppLang()],
+      !!(anyNotifyWindowVisible() && !isViewingChat(chatType, chatId))
+    );
     emitSceneImageStatus('success', chatType, chatId, roleId, aiName);
   } catch (e) {
     console.error('[nianyu] 场景生图失败', e);
