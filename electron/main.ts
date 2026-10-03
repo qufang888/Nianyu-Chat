@@ -82,6 +82,7 @@ import {
   registerBallIPC,
   setBallMainShow,
   setBallMainWindow,
+  setBallMiniWindow,
   pushUnread,
   clearUnreadForChat,
   showFloatingBall,
@@ -662,6 +663,9 @@ function createMiniWindow(): void {
   // 置顶分层（v2.3.37）：小窗用 'floating' 层，低于悬浮球的 'screen-saver' 层——
   // 悬浮球恒在最顶，小窗在悬浮球之下、仍高于其他软件窗口（构造参数不支持 level，创建后显式设置）
   miniWindow.setAlwaysOnTop(s.miniWindow?.alwaysOnTop !== false, 'floating');
+  // v2.3.83：把小窗引用注入悬浮球模块，供 isViewingChat 判断「小窗是否真的可见」。
+  // 未注入时该判定会偏保守（认为小窗不可见 → 退化为弹卡片），属安全方向：宁可多提醒、不可静默。
+  setBallMiniWindow(miniWindow);
 
   // 关闭仅隐藏，不退出
   miniWindow.on('close', (e) => {
@@ -695,6 +699,17 @@ function createMiniWindow(): void {
   // 有交互时恢复不透明
   miniWindow.on('focus', () => miniWindow?.setOpacity(1));
 
+  // v2.3.83：小窗一旦隐藏就等于用户不再看它，必须清掉前台聊天标记。
+  // 挂在 `hide` 而非 `closed`：小窗「关闭」只做 hide()、窗口不销毁（见上方 close 处理），
+  // 所以 `closed` 在正常使用中永不触发。挂在 `hide` 上可**一处覆盖全部收起路径**
+  // （关闭按钮 / 托盘 toggleMiniWindow / IPC mini:hide …），不必逐条路径补清理、也不会漏。
+  // 残留标记会让 isViewingChat 把「已收起的小窗」误判为用户正在看该会话，
+  // 进而使生图失败的提醒卡片被窗口可见性拦掉、Toast 又被 chatId 过滤 → 彻底静默。
+  miniWindow.on('hide', () => {
+    activeChatKeyMini = '';
+    clearMiniActiveChat();
+  });
+
   miniWindow.on('closed', () => {
     miniWindow = null;
     clearAutoChatDriverByWindow(miniWindowWcId, 'closed');
@@ -702,6 +717,7 @@ function createMiniWindow(): void {
     // 迷你窗关闭即失去前台聊天标记，避免残留把已关闭迷你窗的聊天误判为前台
     activeChatKeyMini = '';
     clearMiniActiveChat();
+    setBallMiniWindow(null); // v2.3.83：释放小窗引用，避免 isViewingChat 拿到已销毁窗口
   });
 }
 
