@@ -755,6 +755,23 @@ export const Settings: React.FC<{
     patch({ animControlMode: 'single', animGroups: { ...(draft?.animGroups || {}), [groupId]: !cur } });
   };
 
+  // v2.3.91：总控开关同时充当 13 组的「全选」。
+  // 全部打开→勾选、全部关闭→不勾选、混合→半选（indeterminate，横杠）。
+  // 拨动它 = 把 13 组一次性全开/全关，并写回总控模式（单控随之失效）。
+  const masterRef = useRef<HTMLInputElement>(null);
+  const groupStates = ANIM_GROUPS.map((g) => draft?.animGroups?.[g.id] !== false);
+  const allGroupsOn = groupStates.length > 0 && groupStates.every(Boolean);
+  const groupsMixed = !allGroupsOn && !groupStates.every((s) => !s);
+  useEffect(() => {
+    // React 没有 indeterminate 属性，只能手动同步到 DOM
+    if (masterRef.current) masterRef.current.indeterminate = groupsMixed;
+  }, [groupsMixed]);
+  const setAllGroups = (on: boolean) => {
+    const nextGroups: Record<string, boolean> = {};
+    for (const g of ANIM_GROUPS) nextGroups[g.id] = on;
+    patch({ enableAnimations: on, animControlMode: 'master', animGroups: nextGroups });
+  };
+
   // ===== 记忆提示词（v2.3.36）：本地草稿 + 失焦落盘 =====
   // textarea 不逐字符即时保存（避免长文本输入时频繁写盘/重载导致卡顿与光标跳动），失焦时一次性 patch。
   // 清空保护：失焦时若为纯空白，自动填回出厂默认并提示，保证运行时两提示词恒非空。
@@ -1336,22 +1353,23 @@ export const Settings: React.FC<{
 
         {/* ===== 界面动效（总控）===== */}
         <div id="sec-animations" className="section-title" style={{ marginTop: 16 }}>{t('settings.animations')}</div>
-        {/* 总控开关。单控模式下它被「接管」：显示为灰化不可编辑，并在标题处说明当前不生效。
-            任何情况下拨动它都会把模式切回总控（animControlMode='master'），即单控立即失效。 */}
+        {/* 总控开关：任何模式下都可点。拨动它即 patch animControlMode='master' → 单控立即失效、回到总控。
+            此前此处是 disabled={animSingle}（单控模式下灰掉），但 singleHint 文案又写着
+            「再次拨动上方总开关即可回到总控模式」——自相矛盾，且用户被卡在单控里出不来。现改为常可点。 */}
         <label
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: 10,
-            cursor: animSingle ? 'not-allowed' : 'pointer',
-            opacity: animSingle ? 0.55 : 1,
+            cursor: 'pointer',
+            opacity: 1,
           }}
         >
           <input
+            ref={masterRef}
             type="checkbox"
-            checked={!!draft.enableAnimations}
-            disabled={animSingle}
-            onChange={(e) => patch({ enableAnimations: e.target.checked, animControlMode: 'master' })}
+            checked={allGroupsOn}
+            onChange={(e) => setAllGroups(e.target.checked)}
           />
           <span>
             {animSingle ? t('animCtl.masterTakenOver') : t('settings.animationsOn')}
