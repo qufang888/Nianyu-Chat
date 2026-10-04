@@ -8,18 +8,33 @@ import { useEffect, useRef, useState } from 'react';
 export const RETRACT_MS = 160;
 
 /**
- * 动效总开关是否已关闭（`ThemeContext` 在 `settings.enableAnimations === false` 时
- * 给 `document.documentElement` 挂 `.anim-off`）。
+ * 判断「缩入动画是否已被禁用」，即此时必须把缩入时长降为 0 直接卸载，否则会出
+ * 「菜单点了不消失」的问题——被禁用的关键帧/过渡会让元素停留在**动画初始态**
+ * （`opacity: 1`），也就是菜单仍完整可见地杵在屏幕上 RETRACT_MS 才被卸载。
+ * （悬浮球那套能免疫是因为它用 `transition`：基态本就是隐藏态，`transition:none`
+ * 等于瞬间跳到隐藏态；而 `animation` 的基态是显示态，语义相反。）
  *
- * 关闭时必须把缩入时长降为 0，否则会出「菜单点了不消失」的问题：
- * 总控规则 `.anim-off * { animation: none !important }` 会把缩入关键帧整个抹掉，
- * 元素停留在未播放的初始态（`opacity: 1`）—— 也就是**菜单仍完整可见地杵在屏幕上
- * 160ms** 才被卸载。（悬浮球那套能免疫是因为它用 `transition`：基态本就是隐藏态，
- * `transition:none` 等于瞬间跳到隐藏态；而 `animation` 的基态是显示态，语义相反。）
- * 故此处直接读根元素类名——它是总控的唯一真源，且是同步的，无需引入 React 上下文依赖。
+ * 两种禁用来源都要认：
+ * 1. **总控关闭**：`ThemeContext` 在 `settings.enableAnimations === false`（总控模式）
+ *    给 `document.documentElement` 挂 `.anim-off`，其 `.anim-off * { animation:none!important }`
+ *    会把缩入关键帧整个抹掉。
+ * 2. **单控模式关闭了「右键菜单与下拉」分组**：此时**不挂** `.anim-off`（单控刻意不挂，
+ *    以免误杀流式豁免与其它仍开启的分组），而是由 `applyAnimControl` 写入
+ *    `data-anim-off="<被关分组…>"`，并注入 `html[data-anim-off~="ctxmenu"] <选择器>
+ *    { animation:none!important }` 门禁抹掉本组缩入动画。`.anim-off` 不存在，
+ *    所以必须额外读 `data-anim-off` 才能识别。
+ *
+ * 直接读根元素的类名/属性：二者都是同步的、无需引入 React 上下文，且是各自动画的唯一真源。
+ * 注意：现在所有 useRetract 的调用方（气泡/列表/各类下拉、选中浮层、抽屉）都归属
+ * `ctxmenu` 分组，故此处固定按 `ctxmenu` 判定；若将来有非 ctxmenu 元素复用本 Hook，
+ * 需把分组改为参数传入。
  */
-function isAnimOff(): boolean {
-  return typeof document !== 'undefined' && document.documentElement.classList.contains('anim-off');
+function isRetractSuppressed(): boolean {
+  if (typeof document === 'undefined') return false;
+  const root = document.documentElement;
+  if (root.classList.contains('anim-off')) return true;
+  const off = root.dataset.animOff || '';
+  return off.split(/\s+/).includes('ctxmenu');
 }
 
 export interface RetractState<T> {
@@ -83,8 +98,9 @@ export function useRetract<T>(value: T | null, durationMs: number = RETRACT_MS):
       setState((prev) => (prev.leaving ? { shown: null, leaving: false } : prev));
       return clearTimer;
     }
-    // 动效总控关闭：缩入动画被 CSS 全局禁用，跳过整个缩入阶段直接卸载（详见 isAnimOff 注释）
-    if (isAnimOff()) {
+    // 缩入动画已被禁用（总控关闭，或单控下「右键菜单与下拉」分组关闭）：跳过整个缩入阶段
+    // 直接卸载（详见 isRetractSuppressed 注释）
+    if (isRetractSuppressed()) {
       shownRef.current = null;
       setState({ shown: null, leaving: false });
       return clearTimer;
