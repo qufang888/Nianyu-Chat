@@ -4,6 +4,7 @@ import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
 import { useTheme } from '../theme/ThemeContext';
 import { AvatarImg } from './ChatList';
+import { isGroupEnabled } from '../utils/animControl';
 
 interface CustomTitleBarProps {
   variant?: 'main' | 'mini';
@@ -62,10 +63,10 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
   const isMini = variant === 'mini';
   const [isMax, setIsMax] = useState(maximized);
 
-  // v2.3.77：动效开关（内联 transition 的 CSS 类逃逸问题——`.anim-off *` 的 !important 只作用于
-  // 类选择器，而**内联 style 优先级更高**，关闭动效时内联过渡仍会播放，故此处需内联判定）。
-  // 与 QueueDock.tsx 同思路。
-  const animOn = settings?.enableAnimations !== false;
+  // v2.3.90：动效开关（内联 transition 的 CSS 类逃逸问题——`.anim-off *` 的 !important 只作用于
+  // 类选择器，而**内联 style 优先级更高**，关闭动效时内联过渡仍会播放，故此处需走 isGroupEnabled
+  // 判定（总控关闭或单控关掉「面板」分组都会变为无过渡）。与 QueueDock.tsx 同思路。
+  const animOn = isGroupEnabled(settings, 'panel');
   const [showClosePrompt, setShowClosePrompt] = useState(false);
   const [dontShowAgain, setDontShowAgain] = useState(false);
   // 弹窗内临时选择的行为（默认跟随当前设置，用户可在弹窗内切换）

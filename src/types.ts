@@ -482,6 +482,11 @@ export interface AppSettings {
   voice: VoiceSettings;
   miniWindow: MiniWindowSettings;
   enableAnimations: boolean; // 全局 UI 动效总开关（低配电脑可关闭）
+  // ===== 高级动画控制（v2.3.90）=====
+  // 总控/单控**互斥**：master=总开关统一管全部动画（enableAnimations）；single=总控被忽略，
+  // 每个动画按 animGroups 里的自己的开关播放。拨动任意单项开关进入单控，再拨总控开关回总控。
+  animControlMode?: 'master' | 'single';
+  animGroups?: Record<string, boolean>; // 分组 id → 是否开启动效（缺 key 视为开）；分组表见 src/utils/animControl.ts
   // ===== 软件更新（v2.3.45）=====
   autoCheckUpdate?: boolean; // 启动时自动检查更新（默认 true）；关闭后仅手动检查
   autoDownloadUpdate?: boolean; // 发现新版本后自动从 GitHub 下载安装包（默认 false）
@@ -493,6 +498,7 @@ export interface AppSettings {
   queueDockY?: number; // 请求队列贴边图标的纵坐标 px（v2.3.46，仅主界面右缘可上下拖动；缺省=视口垂直偏上 40%）
   // ===== 首启向导与自我身份 =====
   firstRunDone: boolean; // 是否已走过初始设置（老用户读取到旧 settings 时由 db 强制置 true）
+  tutorialDone: boolean; // v2.3.90：是否已完成/已跳过「新手引导」（添加人物卡 → 开启第一个聊天）；与 firstRunDone 独立，二者互斥触发
   selfRoles: SelfRole[]; // 用户自建的「我的角色卡」
   currentSelfRoleId: string; // 全局默认使用的自我身份
   chatSelfRoles: Record<string, string>; // 按会话覆盖的自我身份：key="single:roleId"/"group:groupId"，value=selfRoleId / 'none' / 'default'
@@ -829,10 +835,28 @@ export const DEFAULT_SETTINGS: AppSettings = {
   webSearchFetchTimeout: 8000,
   searchApiKey: '',
   enableAnimations: true,
+  // ===== 高级动画控制（v2.3.90）：默认总控模式 + 全部分组开启 =====
+  animControlMode: 'master',
+  animGroups: {
+    panel: true,
+    ctxmenu: true,
+    toast: true,
+    bubble: true,
+    loading: true,
+    progress: true,
+    queue: true,
+    floatball: true,
+    splash: true,
+    cursor: true,
+    banner: true,
+    theme: true,
+    scrollbar: true,
+  },
   autoCheckUpdate: true,
   autoDownloadUpdate: false,
   modelTagMode: 'api',
   firstRunDone: false,
+  tutorialDone: false,
   selfRoles: [],
   currentSelfRoleId: '',
   chatSelfRoles: {},

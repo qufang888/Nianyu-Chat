@@ -14,6 +14,8 @@ interface SearchResultItem {
 }
 import { renderMarkdown } from '../utils/markdown';
 import { filterSpeechText } from '../utils/speechScope';
+// v2.3.90：菜单/抽屉缩入（关闭）动画通用 Hook
+import { useRetract } from '../hooks/useRetract';
 import { CustomTitleBar } from './CustomTitleBar';
 import CustomCursor from './CustomCursor';
 import ErrorBubble from './ErrorBubble';
@@ -37,6 +39,7 @@ import { MomentsView } from './MomentsView';
 import { EVENT_COOLDOWN_MS, EVENT_TRIGGER_THRESHOLD } from '../eventThemes';
 import { getEventStore, setEventStore } from '../utils/eventStore';
 import { setIdleActivity } from '../utils/idleTimerStore';
+import { applyAnimControl } from '../utils/animControl';
 import { resolveWantStream, resolveStreamInfo, persistStreamToggle, type StreamPref } from '../utils/chatStream';
 import { usePseudoReveal, markPseudoPending, isPseudoPending, clearPseudoPending } from '../utils/pseudoStream';
 import { clampPseudoSpeed, PSEUDO_QUEUE } from '../types';
@@ -82,6 +85,8 @@ export const MiniChat: React.FC = () => {
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [clearOpen, setClearOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // v2.3.90：抽屉关闭时先播缩入（向左滑出 + 遮罩淡出）再卸载
+  const drawer = useRetract(drawerOpen ? true : null);
   const [momentsOpen, setMomentsOpen] = useState(false);
   // 消息查找（🔍）与关系值（💞）开关
   const [searchOpen, setSearchOpen] = useState(false);
@@ -818,7 +823,9 @@ export const MiniChat: React.FC = () => {
       };
       const ff = FONT_FAMILIES[settings.fontFamily] || FONT_FAMILIES.system;
       if (ff) root.style.setProperty('--font-family', ff);
-      root.classList.toggle('anim-off', !settings.enableAnimations);
+      // 高级动画控制（v2.3.90）：总控 / 单控互斥。小窗是独立 document，
+      // 有自己的 <html>，故必须对自己的 document 调用（主窗口 ThemeContext 只管主窗）。
+      applyAnimControl(document, settings, 'main');
       // 全局开关统一重派生
       setHideReasoning(settings.hideReasoning !== false);
       // v2.3.44：全局 TTS 开关（主窗/设置页切换后小窗立即同步）
@@ -2489,9 +2496,12 @@ export const MiniChat: React.FC = () => {
         </div>
       </div>
 
-      {drawerOpen && (
-        <div className="mini-drawer-mask" onClick={() => setDrawerOpen(false)}>
-          <div className="mini-drawer" onClick={(e) => e.stopPropagation()}>
+      {drawer.shown && (
+        <div
+          className={`mini-drawer-mask${drawer.leaving ? ' leaving' : ''}`}
+          onClick={() => setDrawerOpen(false)}
+        >
+          <div className={`mini-drawer${drawer.leaving ? ' leaving' : ''}`} onClick={(e) => e.stopPropagation()}>
             <div className="mini-drawer-head">
               <span>{t('mini.menu')}</span>
               <span className="mini-drawer-close" onClick={() => setDrawerOpen(false)}>×</span>
@@ -2853,6 +2863,9 @@ const MiniMessageRow: React.FC<{
   const { t } = useI18n();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [selPopup, setSelPopup] = useState<{ x: number; y: number; text: string } | null>(null);
+  // v2.3.90：右键菜单与选中一键记忆弹窗的缩入（关闭）动画
+  const ctxMenu = useRetract(menuPos);
+  const selPop = useRetract(selPopup);
   // v2.3.63：已移除「撤回」渲染分支——历史 recalled 消息按普通消息显示，避免空白块
 
   const handleContextMenu = (e: React.MouseEvent) => {
@@ -3108,13 +3121,13 @@ const MiniMessageRow: React.FC<{
         </div>
       </div>
       {/* 右键菜单：Portal 到 body，脱离 .app-root 的 transform/filter 包含块，避免 fixed 坐标相对祖先偏移 */}
-      {menuPos && createPortal(
+      {ctxMenu.shown && createPortal(
         <div
-          className="ctx-menu"
+          className={`ctx-menu${ctxMenu.leaving ? ' leaving' : ''}`}
           style={{
             position: 'fixed',
-            left: Math.min(menuPos.x, window.innerWidth - 160),
-            top: Math.min(menuPos.y, window.innerHeight - 200),
+            left: Math.min(ctxMenu.shown.x, window.innerWidth - 160),
+            top: Math.min(ctxMenu.shown.y, window.innerHeight - 200),
             zIndex: 300,
           }}
         >
@@ -3148,17 +3161,17 @@ const MiniMessageRow: React.FC<{
         document.body
       )}
       {/* 文字选中一键记忆弹窗 */}
-      {selPopup && onQuickMemory && createPortal(
+      {selPop.shown && onQuickMemory && createPortal(
         <div
-          className="sel-popup"
+          className={`sel-popup${selPop.leaving ? ' leaving' : ''}`}
           style={{
             position: 'fixed',
-            left: Math.min(selPopup.x, window.innerWidth - 160),
-            top: selPopup.y + 16,
+            left: Math.min(selPop.shown.x, window.innerWidth - 160),
+            top: selPop.shown.y + 16,
             zIndex: 300,
           }}
         >
-          <button className="sel-popup-btn" onClick={() => { onQuickMemory(selPopup.text); setSelPopup(null); }}>
+          <button className="sel-popup-btn" onClick={() => { onQuickMemory(selPop.shown!.text); setSelPopup(null); }}>
             🧠 {t('msg.quickMemory')}
           </button>
         </div>,

@@ -19,6 +19,7 @@ import { createPortal } from 'react-dom';
 import { useTheme } from '../theme/ThemeContext';
 import type { AppSettings } from '../types';
 import cursorPngUrl from '../assets/cursor/cursor.png';
+import { isGroupEnabled } from '../utils/animControl';
 
 // ===== 类型定义 =====
 
@@ -99,6 +100,16 @@ const CustomCursor: React.FC = () => {
   const opacityRef = useRef(1);             // 当前全局透明度 0~1
   const fadeStateRef = useRef<FadeState>('none'); // 当前淡入淡出状态
   const fadeStartRef = useRef(0);           // 淡入/淡出开始时间戳
+  // v2.3.90：动效控制。Canvas 的 globalAlpha 补间是纯 JS 绘制逻辑，`.anim-off` 的 CSS
+  // 全局规则管不到它，故需在此显式门控：关闭动效时淡入/淡出「一步到位」（直接写终值），
+  // 不再播放 rAF 补间。判定走 isGroupEnabled —— 总控关闭或单控关掉「自定义光标」分组都生效。
+  // 用 ref 而非闭包变量：rAF 回调长期存活，需读到最新值而不必重建整条回调链。
+  // 在 effect 中同步（而非渲染期直接赋值）——渲染期写 ref 在并发模式下属于副作用。
+  const cursorAnimOn = isGroupEnabled(settings, 'cursor');
+  const animOnRef = useRef(cursorAnimOn);
+  useEffect(() => {
+    animOnRef.current = cursorAnimOn;
+  }, [cursorAnimOn]);
 
   // ===== 对象池（预分配，永不销毁）=====
   const trailPoolRef = useRef<TrailPoint[]>(
@@ -468,7 +479,11 @@ const CustomCursor: React.FC = () => {
     // ---- 淡入淡出更新（窗口切换丝滑过渡）----
     const fade = fadeStateRef.current;
     if (fade !== 'none') {
-      const fadeElapsed = now - fadeStartRef.current;
+      // v2.3.90：动效总开关关闭 → 跳过补间，把 elapsed 视作无穷大，
+      // 下面的 t 立刻饱和到 1，走既有分支的「终值路径」：淡入直接置 1，
+      // 淡出直接置 0 并完成隐藏收尾（清屏 / 摘 cursor-hidden / 停循环）。
+      // 这样无需在两处分支里各写一份「瞬时完成」代码，也不会残留半透明帧。
+      const fadeElapsed = animOnRef.current ? now - fadeStartRef.current : Number.POSITIVE_INFINITY;
       if (fade === 'in') {
         // 淡入：透明度 0 → 1
         const t = Math.min(1, fadeElapsed / FADE_IN_MS);
@@ -656,7 +671,9 @@ const CustomCursor: React.FC = () => {
       if (hiddenRef.current) {
         hiddenRef.current = false;
         document.body.classList.add('cursor-hidden');
-        opacityRef.current = 0; // 从透明开始淡入，丝滑浮现
+        // 从透明开始淡入，丝滑浮现；动效关闭时直接给终值 1（配合下面的 Infinity 门控，
+        // 下一帧也会立刻饱和到 1 —— 此处提前赋值是为了不留下任何一帧 opacity:0）
+        opacityRef.current = animOnRef.current ? 0 : 1;
         fadeStateRef.current = 'in';
         fadeStartRef.current = performance.now();
       } else if (fadeStateRef.current === 'out') {

@@ -273,6 +273,9 @@ class DataManager {
       this.store.moments = [];
       this.saveStore();
     }
+    // v2.3.90：回收孤儿剧情节点（msg_id 指向已不存在的消息）。
+    // 幂等：只在真有孤儿时写盘；重复启动不会再删任何东西。
+    this.cleanupOrphanStoryNodes();
   }
 
   get dataDirectory(): string {
@@ -617,7 +620,7 @@ class DataManager {
     // v2.3.80 修正：msg_id 精确删除**不依赖时间戳**（节点 timestamp 是「创建时刻」，
     // 且历史数据可能存在无法解析的时间戳），故不能被 `fromTs > 0` 一起短路掉——
     // 否则消息时间戳全不可解析时，msg_id 明明能命中的节点也删不掉。
-    // 时间戳路径仅在 fromTs 有效时作为补充。
+    // 时间戳路径仅在 fromTs 有效时作为补充，且**只清理未关联节点**（见 deleteStoryNodesSince）。
     const deletedNodes = withStoryNodes
       ? this.deleteStoryNodesByMsgIds(chatType, chatId, ids) + (fromTs > 0 ? this.deleteStoryNodesSince(chatType, chatId, fromTs) : 0)
       : 0;
@@ -656,23 +659,75 @@ class DataManager {
     return removed;
   }
 
-  // 删除「该时间点之后」的剧情节点（v2.3.63，供「修改重发」联动清理）
-  // 保守策略：时间戳无法解析（NaN）的节点一律保留，宁可漏删也不误删
-  // v2.3.80：边界由 `t < sinceTs` 改为 `t <= sinceTs` —— 原先严格小于会把
-  //「时间戳恰好等于回滚起点」的节点保留下来（用户反馈的残留即此），少删了它自己那一条。
+  // 按聊天删除**全部**剧情节点（v2.3.90：清空消息时的连带清理）
+  // 为什么需要：clearChatMessages / deleteChat 删掉消息后，节点会残留成「孤儿」——
+  // msg_id 指向一条已不存在的消息。这种孤儿早于任何回滚锚点，回滚永远回收不掉，
+  // 节点面板里也点不开（源消息没了）。
+  deleteStoryNodesByChat(chatType: string, chatId: string): number {
+    const before = this.store.storyNodes.length;
+    this.store.storyNodes = this.store.storyNodes.filter(
+      (n) => !(n.chat_type === chatType && n.chat_id === chatId)
+    );
+    const removed = before - this.store.storyNodes.length;
+    if (removed > 0) this.saveStore();
+    return removed;
+  }
+
+  // 删除「该时间点之后」的剧情节点（v2.3.63，供「修改重发 / 回滚」联动清理）
+  //
+  // ⚠️ v2.3.90 语义收窄（BUG 修复）：**只删除「未关联消息」（msg_id == null）的近期节点**。
+  // 原因：节点 timestamp 取的是「标记时刻」（addStoryNode 里的 new Date()），与消息 timestamp
+  // 无关。用户可以很久以后才回头标记一条**旧消息**（back-fill），此时节点 timestamp 远晚于
+  // 消息时间。若按时间戳无差别删除，回滚到该消息时间点之前就会把「消息仍然存活、但节点被删掉」
+  // 的节点误删——真实数据已出现过这种风险（节点标记时间比消息晚 12 天）。
+  // 已关联（msg_id != null）的节点一律交给精确路径 deleteStoryNodesByMsgIds 处理：
+  // 审计已证明该路径覆盖全部「消息确实被回滚」的情形，且不会误删存活消息的节点。
+  // 保守策略依然保留：时间戳无法解析（NaN）的节点一律保留，宁可漏删也不误删。
+  // v2.3.80 的边界修正（保留 `t < sinceTs`）依然成立，只是现在只作用于未关联节点。
   deleteStoryNodesSince(chatType: string, chatId: string, sinceTs: number): number {
     if (!(sinceTs > 0)) return 0;
     const before = this.store.storyNodes.length;
     this.store.storyNodes = this.store.storyNodes.filter((n) => {
       if (n.chat_type !== chatType || n.chat_id !== chatId) return true; // 其他聊天/群聊的节点保留
+      // 已关联消息的节点 → 时间戳路径不碰（由 deleteStoryNodesByMsgIds 精确处理）
+      if (n.msg_id != null) return true;
       const t = Date.parse(n.timestamp);
       if (!Number.isFinite(t)) return true; // 时间戳不可解析 → 保守保留
-      // 保留「严格早于起点」的节点 → 等价于删除 t >= sinceTs（含边界那条，即被回滚消息自带的节点）
+      // 保留「严格早于起点」的未关联节点 → 等价于删除 t >= sinceTs
       return t < sinceTs;
     });
     const removed = before - this.store.storyNodes.length;
     if (removed > 0) this.saveStore();
     return removed;
+  }
+
+  /**
+   * 一次性数据迁移（v2.3.90）：回收「孤儿剧情节点」。
+   *
+   * 孤儿定义：节点 msg_id != null，但同一 chat_type + chat_id 下**不存在**该 id 的消息。
+   * 成因：历史版本的 clearChatMessages / deleteChat 只删消息不删节点。
+   * 这些节点回滚永远回收不掉（它们早于任何回滚锚点），会一直挂在节点面板上。
+   *
+   * 安全性：
+   *  - **保留** msg_id == null 的节点：无法判定其关联，永不删除（宁可漏删不误删）。
+   *  - **保留** 消息确实存在的节点。
+   *  - 幂等：第二次运行没有任何节点可删（removed === 0 → 不写盘）。
+   *  - 逐条按 id + chat 联合判定，不受「消息 id 全局自增、跨聊天不隔离」影响。
+   */
+  private cleanupOrphanStoryNodes(): void {
+    const nodes = this.store.storyNodes;
+    if (!Array.isArray(nodes) || nodes.length === 0) return;
+    const before = nodes.length;
+    const isAlive = (n: { chat_type: string; chat_id: string; msg_id: number | null }): boolean =>
+      this.store.messages.some(
+        (m) => m.id === n.msg_id && m.chat_type === n.chat_type && m.chat_id === n.chat_id
+      );
+    this.store.storyNodes = nodes.filter((n) => (n.msg_id == null ? true : isAlive(n)));
+    const removed = before - this.store.storyNodes.length;
+    if (removed > 0) {
+      console.log(`[迁移] 回收孤儿剧情节点 ${removed} 个`);
+      this.saveStore();
+    }
   }
 
   // ---------- 聊天记录 ----------
@@ -711,6 +766,7 @@ class DataManager {
   }
 
   // 删除聊天：一并删除该聊天内产生的自动记忆（手动记忆保留），并移除聊天会话
+  // v2.3.90：同时删除该聊天的全部剧情节点（同 clearChatMessages，避免孤儿节点）
   deleteChat(chatType: string, chatId: string): void {
     const ids = new Set(
       this.store.messages
@@ -721,6 +777,7 @@ class DataManager {
       (m) => !(m.chat_type === chatType && m.chat_id === chatId)
     );
     this.deleteAutoMemoriesByMsgIds(ids);
+    this.deleteStoryNodesByChat(chatType, chatId);
     this.store.chatSessions = this.store.chatSessions.filter(
       (s) => !(s.chat_type === chatType && s.chat_id === chatId)
     );
@@ -728,7 +785,9 @@ class DataManager {
   }
 
   // 清空当前聊天消息；withMemories=true 时一并删除该聊天内产生的自动记忆（手动记忆保留）
-  clearChatMessages(chatType: string, chatId: string, withMemories: boolean): { deletedMsgs: number; deletedMems: number } {
+  // v2.3.90：**同时删除该聊天的全部剧情节点**。此前只删消息不删节点，会留下 msg_id
+  // 指向已删除消息的孤儿节点（回滚也回收不掉，因为它们早于任何回滚锚点）。
+  clearChatMessages(chatType: string, chatId: string, withMemories: boolean): { deletedMsgs: number; deletedMems: number; deletedNodes: number } {
     const ids = new Set(
       this.store.messages
         .filter((m) => m.chat_type === chatType && m.chat_id === chatId)
@@ -739,8 +798,10 @@ class DataManager {
     );
     let deletedMems = 0;
     if (withMemories) deletedMems = this.deleteAutoMemoriesByMsgIds(ids);
+    // v2.3.90：连带清理该聊天的剧情节点，避免产生孤儿节点
+    const deletedNodes = this.deleteStoryNodesByChat(chatType, chatId);
     this.saveStore();
-    return { deletedMsgs: ids.size, deletedMems };
+    return { deletedMsgs: ids.size, deletedMems, deletedNodes };
   }
 
   // ---------- 群组 ----------

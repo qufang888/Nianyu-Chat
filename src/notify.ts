@@ -2,6 +2,7 @@
 // 仅在「主界面与小窗均未打开/最小化、软件在后台运行」时由主进程弹出。
 // 卡片自动适配系统主题（浅色/深色），色调与主界面一致。
 import { playSoundSync, invalidateSoundCache } from './utils/sound';
+import { applyAnimControl } from './utils/animControl';
 const api = (window as any).api;
 
 const CARD_W = 340;
@@ -176,7 +177,11 @@ function mount(): void {
     if (api && api.getSettings) {
       api.getSettings()
         .then((s: any) => {
-          document.documentElement.classList.toggle('anim-off', s?.enableAnimations === false);
+          // 高级动画控制（v2.3.90）：总控 / 单控互斥。通知窗是独立 document，
+          // 总控关闭 → 上面注入的 `.anim-off` 全局 kill 生效（卡片直接跳到终态）；
+          // 单控模式 → 改用 `html[data-anim-off~="toast"]` + 自动生成的 <style> 关掉 .ny-card 过渡。
+          // kind 传 'notify'：该分组在本窗用的是 .ny-card（见 ANIM_GROUPS 的 docSelectors）。
+          applyAnimControl(document, s, 'notify');
         })
         .catch(() => {});
     }
@@ -207,6 +212,14 @@ function mount(): void {
   // 静默模式切换后，立即刷新音效缓存，使「关闭通知提示音」即时生效
   if (api && api.onSettingsChanged) {
     api.onSettingsChanged(() => invalidateSoundCache());
+  }
+
+  // 挂载时先落一次动效门控：show() 里的读取是异步的，首张卡片可能早于它返回，
+  // 故这里预热一次，避免第一张卡片仍播放已被关闭的滑入动画。
+  if (api && api.getSettings) {
+    api.getSettings()
+      .then((s: any) => applyAnimControl(document, s, 'notify'))
+      .catch(() => {});
   }
 }
 

@@ -5,12 +5,14 @@ import { useTheme } from '../theme/ThemeContext';
 import type { Role, RoleStat } from '../types';
 import { AvatarImg } from './ChatList';
 import { normalizeRelation, RELATION_LABELS } from '../types';
+import { isGroupEnabled } from '../utils/animControl';
 
 export const StatsView: React.FC = () => {
   const { t } = useI18n();
-  // v2.3.77：动效开关——token 占比条用内联 transition，需内联判定（内联优先级高于 .anim-off 的 !important）
+  // v2.3.90：动效开关——token 占比条用内联 transition，需走 isGroupEnabled 判定
+  // （内联优先级高于 .anim-off 的 !important；总控关闭或单控关掉「进度条」都应变为无过渡）
   const { settings } = useTheme();
-  const animOn = settings?.enableAnimations !== false;
+  const animOn = isGroupEnabled(settings, 'progress');
   const [stats, setStats] = useState<RoleStat[]>([]);
   const [global, setGlobal] = useState(0);
   const [roles, setRoles] = useState<Record<string, { avatar: string; affinity: number; mood: string; relation: string }>>({});
