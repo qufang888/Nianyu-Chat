@@ -1375,14 +1375,14 @@ export const Settings: React.FC<{
             {t('animCtl.backToMaster')}
           </button>
         )}
-        {/* 分组开关：仅单控模式可交互；总控模式下灰显（此时总开关说了算） */}
+        {/* 分组开关：任何模式下都可点。点任意一个即 toggleAnimGroup → 进入单控模式（总控被忽略），
+            这是「拨动任一分项开关即进入单控」语义的唯一入口，绝不能在此模式下灰掉，否则单控不可达。 */}
         <div
           style={{
             marginTop: 12,
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
             gap: '8px 16px',
-            opacity: animSingle ? 1 : 0.55,
           }}
         >
           {ANIM_GROUPS.map((g) => (
@@ -1392,13 +1392,12 @@ export const Settings: React.FC<{
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
-                cursor: animSingle ? 'pointer' : 'not-allowed',
+                cursor: 'pointer',
               }}
             >
               <input
                 type="checkbox"
                 checked={draft.animGroups?.[g.id] !== false}
-                disabled={!animSingle}
                 onChange={() => toggleAnimGroup(g.id)}
               />
               <span>{t(g.labelKey)}</span>

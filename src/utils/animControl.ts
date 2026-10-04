@@ -177,7 +177,11 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.settings-nav-item',
       '.settings-search-input',
       '.settings-suggest-item',
-      '.event-modal *',
+      // 事件弹窗：只列真正带过渡的具体类，禁用通配 `*`（否则该弹窗内将来出现的
+      // .stream-char/.pseudo-char 会被 theme 组静默关掉，破坏「流式恒开」承诺）。
+      '.event-option',
+      '.event-close-top',
+      '.event-countdown:not(.urgent)',
     ],
   },
   {
