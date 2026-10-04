@@ -1866,6 +1866,21 @@ input[type='range']::-moz-range-thumb {
   transition: none !important;
 }
 
+/* ===== 流式/打字机动画豁免（v2.3.90）=====
+   需求：逐字渐显属于「内容正在输出」的状态反馈，不是装饰性动效 —— 关掉总控后若一并禁用，
+   用户会看到文字块整段闪现，完全无法感知模型正在打字。故显式豁免这三个类。
+   声明值与上方各自的原始定义逐字一致（`--pseudo-char-dur` 由调用方内联传入，不做改动），
+   视觉与开启动效时完全一致。选择器特异性（0,2,0）+ !important 高于 `.anim-off *`（0,1,0）。 */
+.anim-off .stream-char {
+  animation: nyCharIn 0.3s ease both !important;
+}
+.anim-off .stream-char.stall {
+  animation: nyCharBlink 1s ease-in-out infinite !important;
+}
+.anim-off .pseudo-char {
+  animation: nyCharIn var(--pseudo-char-dur, 0.8s) ease both !important;
+}
+
 /* 自定义 Canvas 光标层：最高层级（2147483646），确保不被任何模态/弹窗/Toast 遮挡。
    pointer-events:none 保证不拦截鼠标事件。z-index 由组件内联 style 覆盖，此处仅作 fallback。 */
 .custom-cursor-canvas {
@@ -2622,6 +2637,8 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   inset: 0;
   z-index: 60;
   background: rgba(0, 0, 0, 0.28);
+  /* v2.3.90：补齐遮罩淡入（缩出见下方 .mini-drawer-mask.leaving） */
+  animation: miniMaskIn 0.15s ease;
 }
 .mini-drawer {
   position: absolute;
@@ -3916,9 +3933,61 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
     transform: none;
   }
 }
+/* v2.3.90 补齐：观察者下拉（.obs-menu）与通用下拉（.select-menu-panel）此前无任何弹出动画 */
 .chat-model-picker,
-.ctx-menu {
+.ctx-menu,
+.obs-menu,
+.select-menu-panel {
   animation: popupLinearIn 0.16s linear;
+}
+
+/* ===== 缩入动画（v2.3.90）：与上方 popupLinearIn 严格对称，供所有菜单关闭时使用 =====
+   配合 hooks/useRetract：关闭时先加 `.leaving` 播放本动画（forwards 保持末态），
+   约 160ms 后组件才卸载 DOM —— 因此不再「瞬间消失」，且缩入途中不会重复触发点击。
+   全部为 CSS 类动画 → 被总控 `.anim-off *` 的 `animation:none !important` 自动禁用。 */
+@keyframes popupLinearOut {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+/* 缩入中：动画进行时元素虽已透明，但仍在文档流内，必须禁用指针事件以免拦截点击 */
+.ctx-menu.leaving,
+.obs-menu.leaving,
+.select-menu-panel.leaving,
+.chat-model-picker.leaving,
+.list-menu.leaving,
+.sel-popup.leaving,
+.more-dropdown.leaving {
+  animation: popupLinearOut 0.15s linear forwards;
+  pointer-events: none;
+}
+
+/* v2.3.90：小窗左侧抽屉 —— 遮罩淡出 + 抽屉向左滑出（与 miniDrawerIn 对称）。
+   淡入关键帧 miniMaskIn 已合并进上方 .mini-drawer-mask 原规则，避免重复选择器。 */
+.mini-drawer-mask.leaving {
+  animation: miniMaskOut 0.15s ease forwards;
+  pointer-events: none;
+}
+@keyframes miniMaskIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes miniMaskOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes miniDrawerOut {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100%); }
+}
+.mini-drawer.leaving {
+  animation: miniDrawerOut 0.15s ease forwards;
+  pointer-events: none;
 }
 
 /* ===== 软件更新提示条（v2.3.45）：聊天区顶部，主题变量着色，受动效开关控制 ===== */

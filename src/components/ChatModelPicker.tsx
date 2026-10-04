@@ -4,6 +4,8 @@ import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
 import type { ModelConfig } from '../types';
 import { PROVIDER_DEFAULTS } from '../types';
+// v2.3.90：面板缩入（关闭）动画
+import { useRetract } from '../hooks/useRetract';
 
 // 聊天模型切换（v2.3.41，仅单聊）：
 // 人物编辑中绑定的模型 = 该人物聊天的默认模型；其他操作菜单可勾选「跟随人物（或默认）模型」——
@@ -18,6 +20,8 @@ export const ChatModelPicker: React.FC<{ chatType: string; chatId: string }> = (
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState({ left: 0, top: 0 });
+  // v2.3.90：面板关闭时先播缩入动画再卸载（坐标随 open 一起失效，故以坐标对象作为 retract 值）
+  const picker = useRetract(open ? pos : null);
   const [list, setList] = useState<ModelConfig[]>([]);
   const [q, setQ] = useState('');
   const [loaded, setLoaded] = useState(false);
@@ -143,16 +147,22 @@ export const ChatModelPicker: React.FC<{ chatType: string; chatId: string }> = (
       )}
       {open &&
         createPortal(
-          <div style={{ position: 'fixed', inset: 0, zIndex: 2147483645 }} onMouseDown={() => setOpen(false)}>
-            <div
-              className="chat-model-picker"
-              style={{
-                position: 'fixed', left: pos.left, top: pos.top, width: 300,
-                zIndex: 2147483646, padding: 8,
-                display: 'flex', flexDirection: 'column', maxHeight: 340, boxSizing: 'border-box',
-              }}
-              onMouseDown={(e) => e.stopPropagation()}
-            >
+          // 遮罩与面板拆成两个 portal：遮罩随 open 立即消失（否则缩入期间会拦截全屏点击），
+          // 面板则由 useRetract 保留 160ms 播放缩入动画后再卸载。
+          <div style={{ position: 'fixed', inset: 0, zIndex: 2147483645 }} onMouseDown={() => setOpen(false)} />,
+          document.body,
+        )}
+      {picker.shown &&
+        createPortal(
+          <div
+            className={`chat-model-picker${picker.leaving ? ' leaving' : ''}`}
+            style={{
+              position: 'fixed', left: picker.shown.left, top: picker.shown.top, width: 300,
+              zIndex: 2147483646, padding: 8,
+              display: 'flex', flexDirection: 'column', maxHeight: 340, boxSizing: 'border-box',
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
               <input
                 className="chat-model-picker-input"
                 autoFocus
@@ -211,7 +221,6 @@ export const ChatModelPicker: React.FC<{ chatType: string; chatId: string }> = (
                   </div>
                 )}
               </div>
-            </div>
           </div>,
           document.body
         )}

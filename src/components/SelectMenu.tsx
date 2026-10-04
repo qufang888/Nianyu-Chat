@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+// v2.3.90：面板缩入（关闭）动画
+import { useRetract } from '../hooks/useRetract';
 
 export interface SelectOption {
   value: string;
@@ -43,6 +45,9 @@ const SelectMenu: React.FC<SelectMenuProps> = ({
   const [tip, setTip] = useState<{ node: React.ReactNode; x: number; y: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  // v2.3.90：关闭时先播缩入动画再卸载；收缩期间 panelRef 仍指向 DOM，
+  // 故外部点击判定（onDown）继续把它当作「面板内」而不会误关。
+  const panelUi = useRetract(open ? rect : null);
 
   const current = options.find((o) => o.value === value);
   const display = current ? current.label : (placeholder ?? '');
@@ -148,16 +153,16 @@ const SelectMenu: React.FC<SelectMenuProps> = ({
         <span className="select-menu-value">{display}</span>
         <span className="select-menu-caret" aria-hidden>▾</span>
       </button>
-      {open && createPortal(
+      {panelUi.shown && createPortal(
         <div
           ref={panelRef}
-          className="select-menu-panel"
+          className={`select-menu-panel${panelUi.leaving ? ' leaving' : ''}`}
           role="listbox"
           style={{
-            top: rect.below ? rect.top : undefined,
-            bottom: rect.below ? undefined : (window.innerHeight - rect.top),
-            left: rect.left,
-            width: rect.width,
+            top: panelUi.shown.below ? panelUi.shown.top : undefined,
+            bottom: panelUi.shown.below ? undefined : (window.innerHeight - panelUi.shown.top),
+            left: panelUi.shown.left,
+            width: panelUi.shown.width,
           }}
         >
           {options.map((opt, i) => (

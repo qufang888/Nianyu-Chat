@@ -5,6 +5,7 @@ import { localeOf } from '../i18n/translations';
 import { useTheme } from '../theme/ThemeContext';
 import type { ChatListItem } from '../types';
 import { sortChats, togglePinnedChat, applyDragOrder, chatKeyOf } from '../utils/chatOrdering';
+import { useRetract } from '../hooks/useRetract';
 
 export const ChatList: React.FC<{
   selectedId: string | null;
@@ -17,6 +18,8 @@ export const ChatList: React.FC<{
   const { settings, reloadSettings } = useTheme();
   const [items, setItems] = useState<ChatListItem[]>([]);
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  // v2.3.90：关闭时先播缩入动画再卸载（此前为 setState(null) 直接消失，与弹出不不对称）
+  const listMenu = useRetract(menuOpen);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameVal, setRenameVal] = useState('');
   // 拖拽排序状态：dragKey=被拖动聊天，overKey=当前悬停目标（用于高亮指示）
@@ -214,8 +217,11 @@ export const ChatList: React.FC<{
                 >
                   ⋯
                 </button>
-                {menuOpen === it.chat_id && (
-                  <div className="list-menu" onClick={(e) => e.stopPropagation()}>
+                {listMenu.shown === it.chat_id && (
+                  <div
+                    className={`list-menu${listMenu.leaving ? ' leaving' : ''}`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <button onClick={() => handleTogglePin(it)}>
                       {pinnedHere ? t('chats.unpin') : t('chats.pin')}
                     </button>

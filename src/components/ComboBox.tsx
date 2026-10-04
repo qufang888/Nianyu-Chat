@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+// v2.3.90：面板缩入（关闭）动画
+import { useRetract } from '../hooks/useRetract';
 
 // 可输入 + 可滚动建议列表的组合框（v2.3.39）
 //
@@ -41,6 +43,10 @@ export const ComboBox: React.FC<ComboBoxProps> = ({
   const [rect, setRect] = useState<{ top: number; left: number; width: number; below: boolean }>({
     top: 0, left: 0, width: 0, below: true,
   });
+  // v2.3.90：关闭时先播缩入动画再卸载（与 SelectMenu 同一模式）。
+  // retract 值带上 shown.length 判定：过滤到 0 条时面板本就不可见，若只在 open 转 null 时才缩入，
+  // 「无结果」状态下点外部关闭会闪出一个空面板 160ms。故以「实际应渲染」为唯一真源。
+  const panelUi = useRetract(open && shown.length > 0 ? rect : null);
 
   // 输入即过滤（不区分大小写）；为空则显示全部
   const q = value.trim().toLowerCase();
@@ -141,17 +147,17 @@ export const ComboBox: React.FC<ComboBoxProps> = ({
           }
         }}
       />
-      {open && shown.length > 0 &&
+      {panelUi.shown &&
         createPortal(
           <div
             ref={panelRef}
-            className="select-menu-panel"
+            className={`select-menu-panel${panelUi.leaving ? ' leaving' : ''}`}
             role="listbox"
             style={{
-              top: rect.below ? rect.top + 2 : undefined,
-              bottom: rect.below ? undefined : window.innerHeight - rect.top + 2,
-              left: rect.left,
-              width: rect.width,
+              top: panelUi.shown.below ? panelUi.shown.top + 2 : undefined,
+              bottom: panelUi.shown.below ? undefined : window.innerHeight - panelUi.shown.top + 2,
+              left: panelUi.shown.left,
+              width: panelUi.shown.width,
             }}
           >
             {shown.map((m, i) => (

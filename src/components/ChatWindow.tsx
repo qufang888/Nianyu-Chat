@@ -49,6 +49,9 @@ import { ImageCropper } from './ImageCropper';
 
 import SelectMenu from './SelectMenu';
 
+// v2.3.90：菜单缩入（关闭）动画通用 Hook —— 关闭时先播与弹出对称的缩入动画再卸载 DOM
+import { useRetract } from '../hooks/useRetract';
+
 import { previewSound, playSoundSync } from '../utils/sound';
 
 import { useVoiceInput } from '../hooks/useVoiceInput';
@@ -462,6 +465,15 @@ export const ChatWindow: React.FC<{
   const [configAnchor, setConfigAnchor] = useState<DOMRect | null>(null);
 
   const [privateAnchor, setPrivateAnchor] = useState<DOMRect | null>(null);
+
+  // v2.3.90：两个观察者下拉 + 工具栏「更多操作」下拉的缩入（关闭）动画。
+  // 锚点/坐标随 show* 一起被置 null，故以「坐标对象」为 retract 值：缩入期间保留最后一次坐标，
+  // 菜单不会闪回 (0,0) 或跳到右上角。
+  const privateMenu = useRetract(showPrivateMenu ? privateAnchor : null);
+
+  const configMenu = useRetract(showObserverConfig ? configAnchor : null);
+
+  const moreMenu = useRetract(moreOpen ? morePos : null);
 
   const [observerMembers, setObserverMembers] = useState<Role[]>([]);
 
@@ -4826,13 +4838,13 @@ export const ChatWindow: React.FC<{
 
           )}
 
-          {showPrivateMenu && privateAnchor && createPortal(
+          {privateMenu.shown && createPortal(
 
             <div
 
-              className="obs-menu"
+              className={`obs-menu${privateMenu.leaving ? ' leaving' : ''}`}
 
-              style={{ position: 'fixed', top: privateAnchor.bottom + 4, right: window.innerWidth - privateAnchor.right, zIndex: 1000 }}
+              style={{ position: 'fixed', top: privateMenu.shown.bottom + 4, right: window.innerWidth - privateMenu.shown.right, zIndex: 1000 }}
 
               onMouseDown={(e) => e.stopPropagation()}
 
@@ -4860,13 +4872,13 @@ export const ChatWindow: React.FC<{
 
           )}
 
-          {showObserverConfig && configAnchor && createPortal(
+          {configMenu.shown && createPortal(
 
             <div
 
-              className="obs-menu obs-config"
+              className={`obs-menu obs-config${configMenu.leaving ? ' leaving' : ''}`}
 
-              style={{ position: 'fixed', top: configAnchor.bottom + 4, right: window.innerWidth - configAnchor.right, zIndex: 1000 }}
+              style={{ position: 'fixed', top: configMenu.shown.bottom + 4, right: window.innerWidth - configMenu.shown.right, zIndex: 1000 }}
 
               onMouseDown={(e) => e.stopPropagation()}
 
@@ -4994,15 +5006,15 @@ export const ChatWindow: React.FC<{
 
             </button>
 
-            {moreOpen && createPortal(
+            {moreMenu.shown && createPortal(
 
               <div
 
-                className="more-dropdown"
+                className={`more-dropdown${moreMenu.leaving ? ' leaving' : ''}`}
 
                 style={{
 
-                  position: 'fixed', right: morePos.right, top: morePos.top,
+                  position: 'fixed', right: moreMenu.shown.right, top: moreMenu.shown.top,
 
                   zIndex: 2147483645,
 
@@ -6958,6 +6970,10 @@ const MessageRow: React.FC<{
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
 
   const [selPopup, setSelPopup] = useState<{ x: number; y: number; text: string } | null>(null);
+  // v2.3.90：右键菜单与选中一键记忆弹窗的缩入（关闭）动画；closeMenu 会同时关闭两者，
+  // 故各自独立 retract —— 两者总是同开同关，视觉上一起缩入。
+  const ctxMenu = useRetract(menuPos);
+  const selPop = useRetract(selPopup);
 
   const failed = msg.status === 'failed';
 
@@ -7550,19 +7566,19 @@ const MessageRow: React.FC<{
 
       {/* 右键菜单：Portal 到 body，脱离 .app-root 的 transform/filter 包含块，避免 fixed 坐标相对祖先偏移 */}
 
-      {menuPos && createPortal(
+      {ctxMenu.shown && createPortal(
 
         <div
 
-          className="ctx-menu"
+          className={`ctx-menu${ctxMenu.leaving ? ' leaving' : ''}`}
 
           style={{
 
             position: 'fixed',
 
-            left: Math.min(menuPos.x, window.innerWidth - 160),
+            left: Math.min(ctxMenu.shown.x, window.innerWidth - 160),
 
-            top: Math.min(menuPos.y, window.innerHeight - 200),
+            top: Math.min(ctxMenu.shown.y, window.innerHeight - 200),
 
             zIndex: 300,
 
@@ -7640,19 +7656,19 @@ const MessageRow: React.FC<{
 
       {/* 文字选中一键记忆弹窗 */}
 
-      {selPopup && onQuickMemory && createPortal(
+      {selPop.shown && onQuickMemory && createPortal(
 
         <div
 
-          className="sel-popup"
+          className={`sel-popup${selPop.leaving ? ' leaving' : ''}`}
 
           style={{
 
             position: 'fixed',
 
-            left: Math.min(selPopup.x, window.innerWidth - 160),
+            left: Math.min(selPop.shown.x, window.innerWidth - 160),
 
-            top: selPopup.y + 16,
+            top: selPop.shown.y + 16,
 
             zIndex: 300,
 
@@ -7660,7 +7676,7 @@ const MessageRow: React.FC<{
 
         >
 
-          <button className="sel-popup-btn" onClick={() => handleQuickMemory(selPopup.text)}>
+          <button className="sel-popup-btn" onClick={() => handleQuickMemory(selPop.shown!.text)}>
 
             🧠 {t('msg.quickMemory')}
 
