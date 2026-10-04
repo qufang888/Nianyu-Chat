@@ -35,6 +35,7 @@ import {
 } from '../types';
 import { DEFAULT_MEMORY_SUMMARIZE_PROMPT, DEFAULT_MEMORY_INJECT_PROMPT } from '../utils/builtinPrompts';
 import { Hint } from './Hint';
+import { ANIM_GROUPS, isGroupEnabled } from '../utils/animControl';
 import { ModelEditor } from './ModelEditor';
 import { FontSettings } from './FontSettings';
 import { GuideView } from './GuideView';
@@ -231,9 +232,9 @@ export const Settings: React.FC<{
   const onlyModels = modelsOnly === true || sub === 'models';
   const { toast, showToast } = useToast();
   const { theme, setTheme, settings, reloadSettings } = useTheme();
-  // v2.3.77：动效开关——更新进度条用的是**内联 transition**，优先级高于 `.anim-off *` 的 !important，
-  // 关闭动效时仍会播放，故此处内联判定（与 CustomTitleBar / QueueDock 同思路）。
-  const animOn = settings?.enableAnimations !== false;
+  // v2.3.90：动效开关——更新进度条用的是**内联 transition**，优先级高于 `.anim-off *` 的 !important，
+  // 关闭动效时仍会播放，故走 isGroupEnabled 判定（与 CustomTitleBar / QueueDock 同思路）。
+  const animOn = isGroupEnabled(settings, 'progress');
   const { t, lang, setLang } = useI18n();
   const panelRef = useRef<HTMLDivElement>(null);
   const catRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -743,6 +744,15 @@ export const Settings: React.FC<{
   const patch = (p: Partial<AppSettings>) => {
     setDraft((d) => ({ ...(d as AppSettings), ...p }));
     api.saveSettings(p).then(reloadSettings);
+  };
+
+  // ===== 高级动画控制：总控 / 单控互斥（v2.3.90）=====
+  // 单控模式下总控被忽略；拨动任意单项开关即进入单控（mode 一并落盘），
+  // 反之拨动总控开关会把 mode 写回 'master'，单控立即失效 —— 二者天然互斥。
+  const animSingle = draft?.animControlMode === 'single';
+  const toggleAnimGroup = (groupId: string) => {
+    const cur = draft?.animGroups?.[groupId] !== false;
+    patch({ animControlMode: 'single', animGroups: { ...(draft?.animGroups || {}), [groupId]: !cur } });
   };
 
   // ===== 记忆提示词（v2.3.36）：本地草稿 + 失焦落盘 =====
@@ -1324,16 +1334,80 @@ export const Settings: React.FC<{
           />
         </div>
 
-        {/* ===== 界面动效 ===== */}
+        {/* ===== 界面动效（总控）===== */}
         <div id="sec-animations" className="section-title" style={{ marginTop: 16 }}>{t('settings.animations')}</div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+        {/* 总控开关。单控模式下它被「接管」：显示为灰化不可编辑，并在标题处说明当前不生效。
+            任何情况下拨动它都会把模式切回总控（animControlMode='master'），即单控立即失效。 */}
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            cursor: animSingle ? 'not-allowed' : 'pointer',
+            opacity: animSingle ? 0.55 : 1,
+          }}
+        >
           <input
             type="checkbox"
             checked={!!draft.enableAnimations}
-            onChange={(e) => patch({ enableAnimations: e.target.checked })}
+            disabled={animSingle}
+            onChange={(e) => patch({ enableAnimations: e.target.checked, animControlMode: 'master' })}
           />
-          <span>{t('settings.animationsOn')}<Hint text={t('settings.animationsDesc')} /></span>
+          <span>
+            {animSingle ? t('animCtl.masterTakenOver') : t('settings.animationsOn')}
+            <Hint text={t('settings.animationsDesc')} />
+          </span>
         </label>
+
+        {/* ===== 高级动画控制（总控 / 单控互斥）===== */}
+        <div id="sec-anim-control" className="section-title" style={{ marginTop: 16 }}>
+          {t('animCtl.title')}
+        </div>
+        <div style={{ fontSize: 12.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', maxWidth: 560 }}>
+          {animSingle ? t('animCtl.singleHint') : t('animCtl.masterHint')}
+        </div>
+        {animSingle && (
+          <button
+            className="btn-ghost"
+            style={{ marginTop: 10 }}
+            onClick={() => patch({ animControlMode: 'master' })}
+          >
+            {t('animCtl.backToMaster')}
+          </button>
+        )}
+        {/* 分组开关：仅单控模式可交互；总控模式下灰显（此时总开关说了算） */}
+        <div
+          style={{
+            marginTop: 12,
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
+            gap: '8px 16px',
+            opacity: animSingle ? 1 : 0.55,
+          }}
+        >
+          {ANIM_GROUPS.map((g) => (
+            <label
+              key={g.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                cursor: animSingle ? 'pointer' : 'not-allowed',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={draft.animGroups?.[g.id] !== false}
+                disabled={!animSingle}
+                onChange={() => toggleAnimGroup(g.id)}
+              />
+              <span>{t(g.labelKey)}</span>
+            </label>
+          ))}
+        </div>
+        <div style={{ marginTop: 10, fontSize: 12, lineHeight: 1.6, color: 'var(--color-text-secondary)', maxWidth: 560 }}>
+          {t('animCtl.streamNote')}
+        </div>
 
         {/* ===== 软件更新（v2.3.45）：检查 GitHub Releases → 提醒 → 下载安装包 ===== */}
         <div id="sec-update" className="section-title" style={{ marginTop: 16 }}>{t('settings.updateTitle')}</div>

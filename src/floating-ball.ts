@@ -13,6 +13,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { ThemeProvider } from './theme/ThemeContext';
 import CustomCursor from './components/CustomCursor';
+import { applyAnimControl } from './utils/animControl';
 
 const api = (window as any).api;
 
@@ -218,17 +219,19 @@ function setupTheme(onChanged?: () => void): void {
   function applyTheme(theme?: string): void {
     document.documentElement.setAttribute('data-theme', theme || 'wechat');
   }
-  // 动效开关（设置 → 主题与外观 → enableAnimations）：与主窗 ThemeContext 同语义，
-  // `!== false` 视为开（未配置默认开），关闭时给根元素挂 .anim-off 由 baseCSS 全局禁用动画
-  function applyAnim(off: boolean): void {
-    document.documentElement.classList.toggle('anim-off', off);
+  // 高级动画控制（v2.3.90）：总控 / 单控互斥。悬浮球是独立 document，
+  // 总控关闭 → 上面 baseCSS 的 `.anim-off` 全局 kill 生效；
+  // 单控模式 → 改用 `html[data-anim-off~="floatball"]` + 自动生成的 <style> 精确关掉本窗动画。
+  // kind 传 'floating'：本窗用 .fb-* 系列选择器，与主窗口的分类法共用同一份 ANIM_GROUPS 定义。
+  function applyAnim(settings: any): void {
+    applyAnimControl(document, settings, 'floating');
   }
   function refreshTheme(): void {
     if (api && api.getSettings) {
       api.getSettings()
         .then((s: any) => {
           applyTheme(s?.theme);
-          applyAnim(s?.enableAnimations === false);
+          applyAnim(s);
         })
         .catch(() => {});
     }

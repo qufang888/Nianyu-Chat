@@ -39,6 +39,7 @@ import { MomentsView } from './MomentsView';
 import { EVENT_COOLDOWN_MS, EVENT_TRIGGER_THRESHOLD } from '../eventThemes';
 import { getEventStore, setEventStore } from '../utils/eventStore';
 import { setIdleActivity } from '../utils/idleTimerStore';
+import { applyAnimControl } from '../utils/animControl';
 import { resolveWantStream, resolveStreamInfo, persistStreamToggle, type StreamPref } from '../utils/chatStream';
 import { usePseudoReveal, markPseudoPending, isPseudoPending, clearPseudoPending } from '../utils/pseudoStream';
 import { clampPseudoSpeed, PSEUDO_QUEUE } from '../types';
@@ -822,7 +823,9 @@ export const MiniChat: React.FC = () => {
       };
       const ff = FONT_FAMILIES[settings.fontFamily] || FONT_FAMILIES.system;
       if (ff) root.style.setProperty('--font-family', ff);
-      root.classList.toggle('anim-off', !settings.enableAnimations);
+      // 高级动画控制（v2.3.90）：总控 / 单控互斥。小窗是独立 document，
+      // 有自己的 <html>，故必须对自己的 document 调用（主窗口 ThemeContext 只管主窗）。
+      applyAnimControl(document, settings, 'main');
       // 全局开关统一重派生
       setHideReasoning(settings.hideReasoning !== false);
       // v2.3.44：全局 TTS 开关（主窗/设置页切换后小窗立即同步）

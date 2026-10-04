@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
 import type { QueueSnapshot, QueueLaneInfo } from '../types';
+import { isGroupEnabled } from '../utils/animControl';
 
 const DRAG_THRESHOLD = 4; // 位移超过该像素判定为拖动（否则视为点击展开/收起）
 
@@ -22,7 +23,9 @@ export default function QueueDock() {
   const [snap, setSnap] = useState<QueueSnapshot | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [dockY, setDockY] = useState<number>(() => Math.round(window.innerHeight * 0.4));
-  const [anim, setAnim] = useState(true); // 动效开关（enableAnimations），内联判定
+  // 动效开关：走 isGroupEnabled（总控关闭 或 单控关掉「请求队列」分组都应变为无过渡）。
+  // 本组件 portal 挂 body（不在 .anim-off 子树语义内），故必须自行订阅设置变化。
+  const [anim, setAnim] = useState(true);
   const [dragging, setDragging] = useState(false);
   const [dragOverIdx, setDragOverIdx] = useState(-1);
   const [panelH, setPanelH] = useState(0); // 面板实测高度（防面板底部溢出视口）
@@ -51,14 +54,21 @@ export default function QueueDock() {
         const s = await api.getSettings();
         if (disposed) return;
         if (typeof s.queueDockY === 'number') setDockY(clampY(s.queueDockY));
-        setAnim(s.enableAnimations !== false);
+        setAnim(isGroupEnabled(s, 'queue'));
       } catch {
         /* 忽略：使用缺省值 */
       }
     })();
     const offSettings = api.onSettingsChanged((_e, patch: Record<string, unknown> | undefined) => {
       if (!patch) return;
-      if (typeof patch.enableAnimations === 'boolean') setAnim(patch.enableAnimations);
+      // 任意与动效相关的键变化（总控 / 模式 / 任一分组）都要重算，改动后由 settings-changed 广播兜底
+      if (
+        'enableAnimations' in patch ||
+        'animControlMode' in patch ||
+        'animGroups' in patch
+      ) {
+        api.getSettings().then((s2) => setAnim(isGroupEnabled(s2, 'queue'))).catch(() => {});
+      }
       if (typeof patch.queueDockY === 'number') setDockY(clampY(patch.queueDockY));
     });
     const offQueue = api.onQueueChanged((data) => {

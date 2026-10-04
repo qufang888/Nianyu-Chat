@@ -19,6 +19,7 @@ import { createPortal } from 'react-dom';
 import { useTheme } from '../theme/ThemeContext';
 import type { AppSettings } from '../types';
 import cursorPngUrl from '../assets/cursor/cursor.png';
+import { isGroupEnabled } from '../utils/animControl';
 
 // ===== 类型定义 =====
 
@@ -99,15 +100,16 @@ const CustomCursor: React.FC = () => {
   const opacityRef = useRef(1);             // 当前全局透明度 0~1
   const fadeStateRef = useRef<FadeState>('none'); // 当前淡入淡出状态
   const fadeStartRef = useRef(0);           // 淡入/淡出开始时间戳
-  // v2.3.90：动效总开关。Canvas 的 globalAlpha 补间是纯 JS 绘制逻辑，`.anim-off` 的 CSS
+  // v2.3.90：动效控制。Canvas 的 globalAlpha 补间是纯 JS 绘制逻辑，`.anim-off` 的 CSS
   // 全局规则管不到它，故需在此显式门控：关闭动效时淡入/淡出「一步到位」（直接写终值），
-  // 不再播放 rAF 补间。语义与 CustomTitleBar / VideoBubble 的 `animOn` 判定保持一致。
+  // 不再播放 rAF 补间。判定走 isGroupEnabled —— 总控关闭或单控关掉「自定义光标」分组都生效。
   // 用 ref 而非闭包变量：rAF 回调长期存活，需读到最新值而不必重建整条回调链。
   // 在 effect 中同步（而非渲染期直接赋值）——渲染期写 ref 在并发模式下属于副作用。
-  const animOnRef = useRef(settings?.enableAnimations !== false);
+  const cursorAnimOn = isGroupEnabled(settings, 'cursor');
+  const animOnRef = useRef(cursorAnimOn);
   useEffect(() => {
-    animOnRef.current = settings?.enableAnimations !== false;
-  }, [settings?.enableAnimations]);
+    animOnRef.current = cursorAnimOn;
+  }, [cursorAnimOn]);
 
   // ===== 对象池（预分配，永不销毁）=====
   const trailPoolRef = useRef<TrailPoint[]>(

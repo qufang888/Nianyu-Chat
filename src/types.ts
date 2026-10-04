@@ -482,6 +482,11 @@ export interface AppSettings {
   voice: VoiceSettings;
   miniWindow: MiniWindowSettings;
   enableAnimations: boolean; // 全局 UI 动效总开关（低配电脑可关闭）
+  // ===== 高级动画控制（v2.3.90）=====
+  // 总控/单控**互斥**：master=总开关统一管全部动画（enableAnimations）；single=总控被忽略，
+  // 每个动画按 animGroups 里的自己的开关播放。拨动任意单项开关进入单控，再拨总控开关回总控。
+  animControlMode?: 'master' | 'single';
+  animGroups?: Record<string, boolean>; // 分组 id → 是否开启动效（缺 key 视为开）；分组表见 src/utils/animControl.ts
   // ===== 软件更新（v2.3.45）=====
   autoCheckUpdate?: boolean; // 启动时自动检查更新（默认 true）；关闭后仅手动检查
   autoDownloadUpdate?: boolean; // 发现新版本后自动从 GitHub 下载安装包（默认 false）
@@ -830,6 +835,23 @@ export const DEFAULT_SETTINGS: AppSettings = {
   webSearchFetchTimeout: 8000,
   searchApiKey: '',
   enableAnimations: true,
+  // ===== 高级动画控制（v2.3.90）：默认总控模式 + 全部分组开启 =====
+  animControlMode: 'master',
+  animGroups: {
+    panel: true,
+    ctxmenu: true,
+    toast: true,
+    bubble: true,
+    loading: true,
+    progress: true,
+    queue: true,
+    floatball: true,
+    splash: true,
+    cursor: true,
+    banner: true,
+    theme: true,
+    scrollbar: true,
+  },
   autoCheckUpdate: true,
   autoDownloadUpdate: false,
   modelTagMode: 'api',
