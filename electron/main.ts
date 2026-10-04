@@ -5535,8 +5535,10 @@ function registerIPC(): void {
     return res;
   });
   // ---------- 记忆快捷添加（选中文本一键记忆） ----------
-  // 「修改重发」专用（v2.3.63）：回滚 + **额外删除该时间点之后的剧情节点**。
-  // 与普通回滚分开成独立 IPC，避免影响既有回滚行为（普通回滚不碰节点）。
+  // 「修改重发」专用（v2.3.63）：回滚 + 删除关联的剧情节点。
+  // v2.3.90 更正注释：此前写的「与普通回滚分开成独立 IPC，避免影响既有回滚行为（普通回滚不碰节点）」
+  // 自 v2.3.79 起已不成立——两条路径都调用 `rollbackMessages(..., true)`，**都会**删除剧情节点。
+  // 保留独立 IPC 仅为兼容既有 preload/renderer 调用方（两者行为现已完全一致）。
   ipcMain.handle('messages:rollbackForEdit', (_e, chatType: string, chatId: string, fromMsgId: number) => {
     const res = dm.rollbackMessages(chatType, chatId, fromMsgId, true);
     if (res.deletedMoments > 0) broadcast('moments:changed', { chatId });

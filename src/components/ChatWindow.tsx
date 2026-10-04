@@ -3640,10 +3640,10 @@ export const ChatWindow: React.FC<{
 
         }
 
-                // v2.3.63：改用 rollbackForEdit —— 在回滚之外**额外删除该时间点之后的剧情节点**
-
-
-        // （普通「回滚」不动节点；记忆 / 朋友圈动态仍由回滚统一联动删除）
+                // v2.3.63：改用 rollbackForEdit —— 与普通「回滚」走同一个数据口径。
+        // v2.3.90 更正注释：此前写的「普通回滚不动节点」自 v2.3.79 起已不成立——
+        // 两条路径（rollback / rollbackForEdit）都调用 `rollbackMessages(..., true)`，**都会**删除剧情节点。
+        // 记忆 / 朋友圈动态同样由回滚统一联动删除。
 
 
         const rb = await api.rollbackForEdit({ chatType, chatId, fromMsgId: em.id });
