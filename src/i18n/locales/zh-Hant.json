@@ -1403,5 +1403,22 @@
   "momentMedia.image.failed": "朋友圈配圖失敗：{msg}",
   "momentMedia.video.started": "正在生成朋友圈配影片…",
   "momentMedia.video.success": "朋友圈配影片已生成",
-  "momentMedia.video.failed": "朋友圈配影片失敗：{msg}"
+  "momentMedia.video.failed": "朋友圈配影片失敗：{msg}",
+  "tutorial.step": "第 {cur}/{total} 步",
+  "tutorial.close": "關閉引導",
+  "tutorial.step1Title": "新增第一張人物卡",
+  "tutorial.step1Body": "點擊高亮的「＋」按鈕新增一張人物卡：可以自行填寫設定，也可以匯入現成的 PNG 角色卡。",
+  "tutorial.step1Hint": "新增成功後會自動進入下一步。",
+  "tutorial.step2Title": "開啟第一個聊天",
+  "tutorial.step2Body": "點擊人物卡上的「聊天」按鈕進入對話，然後送出你的第一則訊息。",
+  "tutorial.step2Hint": "送出第一則訊息後引導會自動結束。",
+  "tutorial.gotoContacts": "前往聯絡人頁",
+  "tutorial.back": "上一步",
+  "tutorial.next": "下一步",
+  "tutorial.finish": "完成",
+  "tutorial.skip": "略過引導",
+  "tutorial.doneTitle": "完成！",
+  "tutorial.doneBody": "你已經建立好第一張人物卡並開啟了第一個聊天，去玩吧。",
+  "tutorial.rerun": "重新執行新手引導",
+  "tutorial.rerunDone": "已重設新手引導（若還沒有人物卡，下次啟動時會再次出現）"
 }

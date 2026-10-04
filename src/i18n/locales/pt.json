@@ -1403,5 +1403,22 @@
   "momentMedia.image.failed": "Falha ao gerar a imagem do Moments: {msg}",
   "momentMedia.video.started": "Gerando vídeo do Moments…",
   "momentMedia.video.success": "Vídeo do Moments gerado",
-  "momentMedia.video.failed": "Falha ao gerar o vídeo do Moments: {msg}"
+  "momentMedia.video.failed": "Falha ao gerar o vídeo do Moments: {msg}",
+  "tutorial.step": "Passo {cur}/{total}",
+  "tutorial.close": "Fechar o tutorial",
+  "tutorial.step1Title": "Crie seu primeiro cartão de personagem",
+  "tutorial.step1Body": "Clique no botão「＋」destacado para criar um cartão de personagem: preencha os detalhes ou importe um cartão PNG pronto.",
+  "tutorial.step1Hint": "O tutorial avança automaticamente assim que o cartão for adicionado.",
+  "tutorial.step2Title": "Inicie seu primeiro chat",
+  "tutorial.step2Body": "Clique no botão「Chat」do cartão de personagem para abrir a conversa e envie sua primeira mensagem.",
+  "tutorial.step2Hint": "O tutorial termina automaticamente após a primeira mensagem.",
+  "tutorial.gotoContacts": "Ir para Contatos",
+  "tutorial.back": "Anterior",
+  "tutorial.next": "Avançar",
+  "tutorial.finish": "Concluir",
+  "tutorial.skip": "Pular tutorial",
+  "tutorial.doneTitle": "Tudo pronto!",
+  "tutorial.doneBody": "Você já criou seu primeiro cartão de personagem e iniciou seu primeiro chat. Divirta-se!",
+  "tutorial.rerun": "Refazer o tutorial",
+  "tutorial.rerunDone": "Tutorial redefinido (ele aparecerá novamente na próxima inicialização se você ainda não tiver cartões de personagem)"
 }

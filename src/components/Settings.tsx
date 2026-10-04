@@ -4601,6 +4601,20 @@ export const Settings: React.FC<{
               {t('settings.rerunWizard')}
             </button>
           )}
+          {/* v2.3.90：重新运行新手引导。
+              注意：新手引导只在「一张人物卡都没有」时自动出现，因此对已有卡的用户点这个按钮
+              只是把 tutorialDone 写回 false，界面上不会立刻弹出——它主要在刚做完初始设置、
+              还没建卡时才有意义。 */}
+          <button
+            className="btn-ghost"
+            style={{ marginLeft: 8 }}
+            onClick={async () => {
+              await api.saveSettings({ tutorialDone: false });
+              showToast(t('tutorial.rerunDone'));
+            }}
+          >
+            {t('tutorial.rerun')}
+          </button>
         </div>
         <div className="settings-about-row">
           <button type="button" className="btn-ghost" onClick={() => onAbout?.()}>

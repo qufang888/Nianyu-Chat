@@ -22,6 +22,7 @@ import VideoBubble from './components/VideoBubble';
 import ErrorBubble from './components/ErrorBubble';
 import QueueDock from './components/QueueDock';
 import { UpdatePopup } from './components/UpdatePopup';
+import { TutorialOverlay } from './components/TutorialOverlay';
 import type { Role } from './types';
 
 type View = 'chats' | 'contacts' | 'compare' | 'settings' | 'stats' | 'library' | 'moments';
@@ -94,6 +95,36 @@ export default function App() {
   useEffect(() => {
     if (!showSplash && settings && (!settings.firstRunDone || !settings.models?.length)) setShowOnboarding(true);
   }, [showSplash, settings]);
+
+  // ===== 新手引导（v2.3.90，可跳过）=====
+  // 与上面的初始设置向导严格互斥：仅当 firstRunDone === true（初始设置已走完）且
+  // 初始设置向导当前没有展示时，才可能挂载 TutorialOverlay。
+  // 触发条件全部满足才弹：已完成初始设置 + 未完成也未跳过引导 + 还没有任何人物卡。
+  // 人物卡数量为 0 的限制意味着「设置 → 重新运行新手引导」对已有卡的老用户不会自动弹出
+  // （按钮仍会把 tutorialDone 写回 false），这点在设置按钮旁有注释说明。
+  const [tutorialDismissed, setTutorialDismissed] = useState(false);
+  const [roleCount, setRoleCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (tutorialDismissed) return;
+    let alive = true;
+    void api
+      .getRoles()
+      .then((rs) => {
+        if (alive) setRoleCount(rs.length);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [tutorialDismissed, showOnboarding]);
+
+  const tutorialEligible =
+    !showSplash &&
+    !showOnboarding &&
+    !!settings &&
+    settings.firstRunDone === true &&
+    settings.tutorialDone !== true &&
+    roleCount === 0;
 
   // 开屏动画每次启动都展示；此处仅把 hasShownSplash 写入设置做历史记录，不作为展示门槛。
   useEffect(() => {
@@ -329,9 +360,17 @@ export default function App() {
       <VideoBubble />
       <ErrorBubble />
       <QueueDock />
-      {/* v2.3.48：更新提醒弹窗（仅主窗；每版本只弹一次，设置中可永久关闭提醒） */}
+{/* v2.3.48：更新提醒弹窗（仅主窗；每版本只弹一次，设置中可永久关闭提醒） */}
       <UpdatePopup />
-      </div>
+      {/* v2.3.90：新手引导（可跳过；与初始设置向导互斥，仅在「无人物卡」时出现） */}
+      {tutorialEligible && (
+        <TutorialOverlay
+          show
+          onClose={() => setTutorialDismissed(true)}
+          onGoToContacts={() => setView('contacts')}
+        />
+      )}
+    </div>
     </div>
   );
 }

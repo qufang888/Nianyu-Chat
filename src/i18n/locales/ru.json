@@ -1403,5 +1403,22 @@
   "momentMedia.image.failed": "Не удалось создать картинку Moments: {msg}",
   "momentMedia.video.started": "Создание видео Moments…",
   "momentMedia.video.success": "Видео Moments готово",
-  "momentMedia.video.failed": "Не удалось создать видео Moments: {msg}"
+  "momentMedia.video.failed": "Не удалось создать видео Moments: {msg}",
+  "tutorial.step": "Шаг {cur}/{total}",
+  "tutorial.close": "Закрыть обучение",
+  "tutorial.step1Title": "Создайте первую карточку персонажа",
+  "tutorial.step1Body": "Нажмите выделенную кнопку「＋」чтобы создать карточку персонажа: заполните данные вручную или импортируйте готовую карточку в формате PNG.",
+  "tutorial.step1Hint": "После добавления карточки обучение автоматически перейдёт к следующему шагу.",
+  "tutorial.step2Title": "Начните первый чат",
+  "tutorial.step2Body": "Нажмите кнопку「Чат」на карточке персонажа, чтобы открыть беседу, затем отправьте первое сообщение.",
+  "tutorial.step2Hint": "После первого сообщения обучение завершится автоматически.",
+  "tutorial.gotoContacts": "Перейти в контакты",
+  "tutorial.back": "Назад",
+  "tutorial.next": "Далее",
+  "tutorial.finish": "Готово",
+  "tutorial.skip": "Пропустить обучение",
+  "tutorial.doneTitle": "Готово!",
+  "tutorial.doneBody": "Вы создали первую карточку персонажа и начали первый чат. Приятной игры!",
+  "tutorial.rerun": "Пройти обучение заново",
+  "tutorial.rerunDone": "Обучение сброшено (оно снова появится при следующем запуске, если у вас ещё нет карточек персонажей)"
 }

@@ -1403,5 +1403,22 @@
   "momentMedia.image.failed": "Échec de l’image Moments : {msg}",
   "momentMedia.video.started": "Génération de la vidéo Moments…",
   "momentMedia.video.success": "Vidéo Moments générée",
-  "momentMedia.video.failed": "Échec de la vidéo Moments : {msg}"
+  "momentMedia.video.failed": "Échec de la vidéo Moments : {msg}",
+  "tutorial.step": "Étape {cur}/{total}",
+  "tutorial.close": "Fermer le tutoriel",
+  "tutorial.step1Title": "Créez votre première fiche de personnage",
+  "tutorial.step1Body": "Cliquez sur le bouton « ＋ » mis en évidence pour créer une fiche de personnage : remplissez les détails vous-même ou importez une fiche PNG existante.",
+  "tutorial.step1Hint": "Le tutoriel passe automatiquement à l’étape suivante une fois la fiche ajoutée.",
+  "tutorial.step2Title": "Démarrez votre première discussion",
+  "tutorial.step2Body": "Cliquez sur le bouton « Discussion » de la fiche pour ouvrir la conversation, puis envoyez votre premier message.",
+  "tutorial.step2Hint": "Le tutoriel se termine automatiquement après votre premier message.",
+  "tutorial.gotoContacts": "Aller aux contacts",
+  "tutorial.back": "Précédent",
+  "tutorial.next": "Suivant",
+  "tutorial.finish": "Terminer",
+  "tutorial.skip": "Ignorer le tutoriel",
+  "tutorial.doneTitle": "C’est prêt !",
+  "tutorial.doneBody": "Vous avez créé votre première fiche de personnage et démarré votre première discussion. Amusez-vous !",
+  "tutorial.rerun": "Revoir le tutoriel",
+  "tutorial.rerunDone": "Tutoriel réinitialisé (il réapparaîtra au prochain démarrage si vous n’avez toujours pas de fiche)"
 }

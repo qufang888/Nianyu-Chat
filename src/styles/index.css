@@ -4467,3 +4467,146 @@ body.ny-drop-chat .quick-import-overlay {
 [data-theme='glass'] .msg-action-divider {
   background: rgba(18, 16, 38, 0.55);
 }
+
+/* ===== 新手引导（v2.3.90，可跳过：添加第一个人物卡 → 开启第一个聊天）=====
+   遮罩用 4 块 .tutorial-mask 面板围出「spotlight 洞」，洞内的高亮元素保持可点击；
+   找不到目标元素时只渲染一整块遮罩 + 居中卡片（此时整屏不可点，仅卡片可交互）。
+   配色一律走主题 CSS 变量，14 套主题（明/暗/毛玻璃）均保持可读。 */
+.tutorial-root {
+  position: fixed;
+  inset: 0;
+  /* 高于 .modal-mask(10001)，避免被初始设置向导等弹窗压住；低于自定义光标层 */
+  z-index: 10002;
+  /* 关键：根层本身不吃鼠标事件，否则整屏（含 spotlight 洞）都会吞掉点击，高亮按钮将无法操作。
+     真正拦截事件的只有 .tutorial-mask（洞外区域）与 .tutorial-card。 */
+  pointer-events: none;
+}
+.tutorial-mask {
+  position: fixed;
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+}
+/* 整屏遮罩：仅「完成卡片」这一瞬间使用，其余情况都用围出 spotlight 洞的 4 块面板 */
+.tutorial-mask-full {
+  inset: 0;
+}
+/* 高亮环：只画边框，不吃鼠标事件，保证洞内按钮可点 */
+.tutorial-ring {
+  position: fixed;
+  border-radius: 10px;
+  border: 2px solid var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary), 0 4px 18px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  animation: tutorialRingPulse 1.6s ease-in-out infinite;
+}
+@keyframes tutorialRingPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px var(--color-primary), 0 4px 18px rgba(0, 0, 0, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 6px var(--color-primary), 0 4px 22px rgba(0, 0, 0, 0.45);
+  }
+}
+.tutorial-card {
+  position: fixed;
+  background: var(--color-panel);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-panel);
+  padding: 14px 16px 12px;
+  box-sizing: border-box;
+  /* 卡片自身可交互（按钮/关闭），洞外区域由遮罩面板拦截 */
+  pointer-events: auto;
+  animation: tutorialCardIn 0.18s ease-out;
+}
+.tutorial-card-center {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  /* 独立关键帧：保留 translate(-50%,-50%) 居中偏移（通用 tutorialCardIn 会把它覆盖掉） */
+  animation: tutorialCardInCenter 0.18s ease-out;
+}
+@keyframes tutorialCardInCenter {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+@keyframes tutorialCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.tutorial-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.tutorial-step {
+  font-size: calc(12px * var(--font-scale));
+  color: var(--color-text-secondary);
+}
+.tutorial-close {
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--color-text-secondary);
+  padding: 0 4px;
+  border-radius: 6px;
+}
+.tutorial-close:hover {
+  color: var(--color-text);
+  background: var(--color-hover);
+}
+.tutorial-title {
+  font-size: calc(15px * var(--font-scale));
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 6px;
+}
+.tutorial-body {
+  font-size: calc(13px * var(--font-scale));
+  color: var(--color-text);
+  line-height: 1.65;
+}
+.tutorial-hint {
+  margin-top: 6px;
+  font-size: calc(12px * var(--font-scale));
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+.tutorial-goto {
+  margin-top: 10px;
+  width: 100%;
+}
+.tutorial-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.tutorial-actions .tutorial-skip {
+  margin-right: auto;
+}
+.tutorial-done-emoji {
+  font-size: 34px;
+  text-align: center;
+  margin-bottom: 6px;
+}
+.tutorial-card-center .tutorial-title,
+.tutorial-card-center .tutorial-body {
+  text-align: center;
+}

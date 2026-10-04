@@ -493,6 +493,7 @@ export interface AppSettings {
   queueDockY?: number; // 请求队列贴边图标的纵坐标 px（v2.3.46，仅主界面右缘可上下拖动；缺省=视口垂直偏上 40%）
   // ===== 首启向导与自我身份 =====
   firstRunDone: boolean; // 是否已走过初始设置（老用户读取到旧 settings 时由 db 强制置 true）
+  tutorialDone: boolean; // v2.3.90：是否已完成/已跳过「新手引导」（添加人物卡 → 开启第一个聊天）；与 firstRunDone 独立，二者互斥触发
   selfRoles: SelfRole[]; // 用户自建的「我的角色卡」
   currentSelfRoleId: string; // 全局默认使用的自我身份
   chatSelfRoles: Record<string, string>; // 按会话覆盖的自我身份：key="single:roleId"/"group:groupId"，value=selfRoleId / 'none' / 'default'
@@ -833,6 +834,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoDownloadUpdate: false,
   modelTagMode: 'api',
   firstRunDone: false,
+  tutorialDone: false,
   selfRoles: [],
   currentSelfRoleId: '',
   chatSelfRoles: {},

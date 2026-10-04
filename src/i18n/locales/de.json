@@ -1403,5 +1403,22 @@
   "momentMedia.image.failed": "Moments-Bild fehlgeschlagen: {msg}",
   "momentMedia.video.started": "Moments-Video wird erzeugt…",
   "momentMedia.video.success": "Moments-Video erstellt",
-  "momentMedia.video.failed": "Moments-Video fehlgeschlagen: {msg}"
+  "momentMedia.video.failed": "Moments-Video fehlgeschlagen: {msg}",
+  "tutorial.step": "Schritt {cur}/{total}",
+  "tutorial.close": "Tutorial schließen",
+  "tutorial.step1Title": "Erste Charakterkarte anlegen",
+  "tutorial.step1Body": "Klicke auf das hervorgehobene „＋“, um eine Charakterkarte anzulegen: Details selbst ausfüllen oder eine fertige PNG-Rollenkarte importieren.",
+  "tutorial.step1Hint": "Nach dem Anlegen geht es automatisch zum nächsten Schritt.",
+  "tutorial.step2Title": "Ersten Chat starten",
+  "tutorial.step2Body": "Klicke auf „Chat“ der Charakterkarte, um das Gespräch zu öffnen, und sende dann deine erste Nachricht.",
+  "tutorial.step2Hint": "Nach der ersten Nachricht endet das Tutorial automatisch.",
+  "tutorial.gotoContacts": "Zu den Kontakten",
+  "tutorial.back": "Zurück",
+  "tutorial.next": "Weiter",
+  "tutorial.finish": "Fertig",
+  "tutorial.skip": "Tutorial überspringen",
+  "tutorial.doneTitle": "Fertig!",
+  "tutorial.doneBody": "Du hast deine erste Charakterkarte angelegt und deinen ersten Chat gestartet. Viel Spaß!",
+  "tutorial.rerun": "Tutorial erneut ausführen",
+  "tutorial.rerunDone": "Tutorial zurückgesetzt (es erscheint beim nächsten Start erneut, wenn du noch keine Charakterkarte hast)"
 }
