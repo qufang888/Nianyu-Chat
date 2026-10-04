@@ -59,7 +59,19 @@ export const MemoryPanel: React.FC<{ roleId: string }> = ({ roleId }) => {
     setDraft(m.content);
   };
 
-  // 搜索 haystack：拼接所有可检索字段（内容 / 聊天名 / 来源 / 原始 id / 时间），不区分大小写
+  // 把时间戳格式化为本地 YYYY-MM-DD：显示与检索统一用这一格式，做到「所见即所搜」，
+  // 这样按时间命中时日期本身也能被 highlight() 正确包裹。
+  const fmtDay = (s?: string): string => {
+    if (!s) return '';
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      const p = (n: number) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    }
+    return s.slice(0, 10);
+  };
+
+  // 搜索 haystack：拼接所有可检索字段（内容 / 聊天名 / 来源 / 原始 id / 日期），不区分大小写
   const searchableText = (m: MemoryEntry): string => {
     const parts: string[] = [m.content];
     if (m.chatId) {
@@ -67,8 +79,8 @@ export const MemoryPanel: React.FC<{ roleId: string }> = ({ roleId }) => {
       parts.push(m.chatId);
     }
     parts.push(m.source === 'auto' ? t('library.auto') : t('library.manual'));
-    if (m.created_at) parts.push(m.created_at);
-    if (m.updated_at) parts.push(m.updated_at);
+    if (m.created_at) parts.push(fmtDay(m.created_at));
+    if (m.updated_at) parts.push(fmtDay(m.updated_at));
     return parts.join(' ');
   };
 
@@ -197,15 +209,18 @@ export const MemoryPanel: React.FC<{ roleId: string }> = ({ roleId }) => {
               <div className="mem-text">{highlight(m.content)}</div>
               <div className="mem-foot">
                 <span className={`badge ${m.source === 'auto' ? 'auto' : 'manual'}`}>
-                  {m.source === 'auto' ? t('library.auto') : t('library.manual')}
+                  {highlight(m.source === 'auto' ? t('library.auto') : t('library.manual'))}
                 </span>
                 {m.chatId ? (
                   <span className="badge chat" title={m.chatId}>
-                    {t('memory.chatSpecific', { name: chatNames[m.chatId] || m.chatId })}
+                    {highlight(t('memory.chatSpecific', { name: chatNames[m.chatId] || m.chatId }))}
                   </span>
                 ) : (
-                  <span className="badge shared">{t('memory.shared')}</span>
+                  <span className="badge shared">{highlight(t('memory.shared'))}</span>
                 )}
+                {fmtDay(m.created_at) ? (
+                  <span className="mem-date">{highlight(fmtDay(m.created_at))}</span>
+                ) : null}
                 <div>
                   <button className="btn-ghost" onClick={() => edit(m)}>
                     {t('memory.edit')}
