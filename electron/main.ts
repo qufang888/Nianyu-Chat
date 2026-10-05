@@ -6991,6 +6991,14 @@ function registerIPC(): void {
     ok: dm.setSkillEnabled(id, !!enabled),
   }));
 
+  // ---------- 内置技能（v2.3.93）：恢复被删除/被改动的内置技能为随念语附带的版本 ----------
+  ipcMain.handle('skill:restoreBuiltin', (_e, id: string) => ({
+    ok: !!dm.restoreBuiltinSkill(typeof id === 'string' ? id : ''),
+  }));
+
+  // 已被用户删除但仍可恢复的内置技能（设置页展示「恢复内置技能」入口）
+  ipcMain.handle('skill:listDismissedBuiltins', () => dm.listDismissedBuiltinSkills());
+
   // 受控 HTTP 工具调用：只发预设的请求，绝不执行任意代码（安全边界）
   ipcMain.handle(
     'plugin:callTool',
