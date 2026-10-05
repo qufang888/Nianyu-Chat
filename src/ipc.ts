@@ -12,6 +12,8 @@ import type {
   Rule,
   MemoryEntry,
   Plugin,
+  Skill,
+  SkillImportResult,
   ProbeOptions,
   UpdateStatus,
   QueueSnapshot,
@@ -373,6 +375,11 @@ export interface NianyuAPI {
   removePlugin: (id: string) => Promise<{ ok: boolean }>;
   togglePlugin: (id: string, enabled: boolean) => Promise<{ ok: boolean; plugin?: Plugin }>;
   callPluginTool: (pluginId: string, toolName: string, arg: string) => Promise<{ ok: boolean; text?: string }>;
+  // ===== 技能（v2.3.92；SKILL.md 形态，纯提示词注入，不执行任何脚本）=====
+  importSkill: (content: string, fileName: string) => Promise<SkillImportResult>;
+  listSkills: () => Promise<Skill[]>;
+  removeSkill: (id: string) => Promise<{ ok: boolean }>;
+  toggleSkill: (id: string, enabled: boolean) => Promise<{ ok: boolean }>;
 
   // ===== 软件更新（v2.3.45）=====
   checkUpdate: (manual?: boolean) => Promise<UpdateStatus>;
@@ -448,6 +455,11 @@ export const api: NianyuAPI = {
   mcpAdd: (p) => raw.mcpAdd(p),
   mcpRemove: (key) => raw.mcpRemove(key),
   mcpToggle: (key, enabled) => raw.mcpToggle(key, enabled),
+  // ===== 技能（v2.3.92）=====
+  importSkill: (content, fileName) => raw.importSkill(content, fileName),
+  listSkills: () => raw.listSkills(),
+  removeSkill: (id) => raw.removeSkill(id),
+  toggleSkill: (id, enabled) => raw.toggleSkill(id, enabled),
   translate: (text) => raw.translate(text),
   interruptStream: (chatId) => raw.interruptStream(chatId),
   copyChat: (type, id) => raw.copyChat(type, id),

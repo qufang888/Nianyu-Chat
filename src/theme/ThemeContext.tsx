@@ -78,10 +78,10 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     else root.style.removeProperty('--input-bg');
     if (settings.inputTextColor) root.style.setProperty('--input-fg', settings.inputTextColor);
     else root.style.removeProperty('--input-fg');
-        // 高级动画控制（v2.3.90）：总控 / 单控互斥。原先这里只挂 `.anim-off`（总控 kill），
-    // 现统一走 applyAnimControl —— 总控关闭时挂 `.anim-off`，单控模式改挂
+    // 高级动画控制（v2.3.92）：全开 / 全关 / 自定义三档。原先这里只挂 `.anim-off`（总控 kill），
+    // 现统一走 applyAnimControl —— 'all-off' 档挂 `.anim-off`；'custom' 档改挂
     // `html[data-anim-off~="<id>"]` 并由自动生成的 <style> 精确关掉对应分组；
-    // 单控模式下永不挂 `.anim-off`，以保证仍开启的分组动画与「流式豁免」不被误杀。
+    // 'custom' 档永不挂 `.anim-off`，以保证仍开启的分组动画与「流式豁免」不被误杀。
     applyAnimControl(document, settings, 'main');
     // 毛玻璃主题背景（仅 glass/frost 主题生效）：自定义背景色或图片，磨砂效果由主题 CSS 的 backdrop-filter 保留
     const isGlass = theme === 'glass' || theme === 'frost';

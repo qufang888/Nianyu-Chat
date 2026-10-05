@@ -13,6 +13,16 @@ import type {
   Plugin,
 } from '../src/types';
 import { DEFAULT_SETTINGS } from '../src/types';
+import {
+  listSkills,
+  getSkill,
+  importSkill,
+  deleteSkill,
+  setSkillEnabled,
+  getSkillsForChat,
+  buildSkillsPrompt,
+} from './skills';
+import type { Skill, SkillImportResult } from '../src/types';
 
 // 纯 JS 存储：数据以 JSON 文件持久化，无需任何原生编译模块。
 interface ChatSession {
@@ -446,6 +456,50 @@ class DataManager {
   deletePlugin(id: string): void {
     this.store.plugins = this.store.plugins.filter((p) => p.id !== id);
     this.saveStore();
+  }
+
+  // ===================== 技能（Skill）=====================
+  // 刻意**不进 store.json**：技能数据落在独立文件 skills.json（见 electron/skills.ts）。
+  // 理由：store.json 是聊天主数据（消息/角色/记忆），技能属于可随时整体删除的外挂资产，
+  // 物理隔离可避免技能解析异常污染聊天存档，也便于单独备份/回滚。
+  // DataManager 只做薄门面，真实逻辑与解析规则集中在 skills.ts（便于独立实测）。
+
+  /** 列出全部技能（导入时间倒序） */
+  listSkills(): Skill[] {
+    return listSkills();
+  }
+
+  /** 取单个技能 */
+  getSkill(id: string): Skill | undefined {
+    return getSkill(id);
+  }
+
+  /** 解析并导入一段 SKILL.md 文本（content 来自用户对话框选中的文件，不接受任意路径） */
+  importSkill(content: string, fileName: string): SkillImportResult {
+    return importSkill(content, fileName);
+  }
+
+  /** 删除技能，返回是否命中 */
+  deleteSkill(id: string): boolean {
+    return deleteSkill(id);
+  }
+
+  /** 启停技能，返回是否命中 */
+  setSkillEnabled(id: string, enabled: boolean): boolean {
+    return setSkillEnabled(id, enabled);
+  }
+
+  /**
+   * 某场对话实际生效的技能：global ∪ (role 且 roleId 匹配) ∪ (chat 且 chatKey 匹配)。
+   * 单聊传 resolveSingleRoleId 后的角色 id；群聊传正在发言的角色 id（可为空）。
+   */
+  getSkillsForChat(chatType: string, chatId: string, roleId = ''): Skill[] {
+    return getSkillsForChat(chatType, chatId, roleId);
+  }
+
+  /** 构造注入给 AI 的「可用技能」段；无技能时返回空串（调用方整段跳过） */
+  buildSkillsPrompt(chatType: string, chatId: string, roleId = ''): string {
+    return buildSkillsPrompt(this.getSkillsForChat(chatType, chatId, roleId));
   }
 
 
@@ -895,6 +949,20 @@ class DataManager {
         }));
         // 老用户（已存在 settings.json 但无 firstRunDone 字段）视为已完成首启，不再弹出向导
         if (raw.firstRunDone === undefined) merged.firstRunDone = true;
+        // v2.3.92：动画控制由「总控/单控」二元改为「全开/全关/自定义」三档。
+        // 老配置没有 animMode 字段，按旧语义单向映射（不覆盖已存在的合法 animMode）：
+        //   animControlMode==='single'（当年拨过分项开关）→ 'custom'：保留用户逐项调过的结果；
+        //   否则 enableAnimations===false              → 'all-off'；
+        //   其余（含老配置 enableAnimations=true）    → 'all-on'。
+        // 只在读盘时补齐，不主动回写 settings.json（避免老用户文件被无谓改动）。
+        if (raw.animMode !== 'all-on' && raw.animMode !== 'all-off' && raw.animMode !== 'custom') {
+          merged.animMode =
+            raw.animControlMode === 'single'
+              ? 'custom'
+              : raw.enableAnimations === false
+                ? 'all-off'
+                : 'all-on';
+        }
         return merged;
       }
     } catch (e) {

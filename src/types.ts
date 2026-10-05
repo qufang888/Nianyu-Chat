@@ -440,6 +440,38 @@ export interface Plugin {
   created_at: string;
 }
 
+// ===== 技能 Skill（v2.3.92 新增；SKILL.md 形态的「说明书」层）=====
+// 与插件的关键区别：技能**只做纯提示词注入，绝不执行任何脚本**。
+// frontmatter 中若声明 scripts/exec/command 等可执行字段，解析时忽略并在 UI 显式标注。
+export type SkillScope = 'global' | 'role' | 'chat';
+
+export interface Skill {
+  id: string;
+  name: string; // 必填：技能名（进提示词 <skill name="...">）
+  description: string; // 必填：AI 判断「何时用这个技能」的唯一依据，需写清触发场景
+  scope: SkillScope; // 作用域：global=全部对话 / role=绑定角色 / chat=绑定单场对话
+  roleId?: string; // scope=role 时必填：绑定的角色 id
+  chatKey?: string; // scope=chat 时必填：绑定的对话，格式 `${chatType}:${chatId}`
+  version?: string;
+  body: string; // 正文：注入给 AI 的指令 / Markdown（纯提示词，不执行）
+  sourceFile?: string; // 来源文件名（仅展示用，不保留绝对路径）
+  enabled: boolean;
+  truncated?: boolean; // 正文超上限被截断
+  scriptBlocked?: boolean; // frontmatter 含脚本类字段 → 已忽略（本版本不执行）
+  scriptFields?: string; // 被忽略的脚本字段名（逗号分隔），供 UI 展示
+  importedAt: string;
+}
+
+/** 技能导入结果（IPC 返回） */
+export interface SkillImportResult {
+  ok: boolean;
+  skill?: Skill;
+  /** i18n 键后缀，如 errNoName → 渲染层拼 skill.{key} */
+  error?: string;
+  /** 提示类型：script=含脚本字段已忽略 / truncated=正文超限被截断 */
+  warnings?: string[];
+}
+
 export interface AppSettings {
   apiKeys: ApiKeys;
   defaultModel: string;
@@ -471,6 +503,7 @@ export interface AppSettings {
   proactiveDnd?: { enabled?: boolean; start?: string; end?: string }; // 勿扰窗口（'HH:mm'，支持跨午夜）
   proactiveDailyLimit?: number; // NHPP：每聊天每日主动消息硬上限（默认 5）
   proactiveFreshnessMin?: number; // NHPP：距上一条消息不足 N 分钟不触发（默认 10）
+  proactiveAdaptiveEnabled?: boolean; // v2.3.92 NHPP：频率自适应开关（默认 true）。开启时发送强度按「用户回复间隔 EMA」动态缩放（回得快→提频/回得慢→降频，钳制 0.5~1.5）；关闭则回到固定频率（仅保留时段/贝叶斯/疲劳三维）
   // ===== MCP 服务器（v2.3.17 新增）=====
   mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>;
   chatBackgrounds: Record<string, string>; // key: "single:roleId" or "group:groupId"
@@ -481,10 +514,17 @@ export interface AppSettings {
   bubbleOpacity: number; // 聊天气泡透明度（50~100，100=完全不透明）
   voice: VoiceSettings;
   miniWindow: MiniWindowSettings;
-  enableAnimations: boolean; // 全局 UI 动效总开关（低配电脑可关闭）
-  // ===== 高级动画控制（v2.3.90）=====
-  // 总控/单控**互斥**：master=总开关统一管全部动画（enableAnimations）；single=总控被忽略，
-  // 每个动画按 animGroups 里的自己的开关播放。拨动任意单项开关进入单控，再拨总控开关回总控。
+  enableAnimations: boolean; // 【v2.3.92 起为兼容字段】旧的总开关，保留仅为向后兼容读；新逻辑请用 animMode
+  // ===== 高级动画控制 =====
+  // v2.3.92 起改为**三档互斥**（取代 v2.3.90 的 master/single 二元模式）：
+  //   - 'all-on'  （全部开启，默认）：所有动画一律播放；
+  //   - 'all-off' （全部关闭）：所有动画一律停播；
+  //   - 'custom'  （自定义）：按 animGroups 里的分组开关逐个决定（设置页仅此档显示分组开关）。
+  // 向后兼容：老 settings 里没有 animMode 时，读档位按 animControlMode==='single' → custom、
+  // 否则 enableAnimations===false → all-off、其余 → all-on 映射（见 src/utils/animControl.ts）。
+  animMode?: 'all-on' | 'all-off' | 'custom';
+  // 【以下两个为兼容字段，v2.3.92 起不再作为档位真源，仅在写入时同步以兼容旧版回滚】
+  // animControlMode：'master'=全开/'single'=自定义；'master' 另可对应全关（配合 enableAnimations=false）
   animControlMode?: 'master' | 'single';
   animGroups?: Record<string, boolean>; // 分组 id → 是否开启动效（缺 key 视为开）；分组表见 src/utils/animControl.ts
   // ===== 软件更新（v2.3.45）=====
@@ -834,8 +874,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   webSearchFetchCount: 5,
   webSearchFetchTimeout: 8000,
   searchApiKey: '',
+  // ===== 高级动画控制（v2.3.92）：三档制，默认「全部开启」+ 全部分组开启 =====
+  animMode: 'all-on',
   enableAnimations: true,
-  // ===== 高级动画控制（v2.3.90）：默认总控模式 + 全部分组开启 =====
   animControlMode: 'master',
   animGroups: {
     panel: true,
@@ -851,6 +892,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     banner: true,
     theme: true,
     scrollbar: true,
+    tutorial: true,
   },
   autoCheckUpdate: true,
   autoDownloadUpdate: false,

@@ -63,7 +63,14 @@ import {
   MEMORY_SUMMARIZE_EXISTING_PLACEHOLDER,
   MEMORY_SUMMARIZE_DIALOGUE_PLACEHOLDER,
 } from '../src/utils/builtinPrompts';
-import { initProactiveEngine, rescheduleProactive, extractPendingCallback, heartbeatProactive } from './proactive';
+import {
+  initProactiveEngine,
+  rescheduleProactive,
+  extractPendingCallback,
+  heartbeatProactive,
+  markQuickReply,
+  deriveAwaitingReplyKeys,
+} from './proactive';
 import type {
   Role,
   ChatMessage,
@@ -3172,10 +3179,15 @@ function addUserMessage(p: {
   // 广播用户消息到所有窗口（让 MiniChat 发出的图片在小窗/主窗同步显示）
   broadcast('stream:user', msg);
   // 用户在该聊天发言：解除主动消息冷却（idleCooldownUntilReply），允许下一条主动消息
+  // 注意：这里只清主进程内存 Set；冻结基准（idleCooldownFrozenMs）由 3s 调度 tick 检测到
+  // 冷却已解除后丢弃并把计时基准推到现在 → 从零重新计时（避免解除瞬间立即补发）。
   proactiveAwaitingReply.delete(`${p.chatType}:${p.chatId}`);
   // NHPP 主动消息引擎：用户交互 → 重算候选时刻 + 抽取显式承诺（待回访）。
   // 仅 settings.proactiveEngine === 'nhpp' 时生效；经典 idle 定时机制不受影响。
   rescheduleProactive(p.chatType, p.chatId);
+  // v2.3.92：补 30 分钟盲区 —— 发出后 30 分钟内的秒回立刻结算正反馈 + 回复间隔 EMA，
+  // 不必等 evaluateFeedback 的满窗判定（否则等待期 priors/频率完全不更新）。
+  markQuickReply(`${p.chatType}:${p.chatId}`);
   extractPendingCallback(p.chatType, p.chatId, p.content || '');
   return msg;
 }
@@ -3223,6 +3235,18 @@ function buildMessagesForRole(
     if (selfRole.world_setting) b.push(`世界观：${selfRole.world_setting}。`);
     parts.push(`【对话对象（用户）设定】\n${b.join('\n')}`);
   }
+  // ===== v2.3.92 技能层 =====
+  // 顺序要求（护人设）：技能段必须排在角色/世界书/用户设定**之后** —— 技能是「附加能力说明书」，
+  // 排在人设之前会让后写的技能文本看起来像更高优先级的身份定义，从而覆盖角色人设。
+  // 空列表时 buildSkillsPrompt 返回空串 → 整段跳过（省 token，也不让 AI 误以为有技能）。
+  if (chatId) {
+    const skillsPrompt = dm.buildSkillsPrompt(
+      'single',
+      chatId,
+      dm.resolveSingleRoleId('single', chatId)
+    );
+    if (skillsPrompt) parts.push(skillsPrompt);
+  }
   const sysPrompt = parts.join('\n\n');
   const finalImages =
     storedImages && storedImages.length ? storedImages : storedImage ? [storedImage] : [];
@@ -3267,6 +3291,14 @@ function buildGroupMessages(
     if (selfRole.background) b.push(`背景：${selfRole.background}。`);
     if (selfRole.world_setting) b.push(`世界观：${selfRole.world_setting}。`);
     parts.push(`【对话对象（用户）设定】\n${b.join('\n')}`);
+  }
+  // ===== v2.3.92 技能层 =====
+  // 顺序要求（护人设）：在角色/世界书/用户设定**之后**、群聊规则**之前**。
+  // 前者避免技能文本覆盖角色人设；后者让「群聊规则」仍是最后一道约束
+  // （技能若排在群聊规则之后，会以更靠后的指令姿态压制群聊身份与不代人发言的硬约束）。
+  if (groupId) {
+    const skillsPrompt = dm.buildSkillsPrompt('group', groupId, role.id);
+    if (skillsPrompt) parts.push(skillsPrompt);
   }
   parts.push(
     `【群聊规则】\n这是一个多人群聊，成员有：${memberNames.join('、')}。\n` +
@@ -5228,6 +5260,14 @@ function registerIPC(): void {
   ipcMain.handle('chats:delete', (_e, type, id) => {
     // 中止该聊天的进行中流式生成，避免孤儿流继续写库产生幽灵会话 / 串台
     abortStreamsForChat(id);
+    // v2.3.92：清理该聊天的主动消息冷却/冻结状态，避免删聊天后残留等待态
+    proactiveAwaitingReply.delete(`${type}:${id}`);
+    try {
+      idleCooldownFrozenMs.delete(`${type}:${id}`);
+      idleState.delete(`${type}:${id}`);
+    } catch {
+      /* idleState 尚未初始化（极早期调用）时忽略 */
+    }
     // 群聊删除时一并移除群组记录，避免残留
     if (type === 'group') dm.deleteGroup(id);
     else dm.deleteChat(type, id);
@@ -6599,6 +6639,11 @@ function registerIPC(): void {
   // 两窗口各自渲染进程独立，无法共享模块变量，因此由主进程统一持有 lastActivity
   // 并每秒广播 elapsed，渲染进程只负责显示，杜绝相位差与初始化差。
   const idleState = new Map<string, number>(); // chatKey -> lastActivityTs
+  // v2.3.92：等回复冷却期间「冻结」的已静默时长（ms）。
+  // 冷却命中时记下当时的 elapsed 并停止增长（真暂停，而非 continue 跳过）；
+  // 用户回复解除冷却后丢弃该值并把基准推到现在 → 从零重新计时，不会解除瞬间立即补发。
+  // 声明在 250ms tick 之前，供倒计时广播复用（冷却中倒计时不走字，避免"看似在走却不发"）。
+  const idleCooldownFrozenMs = new Map<string, number>();
   // 渲染端当前查看的聊天（`${chatType}:${chatId}`）。窗口隐藏/托盘后仍保留，
   // 供主动消息调度器判断该对哪个聊天开口（与悬浮球未读判定共用同一来源）。
   // 注意：activeChatKeyMain 已在模块顶层声明，此处不再重复声明。
@@ -6617,7 +6662,11 @@ function registerIPC(): void {
     if (idleState.size === 0) return;
     const now = Date.now();
     const payload: Record<string, number> = {};
-    for (const [k, ts] of idleState) payload[k] = now - ts;
+    for (const [k, ts] of idleState) {
+      // v2.3.92：等回复冷却中的聊天广播冻结值（倒计时不走字），否则用户会看到"一直在倒计时却永远不发"
+      const frozenCooldown = idleCooldownFrozenMs.get(k);
+      payload[k] = frozenCooldown != null ? frozenCooldown : now - ts;
+    }
     broadcast('idle:tick', payload);
   }, 250);
 
@@ -6650,6 +6699,7 @@ function registerIPC(): void {
     // 冷却开关关闭：清空冷却表，避免历史残留误挡（开启时才按冷却跳过）
     if (s.idleCooldownUntilReply === false && proactiveAwaitingReply.size > 0) {
       proactiveAwaitingReply.clear();
+      idleCooldownFrozenMs.clear(); // v2.3.92：开关关闭时一并清理冻结基准，否则残留值会让下次开启后计时起点错乱
     }
     const switchAction = s.idleSwitchAction || 'continue';
     if (switchAction === 'continue' && idleFrozenElapsedMs.size > 0) {
@@ -6661,9 +6711,27 @@ function registerIPC(): void {
     let bestKey: string | null = null;
     let bestOverdue = -1;
     let bestIntervalMs = 0;
-    for (const [k, ts] of idleState) {
+    for (const [k, tsRaw] of idleState) {
+      let ts = tsRaw;
       if ((s.chatIdleEnabled || {})[k] === false) continue; // 该聊天单独关闭了主动消息
-      if (s.idleCooldownUntilReply !== false && proactiveAwaitingReply.has(k)) continue; // 冷却中：等用户回复
+      // v2.3.92「等你回复才发下一条」：真暂停，而非 continue 跳过。
+      // 原实现直接 continue，基准时间戳不动 → overdue 单调堆积；
+      // 用户一回复（冷却在 addUserMessage 里被清）下一个 3s tick 就立即补发一条（体感 bug）。
+      // 现在：首次命中时冻结当前 elapsed（之后 elapsed 不再增长）→ 冷却解除后从零重新计时。
+      if (s.idleCooldownUntilReply !== false && proactiveAwaitingReply.has(k)) {
+        if (!idleCooldownFrozenMs.has(k)) {
+          const base = idleFrozenElapsedMs.get(k);
+          idleCooldownFrozenMs.set(k, base != null ? base : Math.max(0, now - ts));
+        }
+        continue; // 冻结基准后跳过本轮评估（不发送、不推后间隔）
+      }
+      // 冷却已解除：丢弃冻结值并把基准推到现在 → elapsed 从零重新计时（不立即补发）
+      if (idleCooldownFrozenMs.has(k)) {
+        idleCooldownFrozenMs.delete(k);
+        ts = now;
+        idleState.set(k, now);
+        broadcast('idle:activity', { chatKey: k, timestamp: now });
+      }
       const sep = k.indexOf(':');
       if (sep <= 0) continue;
       const chatType = k.slice(0, sep);
@@ -6709,6 +6777,7 @@ function registerIPC(): void {
     const startedAt = Date.now();
     idleState.set(key, startedAt);
     idleFrozenElapsedMs.delete(key);
+    idleCooldownFrozenMs.delete(key); // v2.3.92：本轮已发出 → 冻结基准作废（随后由 handleProactive 写入冷却表）
     broadcast('idle:activity', { chatKey: key, timestamp: startedAt, intervalMs: bestIntervalMs });
     void handleProactive({ chatType, chatId })
       .catch(() => {
@@ -6854,6 +6923,21 @@ function registerIPC(): void {
     const next = dm.updatePlugin(id, { enabled });
     return { ok: !!next, plugin: next };
   });
+
+  // ---------- 技能（v2.3.92 新增；SKILL.md 形态，纯提示词注入，不执行任何脚本）----------
+  // 安全边界：导入只接受**用户通过系统对话框选中的文件内容**（file:pickText 已读好传进来），
+  // 主进程不接受渲染进程传入的任意路径，避免变成任意文件读取入口。
+  ipcMain.handle('skill:import', (_e, content: string, fileName: string) =>
+    dm.importSkill(typeof content === 'string' ? content : '', typeof fileName === 'string' ? fileName : '')
+  );
+
+  ipcMain.handle('skill:list', () => dm.listSkills());
+
+  ipcMain.handle('skill:remove', (_e, id: string) => ({ ok: dm.deleteSkill(id) }));
+
+  ipcMain.handle('skill:toggle', (_e, id: string, enabled: boolean) => ({
+    ok: dm.setSkillEnabled(id, !!enabled),
+  }));
 
   // 受控 HTTP 工具调用：只发预设的请求，绝不执行任意代码（安全边界）
   ipcMain.handle(
@@ -7104,12 +7188,22 @@ app.whenReady().then(() => {
     sendProactive: (chatType, chatId, extraInstruction) => handleProactive({ chatType, chatId, extraInstruction }),
     getMessages: (chatType, chatId) => dm.getMessages(chatType, chatId),
     isBusy: (chatId) => streamControllers.has(chatId),
+    // v2.3.92「等你回复才发下一条」：状态真源在主进程内存 Set（调度全在主进程，多窗口天然一致）。
+    // NHPP 两个发送分支（定向回访 / 泛化候选）命中它时保持候选原样、不重采样。
+    isAwaitingReply: (chatKey) => proactiveAwaitingReply.has(chatKey),
     getDefaultModel: () => {
       const s = dm.getSettings();
       return getDefaultModelConfig(s) || undefined;
     },
     logError: (category, message, detail) => dm.logError(category, message, detail),
   });
+  // v2.3.92：重启后从 proactive-nhpp.json 的 feedback[] 派生「仍在等用户回复」的聊天，
+  // 补回丢失的内存冷却状态（不新增持久化字段）。不恢复会导致重启瞬间给未回复的聊天补发一条。
+  try {
+    for (const chatKey of deriveAwaitingReplyKeys()) proactiveAwaitingReply.add(chatKey);
+  } catch {
+    /* 派生失败则退化为「不恢复」，不会永久卡死 */
+  }
   setInterval(() => {
     try {
       heartbeatProactive();

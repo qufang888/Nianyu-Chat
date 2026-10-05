@@ -61,9 +61,10 @@ export default function QueueDock() {
     })();
     const offSettings = api.onSettingsChanged((_e, patch: Record<string, unknown> | undefined) => {
       if (!patch) return;
-      // 任意与动效相关的键变化（总控 / 模式 / 任一分组）都要重算，改动后由 settings-changed 广播兜底
+      // 任意与动效相关的键变化（三档 animMode / 兼容字段 / 任一分组）都要重算，改动后由 settings-changed 广播兜底
       if (
         'enableAnimations' in patch ||
+        'animMode' in patch ||
         'animControlMode' in patch ||
         'animGroups' in patch
       ) {

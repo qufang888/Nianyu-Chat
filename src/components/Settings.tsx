@@ -18,6 +18,8 @@ import {
   type WorldBook,
   type ErrorLogEntry,
   type Plugin,
+  type Skill,
+  type SkillScope,
   MODEL_GROUP_COLORS,
   MODEL_GROUP_NAME_MAX,
   MODEL_GROUP_MAX,
@@ -35,7 +37,7 @@ import {
 } from '../types';
 import { DEFAULT_MEMORY_SUMMARIZE_PROMPT, DEFAULT_MEMORY_INJECT_PROMPT } from '../utils/builtinPrompts';
 import { Hint } from './Hint';
-import { ANIM_GROUPS, isGroupEnabled } from '../utils/animControl';
+import { ANIM_GROUPS, ANIM_MODES, getAnimMode, isGroupEnabled, type AnimMode } from '../utils/animControl';
 import { ModelEditor } from './ModelEditor';
 import { FontSettings } from './FontSettings';
 import { GuideView } from './GuideView';
@@ -90,7 +92,7 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'cat-translation', key: 'settings.catTranslation', kw: ['翻译', 'translation'] },
   { id: 'cat-window', key: 'settings.catWindow', kw: ['窗口', '小窗', '悬浮球', 'window', '迷你'] },
   { id: 'sec-language', key: 'settings.language', kw: ['语言', 'language', '界面语言', '中文', '英文'] },
-  { id: 'sec-animations', key: 'settings.animations', kw: ['动画', 'animation', '动效'] },
+  { id: 'sec-animations', key: 'settings.animations', kw: ['动画', 'animation', '动效', '全部开启', '全部关闭', '自定义', '分组', 'all on', 'all off', 'custom', 'group'] },
   { id: 'sec-update', key: 'settings.updateTitle', kw: ['更新', '升级', '版本', '检查更新', '自动更新', '下载更新', 'github', 'update', 'upgrade', 'version', 'release'] },
   // ===== 模型管理（二级页 sub='models'）=====
   { id: 'sec-globalparams', key: 'settings.globalModelParams', sub: 'models', kw: ['全局参数', '全局模型参数', '默认参数', '温度', 'temperature', 'top p', 'topp', 'top k', 'topk', '采样', '流式', 'stream', '打字机'] },
@@ -118,6 +120,7 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-sceneimage', key: 'settings.sceneImage', kw: ['场景图', 'scene', '配图'] },
   { id: 'sec-websearch', key: 'settings.webSearch', kw: ['联网', '搜索', 'web', 'search', '联网搜索'] },
   { id: 'sec-plugins', key: 'settings.plugins', kw: ['插件', 'plugin', '扩展'] },
+  { id: 'sec-skills', key: 'skill.title', kw: ['技能', 'skill', '技能包', 'skill.md', '说明书', '注入'] },
   { id: 'sec-translation', key: 'settings.translation', kw: ['翻译', 'translation', '译文'] },
   { id: 'sec-sound', key: 'settings.sound', kw: ['音效', 'sound', '提示音', '通知音', '声音'] },
   { id: 'sec-mini', key: 'settings.mini', kw: ['小窗', '迷你', 'mini', '快捷'] },
@@ -475,6 +478,40 @@ export const Settings: React.FC<{
     refreshPlugins();
   }, [refreshPlugins]);
 
+  // ===== v2.3.92 技能（Skill）=====
+  // 独立 IPC（skill:*），数据落在主进程 userData/skills.json，不进 settings、不污染聊天主数据。
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [skillScopeFilter, setSkillScopeFilter] = useState<'all' | SkillScope>('all');
+  const refreshSkills = React.useCallback(() => {
+    api.listSkills().then(setSkills).catch(() => {});
+  }, []);
+  useEffect(() => {
+    refreshSkills();
+  }, [refreshSkills]);
+  const visibleSkills =
+    skillScopeFilter === 'all' ? skills : skills.filter((s) => s.scope === skillScopeFilter);
+  /** 导入技能：只接受系统对话框里用户亲自选中的文件，主进程不接受任意路径 */
+  const importSkillFile = async () => {
+    try {
+      const picked = await api.pickTextFile([{ name: 'SKILL.md', extensions: ['md', 'markdown', 'txt'] }]);
+      if (!picked) return;
+      const fileName = picked.path.split(/[\\/]/).pop() || 'SKILL.md';
+      const res = await api.importSkill(picked.content, fileName);
+      if (!res.ok) {
+        showToast(`${t('skill.importFailed')}: ${t(`skill.${res.error || 'errNoFrontmatter'}`)}`, {
+          error: true,
+        });
+        return;
+      }
+      refreshSkills();
+      if ((res.warnings || []).includes('script')) showToast(t('skill.warnScript'), { error: true });
+      else if ((res.warnings || []).includes('truncated')) showToast(t('skill.warnTruncated'));
+      else showToast(t('skill.imported'));
+    } catch (e: any) {
+      showToast(e?.message || String(e), { error: true });
+    }
+  };
+
   useEffect(() => {
     if (settings) setDraft(settings);
   }, [settings]);
@@ -746,31 +783,35 @@ export const Settings: React.FC<{
     api.saveSettings(p).then(reloadSettings);
   };
 
-  // ===== 高级动画控制：总控 / 单控互斥（v2.3.90）=====
-  // 单控模式下总控被忽略；拨动任意单项开关即进入单控（mode 一并落盘），
-  // 反之拨动总控开关会把 mode 写回 'master'，单控立即失效 —— 二者天然互斥。
-  const animSingle = draft?.animControlMode === 'single';
+  // ===== 高级动画控制：三档（全开 / 全关 / 自定义，v2.3.92）=====
+  // 三档互斥，档位真源是 `draft.animMode`；旧的 enableAnimations / animControlMode
+  // 在每次 patch 时一并同步写入，纯粹为了兼容旧版回滚与其它仍读旧字段的代码。
+  // 只有「自定义」档才需要逐组开关 —— 其余两档下分组开关本就不起作用，直接整块隐藏。
+  const animMode: AnimMode = getAnimMode(draft);
+  const animCustom = animMode === 'custom';
+  const setAnimMode = (mode: AnimMode) => {
+    patch({
+      animMode: mode,
+      // 兼容字段同步：all-off ⇔ enableAnimations=false；custom ⇔ animControlMode='single'
+      enableAnimations: mode !== 'all-off',
+      animControlMode: mode === 'custom' ? 'single' : 'master',
+    });
+  };
   const toggleAnimGroup = (groupId: string) => {
     const cur = draft?.animGroups?.[groupId] !== false;
-    patch({ animControlMode: 'single', animGroups: { ...(draft?.animGroups || {}), [groupId]: !cur } });
+    patch({
+      animMode: 'custom',
+      animControlMode: 'single',
+      animGroups: { ...(draft?.animGroups || {}), [groupId]: !cur },
+    });
   };
-
-  // v2.3.91：总控开关同时充当 13 组的「全选」。
-  // 全部打开→勾选、全部关闭→不勾选、混合→半选（indeterminate，横杠）。
-  // 拨动它 = 把 13 组一次性全开/全关，并写回总控模式（单控随之失效）。
-  const masterRef = useRef<HTMLInputElement>(null);
-  const groupStates = ANIM_GROUPS.map((g) => draft?.animGroups?.[g.id] !== false);
-  const allGroupsOn = groupStates.length > 0 && groupStates.every(Boolean);
-  const groupsMixed = !allGroupsOn && !groupStates.every((s) => !s);
-  useEffect(() => {
-    // React 没有 indeterminate 属性，只能手动同步到 DOM
-    if (masterRef.current) masterRef.current.indeterminate = groupsMixed;
-  }, [groupsMixed]);
-  const setAllGroups = (on: boolean) => {
-    const nextGroups: Record<string, boolean> = {};
-    for (const g of ANIM_GROUPS) nextGroups[g.id] = on;
-    patch({ enableAnimations: on, animControlMode: 'master', animGroups: nextGroups });
-  };
+  // 供三档选择器下方的说明文字使用（纯展示，不参与门控）
+  const animModeHintKey: 'animCtl.modeAllOnHint' | 'animCtl.modeAllOffHint' | 'animCtl.modeCustomHint' =
+    animMode === 'all-on'
+      ? 'animCtl.modeAllOnHint'
+      : animMode === 'all-off'
+        ? 'animCtl.modeAllOffHint'
+        : 'animCtl.modeCustomHint';
 
   // ===== 记忆提示词（v2.3.36）：本地草稿 + 失焦落盘 =====
   // textarea 不逐字符即时保存（避免长文本输入时频繁写盘/重载导致卡顿与光标跳动），失焦时一次性 patch。
@@ -1351,80 +1392,77 @@ export const Settings: React.FC<{
           />
         </div>
 
-        {/* ===== 界面动效（总控）===== */}
+        {/* ===== 界面动效（三档：全部开启 / 全部关闭 / 自定义，v2.3.92）===== */}
         <div id="sec-animations" className="section-title" style={{ marginTop: 16 }}>{t('settings.animations')}</div>
-        {/* 总控开关：任何模式下都可点。拨动它即 patch animControlMode='master' → 单控立即失效、回到总控。
-            此前此处是 disabled={animSingle}（单控模式下灰掉），但 singleHint 文案又写着
-            「再次拨动上方总开关即可回到总控模式」——自相矛盾，且用户被卡在单控里出不来。现改为常可点。 */}
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            cursor: 'pointer',
-            opacity: 1,
-          }}
-        >
-          <input
-            ref={masterRef}
-            type="checkbox"
-            checked={allGroupsOn}
-            onChange={(e) => setAllGroups(e.target.checked)}
-          />
-          <span>
-            {animSingle ? t('animCtl.masterTakenOver') : t('settings.animationsOn')}
-            <Hint text={t('settings.animationsDesc')} />
-          </span>
-        </label>
-
-        {/* ===== 高级动画控制（总控 / 单控互斥）===== */}
-        <div id="sec-anim-control" className="section-title" style={{ marginTop: 16 }}>
-          {t('animCtl.title')}
-        </div>
-        <div style={{ fontSize: 12.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', maxWidth: 560 }}>
-          {animSingle ? t('animCtl.singleHint') : t('animCtl.masterHint')}
-        </div>
-        {animSingle && (
-          <button
-            className="btn-ghost"
-            style={{ marginTop: 10 }}
-            onClick={() => patch({ animControlMode: 'master' })}
-          >
-            {t('animCtl.backToMaster')}
-          </button>
-        )}
-        {/* 分组开关：任何模式下都可点。点任意一个即 toggleAnimGroup → 进入单控模式（总控被忽略），
-            这是「拨动任一分项开关即进入单控」语义的唯一入口，绝不能在此模式下灰掉，否则单控不可达。 */}
-        <div
-          style={{
-            marginTop: 12,
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
-            gap: '8px 16px',
-          }}
-        >
-          {ANIM_GROUPS.map((g) => (
+        {/* 旧版是一个勾选框式总开关（v2.3.90/91），用户反馈无法表达「关一部分但不是全关」，
+            故改为三档单选：三档互斥、语义直白，且「自定义」档才展开分组开关。 */}
+        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
+          {ANIM_MODES.map((m) => (
             <label
-              key={g.id}
+              key={m}
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: 8,
+                gap: 6,
+                fontSize: 13,
                 cursor: 'pointer',
+                color: animMode === m ? 'var(--color-primary)' : undefined,
+                fontWeight: animMode === m ? 600 : undefined,
               }}
             >
-              <input
-                type="checkbox"
-                checked={draft.animGroups?.[g.id] !== false}
-                onChange={() => toggleAnimGroup(g.id)}
-              />
-              <span>{t(g.labelKey)}</span>
+              <input type="radio" checked={animMode === m} onChange={() => setAnimMode(m)} />
+              {t(
+                m === 'all-on'
+                  ? 'animCtl.modeAllOn'
+                  : m === 'all-off'
+                    ? 'animCtl.modeAllOff'
+                    : 'animCtl.modeCustom'
+              )}
             </label>
           ))}
         </div>
-        <div style={{ marginTop: 10, fontSize: 12, lineHeight: 1.6, color: 'var(--color-text-secondary)', maxWidth: 560 }}>
+        <div style={{ fontSize: 12.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', maxWidth: 560, marginTop: 6 }}>
+          {t(animModeHintKey)}
+        </div>
+        <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--color-text-secondary)', maxWidth: 560, marginTop: 6 }}>
           {t('animCtl.streamNote')}
         </div>
+
+        {/* ===== 分组开关：仅「自定义」档渲染（全开/全关档下它们本就不起作用，展示即误导）===== */}
+        {animCustom && (
+          <>
+            <div id="sec-anim-control" className="section-title" style={{ marginTop: 16 }}>
+              {t('animCtl.title')}
+            </div>
+            <div
+              style={{
+                marginTop: 12,
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
+                gap: '8px 16px',
+              }}
+            >
+              {ANIM_GROUPS.map((g) => (
+                <label
+                  key={g.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={draft.animGroups?.[g.id] !== false}
+                    onChange={() => toggleAnimGroup(g.id)}
+                  />
+                  <span>{t(g.labelKey)}</span>
+                </label>
+              ))}
+            </div>
+          </>
+        )}
 
         {/* ===== 软件更新（v2.3.45）：检查 GitHub Releases → 提醒 → 下载安装包 ===== */}
         <div id="sec-update" className="section-title" style={{ marginTop: 16 }}>{t('settings.updateTitle')}</div>
@@ -2045,6 +2083,21 @@ export const Settings: React.FC<{
             </div>
           </div>
 
+          {/* 等回复才发下一条（两种机制通用，v2.3.92：从 legacy 专属块提到总开关旁） */}
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={draft.idleCooldownUntilReply !== false}
+              onChange={(e) => {
+                patch({ idleCooldownUntilReply: e.target.checked });
+                api.saveSettings({ idleCooldownUntilReply: e.target.checked });
+              }}
+            />
+            <div>
+              <div style={{ fontSize: 13 }}>{t('settings.idleCooldown')}<Hint text={t('settings.idleCooldownDesc')} /></div>
+            </div>
+          </div>
+
           {/* ===== ③ 经典定时机制参数（仅 legacy 机制下生效/显示） ===== */}
           {(draft.proactiveEngine ?? 'legacy') === 'nhpp' ? (
             <div style={{ marginTop: 14, fontSize: 12, color: 'var(--color-text-secondary)' }}>
@@ -2178,21 +2231,6 @@ export const Settings: React.FC<{
             </div>
           </div>
 
-          {/* 主动消息冷却：回复上一条主动消息后才发下一条 */}
-          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <input
-              type="checkbox"
-              checked={draft.idleCooldownUntilReply !== false}
-              onChange={(e) => {
-                patch({ idleCooldownUntilReply: e.target.checked });
-                api.saveSettings({ idleCooldownUntilReply: e.target.checked });
-              }}
-            />
-            <div>
-              <div style={{ fontSize: 13 }}>{t('settings.idleCooldown')}<Hint text={t('settings.idleCooldownDesc')} /></div>
-            </div>
-          </div>
-
           {/* 主动消息记忆开关 */}
           <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
             <input
@@ -2248,6 +2286,20 @@ export const Settings: React.FC<{
                   }}
                   style={{ width: 110 }}
                 />
+              </div>
+              {/* 频率自适应（v2.3.92）：按用户回复间隔 EMA 动态调整发送强度 */}
+              <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={draft.proactiveAdaptiveEnabled !== false}
+                  onChange={(e) => {
+                    patch({ proactiveAdaptiveEnabled: e.target.checked });
+                    api.saveSettings({ proactiveAdaptiveEnabled: e.target.checked });
+                  }}
+                />
+                <div>
+                  <div style={{ fontSize: 13 }}>{t('settings.proactiveAdaptive')}<Hint text={t('settings.proactiveAdaptiveDesc')} /></div>
+                </div>
               </div>
               {/* 每日硬上限 + 新鲜度 */}
               <div style={{ display: 'flex', gap: 16, marginTop: 12, flexWrap: 'wrap' }}>
@@ -4307,6 +4359,152 @@ export const Settings: React.FC<{
                   >
                     {t('settings.pluginRemove')}
                   </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ===== 技能（Skill，v2.3.92）——纯指令注入，不执行脚本 ===== */}
+        <div id="sec-skills" className="section-title" style={{ marginTop: 18 }}>
+          {t('skill.title')}
+          <Hint text={t('skill.desc')} />
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 640 }}>
+          {/* 安全边界常驻展示：技能是「说明书」，不是可执行程序 */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 8,
+              padding: '9px 12px',
+              borderRadius: 8,
+              background: 'rgba(90,140,255,0.10)',
+              border: '1px solid rgba(90,140,255,0.32)',
+              fontSize: 12,
+              color: 'var(--color-text-secondary)',
+            }}
+          >
+            <span style={{ fontSize: 13, lineHeight: '18px' }}>🔒</span>
+            <div>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text)' }}>
+                {t('skill.safetyNotice')}
+                <Hint text={t('skill.safetyDetail')} />
+              </div>
+            </div>
+          </div>
+
+          {/* 工具条：导入 + 作用域筛选 + 总数 */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button className="btn-primary" style={{ padding: '5px 12px', fontSize: 12 }} onClick={() => void importSkillFile()}>
+              {t('skill.import')}
+            </button>
+            <select
+              value={skillScopeFilter}
+              onChange={(e) => setSkillScopeFilter(e.target.value as 'all' | SkillScope)}
+              style={{ fontSize: 12, padding: '4px 6px' }}
+            >
+              <option value="all">{t('skill.filterAll')}</option>
+              <option value="global">{t('skill.scopeGlobal')}</option>
+              <option value="role">{t('skill.scopeRole')}</option>
+              <option value="chat">{t('skill.scopeChat')}</option>
+            </select>
+            <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+              {t('skill.count', { n: skills.length })}
+            </span>
+          </div>
+
+          {/* 技能包格式说明（供用户照着写 SKILL.md） */}
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 600, color: 'var(--color-text)' }}>{t('skill.format')}</div>
+            {t('skill.formatDesc')}
+          </div>
+
+          {visibleSkills.length === 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{t('skill.empty')}</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {visibleSkills.map((s) => (
+                <div
+                  key={s.id}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                    padding: '9px 11px',
+                    borderRadius: 8,
+                    background: 'var(--color-bg-elevated, rgba(255,255,255,0.05))',
+                    opacity: s.enabled ? 1 : 0.55,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <strong style={{ fontSize: 13 }}>{s.name}</strong>
+                    <span
+                      style={{
+                        fontSize: 10.5,
+                        padding: '1px 7px',
+                        borderRadius: 9,
+                        whiteSpace: 'nowrap',
+                        background:
+                          s.scope === 'global'
+                            ? 'rgba(90,140,255,0.18)'
+                            : s.scope === 'role'
+                              ? 'rgba(80,200,140,0.18)'
+                              : 'rgba(230,160,60,0.20)',
+                      }}
+                    >
+                      {s.scope === 'global'
+                        ? t('skill.scopeGlobal')
+                        : s.scope === 'role'
+                          ? t('skill.scopeRole')
+                          : t('skill.scopeChat')}
+                    </span>
+                    <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {s.description}
+                    </span>
+                    <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+                      {s.enabled ? t('skill.enabled') : t('skill.disabled')}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={!!s.enabled}
+                      onChange={async (e) => {
+                        await api.toggleSkill(s.id, e.target.checked);
+                        refreshSkills();
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      style={{ padding: '3px 10px', fontSize: 12, color: '#e06c75' }}
+                      onClick={async () => {
+                        // 用应用内原生确认框（与项目其他破坏性操作一致），不用浏览器 window.confirm
+                        const confirmed = await api.showConfirm!(
+                          t('skill.removeConfirm', { name: s.name }),
+                          t('skill.title')
+                        );
+                        if (!confirmed) return;
+                        await api.removeSkill(s.id);
+                        refreshSkills();
+                      }}
+                    >
+                      {t('skill.remove')}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                    <span>
+                      {t('skill.scope')}: {s.scope}
+                      {(s.roleId || s.chatKey) ? ` · ${t('skill.target')}: ${s.roleId || s.chatKey}` : ''}
+                    </span>
+                    {s.version ? <span>{t('skill.version')}: {s.version}</span> : null}
+                    {s.sourceFile ? <span>{t('skill.source')}: {s.sourceFile}</span> : null}
+                  </div>
+                  {s.scriptBlocked && (
+                    <div style={{ fontSize: 11, color: '#e0a83c' }}>
+                      {t('skill.scriptBlocked', { fields: s.scriptFields || '' })}
+                    </div>
+                  )}
+                  {s.truncated && <div style={{ fontSize: 11, color: '#e0a83c' }}>{t('skill.truncated')}</div>}
                 </div>
               ))}
             </div>
