@@ -383,9 +383,11 @@ export function getSkillsForChat(chatType: string, chatId: string, roleId = ''):
 }
 
 // ===== 提示词注入 =====
-/** 转义会破坏 <skill .../> 标签闭合的正文片段 */
+/** 转义会破坏 <skill .../> 标签结构的正文片段。
+ *  开标签与闭标签都要转义：只转义 `</skill>` 时，正文里伪造的 `<skill name="假技能">`
+ *  能让模型误以为存在第二个技能（v2.3.92 独立复核发现）。 */
 function escapeBody(body: string): string {
-  return body.replace(/<\/skill>/gi, '<\\/skill>');
+  return body.replace(/<skill/gi, '<\\skill').replace(/<\/skill>/gi, '<\\/skill>');
 }
 
 function escapeAttr(v: string): string {

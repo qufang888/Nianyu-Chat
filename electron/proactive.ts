@@ -305,6 +305,12 @@ export function extractPendingCallback(chatType: string, chatId: string, userCon
  */
 function isGatedByAwaitingReply(chatKey: string): boolean {
   try {
+    // 独立开关「等你回复才发下一条」：关闭时一律不门禁。
+    // 必须在这里判开关——原先只有 legacy 的 3s 调度循环会读它并清等待态，
+    // 而那个循环开头就 `if (proactiveEngine === 'nhpp') return`，
+    // 导致 NHPP 下关掉开关后 proactiveAwaitingReply 永不清 → 该聊天永久不发主动消息。
+    // `?? true` 保持老用户（无该字段）默认开启。
+    if ((deps?.getSettings().idleCooldownUntilReply ?? true) === false) return false;
     return deps?.isAwaitingReply?.(chatKey) === true;
   } catch {
     return false;

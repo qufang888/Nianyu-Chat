@@ -95,8 +95,8 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
     id: 'toast',
     labelKey: 'animCtl.groupToast',
     selectors: ['.mini-toast', '.update-banner'],
-    // 通知窗是独立文档，卡片类名是 .ny-card
-    docSelectors: { notify: ['.ny-card'] },
+    // 通知窗是独立文档，卡片类名是 .ny-card，关闭按钮是 .ny-close（notify.ts:43/75 有 transition）
+    docSelectors: { notify: ['.ny-card', '.ny-close'] },
   },
   {
     id: 'bubble',
@@ -149,7 +149,6 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
         // v2.3.92 补齐：球体拖拽缩放过渡 / 生视频环形进度过渡 / 右键菜单项
         '.fb-ball',
         '.fb-prog .fg',
-        '.fb-ctx-item',
       ],
     },
   },

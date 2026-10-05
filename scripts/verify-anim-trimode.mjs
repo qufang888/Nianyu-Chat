@@ -294,19 +294,21 @@ const PROBE = String.raw`
 
   // 悬浮球（独立文档选择器，需 kind='floating' 注入门禁规则）。
   // 悬浮球的 CSS 由 floating-ball.ts 在运行时注入 <style>（不在 index.css 里），
-  // 故此处补一份与源码逐字等价的最小规则（见 src/floating-ball.ts:60-75,144），
+  // 故此处补一份与源码逐字等价的最小规则（见 src/floating-ball.ts:60-75），
   // 用来验证**门禁选择器**是否命中，而不是验证悬浮球自己的样式。
+  //
+  // v2.3.92 独立复核发现：原脚本还自造了一条 .fb-ctx-item 的 background 过渡，
+  // 但源码 floating-ball.ts:144 的 .fb-ctx-item **本身没有 transition**（只有 :hover 改 background）。
+  // 那条断言是"自证式"的（用自造的 CSS 证明自造的登记有效），已连同悬浮球该条空转登记一起移除。
   const fbStyle = document.createElement('style');
   fbStyle.textContent = [
     '.fb-ball{transition:transform .12s ease;}',
     '.fb-prog .fg{transition:stroke-dashoffset .25s linear;}',
-    '.fb-ctx-item{transition:background .15s ease;}',
   ].join('\n');
   document.head.appendChild(fbStyle);
   for (const [label, cls, parentCls, rawCls] of [
     ['悬浮球本体',    'fb-ball',    null,     null],
     ['生视频环形进度', 'fb-prog fg', 'fb-prog', 'fg'],
-    ['右键菜单项',    'fb-ctx-item', null,    null],
   ]) {
     const sel = cls.replace(/ /g, '.');
     // kind='floating'：门禁样式必须按悬浮球那套选择器注入（主文档注入的是 main 版，为空）
