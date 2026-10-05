@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, Fragment } from 'react';
+import React, { useCallback, useEffect, useRef, useState, Fragment } from 'react';
 
 import { createPortal } from 'react-dom';
 
@@ -409,6 +409,12 @@ export const ChatWindow: React.FC<{
   const [idleCountdown, setIdleCountdown] = useState(0); // 主动消息触发倒计时（秒）
 
   const [nhppActive, setNhppActive] = useState(false); // NHPP 引擎接管时，经典主动消息开关置灰不可拨动
+
+  // v2.3.93：主动消息「等你回复」状态。状态真源在主进程（多窗口一致），
+  // 本地这份仅用于顶部提示 + 「我不回复」按钮的显示；开关关闭时主进程恒返回 false。
+  const [awaitingReply, setAwaitingReply] = useState(false);
+  const awaitingReplyRef = useRef(false);
+  const [skippingAwaiting, setSkippingAwaiting] = useState(false); // 「我不回复」请求进行中（防连点）
 
   const idleSwitchActionRef = useRef<'pause' | 'reset' | 'continue'>('continue'); // 切换聊天时的计时模式
 
@@ -877,7 +883,95 @@ export const ChatWindow: React.FC<{
 
 
 
-  // 主动消息倒计时：订阅主进程每秒广播的 elapsed，保证多窗口完全一致
+  // v2.3.93：进入/切换聊天时查询「主动消息是否正在等你回复」。
+  // 主进程为唯一真源；开关 idleCooldownUntilReply 关闭时恒返回 false（那就不存在等待态、不显示提示）。
+  useEffect(() => {
+
+    let cancelled = false;
+
+    (async () => {
+
+      let on = false;
+
+      try {
+
+        on = (await api.isAwaitingReply(chatType, chatId)) === true;
+
+      } catch {
+
+        on = false;
+
+      }
+
+      if (cancelled) return;
+
+      awaitingReplyRef.current = on;
+
+      setAwaitingReply(on);
+
+    })();
+
+    return () => {
+
+      cancelled = true;
+
+    };
+
+  }, [chatType, chatId]);
+
+
+
+  // v2.3.93：「我不回复」—— 与用户真的回复完全等价的解除（主进程同一清理入口）。
+  // 乐观更新：先本地清掉提示并把倒计时显示刷回满格，失败则回滚并 toast。
+  const skipAwaitingReply = useCallback(async () => {
+
+    if (skippingAwaiting || !awaitingReplyRef.current) return;
+
+    const prev = awaitingReplyRef.current;
+
+    setSkippingAwaiting(true);
+
+    awaitingReplyRef.current = false;
+
+    setAwaitingReply(false);
+
+    try {
+
+      const r = await api.skipAwaitingReply(chatType, chatId);
+
+      if (!r?.ok) throw new Error('skip failed');
+
+      // 主进程已把计时基准重置为当下并广播 idle:activity；这里同步本地基准，
+      // 让倒计时立刻显示满格（「按已回复过继续计时」），不等广播回环。
+      const ts = Date.now();
+
+      lastActivityRef.current = ts;
+
+      setIdleActivity(chatKey, ts);
+
+      setIdleCountdown(Math.ceil(idleSecondsRef.current || 600));
+
+    } catch (e) {
+
+      // 失败回滚：恢复提示与倒计时显示，避免状态与主进程不一致
+
+      awaitingReplyRef.current = prev;
+
+      setAwaitingReply(prev);
+
+      showToast(t('chat.idleAwaitingSkipFailed'), { error: true });
+
+      console.warn('[nianyu] skipAwaitingReply failed:', e);
+
+    } finally {
+
+      setSkippingAwaiting(false);
+
+    }
+
+  }, [chatType, chatId, chatKey, skippingAwaiting, showToast, t]);
+
+
 
   useEffect(() => {
 
@@ -2023,6 +2117,23 @@ export const ChatWindow: React.FC<{
 
     });
 
+    // v2.3.93：等待回复状态同步 —— 主进程是唯一真源。
+    // 触发时机：① 本窗口/其他窗口发消息解除；② 别的窗口点了「我不回复」；③ 主动消息刚发出；
+    // ④ 设置里关掉了「等你回复」开关（clearAll 逐个广播）。四种情况都靠这一条广播收敛，
+    // 不需要各窗口互相轮询，跨窗口天然一致。
+
+    const offAwaiting = api.onAwaitingReply((_e, data) => {
+
+      if (!data || data.chatKey !== chatKey) return;
+
+      const on = data.awaiting === true;
+
+      awaitingReplyRef.current = on;
+
+      setAwaitingReply(on);
+
+    });
+
     return () => {
 
       offUser();
@@ -2038,6 +2149,8 @@ export const ChatWindow: React.FC<{
       offRoundDone();
 
       offIdle();
+
+      offAwaiting();
 
     };
 
@@ -4629,6 +4742,42 @@ export const ChatWindow: React.FC<{
                   ? `${t('chat.idleReplyLegacyShort')} · ${idleCountdown >= 60 ? `${Math.floor(idleCountdown / 60)}m${idleCountdown % 60}s` : `${idleCountdown}s`}`
 
                   : t('chat.idleReplyLegacyShort')}
+
+            </span>
+
+          )}
+
+          {/* v2.3.93：等待回复提示 + 「我不回复」按钮。
+              位置紧邻倒计时小字（同一区域、同一视觉语言）；仅在主进程确认处于等待态时出现。
+              点「我不回复」= 按「已经回复过了」处理：解除等待，下一条主动消息重新计满一个间隔。 */}
+
+          {awaitingReply && (
+
+            <span
+
+              className="idle-awaiting"
+
+              title={t('chat.idleAwaitingTip')}
+
+            >
+
+              <span className="idle-awaiting-text">{t('chat.idleAwaiting')}</span>
+
+              <button
+
+                className="btn-ghost idle-awaiting-skip"
+
+                title={t('chat.idleAwaitingSkipTip')}
+
+                disabled={skippingAwaiting}
+
+                onClick={skipAwaitingReply}
+
+              >
+
+                {skippingAwaiting ? t('chat.idleAwaitingSkipping') : t('chat.idleAwaitingSkip')}
+
+              </button>
 
             </span>
 

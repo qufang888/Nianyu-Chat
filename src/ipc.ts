@@ -166,6 +166,14 @@ export interface NianyuAPI {
   onIdleActivity: (cb: (e: any, data: any) => void) => () => void;
   offIdleActivity: (cb: (e: any, data: any) => void) => void;
   onIdleTick: (cb: (e: any, data: Record<string, number>) => void) => () => void;
+  // ===== v2.3.93：主动消息「等你回复」状态 =====
+  /** 查询该聊天是否处于等待用户回复状态（开关 idleCooldownUntilReply 关闭时恒 false） */
+  isAwaitingReply: (chatType: string, chatId: string) => Promise<boolean>;
+  /** 「我不回复」：与用户真的回复完全等价地解除等待，计时按「刚回复过」重新开始 */
+  skipAwaitingReply: (chatType: string, chatId: string) => Promise<{ ok: boolean; wasAwaiting: boolean }>;
+  /** 等待态变化广播（主进程驱动，多窗口同步刷新提示与按钮） */
+  onAwaitingReply: (cb: (e: any, data: { chatKey: string; awaiting: boolean; reason?: string }) => void) => () => void;
+  offAwaitingReply: (cb: (e: any, data: any) => void) => void;
   onRoleMood: (cb: (e: any, data: any) => void) => () => void;
   offRoleMood: (cb: (e: any, data: any) => void) => void;
   // 关系值（bond）变更广播：一端调整，主窗/小窗同步刷新展示

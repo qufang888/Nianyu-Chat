@@ -1244,6 +1244,57 @@ input[type='range']::-moz-range-thumb {
   padding: 0 2px;
   line-height: 1;
 }
+/* v2.3.93：主动消息「等你回复」提示 + 「我不回复」按钮
+   视觉语言沿用 .idle-countdown（小字、tabular-nums、不换行），颜色全部走主题变量，无硬编码。
+   对比度：正文用 --color-text（各主题均为「正文色」，14 套主题全部满足 WCAG AA）；
+   主题色只用于 6px 圆点这类**非文字**图形，不承载文本信息（小字用主题色对比度不足）。 */
+.idle-awaiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  white-space: nowrap;
+  line-height: 1;
+  padding: 0 2px;
+}
+.idle-awaiting-text {
+  position: relative;
+  padding-left: 11px;
+  font-size: calc(11px * var(--font-scale));
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+/* 状态圆点：纯装饰性图形，用主题色表达「正在等待」 */
+.idle-awaiting-text::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: var(--color-primary);
+}
+.idle-awaiting-skip {
+  padding: 2px 8px;
+  font-size: calc(11px * var(--font-scale));
+  line-height: 1.4;
+  border-radius: 999px;
+  color: var(--color-text);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.idle-awaiting-skip:hover:not(:disabled) {
+  background: var(--color-hover);
+  border-color: var(--color-primary);
+}
+.idle-awaiting-skip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 .mention-pop {
   position: absolute;
   bottom: 70px;

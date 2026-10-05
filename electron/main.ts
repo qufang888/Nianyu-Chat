@@ -71,6 +71,8 @@ import {
   markQuickReply,
   deriveAwaitingReplyKeys,
 } from './proactive';
+// v2.3.93：等待态状态机（用户回复 / 「我不回复」两条路径共用同一份清理逻辑）
+import { createAwaitingReplyTracker } from './awaitingReply';
 import type {
   Role,
   ChatMessage,
@@ -3178,10 +3180,11 @@ function addUserMessage(p: {
   });
   // 广播用户消息到所有窗口（让 MiniChat 发出的图片在小窗/主窗同步显示）
   broadcast('stream:user', msg);
-  // 用户在该聊天发言：解除主动消息冷却（idleCooldownUntilReply），允许下一条主动消息
-  // 注意：这里只清主进程内存 Set；冻结基准（idleCooldownFrozenMs）由 3s 调度 tick 检测到
-  // 冷却已解除后丢弃并把计时基准推到现在 → 从零重新计时（避免解除瞬间立即补发）。
-  proactiveAwaitingReply.delete(`${p.chatType}:${p.chatId}`);
+  // 用户在该聊天发言：解除主动消息冷却（idleCooldownUntilReply），允许下一条主动消息。
+  // v2.3.93：改走统一入口 clearAwaitingReply —— 与界面上的「我不回复」按钮共用同一份清理逻辑
+  // （等待集合 + 冻结基准 + 计时基准重置为当下 + 广播），两条路径不会分叉。
+  // 计时基准重置为当下 → 下一条主动消息按「刚回复过」重新计满一个间隔，不在解除瞬间补发。
+  clearAwaitingReply(`${p.chatType}:${p.chatId}`, 'user-reply');
   // NHPP 主动消息引擎：用户交互 → 重算候选时刻 + 抽取显式承诺（待回访）。
   // 仅 settings.proactiveEngine === 'nhpp' 时生效；经典 idle 定时机制不受影响。
   rescheduleProactive(p.chatType, p.chatId);
@@ -3535,7 +3538,44 @@ async function handleSendUser(p: {
 const streamControllers = new Map<string, AbortController>();
 // 主动消息冷却表（chatKey 集合）：发出主动消息后加入，用户在该聊天回复后移除。
 // idleCooldownUntilReply 开启时，调度器跳过仍在冷却中的聊天（每个聊天独立冷却）。
+// v2.3.93：下面两个容器一并提到模块级，好让 awaitingReplyTracker（模块级创建）能同时操作三份状态，
+// 从而让「用户回复」与「我不回复」两条路径共用同一个 clearAwaitingReply（见下）。
 const proactiveAwaitingReply = new Set<string>();
+// chatKey -> lastActivityTs（全局静默计时基准，权威真源）
+const idleState = new Map<string, number>();
+// 等待回复期间「冻结」的已静默时长（ms）：命中时记下当时 elapsed 并停止增长（真暂停）；
+// 解除等待时丢弃该值并把基准推到现在 → 从零重新计时，不会在解除瞬间立即补发。
+const idleCooldownFrozenMs = new Map<string, number>();
+
+// v2.3.93：等待态跟踪器 —— 「用户真的回复了」与「界面上的『我不回复』」唯一的清理入口。
+// 两条路径都调 tracker.clear()，因此三份状态（等待集合 / 冻结基准 / 计时基准）的清理动作
+// 与广播行为逐字节一致，不会出现「一条路径漏清冻结表导致下次冷却起点错乱」这类分叉。
+// 计时基准重置为当下 = 用户原话「按已经回复过了的状态继续」：下一条主动消息重新计满一个间隔，
+// 而不是解除瞬间立即补发。
+// broadcast 是函数声明（已提升），此处可在模块级直接引用。
+const awaitingReplyTracker = createAwaitingReplyTracker({
+  maps: { awaiting: proactiveAwaitingReply, frozen: idleCooldownFrozenMs, idleState },
+  broadcast,
+  // 独立开关关闭时不存在等待态：UI 不显示提示、调度门禁也不命中（与 proactive.ts 语义一致）
+  isGateOpen: () => (dm.getSettings().idleCooldownUntilReply ?? true) !== false,
+});
+
+/**
+ * 解除「等你回复」等待态（v2.3.93 统一入口）。
+ * 「用户回复」与「我不回复」都走这里，保证行为完全等价。
+ * @param chatKey `${chatType}:${chatId}`
+ * @param reason 解除来源（仅用于广播载荷，便于前端区分）
+ * @param dropTimerState true = 连计时基准一起删除（聊天被删除时用）
+ * @returns 清理结果（wasAwaiting = 清理前是否确实处于等待态）
+ */
+function clearAwaitingReply(
+  chatKey: string,
+  reason: 'user-reply' | 'skip' | 'settings-off' | 'chat-deleted',
+  dropTimerState = false,
+): { wasAwaiting: boolean } {
+  const r = awaitingReplyTracker.clear(chatKey, reason, { dropTimerState });
+  return { wasAwaiting: r.wasAwaiting };
+}
 function registerStream(chatId: string, c: AbortController): void {
   const prev = streamControllers.get(chatId);
   if (prev && prev !== c) prev.abort(); // 同一聊天只保留一条进行中生成
@@ -4113,7 +4153,8 @@ async function handleProactive(p: {
     } as any);
     sendStreamDone(streamId, aiMsg);
     // 主动消息冷却：记录该聊天等待用户回复（idleCooldownUntilReply 开启时阻止下一条主动消息）
-    proactiveAwaitingReply.add(`${p.chatType}:${p.chatId}`);
+    // v2.3.93：走 tracker.mark，顺带广播 proactive:awaiting → 各窗口立即显示「正在等你回复」提示
+    awaitingReplyTracker.mark(`${p.chatType}:${p.chatId}`);
     void requestMoodJudge(p.chatType, p.chatId, role.id);
     void requestRelationshipAndMoments(p.chatType, p.chatId, role.id);
     void triggerSceneImage(p.chatType, p.chatId, role.id);
@@ -5261,13 +5302,8 @@ function registerIPC(): void {
     // 中止该聊天的进行中流式生成，避免孤儿流继续写库产生幽灵会话 / 串台
     abortStreamsForChat(id);
     // v2.3.92：清理该聊天的主动消息冷却/冻结状态，避免删聊天后残留等待态
-    proactiveAwaitingReply.delete(`${type}:${id}`);
-    try {
-      idleCooldownFrozenMs.delete(`${type}:${id}`);
-      idleState.delete(`${type}:${id}`);
-    } catch {
-      /* idleState 尚未初始化（极早期调用）时忽略 */
-    }
+    // v2.3.93：同样走统一入口；dropTimerState=true → 连计时基准一起删（不留幽灵计时）
+    clearAwaitingReply(`${type}:${id}`, 'chat-deleted', true);
     // 群聊删除时一并移除群组记录，避免残留
     if (type === 'group') dm.deleteGroup(id);
     else dm.deleteChat(type, id);
@@ -6638,12 +6674,8 @@ function registerIPC(): void {
   // ===== 空闲主动回复：主进程维护全局权威计时基准（跨窗口唯一数据源）=====
   // 两窗口各自渲染进程独立，无法共享模块变量，因此由主进程统一持有 lastActivity
   // 并每秒广播 elapsed，渲染进程只负责显示，杜绝相位差与初始化差。
-  const idleState = new Map<string, number>(); // chatKey -> lastActivityTs
-  // v2.3.92：等回复冷却期间「冻结」的已静默时长（ms）。
-  // 冷却命中时记下当时的 elapsed 并停止增长（真暂停，而非 continue 跳过）；
-  // 用户回复解除冷却后丢弃该值并把基准推到现在 → 从零重新计时，不会解除瞬间立即补发。
-  // 声明在 250ms tick 之前，供倒计时广播复用（冷却中倒计时不走字，避免"看似在走却不发"）。
-  const idleCooldownFrozenMs = new Map<string, number>();
+  // v2.3.93：idleState / idleCooldownFrozenMs 已提到模块级（与 proactiveAwaitingReply 同处），
+  // 由模块级的 awaitingReplyTracker 统一负责「记入等待 / 解除等待」的三份状态清理。
   // 渲染端当前查看的聊天（`${chatType}:${chatId}`）。窗口隐藏/托盘后仍保留，
   // 供主动消息调度器判断该对哪个聊天开口（与悬浮球未读判定共用同一来源）。
   // 注意：activeChatKeyMain 已在模块顶层声明，此处不再重复声明。
@@ -6656,6 +6688,24 @@ function registerIPC(): void {
     // 广播给所有窗口，使其 lastActivityRef 同步为权威值
     broadcast('idle:activity', { chatKey: data.chatKey, timestamp: data.ts });
   });
+  // ===== v2.3.93：等待回复状态查询 + 「我不回复」 =====
+  // 进入/切换聊天时查询当前 chatKey 是否在等待；开关关闭时 tracker 恒返回 false（不显示提示）。
+  ipcMain.handle('idle:isAwaitingReply', (_e, p: { chatType: string; chatId: string }): boolean => {
+    if (!p || !p.chatType || !p.chatId) return false;
+    return awaitingReplyTracker.isAwaiting(`${p.chatType}:${p.chatId}`);
+  });
+  // 「我不回复」：与「用户真的回复了」完全等价的解除（同一 clearAwaitingReply）。
+  // 解除后计时基准重置为当下 → 下一条主动消息按「刚回复过」重新计满一个间隔，不立即补发。
+  // 解除后同时广播 proactive:awaiting(false) 与 idle:activity，所有已打开窗口同步刷新。
+  ipcMain.handle(
+    'proactive:skipAwaitingReply',
+    (_e, p: { chatType: string; chatId: string }): { ok: boolean; wasAwaiting: boolean } => {
+      if (!p || !p.chatType || !p.chatId) return { ok: false, wasAwaiting: false };
+      const chatKey = `${p.chatType}:${p.chatId}`;
+      const r = clearAwaitingReply(chatKey, 'skip');
+      return { ok: true, wasAwaiting: r.wasAwaiting };
+    },
+  );
   // 全局 tick：广播各聊天已静默毫秒数，渲染进程据此计算剩余秒数（多窗口完全一致）
   setInterval(() => {
     if (quitting) return;
@@ -6697,9 +6747,11 @@ function registerIPC(): void {
     if (s.proactiveEngine === 'nhpp') return;
     if (proactiveBusyKeys.size > 0) return; // 串行：同一时刻只生成一条，避免并发刷屏
     // 冷却开关关闭：清空冷却表，避免历史残留误挡（开启时才按冷却跳过）
+    // v2.3.93：走 tracker.clearAll —— 逐个 chatKey 广播 proactive:awaiting(false)，
+    // 让已打开的窗口立即隐藏「正在等你回复」提示（否则要等下次切聊天才刷新）。
     if (s.idleCooldownUntilReply === false && proactiveAwaitingReply.size > 0) {
-      proactiveAwaitingReply.clear();
-      idleCooldownFrozenMs.clear(); // v2.3.92：开关关闭时一并清理冻结基准，否则残留值会让下次开启后计时起点错乱
+      // clearAll 内会一并清空冻结表：残留值会让下次开启开关后计时起点错乱（v2.3.92 原行为）
+      awaitingReplyTracker.clearAll('settings-off');
     }
     const switchAction = s.idleSwitchAction || 'continue';
     if (switchAction === 'continue' && idleFrozenElapsedMs.size > 0) {
@@ -7190,7 +7242,8 @@ app.whenReady().then(() => {
     isBusy: (chatId) => streamControllers.has(chatId),
     // v2.3.92「等你回复才发下一条」：状态真源在主进程内存 Set（调度全在主进程，多窗口天然一致）。
     // NHPP 两个发送分支（定向回访 / 泛化候选）命中它时保持候选原样、不重采样。
-    isAwaitingReply: (chatKey) => proactiveAwaitingReply.has(chatKey),
+    // v2.3.93：改走 tracker.isAwaiting（内部同时判开关，开关关闭时不门禁 —— 与 legacy 侧一致）。
+    isAwaitingReply: (chatKey) => awaitingReplyTracker.isAwaiting(chatKey),
     getDefaultModel: () => {
       const s = dm.getSettings();
       return getDefaultModelConfig(s) || undefined;
@@ -7200,7 +7253,8 @@ app.whenReady().then(() => {
   // v2.3.92：重启后从 proactive-nhpp.json 的 feedback[] 派生「仍在等用户回复」的聊天，
   // 补回丢失的内存冷却状态（不新增持久化字段）。不恢复会导致重启瞬间给未回复的聊天补发一条。
   try {
-    for (const chatKey of deriveAwaitingReplyKeys()) proactiveAwaitingReply.add(chatKey);
+    // v2.3.93：用 tracker.mark 而非裸 add，保持与运行期同一套状态转移（含广播语义）
+    for (const chatKey of deriveAwaitingReplyKeys()) awaitingReplyTracker.mark(chatKey);
   } catch {
     /* 派生失败则退化为「不恢复」，不会永久卡死 */
   }

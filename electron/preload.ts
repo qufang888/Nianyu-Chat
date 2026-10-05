@@ -171,6 +171,14 @@ export interface NianyuAPI {
   idleSet: (chatKey: string, ts: number) => void;
   onIdleActivity: (cb: (e: any, data: any) => void) => () => void;
   offIdleActivity: (cb: (e: any, data: any) => void) => void;
+  // ===== v2.3.93：主动消息「等你回复」状态 =====
+  /** 查询该聊天是否处于等待用户回复状态（开关关闭时恒 false） */
+  isAwaitingReply: (chatType: string, chatId: string) => Promise<boolean>;
+  /** 「我不回复」：与用户真的回复完全等价地解除等待，计时按「刚回复过」重新开始 */
+  skipAwaitingReply: (chatType: string, chatId: string) => Promise<{ ok: boolean; wasAwaiting: boolean }>;
+  /** 等待态变化广播（主进程驱动，多窗口同步刷新提示与按钮） */
+  onAwaitingReply: (cb: (e: any, data: { chatKey: string; awaiting: boolean; reason?: string }) => void) => () => void;
+  offAwaitingReply: (cb: (e: any, data: any) => void) => void;
   onIdleTick: (cb: (e: any, data: Record<string, number>) => void) => () => void;
   onRoleMood: (cb: (e: any, data: any) => void) => () => void;
   offRoleMood: (cb: (e: any, data: any) => void) => void;
@@ -627,6 +635,17 @@ const api: NianyuAPI = {
   sendIdleActivity: (chatKey) => ipcRenderer.send('idle:set', { chatKey, ts: Date.now() }),
   idleGet: (chatKey) => ipcRenderer.invoke('idle:get', chatKey),
   idleSet: (chatKey, ts) => ipcRenderer.send('idle:set', { chatKey, ts }),
+  // ===== v2.3.93：主动消息「等你回复」查询 / 解除 / 广播 =====
+  isAwaitingReply: (chatType, chatId) => ipcRenderer.invoke('idle:isAwaitingReply', { chatType, chatId }),
+  skipAwaitingReply: (chatType, chatId) => ipcRenderer.invoke('proactive:skipAwaitingReply', { chatType, chatId }),
+  onAwaitingReply: (cb) => {
+    const listener = (e: any, data: any) => cb(e, data);
+    ipcRenderer.on('proactive:awaiting', listener);
+    return () => ipcRenderer.removeListener('proactive:awaiting', listener);
+  },
+  offAwaitingReply: (cb) => {
+    if (typeof cb === 'function') ipcRenderer.removeListener('proactive:awaiting', cb as any);
+  },
   onIdleActivity: (cb) => {
     const listener = (e: any, data: any) => cb(e, data);
     ipcRenderer.on('idle:activity', listener);

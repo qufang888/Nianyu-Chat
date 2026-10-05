@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, Fragment } from 'react';
+import React, { useCallback, useEffect, useRef, useState, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
@@ -263,6 +263,10 @@ export const MiniChat: React.FC = () => {
   const [idleCountdown, setIdleCountdown] = useState(0);
   const idleSwitchActionRef = useRef<'pause' | 'reset' | 'continue'>('continue');
   const [nhppActive, setNhppActive] = useState(false); // NHPP 接管时经典主动消息开关置灰不可拨动
+  // v2.3.93：主动消息「等你回复」状态（真源在主进程，本地仅用于提示 + 「我不回复」按钮）
+  const [awaitingReply, setAwaitingReply] = useState(false);
+  const awaitingReplyRef = useRef(false);
+  const [skippingAwaiting, setSkippingAwaiting] = useState(false); // 「我不回复」请求进行中（防连点）
   const lastActivityRef = useRef(Date.now()); // 最近一次用户操作时间
   const idleReplyOnRef = useRef(true);
   const idleSecondsRef = useRef(60);
@@ -763,6 +767,15 @@ export const MiniChat: React.FC = () => {
         }
       }
     });
+    // v2.3.93：等待回复状态同步 —— 主进程是唯一真源（主窗/小窗/别的窗口解除都会广播过来）
+    const offAwaiting = api.onAwaitingReply((_e, data) => {
+      if (!data || !current) return;
+      const curKey = `${current.chat_type}:${current.chat_id}`;
+      if (data.chatKey !== curKey) return;
+      const on = data.awaiting === true;
+      awaitingReplyRef.current = on;
+      setAwaitingReply(on);
+    });
     // F1：群聊选人回复 —— 主进程广播「请选择下一位发言者」，弹出选人浮层
     const offNeedSpeaker = api.onNeedSpeaker((data) => {
       if (!data || !current || data.chatId !== current.chat_id) return;
@@ -776,6 +789,7 @@ export const MiniChat: React.FC = () => {
       offUser();
       offEvent();
       offIdle();
+      offAwaiting();
       offNeedSpeaker();
     };
   }, [current]);
@@ -1288,6 +1302,58 @@ export const MiniChat: React.FC = () => {
     });
     return offTick;
   }, [current]);
+
+  // v2.3.93：进入/切换聊天时查询「主动消息是否正在等你回复」（主进程为唯一真源；
+  // 开关 idleCooldownUntilReply 关闭时恒 false —— 那就不存在等待态、不显示提示）。
+  useEffect(() => {
+    if (!current) {
+      awaitingReplyRef.current = false;
+      setAwaitingReply(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      let on = false;
+      try {
+        on = (await api.isAwaitingReply(current.chat_type, current.chat_id)) === true;
+      } catch {
+        on = false;
+      }
+      if (cancelled) return;
+      awaitingReplyRef.current = on;
+      setAwaitingReply(on);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [current]);
+
+  // v2.3.93：「我不回复」—— 与用户真的回复完全等价的解除（主进程同一清理入口）。
+  // 乐观更新：先本地清提示并把倒计时刷回满格，失败则回滚并 toast。
+  const skipAwaitingReply = useCallback(async () => {
+    if (!current || skippingAwaiting || !awaitingReplyRef.current) return;
+    const prev = awaitingReplyRef.current;
+    setSkippingAwaiting(true);
+    awaitingReplyRef.current = false;
+    setAwaitingReply(false);
+    try {
+      const r = await api.skipAwaitingReply(current.chat_type, current.chat_id);
+      if (!r?.ok) throw new Error('skip failed');
+      // 主进程已重置基准并广播 idle:activity；本地同步基准让倒计时立刻显示满格
+      const curKey = `${current.chat_type}:${current.chat_id}`;
+      const ts = Date.now();
+      lastActivityRef.current = ts;
+      setIdleActivity(curKey, ts);
+      setIdleCountdown(Math.ceil(idleSecondsRef.current || 600));
+    } catch (e) {
+      awaitingReplyRef.current = prev;
+      setAwaitingReply(prev);
+      showToast(t('chat.idleAwaitingSkipFailed'), { error: true });
+      console.warn('[nianyu] mini skipAwaitingReply failed:', e);
+    } finally {
+      setSkippingAwaiting(false);
+    }
+  }, [current, skippingAwaiting, showToast, t]);
 
   const doSendMini = async () => {
     if (!current || roleMissing || (!input.trim() && pendingImages.length === 0) || sending) return;
@@ -2059,6 +2125,20 @@ export const MiniChat: React.FC = () => {
                     : idleCountdown > 0
                       ? `${t('chat.idleReplyLegacyShort')} · ${idleCountdown >= 60 ? `${Math.floor(idleCountdown / 60)}m${idleCountdown % 60}s` : `${idleCountdown}s`}`
                       : t('chat.idleReplyLegacyShort')}
+                </span>
+              )}
+              {/* v2.3.93：等待回复提示 + 「我不回复」按钮（与主窗同一区域、同一视觉语言） */}
+              {awaitingReply && (
+                <span className="idle-awaiting" title={t('chat.idleAwaitingTip')}>
+                  <span className="idle-awaiting-text">{t('chat.idleAwaiting')}</span>
+                  <button
+                    className="btn-ghost idle-awaiting-skip"
+                    title={t('chat.idleAwaitingSkipTip')}
+                    disabled={skippingAwaiting}
+                    onClick={skipAwaitingReply}
+                  >
+                    {skippingAwaiting ? t('chat.idleAwaitingSkipping') : t('chat.idleAwaitingSkip')}
+                  </button>
                 </span>
               )}
             </div>
