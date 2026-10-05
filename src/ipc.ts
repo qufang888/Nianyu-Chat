@@ -166,6 +166,14 @@ export interface NianyuAPI {
   onIdleActivity: (cb: (e: any, data: any) => void) => () => void;
   offIdleActivity: (cb: (e: any, data: any) => void) => void;
   onIdleTick: (cb: (e: any, data: Record<string, number>) => void) => () => void;
+  // ===== v2.3.93：主动消息「等你回复」状态 =====
+  /** 查询该聊天是否处于等待用户回复状态（开关 idleCooldownUntilReply 关闭时恒 false） */
+  isAwaitingReply: (chatType: string, chatId: string) => Promise<boolean>;
+  /** 「我不回复」：与用户真的回复完全等价地解除等待，计时按「刚回复过」重新开始 */
+  skipAwaitingReply: (chatType: string, chatId: string) => Promise<{ ok: boolean; wasAwaiting: boolean }>;
+  /** 等待态变化广播（主进程驱动，多窗口同步刷新提示与按钮） */
+  onAwaitingReply: (cb: (e: any, data: { chatKey: string; awaiting: boolean; reason?: string }) => void) => () => void;
+  offAwaitingReply: (cb: (e: any, data: any) => void) => void;
   onRoleMood: (cb: (e: any, data: any) => void) => () => void;
   offRoleMood: (cb: (e: any, data: any) => void) => void;
   // 关系值（bond）变更广播：一端调整，主窗/小窗同步刷新展示
@@ -380,6 +388,10 @@ export interface NianyuAPI {
   listSkills: () => Promise<Skill[]>;
   removeSkill: (id: string) => Promise<{ ok: boolean }>;
   toggleSkill: (id: string, enabled: boolean) => Promise<{ ok: boolean }>;
+  /** v2.3.93：把内置技能恢复为随念语附带的版本（保留启停状态；已删除则重新种入） */
+  restoreBuiltinSkill: (id: string) => Promise<{ ok: boolean }>;
+  /** v2.3.93：已被用户删除、但仍可一键恢复的内置技能 */
+  listDismissedBuiltins: () => Promise<{ id: string; name: string; description: string }[]>;
 
   // ===== 软件更新（v2.3.45）=====
   checkUpdate: (manual?: boolean) => Promise<UpdateStatus>;
@@ -460,6 +472,8 @@ export const api: NianyuAPI = {
   listSkills: () => raw.listSkills(),
   removeSkill: (id) => raw.removeSkill(id),
   toggleSkill: (id, enabled) => raw.toggleSkill(id, enabled),
+  restoreBuiltinSkill: (id) => raw.restoreBuiltinSkill(id),
+  listDismissedBuiltins: () => raw.listDismissedBuiltins(),
   translate: (text) => raw.translate(text),
   interruptStream: (chatId) => raw.interruptStream(chatId),
   copyChat: (type, id) => raw.copyChat(type, id),

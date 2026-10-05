@@ -459,6 +459,9 @@ export interface Skill {
   truncated?: boolean; // 正文超上限被截断
   scriptBlocked?: boolean; // frontmatter 含脚本类字段 → 已忽略（本版本不执行）
   scriptFields?: string; // 被忽略的脚本字段名（逗号分隔），供 UI 展示
+  builtin?: boolean; // v2.3.93：随念语安装即带的内置技能（非用户手动导入），UI 标「内置」徽标
+  builtinVersion?: number; // v2.3.93：内置内容版本号，用于升级时判断是否刷新正文
+  builtinUpdateAvailable?: boolean; // v2.3.93：内置有新版但用户改过正文 → 保留用户版本并提示可恢复
   importedAt: string;
 }
 

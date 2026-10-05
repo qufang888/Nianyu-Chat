@@ -482,8 +482,11 @@ export const Settings: React.FC<{
   // 独立 IPC（skill:*），数据落在主进程 userData/skills.json，不进 settings、不污染聊天主数据。
   const [skills, setSkills] = useState<Skill[]>([]);
   const [skillScopeFilter, setSkillScopeFilter] = useState<'all' | SkillScope>('all');
+  // v2.3.93：已被用户删除、但仍可一键恢复的内置技能
+  const [dismissedBuiltins, setDismissedBuiltins] = useState<{ id: string; name: string; description: string }[]>([]);
   const refreshSkills = React.useCallback(() => {
     api.listSkills().then(setSkills).catch(() => {});
+    api.listDismissedBuiltins().then(setDismissedBuiltins).catch(() => {});
   }, []);
   useEffect(() => {
     refreshSkills();
@@ -510,6 +513,22 @@ export const Settings: React.FC<{
     } catch (e: any) {
       showToast(e?.message || String(e), { error: true });
     }
+  };
+
+  /** 恢复内置技能为随念语附带的版本（v2.3.93） */
+  const restoreBuiltin = async (id: string, name: string) => {
+    const confirmed = await api.showConfirm!(
+      t('skill.restoreConfirm', { name }),
+      t('skill.title')
+    );
+    if (!confirmed) return;
+    const res = await api.restoreBuiltinSkill(id);
+    if (!res.ok) {
+      showToast(t('skill.restoreFailed'), { error: true });
+      return;
+    }
+    refreshSkills();
+    showToast(t('skill.restored'));
   };
 
   useEffect(() => {
@@ -4394,6 +4413,30 @@ export const Settings: React.FC<{
             </div>
           </div>
 
+          {/* v2.3.93：内置技能说明——常驻告知「随念语内置 / 仅主 SKILL.md / 不执行脚本」 */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 8,
+              padding: '9px 12px',
+              borderRadius: 8,
+              background: 'rgba(120,90,220,0.10)',
+              border: '1px solid rgba(140,110,235,0.32)',
+              fontSize: 12,
+              color: 'var(--color-text-secondary)',
+              lineHeight: 1.7,
+            }}
+          >
+            <span style={{ fontSize: 13, lineHeight: '18px' }}>📦</span>
+            <div>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text)' }}>
+                {t('skill.builtinNotice')}
+                <Hint text={t('skill.builtinDetail')} />
+              </div>
+            </div>
+          </div>
+
           {/* 工具条：导入 + 作用域筛选 + 总数 */}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <button className="btn-primary" style={{ padding: '5px 12px', fontSize: 12 }} onClick={() => void importSkillFile()}>
@@ -4420,8 +4463,42 @@ export const Settings: React.FC<{
             {t('skill.formatDesc')}
           </div>
 
+          {/* v2.3.93：被删除的内置技能 → 一键恢复入口（「安装即在列表」的可撤销实现） */}
+          {dismissedBuiltins.length > 0 && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                flexWrap: 'wrap',
+                padding: '8px 11px',
+                borderRadius: 8,
+                background: 'var(--color-bg-elevated, rgba(255,255,255,0.05))',
+                fontSize: 12,
+                color: 'var(--color-text-secondary)',
+              }}
+            >
+              <span>{t('skill.builtinRemoved')}</span>
+              {dismissedBuiltins.map((b) => (
+                <button
+                  key={b.id}
+                  type="button"
+                  className="btn-ghost"
+                  style={{ padding: '2px 10px', fontSize: 12 }}
+                  onClick={() => void restoreBuiltin(b.id, b.name)}
+                >
+                  {t('skill.restoreBuiltin', { name: b.name })}
+                </button>
+              ))}
+            </div>
+          )}
+
           {visibleSkills.length === 0 ? (
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{t('skill.empty')}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+              {skills.length === 0 && dismissedBuiltins.length === 0
+                ? t('skill.empty')
+                : t('skill.emptyFiltered')}
+            </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {visibleSkills.map((s) => (
@@ -4439,6 +4516,21 @@ export const Settings: React.FC<{
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <strong style={{ fontSize: 13 }}>{s.name}</strong>
+                    {/* v2.3.93：内置技能徽标——让用户一眼看出它不是自己导入的 */}
+                    {s.builtin && (
+                      <span
+                        style={{
+                          fontSize: 10.5,
+                          padding: '1px 7px',
+                          borderRadius: 9,
+                          whiteSpace: 'nowrap',
+                          background: 'rgba(140,110,235,0.20)',
+                          color: 'var(--color-text)',
+                        }}
+                      >
+                        {t('skill.builtinBadge')}
+                      </span>
+                    )}
                     <span
                       style={{
                         fontSize: 10.5,
@@ -4497,8 +4589,31 @@ export const Settings: React.FC<{
                       {(s.roleId || s.chatKey) ? ` · ${t('skill.target')}: ${s.roleId || s.chatKey}` : ''}
                     </span>
                     {s.version ? <span>{t('skill.version')}: {s.version}</span> : null}
-                    {s.sourceFile ? <span>{t('skill.source')}: {s.sourceFile}</span> : null}
+                    {/* v2.3.93：内置技能标注来源为「随念语内置」而非来源文件名 */}
+                    {s.builtin ? (
+                      <span>
+                        {t('skill.source')}: {t('skill.builtinSource')}
+                      </span>
+                    ) : (
+                      s.sourceFile ? <span>{t('skill.source')}: {s.sourceFile}</span> : null
+                    )}
                   </div>
+                  {/* v2.3.93：内置有新版但用户改过正文 → 保留用户版本 + 可一键恢复内置版 */}
+                  {s.builtinUpdateAvailable && (
+                    <div
+                      style={{ fontSize: 11, color: '#e0a83c', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
+                    >
+                      <span>{t('skill.builtinUpdate')}</span>
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        style={{ padding: '2px 9px', fontSize: 11 }}
+                        onClick={() => void restoreBuiltin(s.id, s.name)}
+                      >
+                        {t('skill.restoreBuiltin', { name: s.name })}
+                      </button>
+                    </div>
+                  )}
                   {s.scriptBlocked && (
                     <div style={{ fontSize: 11, color: '#e0a83c' }}>
                       {t('skill.scriptBlocked', { fields: s.scriptFields || '' })}
