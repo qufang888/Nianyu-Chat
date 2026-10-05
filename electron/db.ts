@@ -13,6 +13,16 @@ import type {
   Plugin,
 } from '../src/types';
 import { DEFAULT_SETTINGS } from '../src/types';
+import {
+  listSkills,
+  getSkill,
+  importSkill,
+  deleteSkill,
+  setSkillEnabled,
+  getSkillsForChat,
+  buildSkillsPrompt,
+} from './skills';
+import type { Skill, SkillImportResult } from '../src/types';
 
 // 纯 JS 存储：数据以 JSON 文件持久化，无需任何原生编译模块。
 interface ChatSession {
@@ -446,6 +456,50 @@ class DataManager {
   deletePlugin(id: string): void {
     this.store.plugins = this.store.plugins.filter((p) => p.id !== id);
     this.saveStore();
+  }
+
+  // ===================== 技能（Skill）=====================
+  // 刻意**不进 store.json**：技能数据落在独立文件 skills.json（见 electron/skills.ts）。
+  // 理由：store.json 是聊天主数据（消息/角色/记忆），技能属于可随时整体删除的外挂资产，
+  // 物理隔离可避免技能解析异常污染聊天存档，也便于单独备份/回滚。
+  // DataManager 只做薄门面，真实逻辑与解析规则集中在 skills.ts（便于独立实测）。
+
+  /** 列出全部技能（导入时间倒序） */
+  listSkills(): Skill[] {
+    return listSkills();
+  }
+
+  /** 取单个技能 */
+  getSkill(id: string): Skill | undefined {
+    return getSkill(id);
+  }
+
+  /** 解析并导入一段 SKILL.md 文本（content 来自用户对话框选中的文件，不接受任意路径） */
+  importSkill(content: string, fileName: string): SkillImportResult {
+    return importSkill(content, fileName);
+  }
+
+  /** 删除技能，返回是否命中 */
+  deleteSkill(id: string): boolean {
+    return deleteSkill(id);
+  }
+
+  /** 启停技能，返回是否命中 */
+  setSkillEnabled(id: string, enabled: boolean): boolean {
+    return setSkillEnabled(id, enabled);
+  }
+
+  /**
+   * 某场对话实际生效的技能：global ∪ (role 且 roleId 匹配) ∪ (chat 且 chatKey 匹配)。
+   * 单聊传 resolveSingleRoleId 后的角色 id；群聊传正在发言的角色 id（可为空）。
+   */
+  getSkillsForChat(chatType: string, chatId: string, roleId = ''): Skill[] {
+    return getSkillsForChat(chatType, chatId, roleId);
+  }
+
+  /** 构造注入给 AI 的「可用技能」段；无技能时返回空串（调用方整段跳过） */
+  buildSkillsPrompt(chatType: string, chatId: string, roleId = ''): string {
+    return buildSkillsPrompt(this.getSkillsForChat(chatType, chatId, roleId));
   }
 
 

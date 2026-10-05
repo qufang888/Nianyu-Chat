@@ -440,6 +440,38 @@ export interface Plugin {
   created_at: string;
 }
 
+// ===== 技能 Skill（v2.3.92 新增；SKILL.md 形态的「说明书」层）=====
+// 与插件的关键区别：技能**只做纯提示词注入，绝不执行任何脚本**。
+// frontmatter 中若声明 scripts/exec/command 等可执行字段，解析时忽略并在 UI 显式标注。
+export type SkillScope = 'global' | 'role' | 'chat';
+
+export interface Skill {
+  id: string;
+  name: string; // 必填：技能名（进提示词 <skill name="...">）
+  description: string; // 必填：AI 判断「何时用这个技能」的唯一依据，需写清触发场景
+  scope: SkillScope; // 作用域：global=全部对话 / role=绑定角色 / chat=绑定单场对话
+  roleId?: string; // scope=role 时必填：绑定的角色 id
+  chatKey?: string; // scope=chat 时必填：绑定的对话，格式 `${chatType}:${chatId}`
+  version?: string;
+  body: string; // 正文：注入给 AI 的指令 / Markdown（纯提示词，不执行）
+  sourceFile?: string; // 来源文件名（仅展示用，不保留绝对路径）
+  enabled: boolean;
+  truncated?: boolean; // 正文超上限被截断
+  scriptBlocked?: boolean; // frontmatter 含脚本类字段 → 已忽略（本版本不执行）
+  scriptFields?: string; // 被忽略的脚本字段名（逗号分隔），供 UI 展示
+  importedAt: string;
+}
+
+/** 技能导入结果（IPC 返回） */
+export interface SkillImportResult {
+  ok: boolean;
+  skill?: Skill;
+  /** i18n 键后缀，如 errNoName → 渲染层拼 skill.{key} */
+  error?: string;
+  /** 提示类型：script=含脚本字段已忽略 / truncated=正文超限被截断 */
+  warnings?: string[];
+}
+
 export interface AppSettings {
   apiKeys: ApiKeys;
   defaultModel: string;

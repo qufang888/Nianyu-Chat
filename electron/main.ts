@@ -3235,6 +3235,18 @@ function buildMessagesForRole(
     if (selfRole.world_setting) b.push(`世界观：${selfRole.world_setting}。`);
     parts.push(`【对话对象（用户）设定】\n${b.join('\n')}`);
   }
+  // ===== v2.3.92 技能层 =====
+  // 顺序要求（护人设）：技能段必须排在角色/世界书/用户设定**之后** —— 技能是「附加能力说明书」，
+  // 排在人设之前会让后写的技能文本看起来像更高优先级的身份定义，从而覆盖角色人设。
+  // 空列表时 buildSkillsPrompt 返回空串 → 整段跳过（省 token，也不让 AI 误以为有技能）。
+  if (chatId) {
+    const skillsPrompt = dm.buildSkillsPrompt(
+      'single',
+      chatId,
+      dm.resolveSingleRoleId('single', chatId)
+    );
+    if (skillsPrompt) parts.push(skillsPrompt);
+  }
   const sysPrompt = parts.join('\n\n');
   const finalImages =
     storedImages && storedImages.length ? storedImages : storedImage ? [storedImage] : [];
@@ -3279,6 +3291,14 @@ function buildGroupMessages(
     if (selfRole.background) b.push(`背景：${selfRole.background}。`);
     if (selfRole.world_setting) b.push(`世界观：${selfRole.world_setting}。`);
     parts.push(`【对话对象（用户）设定】\n${b.join('\n')}`);
+  }
+  // ===== v2.3.92 技能层 =====
+  // 顺序要求（护人设）：在角色/世界书/用户设定**之后**、群聊规则**之前**。
+  // 前者避免技能文本覆盖角色人设；后者让「群聊规则」仍是最后一道约束
+  // （技能若排在群聊规则之后，会以更靠后的指令姿态压制群聊身份与不代人发言的硬约束）。
+  if (groupId) {
+    const skillsPrompt = dm.buildSkillsPrompt('group', groupId, role.id);
+    if (skillsPrompt) parts.push(skillsPrompt);
   }
   parts.push(
     `【群聊规则】\n这是一个多人群聊，成员有：${memberNames.join('、')}。\n` +
@@ -6903,6 +6923,21 @@ function registerIPC(): void {
     const next = dm.updatePlugin(id, { enabled });
     return { ok: !!next, plugin: next };
   });
+
+  // ---------- 技能（v2.3.92 新增；SKILL.md 形态，纯提示词注入，不执行任何脚本）----------
+  // 安全边界：导入只接受**用户通过系统对话框选中的文件内容**（file:pickText 已读好传进来），
+  // 主进程不接受渲染进程传入的任意路径，避免变成任意文件读取入口。
+  ipcMain.handle('skill:import', (_e, content: string, fileName: string) =>
+    dm.importSkill(typeof content === 'string' ? content : '', typeof fileName === 'string' ? fileName : '')
+  );
+
+  ipcMain.handle('skill:list', () => dm.listSkills());
+
+  ipcMain.handle('skill:remove', (_e, id: string) => ({ ok: dm.deleteSkill(id) }));
+
+  ipcMain.handle('skill:toggle', (_e, id: string, enabled: boolean) => ({
+    ok: dm.setSkillEnabled(id, !!enabled),
+  }));
 
   // 受控 HTTP 工具调用：只发预设的请求，绝不执行任意代码（安全边界）
   ipcMain.handle(

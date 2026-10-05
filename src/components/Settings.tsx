@@ -18,6 +18,8 @@ import {
   type WorldBook,
   type ErrorLogEntry,
   type Plugin,
+  type Skill,
+  type SkillScope,
   MODEL_GROUP_COLORS,
   MODEL_GROUP_NAME_MAX,
   MODEL_GROUP_MAX,
@@ -118,6 +120,7 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-sceneimage', key: 'settings.sceneImage', kw: ['场景图', 'scene', '配图'] },
   { id: 'sec-websearch', key: 'settings.webSearch', kw: ['联网', '搜索', 'web', 'search', '联网搜索'] },
   { id: 'sec-plugins', key: 'settings.plugins', kw: ['插件', 'plugin', '扩展'] },
+  { id: 'sec-skills', key: 'skill.title', kw: ['技能', 'skill', '技能包', 'skill.md', '说明书', '注入'] },
   { id: 'sec-translation', key: 'settings.translation', kw: ['翻译', 'translation', '译文'] },
   { id: 'sec-sound', key: 'settings.sound', kw: ['音效', 'sound', '提示音', '通知音', '声音'] },
   { id: 'sec-mini', key: 'settings.mini', kw: ['小窗', '迷你', 'mini', '快捷'] },
@@ -474,6 +477,40 @@ export const Settings: React.FC<{
   useEffect(() => {
     refreshPlugins();
   }, [refreshPlugins]);
+
+  // ===== v2.3.92 技能（Skill）=====
+  // 独立 IPC（skill:*），数据落在主进程 userData/skills.json，不进 settings、不污染聊天主数据。
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [skillScopeFilter, setSkillScopeFilter] = useState<'all' | SkillScope>('all');
+  const refreshSkills = React.useCallback(() => {
+    api.listSkills().then(setSkills).catch(() => {});
+  }, []);
+  useEffect(() => {
+    refreshSkills();
+  }, [refreshSkills]);
+  const visibleSkills =
+    skillScopeFilter === 'all' ? skills : skills.filter((s) => s.scope === skillScopeFilter);
+  /** 导入技能：只接受系统对话框里用户亲自选中的文件，主进程不接受任意路径 */
+  const importSkillFile = async () => {
+    try {
+      const picked = await api.pickTextFile([{ name: 'SKILL.md', extensions: ['md', 'markdown', 'txt'] }]);
+      if (!picked) return;
+      const fileName = picked.path.split(/[\\/]/).pop() || 'SKILL.md';
+      const res = await api.importSkill(picked.content, fileName);
+      if (!res.ok) {
+        showToast(`${t('skill.importFailed')}: ${t(`skill.${res.error || 'errNoFrontmatter'}`)}`, {
+          error: true,
+        });
+        return;
+      }
+      refreshSkills();
+      if ((res.warnings || []).includes('script')) showToast(t('skill.warnScript'), { error: true });
+      else if ((res.warnings || []).includes('truncated')) showToast(t('skill.warnTruncated'));
+      else showToast(t('skill.imported'));
+    } catch (e: any) {
+      showToast(e?.message || String(e), { error: true });
+    }
+  };
 
   useEffect(() => {
     if (settings) setDraft(settings);
@@ -4322,6 +4359,152 @@ export const Settings: React.FC<{
                   >
                     {t('settings.pluginRemove')}
                   </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ===== 技能（Skill，v2.3.92）——纯指令注入，不执行脚本 ===== */}
+        <div id="sec-skills" className="section-title" style={{ marginTop: 18 }}>
+          {t('skill.title')}
+          <Hint text={t('skill.desc')} />
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 640 }}>
+          {/* 安全边界常驻展示：技能是「说明书」，不是可执行程序 */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 8,
+              padding: '9px 12px',
+              borderRadius: 8,
+              background: 'rgba(90,140,255,0.10)',
+              border: '1px solid rgba(90,140,255,0.32)',
+              fontSize: 12,
+              color: 'var(--color-text-secondary)',
+            }}
+          >
+            <span style={{ fontSize: 13, lineHeight: '18px' }}>🔒</span>
+            <div>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text)' }}>
+                {t('skill.safetyNotice')}
+                <Hint text={t('skill.safetyDetail')} />
+              </div>
+            </div>
+          </div>
+
+          {/* 工具条：导入 + 作用域筛选 + 总数 */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button className="btn-primary" style={{ padding: '5px 12px', fontSize: 12 }} onClick={() => void importSkillFile()}>
+              {t('skill.import')}
+            </button>
+            <select
+              value={skillScopeFilter}
+              onChange={(e) => setSkillScopeFilter(e.target.value as 'all' | SkillScope)}
+              style={{ fontSize: 12, padding: '4px 6px' }}
+            >
+              <option value="all">{t('skill.filterAll')}</option>
+              <option value="global">{t('skill.scopeGlobal')}</option>
+              <option value="role">{t('skill.scopeRole')}</option>
+              <option value="chat">{t('skill.scopeChat')}</option>
+            </select>
+            <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+              {t('skill.count', { n: skills.length })}
+            </span>
+          </div>
+
+          {/* 技能包格式说明（供用户照着写 SKILL.md） */}
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 600, color: 'var(--color-text)' }}>{t('skill.format')}</div>
+            {t('skill.formatDesc')}
+          </div>
+
+          {visibleSkills.length === 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{t('skill.empty')}</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {visibleSkills.map((s) => (
+                <div
+                  key={s.id}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                    padding: '9px 11px',
+                    borderRadius: 8,
+                    background: 'var(--color-bg-elevated, rgba(255,255,255,0.05))',
+                    opacity: s.enabled ? 1 : 0.55,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <strong style={{ fontSize: 13 }}>{s.name}</strong>
+                    <span
+                      style={{
+                        fontSize: 10.5,
+                        padding: '1px 7px',
+                        borderRadius: 9,
+                        whiteSpace: 'nowrap',
+                        background:
+                          s.scope === 'global'
+                            ? 'rgba(90,140,255,0.18)'
+                            : s.scope === 'role'
+                              ? 'rgba(80,200,140,0.18)'
+                              : 'rgba(230,160,60,0.20)',
+                      }}
+                    >
+                      {s.scope === 'global'
+                        ? t('skill.scopeGlobal')
+                        : s.scope === 'role'
+                          ? t('skill.scopeRole')
+                          : t('skill.scopeChat')}
+                    </span>
+                    <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {s.description}
+                    </span>
+                    <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+                      {s.enabled ? t('skill.enabled') : t('skill.disabled')}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={!!s.enabled}
+                      onChange={async (e) => {
+                        await api.toggleSkill(s.id, e.target.checked);
+                        refreshSkills();
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      style={{ padding: '3px 10px', fontSize: 12, color: '#e06c75' }}
+                      onClick={async () => {
+                        // 用应用内原生确认框（与项目其他破坏性操作一致），不用浏览器 window.confirm
+                        const confirmed = await api.showConfirm!(
+                          t('skill.removeConfirm', { name: s.name }),
+                          t('skill.title')
+                        );
+                        if (!confirmed) return;
+                        await api.removeSkill(s.id);
+                        refreshSkills();
+                      }}
+                    >
+                      {t('skill.remove')}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                    <span>
+                      {t('skill.scope')}: {s.scope}
+                      {(s.roleId || s.chatKey) ? ` · ${t('skill.target')}: ${s.roleId || s.chatKey}` : ''}
+                    </span>
+                    {s.version ? <span>{t('skill.version')}: {s.version}</span> : null}
+                    {s.sourceFile ? <span>{t('skill.source')}: {s.sourceFile}</span> : null}
+                  </div>
+                  {s.scriptBlocked && (
+                    <div style={{ fontSize: 11, color: '#e0a83c' }}>
+                      {t('skill.scriptBlocked', { fields: s.scriptFields || '' })}
+                    </div>
+                  )}
+                  {s.truncated && <div style={{ fontSize: 11, color: '#e0a83c' }}>{t('skill.truncated')}</div>}
                 </div>
               ))}
             </div>

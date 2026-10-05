@@ -443,6 +443,11 @@ export interface NianyuAPI {
   removePlugin: (id: string) => Promise<{ ok: boolean }>;
   togglePlugin: (id: string, enabled: boolean) => Promise<{ ok: boolean; plugin?: import('../src/types').Plugin }>;
   callPluginTool: (pluginId: string, toolName: string, arg: string) => Promise<{ ok: boolean; text?: string }>;
+  // ===== 技能（v2.3.92；纯提示词注入，不执行脚本）=====
+  importSkill: (content: string, fileName: string) => Promise<import('../src/types').SkillImportResult>;
+  listSkills: () => Promise<import('../src/types').Skill[]>;
+  removeSkill: (id: string) => Promise<{ ok: boolean }>;
+  toggleSkill: (id: string, enabled: boolean) => Promise<{ ok: boolean }>;
 
   // ===== 软件更新（v2.3.45）=====
   checkUpdate: (manual?: boolean) => Promise<UpdateStatus>;
@@ -948,6 +953,12 @@ const api: NianyuAPI = {
   togglePlugin: (id, enabled) => ipcRenderer.invoke('plugin:toggle', id, enabled),
   callPluginTool: (pluginId, toolName, arg) =>
     ipcRenderer.invoke('plugin:callTool', pluginId, toolName, arg),
+
+  // ===== 技能（v2.3.92；SKILL.md 导入 / 列表 / 启停 / 删除；纯提示词注入，不执行脚本）=====
+  importSkill: (content, fileName) => ipcRenderer.invoke('skill:import', content, fileName),
+  listSkills: () => ipcRenderer.invoke('skill:list'),
+  removeSkill: (id) => ipcRenderer.invoke('skill:remove', id),
+  toggleSkill: (id, enabled) => ipcRenderer.invoke('skill:toggle', id, enabled),
 
   // ===== 确认对话框 =====
   // ===== 软件更新（v2.3.45）=====
