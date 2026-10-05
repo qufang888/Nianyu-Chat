@@ -792,7 +792,7 @@
   "settings.proactiveDailyLimit": "Tageslimit (Nachrichten)",
   "settings.proactiveFreshness": "Frische (Minuten)",
   "settings.proactiveNhppDesc": "Der NHPP‑Motor lernt deine ideale Kontaktfrequenz: Aktives Antworten erhöht sie; langes Schweigen senkt sie automatisch. Wenn du Dinge wie ein Meeting oder Abendessen erwähnst, erhältst du zur richtigen Zeit eine gezielte Nachverfolgung (keine Duplikate mit regulären Kandidaten). Die Daten werden separat in proactive-nhpp.json gespeichert.",
-  "settings.proactiveLegacyHiddenHint": "Derzeit ist NHPP-intelligente Planung aktiv: Optionen des klassischen Timers (Timing‑Modus / Intervall / Chat‑Schalt‑Verhalten / Cooldown / Pro‑Chat‑Umschalter) sind deaktiviert (die beiden Motoren schließen sich aus). NHPP‑spezifische Optionen befinden sich unten.",
+  "settings.proactiveLegacyHiddenHint": "NHPP-Intelligenzplanung ist aktiv: Optionen des klassischen Timers (Zeitmodus / Intervall / Verhalten beim Chatwechsel / Schalter pro Chat) sind deaktiviert (die beiden Mechanismen schließen sich aus). NHPP-spezifische Optionen folgen unten. „Warte auf deine Antwort, bevor die nächste Nachricht kommt\" gilt für beide Mechanismen und bleibt davon unberührt.",
   "settings.mcp": "MCP‑Server (Tool‑Erweiterungen)",
   "settings.mcpDesc": "Verbinde MCP‑Server (Model Context Protocol), um Modelle mit externen Tools zu erweitern (Websuche, Dateizugriff, Datenbank usw.). Tools funktionieren nur bei Modellen, die Tool‑Aufruf unterstützen (nach Fähigkeitsprüfung); nicht‑streamende Anfragen führen automatisch mehrstufige Tool‑Aufrufe aus.",
   "settings.mcpRefresh": "Status aktualisieren",
@@ -1130,8 +1130,8 @@
   "settings.idleSwitchReset": "Zurücksetzen",
   "settings.idleSwitchContinue": "Weiter",
   "settings.idleSwitchActionDesc": "Weiter (Standard): Jeder Chat läuft unabhängig weiter, auch wenn du ihn nicht siehst (Ungelesen/Benachrichtigung). Pause: Timer friert ein und läuft weiter beim Zurückkehren. Zurücksetzen: Timer bleibt eingefroren und startet neu beim Zurückkehren.",
-  "settings.idleCooldown": "Proaktive Abklingzeit (nach Antwort fortsetzen)",
-  "settings.idleCooldownDesc": "Wenn aktiviert, geht ein Chat nach Erhalt einer proaktiven Nachricht in die Abklingzeit: Es werden keine weiteren proaktiven Nachrichten gesendet, bis du in diesem Chat antwortest (Abklingzeit pro Chat). Deaktiviert wird frei nach Intervall/Zeitpunkt ausgelöst.",
+  "settings.idleCooldown": "Warte auf deine Antwort, bevor die nächste Nachricht kommt",
+  "settings.idleCooldownDesc": "Ist dies aktiv (Standard): Ein Chat, der gerade eine proaktive Nachricht erhalten hat, wartet darauf, dass du dort antwortest, bevor eine weitere proaktive Nachricht gesendet werden kann. Beim klassischen Timer pausiert der Countdown während des Wartens (er startet nach deiner Antwort neu, statt sofort zu feuern); bei der NHPP-Intelligenzplanung bleibt der Kandidat an Ort und Stelle, bis du antwortest. Gilt für beide Mechanismen. Ausschalten, um frei nach Intervall/Zufallszeit zu senden.",
   "settings.emoEventAdvanced": "Emotion & Ereignisse (erweitert)",
   "settings.moodJudgeCooldown": "Stimmungs-Cooldown",
   "settings.moodJudgeCooldownDesc": "Minimaler Abstand (Sekunden) zwischen AI-Stimmungsbewertungen. 0 = bei jedem Zug bewerten; höher = weniger Aufrufe, aber langsamere Stimmungsaktualisierung.",
@@ -1442,5 +1442,7 @@
   "animCtl.modeAllOnHint": "Sämtliche Oberflächenanimationen und Übergänge werden abgespielt; es gelten keine Gruppengrenzen.",
   "animCtl.modeAllOffHint": "Sämtliche Oberflächenanimationen und Übergänge sind deaktiviert, was auf schwächeren Geräten für mehr Flüssigkeit sorgt.",
   "animCtl.modeCustomHint": "Nur die unten angehakten Gruppen spielen ihre Animationen ab; nicht angehakte Gruppen bleiben völlig unbewegt.",
-  "animCtl.groupTutorial": "Einrichtungs-Hervorhebung"
+  "animCtl.groupTutorial": "Einrichtungs-Hervorhebung",
+  "settings.proactiveAdaptive": "Adaptive Häufigkeit",
+  "settings.proactiveAdaptiveDesc": "Ist dies aktiv, passt sich die Sendehäufigkeit deiner Antwortgeschwindigkeit an: Schnellere Antworten erhöhen sie, langsamere (oder gar keine) senken sie (Skalierung 0,5–1,5-fach). Ausschalten, um eine feste Häufigkeit zu behalten."
 }

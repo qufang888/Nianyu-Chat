@@ -719,7 +719,7 @@
   "settings.proactiveDailyLimit": "Plafond quotidien (messages)",
   "settings.proactiveFreshness": "Fraîcheur (minutes)",
   "settings.proactiveNhppDesc": "Le moteur NHPP apprend votre fréquence de contact idéale : répondre activement l'augmente ; un silence prolongé la diminue automatiquement. Lorsque vous mentionnez un rendez-vous comme une réunion ou un dîner, vous recevez un rappel ciblé au bon moment (jamais dupliqué avec les candidats génériques). Les données sont enregistrées séparément dans le fichier proactive-nhpp.json.",
-  "settings.proactiveLegacyHiddenHint": "La planification intelligente NHPP est active : les options de la minuterie classique (mode de déclenchement / intervalle / comportement du commutateur de chat / refroidissement / bascule par chat) sont désactivées (les deux moteurs sont mutuellement exclusifs). Les options spécifiques à NHPP sont ci-dessous.",
+  "settings.proactiveLegacyHiddenHint": "La planification intelligente NHPP est active : les options du minuteur classique (mode de déclenchement / intervalle / comportement au changement de discussion / interrupteurs par discussion) sont désactivées (les deux mécanismes sont exclusifs). Les options propres à NHPP figurent ci-dessous. « Attends ta réponse avant le message suivant » s’applique aux deux mécanismes et n’est pas affected.",
   "settings.mcp": "Serveurs MCP (extensions d'outils)",
   "settings.mcpDesc": "Connectez-vous à un serveur MCP (Model Context Protocol) pour ajouter des capacités externes (recherche web, accès aux fichiers, base de données…) aux modèles prenant en charge l'appel d'outils. Les outils ne fonctionnent que sur les modèles confirmés comme prenant en charge l'appel d'outils ; les requêtes non en flux exécutent automatiquement plusieurs tours d'appels d'outils.",
   "settings.mcpRefresh": "Actualiser l'état",
@@ -1166,8 +1166,8 @@
   "settings.idleSwitchReset": "Réinitialiser",
   "settings.idleSwitchContinue": "Continuer",
   "settings.idleSwitchActionDesc": "Continuer (par défaut) : chaque chat garde son propre minuteur et se déclenche indépendamment, même ceux que vous ne regardez pas (livrés aux non-lus/notifications) ; Pause : le minuteur du chat quitté est gelé et reprend quand vous revenez ; Réinitialisation : gelé pendant l'absence, repart à zéro au retour.",
-  "settings.idleCooldown": "Refroidissement proactif (répondre pour continuer)",
-  "settings.idleCooldownDesc": "Lorsqu'activé, un message proactif déclenche un refroidissement : aucun autre message proactif ne sera envoyé tant que vous n'aurez pas répondu dans ce chat (refroidissement par chat). Désactivé, les déclenchements se font librement selon l'intervalle ou aléatoirement.",
+  "settings.idleCooldown": "Attends ta réponse avant le message suivant",
+  "settings.idleCooldownDesc": "Activé (par défaut) : une discussion qui vient de recevoir un message proactif attend que tu y répondes avant qu’un autre message proactif puisse être envoyé. Avec le minuteur classique, le compte à rebours se met en pause pendant l’attente (il repart après ta réponse au lieu de se déclencher immédiatement) ; avec la planification intelligente NHPP, le candidat reste en place jusqu’à ta réponse. S’applique aux deux mécanismes. Désactive pour envoyer librement selon l’intervalle ou un horaire aléatoire.",
   "settings.emoEventAdvanced": "Émotion & événements (avancé)",
   "settings.moodJudgeCooldown": "Refroidissement du jugement d'humeur",
   "settings.moodJudgeCooldownDesc": "Intervalle minimal (en secondes) entre deux jugements d'humeur par l'IA. 0 = jugement à chaque tour ; plus la valeur est élevée, moins d'appels sont effectués, mais les mises à jour d'humeur sont plus lentes.",
@@ -1442,5 +1442,7 @@
   "animCtl.modeAllOnHint": "Toutes les animations et transitions de l’interface sont jouées ; aucune limite par groupe ne s’applique.",
   "animCtl.modeAllOffHint": "Toutes les animations et transitions de l’interface sont désactivées, ce qui fluidifie les machines modestes.",
   "animCtl.modeCustomHint": "Seuls les groupes cochés ci-dessous jouent leurs animations ; les groupes non cochés restent totalement immobiles.",
-  "animCtl.groupTutorial": "Mise en évidence du tutoriel"
+  "animCtl.groupTutorial": "Mise en évidence du tutoriel",
+  "settings.proactiveAdaptive": "Fréquence adaptative",
+  "settings.proactiveAdaptiveDesc": "Activé, la fréquence d’envoi s’adapte à la rapidité de tes réponses : des réponses plus rapides l’augmentent, des réponses plus lentes (ou aucune) la réduisent (facteur 0,5 à 1,5). Désactive pour garder une fréquence fixe."
 }

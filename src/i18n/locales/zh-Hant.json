@@ -915,8 +915,8 @@
   "settings.idleSwitchReset": "重置計時",
   "settings.idleSwitchContinue": "繼續計時",
   "settings.idleSwitchActionDesc": "繼續計時（預設）：每個聊天獨立計時，你不在的聊天也會照常觸發（訊息進未讀/通知）；暫停：離開聊天後計時凍結，回來後繼續；重置：離開期間凍結，回來後重新計時。",
-  "settings.idleCooldown": "主動訊息冷卻（回覆後才繼續）",
-  "settings.idleCooldownDesc": "開啟後，角色發來主動訊息即進入冷卻：直到你在該聊天回覆，才會允許下一條主動訊息（按聊天獨立冷卻）。關閉則按間隔/隨機時間自由觸發。",
+  "settings.idleCooldown": "等你回覆才發下一則",
+  "settings.idleCooldownDesc": "開啟後（預設）：角色發來主動訊息即進入等待，直到你在該聊天回覆，才會允許下一則主動訊息。經典定時機制下等待期間計時暫停（回覆後重新計時，不會立刻補發）；NHPP 智慧排程下候選原地保留等回覆。對兩種機制都生效。關閉則依間隔／隨機時間自由觸發。",
   "settings.emoEventAdvanced": "情緒與事件（高級）",
   "settings.moodJudgeCooldown": "心情判定冷卻",
   "settings.moodJudgeCooldownDesc": "AI 判定心情的最小間隔（秒）。設 0 表示每輪都判定；值越大越省調用，但心情更新越慢。",
@@ -987,7 +987,7 @@
   "settings.proactiveDailyLimit": "每日上限（條）",
   "settings.proactiveFreshness": "新鮮度（分鐘）",
   "settings.proactiveNhppDesc": "NHPP 引擎會學習「你願意被聯繫的理想頻率」：你積極回應 → 頻率升高；長期忽略 → 頻率自動下降。使用者提到「開會/吃飯」等約定時，到點會收到一條定向回訪（不會與普通主動訊息重複）。資料儲存在獨立的 proactive-nhpp.json 中。",
-  "settings.proactiveLegacyHiddenHint": "目前為 NHPP 智慧調度：經典定時的「觸發時機 / 間隔 / 切換計時 / 冷卻 / 按聊天開關」等設定已停用（兩機制互斥），下方為 NHPP 專屬參數。",
+  "settings.proactiveLegacyHiddenHint": "目前為 NHPP 智慧排程：經典定時的「觸發時機／間隔／切換計時／按聊天開關」等設定已停用（兩機制互斥），下方為 NHPP 專屬參數。「等你回覆才發下一則」為兩種機制通用，不受此影響。",
   "settings.mcp": "MCP 伺服器（工具擴充）",
   "settings.mcpDesc": "接入 MCP（Model Context Protocol）伺服器，為支援工具呼叫的模型擴充外部能力（連網查詢、檔案操作、資料庫等）。工具僅在「能力檢測」確認支援工具呼叫的模型上生效，非串流請求自動執行多輪工具呼叫。",
   "settings.mcpRefresh": "重新整理狀態",
@@ -1442,5 +1442,7 @@
   "animCtl.modeAllOnHint": "所有介面動畫與過場全部播放，不受任何分組限制。",
   "animCtl.modeAllOffHint": "所有介面動畫與過場全部關閉，可提升低配電腦的流暢度。",
   "animCtl.modeCustomHint": "僅由下方勾選的分組播放動畫；未勾選的分組一律靜止不動。",
-  "animCtl.groupTutorial": "新手引導高亮"
+  "animCtl.groupTutorial": "新手引導高亮",
+  "settings.proactiveAdaptive": "頻率自適應",
+  "settings.proactiveAdaptiveDesc": "開啟後，發送頻率會依你的回覆間隔自動調整：回得越快越主動，回得越慢（或從不回覆）頻率自動下降（縮放範圍 0.5~1.5 倍）。關閉則維持固定頻率。"
 }

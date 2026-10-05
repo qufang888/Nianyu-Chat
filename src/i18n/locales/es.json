@@ -602,7 +602,7 @@
   "settings.proactiveDailyLimit": "Límite diario (mensajes)",
   "settings.proactiveFreshness": "Frescura (minutos)",
   "settings.proactiveNhppDesc": "El motor NHPP aprende «con qué frecuencia te gustaría ser contactado»: respondes activamente → aumenta la frecuencia; ignoras durante mucho tiempo → la frecuencia disminuye automáticamente. Cuando mencionas planes como una reunión o una cena, recibes un seguimiento dirigido en el momento adecuado (no se duplica con los mensajes genéricos). Los datos se guardan en el archivo separado proactive-nhpp.json.",
-  "settings.proactiveLegacyHiddenHint": "Está activo el programación inteligente NHPP: las opciones del temporizador clásico (modo de sincronización / intervalo / comportamiento al cambiar de chat / enfriamiento / activación por chat) están desactivadas (los dos motores son mutuamente excluyentes). Las opciones específicas de NHPP aparecen abajo.",
+  "settings.proactiveLegacyHiddenHint": "La programación inteligente NHPP está activa: las opciones del temporizador clásico (modo de tiempo / intervalo / comportamiento al cambiar de chat / interruptores por chat) están desactivadas (los dos mecanismos son excluyentes). Las opciones específicas de NHPP están abajo. «Espera tu respuesta antes del siguiente mensaje» se aplica a ambos mecanismos y no se ve afectado.",
   "settings.mcp": "Servidores MCP (extensiones de herramientas)",
   "settings.mcpDesc": "Conéctate a servidores MCP (Model Context Protocol) para dotar a los modelos que admiten llamadas a herramientas de capacidades externas (búsqueda web, acceso a archivos, bases de datos, etc.). Las herramientas solo funcionan en modelos confirmados como compatibles con llamadas a herramientas; las solicitudes no secuenciales ejecutan automáticamente varias rondas de llamadas a herramientas.",
   "settings.mcpRefresh": "Actualizar estado",
@@ -1130,8 +1130,8 @@
   "settings.idleSwitchReset": "Reiniciar",
   "settings.idleSwitchContinue": "Continuar",
   "settings.idleSwitchActionDesc": "Continuar (predeterminado): cada chat mantiene su propio temporizador y se dispara independientemente, incluso los que no estás viendo (se entregan a no leídos/notificaciones); Pausar: el temporizador del chat abandonado se congela y se reanuda al regresar; Reiniciar: permanece congelado mientras estás ausente y se reinicia al regresar.",
-  "settings.idleCooldown": "Enfriamiento proactivo (responder para continuar)",
-  "settings.idleCooldownDesc": "Cuando está activado, al recibir un mensaje proactivo el chat entra en enfriamiento: no se enviará otro mensaje proactivo hasta que respondas en ese chat (el enfriamiento es por chat). Desactivarlo permite que se dispare libremente por intervalo/tiempo aleatorio.",
+  "settings.idleCooldown": "Espera tu respuesta antes del siguiente mensaje",
+  "settings.idleCooldownDesc": "Cuando está activado (predeterminado): un chat que acaba de recibir un mensaje proactivo espera a que respondas allí antes de poder enviar otro. Con el temporizador clásico la cuenta atrás se pausa mientras espera (se reinicia tras tu respuesta en lugar de dispararse de inmediato); con la programación inteligente NHPP el candidato permanece en su sitio hasta que respondas. Se aplica a ambos mecanismos. Desactívalo para enviar libremente por intervalo/hora aleatoria.",
   "settings.emoEventAdvanced": "Emoción & eventos (avanzado)",
   "settings.moodJudgeCooldown": "Enfriamiento de juicio de ánimo",
   "settings.moodJudgeCooldownDesc": "Intervalo mínimo (segundos) entre juicios de ánimo de la IA. 0 = juzgar cada turno; un valor mayor reduce las llamadas pero ralentiza la actualización del ánimo.",
@@ -1442,5 +1442,7 @@
   "animCtl.modeAllOnHint": "Se reproducen todas las animaciones y transiciones de la interfaz; no se aplica ningún límite por grupo.",
   "animCtl.modeAllOffHint": "Todas las animaciones y transiciones de la interfaz están desactivadas, lo que mejora la fluidez en equipos modestos.",
   "animCtl.modeCustomHint": "Solo los grupos que active reproducen sus animaciones; los grupos no activados quedan completamente quietos.",
-  "animCtl.groupTutorial": "Resaltado del tutorial"
+  "animCtl.groupTutorial": "Resaltado del tutorial",
+  "settings.proactiveAdaptive": "Frecuencia adaptativa",
+  "settings.proactiveAdaptiveDesc": "Cuando está activado, la frecuencia de envío se ajusta a la rapidez de tus respuestas: respuestas más rápidas la aumentan, respuestas más lentas (o ninguna) la reducen (escala de 0,5 a 1,5 veces). Desactívalo para mantener una frecuencia fija."
 }

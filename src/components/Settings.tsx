@@ -2046,6 +2046,21 @@ export const Settings: React.FC<{
             </div>
           </div>
 
+          {/* 等回复才发下一条（两种机制通用，v2.3.92：从 legacy 专属块提到总开关旁） */}
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={draft.idleCooldownUntilReply !== false}
+              onChange={(e) => {
+                patch({ idleCooldownUntilReply: e.target.checked });
+                api.saveSettings({ idleCooldownUntilReply: e.target.checked });
+              }}
+            />
+            <div>
+              <div style={{ fontSize: 13 }}>{t('settings.idleCooldown')}<Hint text={t('settings.idleCooldownDesc')} /></div>
+            </div>
+          </div>
+
           {/* ===== ③ 经典定时机制参数（仅 legacy 机制下生效/显示） ===== */}
           {(draft.proactiveEngine ?? 'legacy') === 'nhpp' ? (
             <div style={{ marginTop: 14, fontSize: 12, color: 'var(--color-text-secondary)' }}>
@@ -2179,21 +2194,6 @@ export const Settings: React.FC<{
             </div>
           </div>
 
-          {/* 主动消息冷却：回复上一条主动消息后才发下一条 */}
-          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <input
-              type="checkbox"
-              checked={draft.idleCooldownUntilReply !== false}
-              onChange={(e) => {
-                patch({ idleCooldownUntilReply: e.target.checked });
-                api.saveSettings({ idleCooldownUntilReply: e.target.checked });
-              }}
-            />
-            <div>
-              <div style={{ fontSize: 13 }}>{t('settings.idleCooldown')}<Hint text={t('settings.idleCooldownDesc')} /></div>
-            </div>
-          </div>
-
           {/* 主动消息记忆开关 */}
           <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
             <input
@@ -2249,6 +2249,20 @@ export const Settings: React.FC<{
                   }}
                   style={{ width: 110 }}
                 />
+              </div>
+              {/* 频率自适应（v2.3.92）：按用户回复间隔 EMA 动态调整发送强度 */}
+              <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={draft.proactiveAdaptiveEnabled !== false}
+                  onChange={(e) => {
+                    patch({ proactiveAdaptiveEnabled: e.target.checked });
+                    api.saveSettings({ proactiveAdaptiveEnabled: e.target.checked });
+                  }}
+                />
+                <div>
+                  <div style={{ fontSize: 13 }}>{t('settings.proactiveAdaptive')}<Hint text={t('settings.proactiveAdaptiveDesc')} /></div>
+                </div>
               </div>
               {/* 每日硬上限 + 新鲜度 */}
               <div style={{ display: 'flex', gap: 16, marginTop: 12, flexWrap: 'wrap' }}>

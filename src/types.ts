@@ -471,6 +471,7 @@ export interface AppSettings {
   proactiveDnd?: { enabled?: boolean; start?: string; end?: string }; // 勿扰窗口（'HH:mm'，支持跨午夜）
   proactiveDailyLimit?: number; // NHPP：每聊天每日主动消息硬上限（默认 5）
   proactiveFreshnessMin?: number; // NHPP：距上一条消息不足 N 分钟不触发（默认 10）
+  proactiveAdaptiveEnabled?: boolean; // v2.3.92 NHPP：频率自适应开关（默认 true）。开启时发送强度按「用户回复间隔 EMA」动态缩放（回得快→提频/回得慢→降频，钳制 0.5~1.5）；关闭则回到固定频率（仅保留时段/贝叶斯/疲劳三维）
   // ===== MCP 服务器（v2.3.17 新增）=====
   mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>;
   chatBackgrounds: Record<string, string>; // key: "single:roleId" or "group:groupId"
