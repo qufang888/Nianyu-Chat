@@ -481,10 +481,17 @@ export interface AppSettings {
   bubbleOpacity: number; // 聊天气泡透明度（50~100，100=完全不透明）
   voice: VoiceSettings;
   miniWindow: MiniWindowSettings;
-  enableAnimations: boolean; // 全局 UI 动效总开关（低配电脑可关闭）
-  // ===== 高级动画控制（v2.3.90）=====
-  // 总控/单控**互斥**：master=总开关统一管全部动画（enableAnimations）；single=总控被忽略，
-  // 每个动画按 animGroups 里的自己的开关播放。拨动任意单项开关进入单控，再拨总控开关回总控。
+  enableAnimations: boolean; // 【v2.3.92 起为兼容字段】旧的总开关，保留仅为向后兼容读；新逻辑请用 animMode
+  // ===== 高级动画控制 =====
+  // v2.3.92 起改为**三档互斥**（取代 v2.3.90 的 master/single 二元模式）：
+  //   - 'all-on'  （全部开启，默认）：所有动画一律播放；
+  //   - 'all-off' （全部关闭）：所有动画一律停播；
+  //   - 'custom'  （自定义）：按 animGroups 里的分组开关逐个决定（设置页仅此档显示分组开关）。
+  // 向后兼容：老 settings 里没有 animMode 时，读档位按 animControlMode==='single' → custom、
+  // 否则 enableAnimations===false → all-off、其余 → all-on 映射（见 src/utils/animControl.ts）。
+  animMode?: 'all-on' | 'all-off' | 'custom';
+  // 【以下两个为兼容字段，v2.3.92 起不再作为档位真源，仅在写入时同步以兼容旧版回滚】
+  // animControlMode：'master'=全开/'single'=自定义；'master' 另可对应全关（配合 enableAnimations=false）
   animControlMode?: 'master' | 'single';
   animGroups?: Record<string, boolean>; // 分组 id → 是否开启动效（缺 key 视为开）；分组表见 src/utils/animControl.ts
   // ===== 软件更新（v2.3.45）=====
@@ -834,8 +841,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   webSearchFetchCount: 5,
   webSearchFetchTimeout: 8000,
   searchApiKey: '',
+  // ===== 高级动画控制（v2.3.92）：三档制，默认「全部开启」+ 全部分组开启 =====
+  animMode: 'all-on',
   enableAnimations: true,
-  // ===== 高级动画控制（v2.3.90）：默认总控模式 + 全部分组开启 =====
   animControlMode: 'master',
   animGroups: {
     panel: true,
@@ -851,6 +859,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     banner: true,
     theme: true,
     scrollbar: true,
+    tutorial: true,
   },
   autoCheckUpdate: true,
   autoDownloadUpdate: false,

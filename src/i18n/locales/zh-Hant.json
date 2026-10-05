@@ -480,11 +480,7 @@
   "settings.animationsOn": "開啟動效（線性動畫等）",
   "settings.animationsDesc": "關閉後可提升低配電腦的流暢度，所有過渡與動畫將被禁用",
   "animCtl.title": "進階動畫控制",
-  "animCtl.masterHint": "目前為「總控模式」：上方的總開關統一管理所有動畫，下方的分項開關暫不生效。撥動任一分項開關即可切換為「單控模式」。",
-  "animCtl.singleHint": "目前為「單控模式」：每個動畫由自己的分項開關決定，上方的總開關已被接管、不再生效。再次撥動上方總開關即可回到「總控模式」。",
-  "animCtl.masterTakenOver": "已由單控接管（目前不生效）",
-  "animCtl.backToMaster": "改回總控統一控制",
-  "animCtl.streamNote": "說明：AI 回覆的串流打字機動畫恆開，不受總控與單控影響（否則文字會整段閃現，看不出正在輸出）。",
+  "animCtl.streamNote": "說明：AI 回覆的串流打字機動畫在任何檔位下都恆開（否則文字會整段閃現，看不出正在輸出）。",
   "animCtl.groupPanel": "面板展開／收合",
   "animCtl.groupCtxmenu": "右鍵選單與下拉選單",
   "animCtl.groupToast": "輕提示與更新橫幅",
@@ -1439,5 +1435,12 @@
   "tutorial.doneTitle": "完成！",
   "tutorial.doneBody": "你已經建立好第一張人物卡並開啟了第一個聊天，去玩吧。",
   "tutorial.rerun": "重新執行新手引導",
-  "tutorial.rerunDone": "已重設新手引導（若還沒有人物卡，下次啟動時會再次出現）"
+  "tutorial.rerunDone": "已重設新手引導（若還沒有人物卡，下次啟動時會再次出現）",
+  "animCtl.modeAllOn": "全部開啟",
+  "animCtl.modeAllOff": "全部關閉",
+  "animCtl.modeCustom": "自訂",
+  "animCtl.modeAllOnHint": "所有介面動畫與過場全部播放，不受任何分組限制。",
+  "animCtl.modeAllOffHint": "所有介面動畫與過場全部關閉，可提升低配電腦的流暢度。",
+  "animCtl.modeCustomHint": "僅由下方勾選的分組播放動畫；未勾選的分組一律靜止不動。",
+  "animCtl.groupTutorial": "新手引導高亮"
 }

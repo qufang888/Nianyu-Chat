@@ -157,8 +157,9 @@ function baseCSS(): string {
   [data-theme='glass'] .fb-row:hover{ background:rgba(255,255,255,0.10); }
   [data-theme='glass'] .fb-panel-h .cnt{ color:#cfd2ff; background:rgba(124,131,255,0.32); }
 
-  /* 动效开关（enableAnimations=false 时根元素挂 .anim-off）：全局禁用所有 CSS 动画/过渡，
-     与主界面 index.css 的 .anim-off 规则同语义（覆盖 .fb-panel/.fb-ctx/.fb-ball 等全部动画） */
+  /* 动效开关（animMode='all-off' 时根元素挂 .anim-off）：全局禁用所有 CSS 动画/过渡，
+     与主界面 index.css 的 .anim-off 规则同语义（覆盖 .fb-panel/.fb-ctx/.fb-ball 等全部动画）。
+     'custom' 档不挂 .anim-off，改由 data-anim-off 逐组门禁（见 src/utils/animControl.ts）。 */
   .anim-off, .anim-off *, .anim-off *::before, .anim-off *::after {
     animation: none !important; transition: none !important;
   }

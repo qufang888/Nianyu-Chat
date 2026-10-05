@@ -591,11 +591,7 @@
   "settings.animationsOn": "Animationen aktivieren (lineare Übergänge usw.)",
   "settings.animationsDesc": "Deaktivieren, um die Flüssigkeit auf schwachen Geräten zu verbessern; alle Übergänge und Animationen werden deaktiviert.",
   "animCtl.title": "Erweiterte Animationssteuerung",
-  "animCtl.masterHint": "Aktuell „Gesamtsteuerung“: Der Schalter oben steuert alle Animationen gleichzeitig, die einzelnen Schalter darunter haben keine Wirkung. Schalten Sie einen Einzelschalter um, um zur „Einzelsteuerung“ zu wechseln.",
-  "animCtl.singleHint": "Aktuell „Einzelsteuerung“: Jede Animation folgt ihrem eigenen Schalter, der Hauptschalter oben ist übernommen und gilt nicht mehr. Schalten Sie den Hauptschalter oben erneut um, um zur „Gesamtsteuerung“ zurückzukehren.",
-  "animCtl.masterTakenOver": "Von der Einzelsteuerung übernommen (derzeit ohne Wirkung)",
-  "animCtl.backToMaster": "Zurück zur Gesamtsteuerung",
-  "animCtl.streamNote": "Hinweis: Die Schreibmaschinen-Animation der KI-Antworten ist immer aktiv und wird von weder Gesamt- noch Einzelsteuerung beeinflusst (sonst erscheint Text blockweise und man erkennt nicht, dass geschrieben wird).",
+  "animCtl.streamNote": "Hinweis: Die Schreibmaschinen-Animation der KI-Antworten bleibt in jedem Modus aktiv (sonst erscheint Text blockweise und man erkennt nicht, dass geschrieben wird).",
   "animCtl.groupPanel": "Bereiche ein-/ausklappen",
   "animCtl.groupCtxmenu": "Kontextmenüs & Dropdowns",
   "animCtl.groupToast": "Hinweise & Update-Banner",
@@ -1439,5 +1435,12 @@
   "tutorial.doneTitle": "Fertig!",
   "tutorial.doneBody": "Du hast deine erste Charakterkarte angelegt und deinen ersten Chat gestartet. Viel Spaß!",
   "tutorial.rerun": "Tutorial erneut ausführen",
-  "tutorial.rerunDone": "Tutorial zurückgesetzt (es erscheint beim nächsten Start erneut, wenn du noch keine Charakterkarte hast)"
+  "tutorial.rerunDone": "Tutorial zurückgesetzt (es erscheint beim nächsten Start erneut, wenn du noch keine Charakterkarte hast)",
+  "animCtl.modeAllOn": "Alle an",
+  "animCtl.modeAllOff": "Alle aus",
+  "animCtl.modeCustom": "Benutzerdefiniert",
+  "animCtl.modeAllOnHint": "Sämtliche Oberflächenanimationen und Übergänge werden abgespielt; es gelten keine Gruppengrenzen.",
+  "animCtl.modeAllOffHint": "Sämtliche Oberflächenanimationen und Übergänge sind deaktiviert, was auf schwächeren Geräten für mehr Flüssigkeit sorgt.",
+  "animCtl.modeCustomHint": "Nur die unten angehakten Gruppen spielen ihre Animationen ab; nicht angehakte Gruppen bleiben völlig unbewegt.",
+  "animCtl.groupTutorial": "Einrichtungs-Hervorhebung"
 }

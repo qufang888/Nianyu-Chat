@@ -15,10 +15,10 @@ export const RETRACT_MS = 160;
  * 等于瞬间跳到隐藏态；而 `animation` 的基态是显示态，语义相反。）
  *
  * 两种禁用来源都要认：
- * 1. **总控关闭**：`ThemeContext` 在 `settings.enableAnimations === false`（总控模式）
- *    给 `document.documentElement` 挂 `.anim-off`，其 `.anim-off * { animation:none!important }`
+ * 1. **「全部关闭」档**：`ThemeContext` 走 `applyAnimControl`，在 `animMode === 'all-off'`
+ *    时给 `document.documentElement` 挂 `.anim-off`，其 `.anim-off * { animation:none!important }`
  *    会把缩入关键帧整个抹掉。
- * 2. **单控模式关闭了「右键菜单与下拉」分组**：此时**不挂** `.anim-off`（单控刻意不挂，
+ * 2. **「自定义」档关闭了「右键菜单与下拉」分组**：此时**不挂** `.anim-off`（自定义档刻意不挂，
  *    以免误杀流式豁免与其它仍开启的分组），而是由 `applyAnimControl` 写入
  *    `data-anim-off="<被关分组…>"`，并注入 `html[data-anim-off~="ctxmenu"] <选择器>
  *    { animation:none!important }` 门禁抹掉本组缩入动画。`.anim-off` 不存在，

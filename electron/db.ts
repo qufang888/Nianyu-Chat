@@ -895,6 +895,20 @@ class DataManager {
         }));
         // 老用户（已存在 settings.json 但无 firstRunDone 字段）视为已完成首启，不再弹出向导
         if (raw.firstRunDone === undefined) merged.firstRunDone = true;
+        // v2.3.92：动画控制由「总控/单控」二元改为「全开/全关/自定义」三档。
+        // 老配置没有 animMode 字段，按旧语义单向映射（不覆盖已存在的合法 animMode）：
+        //   animControlMode==='single'（当年拨过分项开关）→ 'custom'：保留用户逐项调过的结果；
+        //   否则 enableAnimations===false              → 'all-off'；
+        //   其余（含老配置 enableAnimations=true）    → 'all-on'。
+        // 只在读盘时补齐，不主动回写 settings.json（避免老用户文件被无谓改动）。
+        if (raw.animMode !== 'all-on' && raw.animMode !== 'all-off' && raw.animMode !== 'custom') {
+          merged.animMode =
+            raw.animControlMode === 'single'
+              ? 'custom'
+              : raw.enableAnimations === false
+                ? 'all-off'
+                : 'all-on';
+        }
         return merged;
       }
     } catch (e) {

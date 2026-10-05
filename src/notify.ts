@@ -132,7 +132,7 @@ function mount(): void {
       html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden;
         font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;}
       #root{width:100%;height:100%;}
-      /* 动效开关（enableAnimations=false 时根元素挂 .anim-off）：禁用卡片滑入/滑出等全部 CSS 动画/过渡 */
+      /* 动效开关（animMode='all-off' 时根元素挂 .anim-off）：禁用卡片滑入/滑出等全部 CSS 动画/过渡 */
       .anim-off, .anim-off *, .anim-off *::before, .anim-off *::after {
         animation: none !important; transition: none !important;
       }

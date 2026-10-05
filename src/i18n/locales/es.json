@@ -627,11 +627,7 @@
   "settings.animationsOn": "Activar animaciones (transiciones lineales, etc.)",
   "settings.animationsDesc": "Desactivar para mejorar la fluidez en dispositivos de bajo rendimiento; todas las transiciones y animaciones se desactivarán.",
   "animCtl.title": "Control avanzado de animaciones",
-  "animCtl.masterHint": "Actualmente en modo «Control maestro»: el interruptor de arriba controla todas las animaciones a la vez y los interruptores individuales de abajo no tienen efecto. Active cualquier interruptor individual para pasar al modo «Control individual».",
-  "animCtl.singleHint": "Actualmente en modo «Control individual»: cada animación sigue su propio interruptor y el interruptor maestro de arriba ha sido asumido, por lo que ya no se aplica. Vuelva a activar el interruptor maestro de arriba para regresar al modo «Control maestro».",
-  "animCtl.masterTakenOver": "Asumido por el control individual (ahora no tiene efecto)",
-  "animCtl.backToMaster": "Volver al control maestro",
-  "animCtl.streamNote": "Nota: la animación de máquina de escribir de las respuestas de la IA está siempre activa y no le afecta ni el control maestro ni el individual (si no, el texto aparecería por bloques y no se vería que se está generando).",
+  "animCtl.streamNote": "Nota: la animación de máquina de escribir de las respuestas de la IA permanece activa en todos los modos (si no, el texto aparecería por bloques y no se vería que se está generando).",
   "animCtl.groupPanel": "Expandir / contraer paneles",
   "animCtl.groupCtxmenu": "Menús contextuales y desplegables",
   "animCtl.groupToast": "Avisos y banner de actualización",
@@ -1439,5 +1435,12 @@
   "tutorial.doneTitle": "¡Listo!",
   "tutorial.doneBody": "Ya has creado tu primera ficha de personaje y habeado tu primer chat. ¡Diviértete!",
   "tutorial.rerun": "Repetir el tutorial",
-  "tutorial.rerunDone": "Tutorial reiniciado (volverá a aparecer al iniciar si aún no tienes fichas de personaje)"
+  "tutorial.rerunDone": "Tutorial reiniciado (volverá a aparecer al iniciar si aún no tienes fichas de personaje)",
+  "animCtl.modeAllOn": "Todo activado",
+  "animCtl.modeAllOff": "Todo desactivado",
+  "animCtl.modeCustom": "Personalizado",
+  "animCtl.modeAllOnHint": "Se reproducen todas las animaciones y transiciones de la interfaz; no se aplica ningún límite por grupo.",
+  "animCtl.modeAllOffHint": "Todas las animaciones y transiciones de la interfaz están desactivadas, lo que mejora la fluidez en equipos modestos.",
+  "animCtl.modeCustomHint": "Solo los grupos que active reproducen sus animaciones; los grupos no activados quedan completamente quietos.",
+  "animCtl.groupTutorial": "Resaltado del tutorial"
 }

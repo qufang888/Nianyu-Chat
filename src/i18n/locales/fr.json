@@ -592,11 +592,7 @@
   "settings.animationsOn": "Activer les animations (transitions linéaires, etc.)",
   "settings.animationsDesc": "Désactiver pour améliorer la fluidité sur les appareils faibles ; toutes les transitions et animations seront désactivées",
   "animCtl.title": "Contrôle avancé des animations",
-  "animCtl.masterHint": "Mode « Contrôle global » : l’interrupteur ci-dessus régit toutes les animations à la fois et les interrupteurs individuels ci-dessous sont sans effet. Activez n’importe quel interrupteur individuel pour passer en mode « Contrôle individuel ».",
-  "animCtl.singleHint": "Mode « Contrôle individuel » : chaque animation suit son propre interrupteur et l’interrupteur global ci-dessus a été repris, il ne s’applique donc plus. Actionnez de nouveau l’interrupteur global ci-dessus pour revenir au mode « Contrôle global ».",
-  "animCtl.masterTakenOver": "Repris par le contrôle individuel (sans effet actuellement)",
-  "animCtl.backToMaster": "Revenir au contrôle global",
-  "animCtl.streamNote": "Remarque : l’animation de machine à écrire des réponses de l’IA est toujours active et n’est affectée ni par le contrôle global ni par le contrôle individuel (sinon le texte apparaîtrait par blocs et on ne verrait plus que la génération est en cours).",
+  "animCtl.streamNote": "Remarque : l’animation de machine à écrire des réponses de l’IA reste active dans tous les modes (sinon le texte apparaîtrait par blocs et on ne verrait plus que la génération est en cours).",
   "animCtl.groupPanel": "Dépliage / repli des panneaux",
   "animCtl.groupCtxmenu": "Menus contextuels et listes déroulantes",
   "animCtl.groupToast": "Notifications et bannière de mise à jour",
@@ -1439,5 +1435,12 @@
   "tutorial.doneTitle": "C’est prêt !",
   "tutorial.doneBody": "Vous avez créé votre première fiche de personnage et démarré votre première discussion. Amusez-vous !",
   "tutorial.rerun": "Revoir le tutoriel",
-  "tutorial.rerunDone": "Tutoriel réinitialisé (il réapparaîtra au prochain démarrage si vous n’avez toujours pas de fiche)"
+  "tutorial.rerunDone": "Tutoriel réinitialisé (il réapparaîtra au prochain démarrage si vous n’avez toujours pas de fiche)",
+  "animCtl.modeAllOn": "Tout activé",
+  "animCtl.modeAllOff": "Tout désactivé",
+  "animCtl.modeCustom": "Personnalisé",
+  "animCtl.modeAllOnHint": "Toutes les animations et transitions de l’interface sont jouées ; aucune limite par groupe ne s’applique.",
+  "animCtl.modeAllOffHint": "Toutes les animations et transitions de l’interface sont désactivées, ce qui fluidifie les machines modestes.",
+  "animCtl.modeCustomHint": "Seuls les groupes cochés ci-dessous jouent leurs animations ; les groupes non cochés restent totalement immobiles.",
+  "animCtl.groupTutorial": "Mise en évidence du tutoriel"
 }

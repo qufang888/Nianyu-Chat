@@ -1,22 +1,27 @@
 /**
- * 高级动画控制 —— 单一真源（v2.3.90）
+ * 高级动画控制 —— 单一真源（v2.3.92 三档制）
  * ============================================================================
- * 用户需求（互斥二选一，控制「谁来决定动画开关」）：
- *   - 总控模式（master，默认）：唯一的总开关 `settings.enableAnimations` 一次性管全部动画；
- *   - 单控模式（single）：只要用户拨动了**任意一个**单项动画开关就进入本模式，此后
- *     **总控被忽略**，每个动画按自己的开关播放/停止；再次拨动总控开关即回到总控模式。
+ * 用户需求（**三档互斥**，取代 v2.3.90 的「总控/单控」二元模式 + v2.3.91 的勾选框）：
+ *   - `all-on`  （全部开启，默认）：所有动画一律播放；
+ *   - `all-off` （全部关闭）：所有动画一律停播；
+ *   - `custom`  （自定义）：由下面 13+1 个分组各自决定，只有勾选上的分组播放。
+ *
+ * 设置页只在 `custom` 档渲染分组开关；`all-on` / `all-off` 档把整块高级设置折叠隐藏，
+ * 因为那两档下分组开关本来也不起作用（展示一组永远可点却无效的开关＝骗人的 UI）。
  *
  * 与既有机制的关系（不要破坏）：
- *   - `.anim-off`（index.css:1861）是总控的全局 kill，语义完全保留；
- *   - 流式/打字机动画（`.stream-char` / `.pseudo-char`）**豁免总控**，本模块
- *     「刻意不把流式动画归入任何分组」，故任何模式下都不会被重新关掉。
+ *   - `.anim-off`（index.css:1861）是「全关档」的全局 kill，语义完全保留；
+ *   - 流式/打字机动画（`.stream-char` / `.stream-char.stall` / `.pseudo-char`）
+ *     **任何档位都豁免**，本模块「刻意不把流式动画归入任何分组」，故三档都关不掉它。
  *
- * 门控实现（两条腿并行，缺一不可）：
- *   1. **类名**（总控）：`html.anim-off` —— 只在「总控模式且总开关关闭」时挂。
- *      单控模式下**永不挂**，否则会把仍然开启的分组动画一起杀掉，也会误伤流式豁免。
- *   2. **data 属性 + 生成的 <style>**（单控）：`html[data-anim-off~="<id>"]`，
- *      配合每个 document 一次性注入的规则 `… { animation:none!important; transition:none!important }`。
- *   3. **内联动画**（transition / rAF 补间，CSS 规则管不到）：改读 `isGroupEnabled()`。
+ * 门控实现（按档位二选一，绝不同时生效 —— 同时生效会误伤流式豁免）：
+ *   1. `all-off` → 挂类名 `html.anim-off`（全局 kill，含各 document 自带的 kill 规则），
+ *      **不设** `data-anim-off`；
+ *   2. `custom`  → **绝不挂** `.anim-off`（否则会把仍开启的分组动画一起杀掉，也会误伤
+ *      流式豁免），改设 `html[data-anim-off~="<id>"]`，配合每个 document 一次性注入的
+ *      规则 `… { animation:none!important; transition:none!important }`；
+ *   3. `all-on`  → 既不挂 `.anim-off` 也不设 `data-anim-off`（两条都不需要）。
+ *   4. **内联动画**（transition / rAF 补间，CSS 规则管不到）：一律改读 `isGroupEnabled()`。
  *
  * 每个 document（主窗口 / 小窗 / 悬浮球 / 通知窗）各自独立注入、各自引用自己的选择器，
  * 因此同一个 `ANIM_GROUPS` 定义能同时服务 4 个文档而不必复制大段选择器列表。
@@ -26,8 +31,15 @@ import type { AppSettings } from '../types';
 /** 文档种类：决定某分组在该文档里用哪套选择器 */
 export type AnimDocKind = 'main' | 'floating' | 'notify';
 
-/** 控制模式 */
-export type AnimControlMode = 'master' | 'single';
+/**
+ * 动画控制档位（v2.3.92）。
+ * 旧的 `enableAnimations:boolean` + `animControlMode:'master'|'single'` 仍留在 settings 里
+ * 作为兼容字段（读档位时按 `getAnimMode()` 的规则映射），但**新逻辑一律只看 `animMode`**。
+ */
+export type AnimMode = 'all-on' | 'all-off' | 'custom';
+
+/** 三档的合法取值（设置页渲染顺序即此数组顺序） */
+export const ANIM_MODES: AnimMode[] = ['all-on', 'all-off', 'custom'];
 
 /** 分组定义：id 既是设置里的 key，也是 data-anim-off 里的 token */
 export interface AnimGroupDef {
@@ -45,9 +57,11 @@ export interface AnimGroupDef {
 }
 
 /**
- * 分组分类法（唯一权威列表）。
+ * 分组分类法（唯一权威列表，v2.3.92 起共 14 组）。
  *
  * 注意：**流式/打字机动画不在此列表中** —— 它按设计恒开（豁免总控，且无单项开关）。
+ * 因此任何分组的选择器都**不得**写成 `.event-modal *` 这类通配：一旦某个容器将来新增了
+ * `.stream-char` / `.pseudo-char`，通配会把它静默关掉，破坏「流式恒开」承诺。
  */
 export const ANIM_GROUPS: AnimGroupDef[] = [
   {
@@ -105,7 +119,9 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.replying-bar .dot',
       '.tool-btn.recording',
       '.mini-btn.recording',
-      '.event-countdown.urgent',
+      // v2.3.92：整类登记（原先只登记了 .urgent，导致非 urgent 态的普通倒计时关不掉）。
+      // 该类同时覆盖 .event-countdown.urgent 的脉冲与常态的 color 过渡。
+      '.event-countdown',
       '.affinity-pop',
     ],
   },
@@ -123,9 +139,19 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
   {
     id: 'floatball',
     labelKey: 'animCtl.groupFloatball',
-    // 悬浮球是独立文档（floating-ball.html），类名自成一套
+    // 悬浮球是独立文档（floating-ball.ts 注入样式），类名自成一套
     selectors: [],
-    docSelectors: { floating: ['.fb-panel', '.fb-ctx', '.fb-row'] },
+    docSelectors: {
+      floating: [
+        '.fb-panel',
+        '.fb-ctx',
+        '.fb-row',
+        // v2.3.92 补齐：球体拖拽缩放过渡 / 生视频环形进度过渡 / 右键菜单项
+        '.fb-ball',
+        '.fb-prog .fg',
+        '.fb-ctx-item',
+      ],
+    },
   },
   {
     id: 'splash',
@@ -141,7 +167,10 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
   {
     id: 'banner',
     labelKey: 'animCtl.groupBanner',
-    selectors: ['.node-banner'],
+    // v2.3.92 修正错位：真正动的是**子元素** `.node-banner-card`（父 `.node-banner` 只是定位容器，
+    // 三条 phase 规则 `.node-banner.phase-* .node-banner-card` 都挂在子元素上）。
+    // 登记父元素是无效的 —— 门禁规则会写 `… .node-banner { animation:none }`，而父元素本来就没有动画。
+    selectors: ['.node-banner-card'],
   },
   {
     id: 'theme',
@@ -172,16 +201,27 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.srb-item',
       '.btn-primary:disabled',
       '.idle-toggle',
+      // v2.3.92 补齐：开关滑块本体与其滑块圆点（伪元素）——原先只登记了外层 .idle-toggle，
+      // 拨动时真正做 transform 位移的是 ::after，父级 kill 管不到它。
+      '.idle-toggle .idle-toggle-knob',
+      '.idle-toggle .idle-toggle-knob::after',
       '.model-tag-click',
       '.hint-icon',
       '.settings-nav-item',
       '.settings-search-input',
       '.settings-suggest-item',
-      // 事件弹窗：只列真正带过渡的具体类，禁用通配 `*`（否则该弹窗内将来出现的
+      // v2.3.92 补齐：提示气泡 / 设置跳转高亮 / 模型卡高亮 / 拖拽与快速导入遮罩
+      '.hint-tip',
+      '.setting-flash',
+      '.model-flash',
+      '.drop-hint',
+      '.quick-import-overlay',
+      // 事件弹窗：只列真正带过渡/动画的具体类。**禁用通配 `*`**（否则该弹窗内将来出现的
       // .stream-char/.pseudo-char 会被 theme 组静默关掉，破坏「流式恒开」承诺）。
+      '.event-overlay',
+      '.event-modal',
       '.event-option',
       '.event-close-top',
-      '.event-countdown:not(.urgent)',
     ],
   },
   {
@@ -189,6 +229,13 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
     labelKey: 'animCtl.groupScrollbar',
     // 自定义滚动条透明度过渡是内联 style → 由 isGroupEnabled 门控
     selectors: [],
+  },
+  {
+    id: 'tutorial',
+    labelKey: 'animCtl.groupTutorial',
+    // v2.3.92 新建组：新手引导高亮环是**无限循环**动画，且新用户首启即默认显示，
+    // 用户感知最强，值得独立成组单独关掉。
+    selectors: ['.tutorial-ring', '.tutorial-card', '.tutorial-card-center'],
   },
 ];
 
@@ -206,16 +253,31 @@ export const DEFAULT_ANIM_GROUPS: Record<string, boolean> = ANIM_GROUPS.reduce(
 
 /** 只需要「动效相关字段」的部分设置（避免与 AppSettings 形成运行时循环依赖） */
 export type AnimSettingsLike = Pick<AppSettings, 'enableAnimations'> &
-  Partial<Pick<AppSettings, 'animControlMode' | 'animGroups'>>;
+  Partial<Pick<AppSettings, 'animMode' | 'animControlMode' | 'animGroups'>>;
 
-/** 当前控制模式：读不到 / 值非法一律回落总控模式 */
-export function getAnimControlMode(settings: AnimSettingsLike | null | undefined): AnimControlMode {
-  return settings?.animControlMode === 'single' ? 'single' : 'master';
+/** 值是否为合法的档位（用于挡住脏数据） */
+function isAnimMode(v: unknown): v is AnimMode {
+  return v === 'all-on' || v === 'all-off' || v === 'custom';
 }
 
-/** 是否处于单控模式（总控被忽略） */
-export function isSingleControl(settings: AnimSettingsLike | null | undefined): boolean {
-  return getAnimControlMode(settings) === 'single';
+/**
+ * 当前档位 —— **全模块唯一的档位读入口**。
+ *
+ * 向后兼容（老 settings 里没有 `animMode`，只有 v2.3.90/91 的两个字段）：
+ *   1. `animControlMode === 'single'` → `'custom'`（当年拨过分项开关 = 用户明确要自定义）；
+ *   2. 否则 `enableAnimations === false` → `'all-off'`；
+ *   3. 其余（含 settings 为 null / 字段非法）→ `'all-on'`（与 v2.3.89 及以前行为一致）。
+ */
+export function getAnimMode(settings: AnimSettingsLike | null | undefined): AnimMode {
+  if (settings && isAnimMode(settings.animMode)) return settings.animMode;
+  if (settings?.animControlMode === 'single') return 'custom';
+  if (settings && settings.enableAnimations === false) return 'all-off';
+  return 'all-on';
+}
+
+/** 是否处于自定义档（只有这一档下分组开关才有意义） */
+export function isCustomAnimMode(settings: AnimSettingsLike | null | undefined): boolean {
+  return getAnimMode(settings) === 'custom';
 }
 
 /** 某分组当前是否启用 —— 所有内联动画组件的唯一判定入口 */
@@ -223,18 +285,19 @@ export function isGroupEnabled(
   settings: AnimSettingsLike | null | undefined,
   groupId: string
 ): boolean {
-  // 设置尚未加载（null）：默认全开，行为与 v2.3.89 及以前一致
-  if (!settings) return true;
-  if (isSingleControl(settings)) {
-    // 单控模式：只看自己的开关，缺省视为开；**总控在此被完全忽略**
-    return settings.animGroups?.[groupId] !== false;
-  }
-  return settings.enableAnimations !== false;
+  const mode = getAnimMode(settings);
+  if (mode === 'all-on') return true;
+  if (mode === 'all-off') return false;
+  // 自定义档：只看自己的开关，缺省视为开
+  return settings?.animGroups?.[groupId] !== false;
 }
 
-/** 单控模式下被关闭的分组 id 列表（写入 data-anim-off） */
+/**
+ * 需要写进 `data-anim-off` 的分组 id 列表（空格分隔）。
+ * 只有自定义档需要 —— 全关档走 `.anim-off` 全局 kill，无需逐组登记。
+ */
 export function disabledGroupIds(settings: AnimSettingsLike | null | undefined): string[] {
-  if (!isSingleControl(settings)) return [];
+  if (getAnimMode(settings) !== 'custom') return [];
   return ANIM_GROUPS.filter((g) => !isGroupEnabled(settings, g.id)).map((g) => g.id);
 }
 
@@ -248,7 +311,7 @@ export function selectorsForGroup(group: AnimGroupDef, kind: AnimDocKind): strin
 /** 生成某个 document 的全部分组门禁规则（每个 document 只生成一次） */
 function buildGateCss(kind: AnimDocKind): string {
   const chunks: string[] = [
-    '/* 高级动画控制 · 单控模式分组门禁（自动生成，勿手改；见 src/utils/animControl.ts） */',
+    '/* 高级动画控制 · 自定义档分组门禁（自动生成，勿手改；见 src/utils/animControl.ts） */',
   ];
   for (const group of ANIM_GROUPS) {
     const sels = selectorsForGroup(group, kind);
@@ -292,10 +355,13 @@ function ensureGateStyle(doc: Document, kind: AnimDocKind): void {
 /**
  * 把设置应用到指定 document —— 整个动画门控的唯一入口。
  *
- * 1. 总控模式且总开关关闭 → 挂 `.anim-off`（全局 kill，含各 document 自带的 kill 规则）；
- *    单控模式**永不挂**，保证仍开启的分组动画与流式豁免都不受影响；
- * 2. 单控模式 → 把被关闭的分组 id 写进 `html[data-anim-off]`（空格分隔，`~=` 匹配）；
- * 3. 顺带注入该 document 的分组门禁规则（每个 document 只注入一次）。
+ * 三档互斥（详见文件头注释）：
+ *   - `all-on`：清掉 `.anim-off` 与 `data-anim-off`；
+ *   - `all-off`：挂 `.anim-off`，清掉 `data-anim-off`；
+ *   - `custom`：**永不挂** `.anim-off`，只写 `data-anim-off`（空格分隔，`~=` 匹配）。
+ *
+ * 无论哪一档都会顺带注入该 document 的分组门禁规则（每个 document 只注入一次），
+ * 这样从「自定义」切到「全关」再切回来不需要重新注入，切换是零延迟的。
  *
  * @param doc 目标文档（主窗口 `document` / 悬浮球 / 通知窗各自的 document）
  * @param settings 当前设置（可为 null，表示尚未加载 → 视为全开）
@@ -308,24 +374,16 @@ export function applyAnimControl(
 ): void {
   if (!doc || !doc.documentElement) return;
   const root = doc.documentElement;
+  const mode = getAnimMode(settings);
 
-  // 1) 总控 kill（单控模式下永不挂）
-  const masterOff = !isSingleControl(settings) && settings?.enableAnimations === false;
-  root.classList.toggle('anim-off', masterOff);
+  // 1) 全关档的全局 kill（其余档位一律不挂，否则会误伤流式豁免与仍开启的分组）
+  root.classList.toggle('anim-off', mode === 'all-off');
 
-  // 2) 单控模式的分组黑名单
+  // 2) 自定义档的分组黑名单（其余档位清空，避免残留上一档的分组名单）
   const off = disabledGroupIds(settings);
   if (off.length > 0) root.setAttribute('data-anim-off', off.join(' '));
   else root.removeAttribute('data-anim-off');
 
   // 3) 分组门禁规则（幂等）
   ensureGateStyle(doc, kind);
-}
-
-/** 供设置页渲染：分组定义 + 当前开关状态 */
-export function readGroupState(
-  settings: AnimSettingsLike | null | undefined,
-  groupId: string
-): boolean {
-  return isGroupEnabled(settings, groupId);
 }
