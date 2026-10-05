@@ -1486,5 +1486,16 @@
   "skill.errEmptyBody": "El cuerpo de la habilidad está vacío",
   "skill.errTooLarge": "El archivo es demasiado grande para importarlo como habilidad",
   "skill.warnScript": "La habilidad declara campos de script; se ignoraron (esta versión no ejecuta scripts)",
-  "skill.warnTruncated": "El cuerpo de la habilidad superó el límite de longitud y se truncó"
+  "skill.warnTruncated": "El cuerpo de la habilidad superó el límite de longitud y se truncó",
+  "skill.builtinBadge": "Integrado",
+  "skill.builtinSource": "Incluido con Nianyu",
+  "skill.builtinNotice": "Habilidad predeterminada: Experto en amor (integrada, lista para usar, se puede desactivar cuando quieras)",
+  "skill.builtinDetail": "Nianyu incluye una habilidad predeterminada, «Experto en amor», para que no tengas que importarla manualmente: aparece en la lista en cuanto se instala Nianyu, tiene su propio interruptor de activar/desactivar y también se puede eliminar (con restauración posterior en un clic). Solo se importó el archivo principal SKILL.md de la habilidad; sus archivos scripts/ NO se importaron y nunca se ejecutan (las habilidades de Nianyu son pura inyección de prompts: no pueden leer ni escribir archivos ni ejecutar comandos), y la base de conocimiento references/ no está incluida — las rutas references/ del cuerpo son solo sugerencias de lectura del texto original y no existen en tu equipo. Fuente: repositorio público shengjidaguai-china/goutoujunshi (licencia MIT).",
+  "skill.builtinRemoved": "Habilidades integradas que has eliminado:",
+  "skill.builtinUpdate": "Hay una versión más reciente de esta habilidad integrada; se conservó el contenido que editaste y no se sobrescribió.",
+  "skill.restoreBuiltin": "Restaurar «{name}» integrado",
+  "skill.restoreConfirm": "¿Restaurar «{name}» a la versión integrada que acompaña a Nianyu? Tus cambios en el texto de la habilidad se sustituirán por la versión integrada (se mantiene el estado activado/desactivado).",
+  "skill.restored": "Restaurado a la versión integrada",
+  "skill.restoreFailed": "No se pudo restaurar la versión integrada",
+  "skill.emptyFiltered": "Ninguna habilidad coincide con el filtro actual. Cambia a «Todos los ámbitos» para verlas todas."
 }

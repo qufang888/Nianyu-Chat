@@ -1486,5 +1486,16 @@
   "skill.errEmptyBody": "O corpo da habilidade está vazio",
   "skill.errTooLarge": "O arquivo é grande demais para ser importado como habilidade",
   "skill.warnScript": "A habilidade declara campos de script; eles foram ignorados (esta versão não executa scripts)",
-  "skill.warnTruncated": "O corpo da habilidade excedeu o limite de tamanho e foi truncado"
+  "skill.warnTruncated": "O corpo da habilidade excedeu o limite de tamanho e foi truncado",
+  "skill.builtinBadge": "Integrado",
+  "skill.builtinSource": "Incluído no Nianyu",
+  "skill.builtinNotice": "Habilidade padrão: Consultor de Amor (integrada, pronta a usar, pode ser desligada quando quiser)",
+  "skill.builtinDetail": "O Nianyu já vem com uma habilidade padrão, «Consultor de Amor», para você não precisar importá-la manualmente: ela aparece na lista assim que o Nianyu é instalado, tem o próprio interruptor de ligar/desligar e também pode ser excluída (com restauração em um clique depois). Apenas o arquivo principal SKILL.md da habilidade foi importado; os arquivos em scripts/ NÃO foram importados e nunca são executados (as habilidades do Nianyu são injeção pura de prompt — não conseguem ler nem gravar arquivos nem executar comandos), e a base de conhecimento em references/ não está incluída — os caminhos references/ no corpo são apenas sugestões de leitura do texto original e não existem na sua máquina. Fonte: repositório público shengjidaguai-china/goutoujunshi (licença MIT).",
+  "skill.builtinRemoved": "Habilidades integradas que você excluiu:",
+  "skill.builtinUpdate": "Há uma versão mais recente desta habilidade integrada; o conteúdo que você editou foi mantido e não foi sobrescrito.",
+  "skill.restoreBuiltin": "Restaurar «{name}» integrada",
+  "skill.restoreConfirm": "Restaurar «{name}» para a versão integrada que acompanha o Nianyu? Suas edições no texto da habilidade serão substituídas pela versão integrada (o estado ligado/desligado é mantido).",
+  "skill.restored": "Restaurada para a versão integrada",
+  "skill.restoreFailed": "Falha ao restaurar a versão integrada",
+  "skill.emptyFiltered": "Nenhuma habilidade corresponde ao filtro atual. Mude para «Todos os escopos» para ver todas."
 }

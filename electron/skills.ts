@@ -11,10 +11,13 @@
 //   3. **注入顺序护人设**：技能段必须排在角色/世界书设定**之后**、群聊规则**之前**
 //      （见 electron/main.ts 的 buildMessagesForRole / buildGroupMessages），
 //      避免技能文本以「更靠后的指令」姿态覆盖角色人设。
+//   4. **内置技能种子（v2.3.93）**：首次访问存储时把内置技能（狗头军师）幂等写入，
+//      用户不需手动导入。升级策略见 seedBuiltinSkills() 的注释——**绝不覆盖用户改过的正文**。
 import { app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Skill, SkillScope, SkillImportResult } from '../src/types';
+import { BUILTIN_SKILL_SEEDS, type BuiltinSkillSeed } from './builtinSkills';
 
 // ===== 硬编码常量（同步登记 硬编码清单.md）=====
 export const SKILL_BODY_MAX = 20_000; // 技能正文最大字符数，超出截断并在 UI 标注
@@ -44,11 +47,26 @@ const SCOPES: SkillScope[] = ['global', 'role', 'chat'];
 interface SkillStore {
   version: number;
   skills: Skill[];
+  /** 已种下过的内置技能版本号（id → 版本），用于升级时判断是否需要刷新正文（读档时归一化） */
+  builtinVersions: Record<string, number>;
+  /** 用户主动删除过的内置技能 id：不复活，尊重显式删除（可从 UI 一键恢复） */
+  dismissedBuiltins: string[];
 }
-const STORE_VERSION = 1;
-let store: SkillStore = { version: STORE_VERSION, skills: [] };
+const STORE_VERSION = 2;
+let store: SkillStore = { version: STORE_VERSION, skills: [], builtinVersions: {}, dismissedBuiltins: [] };
 let storePath = '';
 let loaded = false;
+
+/**
+ * 归一化 store 的可选账本字段（builtinVersions / dismissedBuiltins）。
+ * 磁盘上的旧文件（v2.3.92 写的）没有这两个字段，读档时补默认值，
+ * 之后一律保证它们是对象 / 数组，调用点无需到处判空。
+ */
+function normalizeStore(s: SkillStore): SkillStore {
+  if (!s.builtinVersions || typeof s.builtinVersions !== 'object') s.builtinVersions = {};
+  if (!Array.isArray(s.dismissedBuiltins)) s.dismissedBuiltins = [];
+  return s;
+}
 
 function storeFile(): string {
   if (!storePath) storePath = path.join(app.getPath('userData'), STORE_FILE);
@@ -64,14 +82,23 @@ export function loadSkills(): void {
       store = {
         version: typeof raw.version === 'number' ? raw.version : STORE_VERSION,
         skills: Array.isArray(raw.skills) ? raw.skills.filter(isValidSkill) : [],
+        builtinVersions:
+          raw.builtinVersions && typeof raw.builtinVersions === 'object' ? raw.builtinVersions : {},
+        dismissedBuiltins: Array.isArray(raw.dismissedBuiltins)
+          ? raw.dismissedBuiltins.filter((x): x is string => typeof x === 'string')
+          : [],
       };
     } else {
-      store = { version: STORE_VERSION, skills: [] };
+      store = { version: STORE_VERSION, skills: [], builtinVersions: {}, dismissedBuiltins: [] };
     }
   } catch {
-    store = { version: STORE_VERSION, skills: [] };
+    store = { version: STORE_VERSION, skills: [], builtinVersions: {}, dismissedBuiltins: [] };
   }
+  normalizeStore(store);
   loaded = true;
+  // 载入后立即补种内置技能（幂等）：无论文件是首次创建、被删除过还是旧版本，
+  // 都会在**任何**对外读之前把缺失的内置技能补齐 —— 详见 seedBuiltinSkills。
+  seedBuiltinSkills();
 }
 
 function ensureLoaded(): void {
@@ -315,8 +342,15 @@ export function importSkill(raw: string, fileName: string): SkillImportResult {
 export function deleteSkill(id: string): boolean {
   ensureLoaded();
   const before = store.skills.length;
+  const removed = store.skills.find((s) => s.id === id);
   store.skills = store.skills.filter((s) => s.id !== id);
   if (store.skills.length === before) return false;
+  // 内置技能被用户删除 → 记账为「已移除」，升级/重启不再自动种回（尊重显式删除）；
+  // 用户可在设置页点「恢复内置技能」重新装回。
+  if (removed?.builtin) {
+    if (!store.dismissedBuiltins.includes(id)) store.dismissedBuiltins.push(id);
+    delete store.builtinVersions[id];
+  }
   scheduleSave();
   return true;
 }
@@ -328,6 +362,180 @@ export function setSkillEnabled(id: string, enabled: boolean): boolean {
   s.enabled = !!enabled;
   scheduleSave();
   return true;
+}
+
+// ===== 内置技能种子（v2.3.93）=====
+/**
+ * 把内置技能（当前只有「狗头军师 goutoujunshi」）幂等写入 skills.json。
+ *
+ * ## 何时执行
+ * 由 loadSkills() 在**每次载入存储后**调用一次（含首次访问与后续启动），
+ * 因此「首次启动」「技能文件被删」「换机/重装」等场景都会自动补齐，用户无需手动导入。
+ *
+ * ## 幂等
+ * 以**稳定 id**（builtin-skill-goutoujunshi）而非 name 判重：命中即只校正版本号，
+ * 不新增记录、不覆盖用户数据。同一进程内重复调用安全无副作用。
+ *
+ * ## 升级策略（关键取舍：不静默覆盖用户改过的内容）
+ * 内置技能与用户导入技能共用同一条记录，因此必须区分「用户动过正文」与「只是启停过」：
+ *   - **正文与内置常量逐字一致** → 认定用户没改过（启停/筛选不算改动），
+ *     代码升级带来新正文时**静默刷新**（对齐 builtinContent.ts 的版本号范式）。
+ *   - **正文与内置常量不一致** → 认定用户手动改过或换过来源，**保留用户版本**，
+ *     仅更新 builtinVersion 记账并置 builtinUpdateAvailable=true，UI 提示「内置技能有更新」，
+ *     由用户决定是否用内置版本覆盖（restoreBuiltinSkill）。
+ * 这样既保证「随版本升级拿到最新正文」，又绝不弄丢用户自己的修改。
+ *
+ * ## 删除语义（尊重显式删除）
+ * 用户删掉内置技能 → 记账到 dismissedBuiltins，**此后启动不再自动种回**（不擅自装回）。
+ * 需要时由用户在设置页点「恢复内置版本」主动装回（restoreBuiltinSkill 会清掉该记账）。
+ *
+ * ## 不覆盖用户导入的同名技能
+ * 若用户已自行导入同名同作用域技能（非 builtin），视为「用户已有自己的版本」，
+ * 不注入内置条目，也不做任何覆盖——内置技能让位于用户显式选择。
+ */
+export function seedBuiltinSkills(): { seeded: string[]; refreshed: string[]; userOwned: string[] } {
+  const seeded: string[] = [];
+  const refreshed: string[] = [];
+  const userOwned: string[] = [];
+  normalizeStore(store);
+
+  for (const seed of BUILTIN_SKILL_SEEDS) {
+    // 用户曾显式删除过 → 不复活（可从 UI 主动恢复）
+    if (store.dismissedBuiltins.includes(seed.id)) continue;
+    const existing = store.skills.find((s) => s.id === seed.id);
+
+    // 用户自己导入了同名同作用域技能 → 让位，不覆盖、不注入
+    if (!existing) {
+      const ident = identityOf({ name: seed.name, scope: seed.scope });
+      if (store.skills.some((s) => !s.builtin && identityOf(s) === ident)) {
+        userOwned.push(seed.id);
+        store.builtinVersions[seed.id] = seed.version;
+        continue;
+      }
+      // 走与导入完全相同的解析路径（同一套校验/截断/脚本拦截规则），仅换 id 与 builtin 标记
+      const parsed = parseSkillMarkdown(seed.markdown, { enabled: seed.enabled });
+      if ('error' in parsed) {
+        console.error('[skills] 内置技能解析失败，已跳过：', seed.id, parsed.error);
+        continue;
+      }
+      const { warnings: _w, ...rest } = parsed;
+      store.skills.push({
+        ...rest,
+        id: seed.id,
+        importedAt: new Date().toISOString(),
+        builtin: true,
+        builtinVersion: seed.version,
+      });
+      store.builtinVersions[seed.id] = seed.version;
+      seeded.push(seed.id);
+      continue;
+    }
+
+    // 已有：用户改过正文 → 保留用户版本，只标记「有更新」
+    if (existing.body !== bodyOfSeed(seed)) {
+      if ((existing.builtinVersion || 0) < seed.version) {
+        existing.builtinUpdateAvailable = true;
+        existing.builtinVersion = seed.version;
+        refreshed.push(seed.id);
+      } else if (!existing.builtinUpdateAvailable) {
+        existing.builtinVersion = seed.version;
+      }
+      store.builtinVersions[seed.id] = seed.version;
+      continue;
+    }
+
+    // 已有且正文未被改动：版本升级则静默刷新正文（用户只启停过，不算改动）
+    if ((existing.builtinVersion || 0) < seed.version) {
+      const parsed = parseSkillMarkdown(seed.markdown, { enabled: existing.enabled });
+      if ('error' in parsed) continue;
+      const { warnings: _w, ...rest } = parsed;
+      Object.assign(existing, rest, {
+        id: existing.id,
+        importedAt: existing.importedAt,
+        builtin: true,
+        builtinVersion: seed.version,
+        builtinUpdateAvailable: false,
+      });
+      refreshed.push(seed.id);
+    } else {
+      // 幂等：只补齐缺失的 builtin 标记与记账，不碰用户的 enabled
+      existing.builtin = true;
+      existing.builtinVersion = seed.version;
+    }
+    store.builtinVersions[seed.id] = seed.version;
+  }
+
+  if (seeded.length || refreshed.length) {
+    flushSkills(); // 种子是启动期一次性写入，直接同步落盘，避免首条消息时技能还没进盘
+    console.log('[skills] 内置技能已就绪：', { seeded, refreshed, userOwned });
+  }
+  return { seeded, refreshed, userOwned };
+}
+
+/** 取内置种子解析后的正文（与实际落库走同一条解析路径，保证比对基准一致） */
+function bodyOfSeed(seed: BuiltinSkillSeed): string {
+  const parsed = parseSkillMarkdown(seed.markdown, {});
+  return 'error' in parsed ? '' : parsed.body;
+}
+
+/**
+ * 恢复内置技能：把内置版本写回当前记录。
+ *   - 记录仍在（用户改过正文 / 只是想要最新版）→ 覆盖为内置正文，保留用户的启停状态。
+ *   - 记录已被删除 → 重新种入（清掉 dismissedBuiltins 记账）。
+ * 非内置技能或未知 id 返回 undefined。
+ */
+export function restoreBuiltinSkill(id: string): Skill | undefined {
+  ensureLoaded();
+  const seed = BUILTIN_SKILL_SEEDS.find((s) => s.id === id);
+  if (!seed) return undefined;
+  const target = store.skills.find((s) => s.id === id);
+  if (target && !target.builtin) return undefined; // 用户自有技能，不越权覆盖
+  if (store.dismissedBuiltins.includes(id)) {
+    store.dismissedBuiltins = store.dismissedBuiltins.filter((x) => x !== id);
+  }
+  const parsed = parseSkillMarkdown(seed.markdown, { enabled: target ? target.enabled : seed.enabled });
+  if ('error' in parsed) return undefined;
+  const { warnings: _w, ...rest } = parsed;
+  if (target) {
+    Object.assign(target, rest, {
+      id: target.id,
+      importedAt: target.importedAt,
+      builtin: true,
+      builtinVersion: seed.version,
+      builtinUpdateAvailable: false,
+    });
+    store.builtinVersions[id] = seed.version;
+    scheduleSave();
+    return target;
+  }
+  const created: Skill = {
+    ...rest,
+    id,
+    importedAt: new Date().toISOString(),
+    builtin: true,
+    builtinVersion: seed.version,
+  };
+  store.skills.push(created);
+  store.builtinVersions[id] = seed.version;
+  flushSkills();
+  return created;
+}
+
+/**
+ * 列出「已被用户删除但仍可一键恢复」的内置技能（供设置页展示恢复入口）。
+ * 已存在的内置技能不在此列（它们就在列表里，无需恢复）。
+ */
+export function listDismissedBuiltinSkills(): { id: string; name: string; description: string }[] {
+  ensureLoaded();
+  const out: { id: string; name: string; description: string }[] = [];
+  for (const seed of BUILTIN_SKILL_SEEDS) {
+    if (!store.dismissedBuiltins.includes(seed.id)) continue;
+    if (store.skills.some((s) => s.id === seed.id)) continue;
+    const parsed = parseSkillMarkdown(seed.markdown, {});
+    if ('error' in parsed) continue;
+    out.push({ id: seed.id, name: parsed.name, description: parsed.description });
+  }
+  return out;
 }
 
 // ===== 作用域解析（纯函数，可独立断言）=====

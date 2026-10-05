@@ -388,6 +388,10 @@ export interface NianyuAPI {
   listSkills: () => Promise<Skill[]>;
   removeSkill: (id: string) => Promise<{ ok: boolean }>;
   toggleSkill: (id: string, enabled: boolean) => Promise<{ ok: boolean }>;
+  /** v2.3.93：把内置技能恢复为随念语附带的版本（保留启停状态；已删除则重新种入） */
+  restoreBuiltinSkill: (id: string) => Promise<{ ok: boolean }>;
+  /** v2.3.93：已被用户删除、但仍可一键恢复的内置技能 */
+  listDismissedBuiltins: () => Promise<{ id: string; name: string; description: string }[]>;
 
   // ===== 软件更新（v2.3.45）=====
   checkUpdate: (manual?: boolean) => Promise<UpdateStatus>;
@@ -468,6 +472,8 @@ export const api: NianyuAPI = {
   listSkills: () => raw.listSkills(),
   removeSkill: (id) => raw.removeSkill(id),
   toggleSkill: (id, enabled) => raw.toggleSkill(id, enabled),
+  restoreBuiltinSkill: (id) => raw.restoreBuiltinSkill(id),
+  listDismissedBuiltins: () => raw.listDismissedBuiltins(),
   translate: (text) => raw.translate(text),
   interruptStream: (chatId) => raw.interruptStream(chatId),
   copyChat: (type, id) => raw.copyChat(type, id),

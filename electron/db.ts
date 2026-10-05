@@ -19,6 +19,8 @@ import {
   importSkill,
   deleteSkill,
   setSkillEnabled,
+  restoreBuiltinSkill,
+  listDismissedBuiltinSkills,
   getSkillsForChat,
   buildSkillsPrompt,
 } from './skills';
@@ -487,6 +489,19 @@ class DataManager {
   /** 启停技能，返回是否命中 */
   setSkillEnabled(id: string, enabled: boolean): boolean {
     return setSkillEnabled(id, enabled);
+  }
+
+  /**
+   * 恢复内置技能为随念语附带的版本（v2.3.93）。
+   * 记录仍在 → 覆盖正文但保留用户的启停状态；记录已被删除 → 重新种入。
+   */
+  restoreBuiltinSkill(id: string): Skill | undefined {
+    return restoreBuiltinSkill(id);
+  }
+
+  /** 已被用户删除、但仍可一键恢复的内置技能（设置页恢复入口用） */
+  listDismissedBuiltinSkills(): { id: string; name: string; description: string }[] {
+    return listDismissedBuiltinSkills();
   }
 
   /**

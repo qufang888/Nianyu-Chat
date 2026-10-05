@@ -76,6 +76,15 @@ function seedStore(obj) {
 function readStore() {
   return JSON.parse(readFileSync(STORE_PATH, 'utf-8'));
 }
+/**
+ * 只取「用户导入的」技能（排除 v2.3.93 起自动种入的内置技能）。
+ * 本组断言考察的是 importSkill / deleteSkill / 覆盖升级等**用户操作**的落盘行为，
+ * 内置种子是加载时自动发生的、不属于这些操作的产物，故按builtin 标记过滤后再计数，
+ * 断言意图与 v2.3.92（尚无内置技能）时完全一致。
+ */
+function userSkills(obj) {
+  return (obj.skills || []).filter((s) => !s.builtin);
+}
 /** 等待 500ms 防抖落盘 */
 const settle = () => new Promise((r) => setTimeout(r, 700));
 
@@ -416,16 +425,17 @@ section('D  skills.json 独立文件：落盘 / 重启重载 / 删除 / 重复�
   ok(r1.ok && !!r1.skill, 'D1 importSkill 返回成功', `name=${r1.skill && r1.skill.name}`);
   await settle();
   const f1 = readStore();
-  ok(f1.skills.length === 1 && f1.skills[0].name === '记笔记', 'D2 真实 skills.json 落盘 1 条', `count=${f1.skills.length}`);
+  const u1 = userSkills(f1);
+  ok(u1.length === 1 && u1[0].name === '记笔记', 'D2 真实 skills.json 落盘 1 条用户技能', `count=${u1.length}`);
   ok(
-    f1.skills[0].id.startsWith('skill_') && !!f1.skills[0].importedAt,
+    u1[0].id.startsWith('skill_') && !!u1[0].importedAt,
     'D3 id / importedAt 已生成',
-    `id=${f1.skills[0].id}`
+    `id=${u1[0].id}`
   );
 
   // D4：重启（重新 load 模块）→ 数据仍在
   const M2 = loadSkillsModule();
-  const listed = M2.listSkills();
+  const listed = M2.listSkills().filter((s) => !s.builtin);
   ok(listed.length === 1 && listed[0].description.length > 0, 'D4 重启后从 skills.json 重载成功', `count=${listed.length}`);
 
   // D5：再导入一个 chat 技能
@@ -433,13 +443,13 @@ section('D  skills.json 独立文件：落盘 / 重启重载 / 删除 / 重复�
   const r2 = M2.importSkill(chatMd, 'group.md');
   ok(r2.ok, 'D5 第二个技能导入成功');
   await settle();
-  ok(readStore().skills.length === 2, 'D6 落盘 2 条', `count=${readStore().skills.length}`);
+  ok(userSkills(readStore()).length === 2, 'D6 落盘 2 条用户技能', `count=${userSkills(readStore()).length}`);
 
   // D7：同一 identity（同名+同scope+同绑定）重复导入 → 覆盖而非追加
   const r3 = M2.importSkill(VALID_MD.replace('1.2.0', '2.0.0'), 'note-v2.md');
   await settle();
   const f2 = readStore();
-  ok(f2.skills.length === 2, 'D7 同名同作用域重复导入为覆盖，不追加', `count=${f2.skills.length}`);
+  ok(userSkills(f2).length === 2, 'D7 同名同作用域重复导入为覆盖，不追加', `count=${userSkills(f2).length}`);
   ok(
     f2.skills.some((s) => s.name === '记笔记' && s.version === '2.0.0'),
     'D8 覆盖后内容为新版',
@@ -467,9 +477,15 @@ section('D  skills.json 独立文件：落盘 / 重启重载 / 删除 / 重复�
   await settle();
   const f3 = readStore();
   ok(
-    f3.skills.length === 1 && !f3.skills.some((s) => s.id === delId),
+    userSkills(f3).length === 1 && !f3.skills.some((s) => s.id === delId),
     'D15 删除已落盘',
-    `count=${f3.skills.length}`
+    `count=${userSkills(f3).length}`
+  );
+
+  // D17：内置技能（v2.3.93）在同一存储里共存，且不干扰用户技能的删除/覆盖语义
+  ok(
+    f3.skills.some((s) => s.builtin === true && s.id === 'builtin-skill-goutoujunshi'),
+    'D17 内置技能与用户技能共存于 skills.json，且用户技能的删除不影响它'
   );
 
   // D16：skills.json 与 store.json 物理隔离（技能不进聊天主数据）

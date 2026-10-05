@@ -1486,5 +1486,16 @@
   "skill.errEmptyBody": "Le corps de la compétence est vide",
   "skill.errTooLarge": "Le fichier est trop volumineux pour être importé comme compétence",
   "skill.warnScript": "La compétence déclare des champs de script ; ils ont été ignorés (cette version n’exécute aucun script)",
-  "skill.warnTruncated": "Le corps de la compétence a dépassé la limite de longueur et a été tronqué"
+  "skill.warnTruncated": "Le corps de la compétence a dépassé la limite de longueur et a été tronqué",
+  "skill.builtinBadge": "Intégré",
+  "skill.builtinSource": "Fourni avec Nianyu",
+  "skill.builtinNotice": "Compétence par défaut : Conseiller amoureux (intégrée, prête à l’emploi, désactivable à tout moment)",
+  "skill.builtinDetail": "Nianyu fournit une compétence par défaut, « Conseiller amoureux », que vous n’avez pas à importer manuellement : elle apparaît dans la liste dès l’installation de Nianyu, dispose de son propre interrupteur activation/désactivation et peut aussi être supprimée (avec une restauration en un clic ensuite). Seul le fichier principal SKILL.md de la compétence a été importé ; ses fichiers scripts/ n’ont PAS été importés et ne sont jamais exécutés (les compétences Nianyu sont une pure injection de prompt : elles ne peuvent ni lire ni écrire de fichier ni exécuter de commande), et la base de connaissances references/ n’est pas incluse — les chemins references/ présents dans le corps ne sont que des conseils de lecture du texte d’origine et n’existent pas sur votre machine. Source : dépôt public shengjidaguai-china/goutoujunshi (licence MIT).",
+  "skill.builtinRemoved": "Compétences intégrées que vous avez supprimées :",
+  "skill.builtinUpdate": "Une version plus récente de cette compétence intégrée existe ; le contenu que vous avez modifié a été conservé et non écrasé.",
+  "skill.restoreBuiltin": "Restaurer « {name} » intégré",
+  "skill.restoreConfirm": "Restaurer « {name} » dans la version intégrée fournie avec Nianyu ? Vos modifications du texte de la compétence seront remplacées par la version intégrée (l’état activé/désactivé est conservé).",
+  "skill.restored": "Restauré dans la version intégrée",
+  "skill.restoreFailed": "Échec de la restauration de la version intégrée",
+  "skill.emptyFiltered": "Aucune compétence ne correspond au filtre actuel. Passez sur « Toutes les portées » pour tout afficher."
 }

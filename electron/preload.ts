@@ -456,6 +456,9 @@ export interface NianyuAPI {
   listSkills: () => Promise<import('../src/types').Skill[]>;
   removeSkill: (id: string) => Promise<{ ok: boolean }>;
   toggleSkill: (id: string, enabled: boolean) => Promise<{ ok: boolean }>;
+  // v2.3.93 内置技能：恢复为随念语附带的版本 / 列出可恢复的被删内置技能
+  restoreBuiltinSkill: (id: string) => Promise<{ ok: boolean }>;
+  listDismissedBuiltins: () => Promise<{ id: string; name: string; description: string }[]>;
 
   // ===== 软件更新（v2.3.45）=====
   checkUpdate: (manual?: boolean) => Promise<UpdateStatus>;
@@ -978,6 +981,9 @@ const api: NianyuAPI = {
   listSkills: () => ipcRenderer.invoke('skill:list'),
   removeSkill: (id) => ipcRenderer.invoke('skill:remove', id),
   toggleSkill: (id, enabled) => ipcRenderer.invoke('skill:toggle', id, enabled),
+  // v2.3.93 内置技能：恢复为随念语附带的版本 / 列出可恢复的被删内置技能
+  restoreBuiltinSkill: (id) => ipcRenderer.invoke('skill:restoreBuiltin', id),
+  listDismissedBuiltins: () => ipcRenderer.invoke('skill:listDismissedBuiltins'),
 
   // ===== 确认对话框 =====
   // ===== 软件更新（v2.3.45）=====

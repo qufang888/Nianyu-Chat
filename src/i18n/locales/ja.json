@@ -1486,5 +1486,16 @@
   "skill.errEmptyBody": "スキル本文が空です",
   "skill.errTooLarge": "ファイルが大きすぎてスキルとしてインポートできません",
   "skill.warnScript": "スキルにスクリプトフィールドがあります。無視しました（本バージョンはスクリプトを実行しません）",
-  "skill.warnTruncated": "スキル本文が上限を超えたため切り詰めました"
+  "skill.warnTruncated": "スキル本文が上限を超えたため切り詰めました",
+  "skill.builtinBadge": "内蔵",
+  "skill.builtinSource": "Nianyu 同梱",
+  "skill.builtinNotice": "デフォルトスキル：恋愛アドバイザー（内蔵済み・すぐに使用可・いつでもオフにできます）",
+  "skill.builtinDetail": "Nianyu にはデフォルトスキル「恋愛アドバイザー」が 1 つ同梱されています。手でインポートする必要はありません。Nianyu をインストールするとすぐに一覧に現れ、有効／無効のトグルを各自持ち、削除することもできます（削除後はワンクリックで復元できます）。インポートしたのはスキルのメイン SKILL.md ファイルのみです。同梱の scripts/ はインポートされておらず、実行されることも一切ありません（Nianyu のスキルは純粋なプロンプト注入であり、ファイルの読み書きやコマンド実行はできません）。references/ のナレッジベースも同梱対象外で、本文中の references パスは原文の閲覧提案仅供参考の記述でありお使いの端末には存在しません。出典：公開リポジトリ shengjidaguai-china/goutoujunshi（MIT ライセンス）。",
+  "skill.builtinRemoved": "削除した内蔵スキル：",
+  "skill.builtinUpdate": "この内蔵スキルに新しいバージョンがあります。編集された内容は保持され、上書きされていません。",
+  "skill.restoreBuiltin": "内蔵版「{name}」を復元",
+  "skill.restoreConfirm": "「{name}」を Nianyu 同梱の内蔵版に戻しますか？スキル本文への変更は内蔵版で置き換えられます（有効／無効の状態は維持されます）。",
+  "skill.restored": "内蔵版に復元しました",
+  "skill.restoreFailed": "内蔵版の復元に失敗しました",
+  "skill.emptyFiltered": "現在のフィルターに一致するスキルはありません。「すべてのスコープ」に切り替えてください。"
 }
