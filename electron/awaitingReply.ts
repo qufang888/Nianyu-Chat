@@ -97,6 +97,12 @@ export function createAwaitingReplyTracker(deps: AwaitingReplyDeps): AwaitingRep
 
   const mark = (chatKey: string): void => {
     if (!chatKey) return;
+    // v2.3.93 QA 复核 BUG-E：开关关闭（idleCooldownUntilReply=false）时不得进入等待态。
+    // 漏判后果：调度侧已被 isGatedByAwaitingReply/isAwaiting 挡住不会真发消息，
+    // 但 mark() 仍会广播 awaiting:true —— 渲染层正是走广播路径，于是 UI 提示会
+    // 永久残留（清不掉，因为开关关闭时 clearAll 不会逐个广播清除）。
+    // 与 isAwaiting() 保持同一判据，避免「查得到=false、界面却显示等待」的割裂。
+    if (!isGateOpen()) return;
     maps.awaiting.add(chatKey);
     emit(AWAITING_REPLY_CHANNEL, { chatKey, awaiting: true, reason: 'sent' });
   };

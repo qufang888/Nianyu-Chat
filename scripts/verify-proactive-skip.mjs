@@ -81,11 +81,14 @@ function makeEnv({ gateOpen = true, now = 1_000_000 } = {}) {
   const idleState = new Map();
   const broadcasts = [];
   let clock = now;
+  // 开关必须是**可变状态**并由 isGateOpen 闭包读取——mark()/isAwaiting() 每次调用
+  // 都会重新读它。用普通参数捕获会测不到「开关中途变化」这个真实场景。
+  const gate = { open: gateOpen };
   const tracker = M.createAwaitingReplyTracker({
     maps: { awaiting, frozen, idleState },
     broadcast: (channel, payload) => broadcasts.push({ channel, payload }),
     now: () => clock,
-    isGateOpen: () => gateOpen,
+    isGateOpen: () => gate.open,
   });
   return {
     M,
@@ -93,6 +96,11 @@ function makeEnv({ gateOpen = true, now = 1_000_000 } = {}) {
     awaiting,
     frozen,
     idleState,
+    gate,
+    /** 动态开关「等你回复」功能（tracker 通过 isGateOpen 闭包读 gate.open） */
+    setGate: (v) => {
+      gate.open = v;
+    },
     broadcasts,
     /** 推进注入时钟 */
     advance: (ms) => {
@@ -101,9 +109,6 @@ function makeEnv({ gateOpen = true, now = 1_000_000 } = {}) {
     },
     /** 「ms 毫秒之前」的时间戳（不移动时钟，只取过去某刻 —— 用来伪造已静默时长） */
     elapsedAgo: (ms) => clock - ms,
-    setGate: (v) => {
-      gateOpen = v;
-    },
     /** 某频道的广播记录 */
     on: (channel) => broadcasts.filter((b) => b.channel === channel),
   };
@@ -269,22 +274,36 @@ section('D  开关 idleCooldownUntilReply=false → 不存在等待态（UI 不�
   const env = makeEnv({ gateOpen: false });
   const KEY = 'single:d1';
   env.idleState.set(KEY, env.elapsedAgo(30 * MIN));
+
+  // v2.3.93 QA 复核 BUG-E 回归：开关关闭时 mark() 必须直接返回——
+  // 既不写集合、也不广播 awaiting:true。原实现漏判 isGateOpen()，
+  // 导致 UI（走广播路径）提示永久残留：调度侧被 isAwaiting 挡住不发消息，
+  // 但界面却一直显示「正在等你回复」，而 clearAll 在开关关闭时不会再广播清除。
   env.tracker.mark(KEY);
-  ok(env.awaiting.has(KEY) === true, 'D1 集合里确实记入了（历史状态存在）');
-  ok(env.tracker.isAwaiting(KEY) === false, 'D2 开关关闭时 isAwaiting=false → 前端不显示「等你回复」');
+  ok(env.awaiting.has(KEY) === false, 'D1 开关关闭时 mark() 不写入等待集合（不再残留历史状态）');
+  ok(env.on('proactive:awaiting').filter((b) => b.payload.awaiting === true).length === 0,
+    'D2 开关关闭时 mark() 不广播 awaiting=true（UI 不会误显示提示）');
+  ok(env.tracker.isAwaiting(KEY) === false, 'D3 开关关闭时 isAwaiting=false → 前端不显示「等你回复」');
 
   // 门禁不命中 → 调度不被拦住（与 proactive.ts isGatedByAwaitingReply 语义一致）
   const L = makeLegacy(env);
   const r = L.tick({ ...S, idleCooldownUntilReply: false }, env.advance(0));
-  ok(r.sent === KEY, 'D3 开关关闭时调度不被等待态拦住（不门禁）');
+  ok(r.sent === KEY, 'D4 开关关闭时调度不被等待态拦住（不门禁）');
+
+  // 开关重新打开后才允许进入等待态（mark 的门禁是动态读取，不是永久拒绝）
+  env.setGate(true);
+  env.tracker.mark(KEY);
+  ok(env.awaiting.has(KEY) === true, 'D5 开关重新打开后 mark() 恢复记入（门禁动态生效）');
+  ok(env.tracker.isAwaiting(KEY) === true, 'D6 开关打开时 isAwaiting=true');
+  env.setGate(false);
 
   // clearAll：开关被关掉时主进程清空等待态 + 广播，窗口立即隐藏提示
   env.broadcasts.length = 0;
   const keys = env.tracker.clearAll('settings-off');
-  ok(keys.length === 1 && keys[0] === KEY, 'D4 clearAll 返回被清掉的 chatKey 列表');
-  ok(env.awaiting.size === 0 && env.frozen.size === 0, 'D5 clearAll 清空等待集合与冻结表');
+  ok(keys.length === 1 && keys[0] === KEY, 'D7 clearAll 返回被清掉的 chatKey 列表');
+  ok(env.awaiting.size === 0 && env.frozen.size === 0, 'D8 clearAll 清空等待集合与冻结表');
   ok(env.on('proactive:awaiting').filter((b) => b.payload.awaiting === false).length === 1,
-    'D6 clearAll 逐个广播 awaiting=false（各窗口立即隐藏提示）');
+    'D9 clearAll 逐个广播 awaiting=false（各窗口立即隐藏提示）');
 }
 
 // ================================================================= E：冻结基准必须被丢弃
