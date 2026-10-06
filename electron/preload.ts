@@ -19,6 +19,8 @@ import type {
   QuickImportResult,
   SceneImageStatusEvent,
   MomentMediaStatusEvent,
+  VoiceListResult,
+  ListVoicesOptions,
 } from '../src/types';
 import type { ImportCharacterResult } from '../src/utils/characterCard';
 
@@ -218,6 +220,8 @@ export interface NianyuAPI {
   removeStoryNode: (id: number) => Promise<void>;
   renameStoryNode: (id: number, title: string) => Promise<void>;
   forkChatFromNode: (chatType: string, chatId: string, nodeId: number) => Promise<{ chat_type: string; chat_id: string; name: string }>;
+  // v2.3.94 需求 1：从任意消息分叉新对话（右键消息气泡 →「从此处开启新对话」）
+  forkChatFromMessage: (chatType: string, chatId: string, msgId: number) => Promise<{ chat_type: string; chat_id: string; name: string }>;
   addMoment: (roleId: string, content: string, images: string[], scheduledAt?: string | null, selfRoleId?: string) => Promise<number>;
   listMoments: (roleId?: string, includeUnpublished?: boolean, selfRoleId?: string, favoritedOnly?: boolean) => Promise<any[]>;
   removeMoment: (id: number) => Promise<void>;
@@ -283,6 +287,12 @@ export interface NianyuAPI {
   getRoleStats: () => Promise<RoleStat[]>;
   getModelStats: () => Promise<{ modelId: string; name: string; tokens: number; calls: number }[]>;
 
+  // v2.3.94 需求 11：陪伴时长。上报的是**增量**，主进程累加（主窗/小窗同 key 不互相覆盖）
+  addCompanionMs: (key: string, deltaMs: number) => Promise<number>;
+  getCompanionMap: () => Promise<Record<string, number>>;
+  getCompanionByRole: () => Promise<Record<string, number>>;
+  resolveChatRoleId: (chatType: string, chatId: string) => Promise<string>;
+
   getSettings: () => Promise<AppSettings>;
   saveSettings: (patch: Partial<AppSettings>) => Promise<AppSettings>;
   resetSettings: (keepKeys?: boolean) => Promise<AppSettings>;
@@ -347,7 +357,13 @@ export interface NianyuAPI {
   debugEnd: () => Promise<{ ok: boolean; restored?: number; error?: string; report?: Record<string, { time: string; message: string }[]> }>;
   transcribeAudio: (data: Uint8Array) => Promise<string>;
   textToSpeech: (text: string, roleId?: string, forceRegenerate?: boolean) => Promise<string>;
-  listVoices: () => Promise<string[]>;
+  /**
+   * 拉取 TTS 音色列表。
+   * 不传 opts → 返回 string[]（与 v2.3.22 起的旧行为完全一致，设置页等旧调用点无需改动）。
+   * 传 opts   → 返回 VoiceListResult（带 reason 分类，供「人物音色绑定」区分
+   *             「该提供商无音色列表端点 → 引导手填」与「网络/密钥错误 → 提示重试」）。
+   */
+  listVoices: (opts?: ListVoicesOptions) => Promise<string[] | VoiceListResult>;
 
   miniOpen: (p?: {
     initialChat?: { chatType: string; chatId: string; isObserverPrivate?: boolean };
@@ -708,6 +724,8 @@ const api: NianyuAPI = {
   removeStoryNode: (id) => ipcRenderer.invoke('chats:removeStoryNode', id),
   renameStoryNode: (id, title) => ipcRenderer.invoke('chats:renameStoryNode', id, title),
   forkChatFromNode: (chatType, chatId, nodeId) => ipcRenderer.invoke('chats:forkFromNode', chatType, chatId, nodeId),
+  // v2.3.94 需求 1：从任意消息分叉新对话
+  forkChatFromMessage: (chatType, chatId, msgId) => ipcRenderer.invoke('chats:forkFromMessage', chatType, chatId, msgId),
   addMoment: (roleId, content, images, scheduledAt, selfRoleId) => ipcRenderer.invoke('moments:add', roleId, content, images, scheduledAt, selfRoleId),
   listMoments: (roleId, includeUnpublished, selfRoleId, favoritedOnly) => ipcRenderer.invoke('moments:list', roleId, includeUnpublished, selfRoleId, favoritedOnly),
   removeMoment: (id) => ipcRenderer.invoke('moments:remove', id),
@@ -781,6 +799,12 @@ const api: NianyuAPI = {
   getRoleStats: () => ipcRenderer.invoke('stats:roles'),
   getModelStats: () => ipcRenderer.invoke('stats:modelUsage'),
 
+  // v2.3.94 需求 11：陪伴时长心跳（传增量，主进程累加并节流落盘）
+  addCompanionMs: (key, deltaMs) => ipcRenderer.invoke('companion:add', { key, deltaMs }),
+  getCompanionMap: () => ipcRenderer.invoke('companion:all'),
+  getCompanionByRole: () => ipcRenderer.invoke('companion:byRole'),
+  resolveChatRoleId: (chatType, chatId) => ipcRenderer.invoke('chat:roleId', { chatType, chatId }),
+
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (patch) => ipcRenderer.invoke('settings:save', patch),
   resetSettings: (keepKeys) => ipcRenderer.invoke('settings:reset', keepKeys),
@@ -831,7 +855,7 @@ const api: NianyuAPI = {
   debugStart: () => ipcRenderer.invoke('debug:start'),
   debugTrigger: (kind, chatType, chatId) => ipcRenderer.invoke('debug:trigger', kind, chatType, chatId),
   debugEnd: () => ipcRenderer.invoke('debug:end'),
-  listVoices: () => ipcRenderer.invoke('audio:listVoices'),
+  listVoices: (opts) => ipcRenderer.invoke('audio:listVoices', opts),
 
   miniOpen: (p) => ipcRenderer.invoke('mini:open', p),
   miniGetInitial: () => ipcRenderer.invoke('mini:getInitial'),

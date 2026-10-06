@@ -57,7 +57,7 @@ export interface AnimGroupDef {
 }
 
 /**
- * 分组分类法（唯一权威列表，v2.3.92 起共 14 组）。
+ * 分组分类法（唯一权威列表，v2.3.92 起共 14 组，v2.3.94 需求 11 新增 stats 后共 15 组）。
  *
  * 注意：**流式/打字机动画不在此列表中** —— 它按设计恒开（豁免总控，且无单项开关）。
  * 因此任何分组的选择器都**不得**写成 `.event-modal *` 这类通配：一旦某个容器将来新增了
@@ -69,6 +69,10 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
     labelKey: 'animCtl.groupPanel',
     selectors: [
       '.stories-panel',
+      // v2.3.94 需求 2：消息下方按钮组改为「线性弹出」后，动画载体仍是 .msg-action-bar 本身
+      //（transition: transform），故**无需新增选择器** —— 它早已登记在本组，可被独立开关。
+      // 刻意不把 .msg-ai-action-btn 也加进来：它属于 bubble 组（animControl.ts 的 bubble 项），
+      // 同时登记到两个组会导致「关掉 panel 连带关掉 bubble 想保留的按钮动画」的语义冲突。
       '.msg-action-bar',
       '.scroll-to-bottom',
       '.mini-scroll-to-bottom',
@@ -89,6 +93,8 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.mention-pop',
       '.mini-drawer',
       '.mini-drawer-mask',
+      // v2.3.94 需求 12：通用搜索候选面板（SearchSuggest.tsx，portal 到 body）
+      '.search-suggest',
     ],
   },
   {
@@ -209,12 +215,27 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.settings-nav-item',
       '.settings-search-input',
       '.settings-suggest-item',
+      // v2.3.94 需求 13/14：聊天列表搜索框与不常用聊天文件夹表头（均含 var(--transition) 过渡）
+      '.list-search-row',
+      '.list-search-input',
+      '.list-search-clear',
+      '.list-search-badge',
+      '.inactive-folder-head',
+      '.inactive-folder-caret',
+      '.inactive-folder-count',
+      // v2.3.94 需求 10：翻译弹窗的删除按钮 hover/focus 变色过渡（.tr-* 系列，主窗与小窗共用）
+      '.tr-seg-del',
+      '.tr-btn',
       // v2.3.92 补齐：提示气泡 / 设置跳转高亮 / 模型卡高亮 / 拖拽与快速导入遮罩
       '.hint-tip',
       '.setting-flash',
       '.model-flash',
       '.drop-hint',
       '.quick-import-overlay',
+      // v2.3.94 需求 7：多媒体 API 配置编辑器（TTS/ASR/生图/生视频共用）
+      // 的卡片边框过渡与展开表单入场动画
+      '.media-cfg-card',
+      '.media-cfg-body',
       // 事件弹窗：只列真正带过渡/动画的具体类。**禁用通配 `*`**（否则该弹窗内将来出现的
       // .stream-char/.pseudo-char 会被 theme 组静默关掉，破坏「流式恒开」承诺）。
       '.event-overlay',
@@ -235,6 +256,21 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
     // v2.3.92 新建组：新手引导高亮环是**无限循环**动画，且新用户首启即默认显示，
     // 用户感知最强，值得独立成组单独关掉。
     selectors: ['.tutorial-ring', '.tutorial-card', '.tutorial-card-center'],
+  },
+  {
+    // v2.3.94 需求 11（统计页三大板块）：饼图「从圆心顺时针拉开」的 rAF 补间与扇区悬停外扩
+    // 都是**内联**动画（内联优先级高于 .anim-off 的 !important），故必须由 StatsView 里的
+    // isGroupEnabled(settings, 'stats') 门控；这里同时登记 CSS 类名，让 CSS 侧的
+    // transition（悬停外扩 / 榜单行浮现）在自定义档被关掉时也能被 kill 掉。
+    id: 'stats',
+    labelKey: 'animCtl.groupStats',
+    selectors: [
+      '.stats-pie-slice',
+      '.stats-legend-row',
+      '.stats-fav-card',
+      '.stats-rank-row',
+      '.stats-role-pick-item',
+    ],
   },
 ];
 

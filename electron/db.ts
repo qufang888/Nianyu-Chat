@@ -11,8 +11,9 @@ import type {
   Rule,
   MemoryEntry,
   Plugin,
+  MediaApiConfig,
 } from '../src/types';
-import { DEFAULT_SETTINGS } from '../src/types';
+import { DEFAULT_SETTINGS, TTS_PROVIDERS } from '../src/types';
 import {
   listSkills,
   getSkill,
@@ -25,6 +26,13 @@ import {
   buildSkillsPrompt,
 } from './skills';
 import type { Skill, SkillImportResult } from '../src/types';
+
+/**
+ * 陪伴时长落盘合并窗口（毫秒）。
+ * 「前台停留 1s 心跳」若每秒同步写盘会造成明显卡顿（settings 是整份 JSON），
+ * 故累加只改内存，落盘按此窗口合并；退出前另有 flushCompanionSync 兜底。
+ */
+const COMPANION_FLUSH_MS = 30_000;
 
 // 纯 JS 存储：数据以 JSON 文件持久化，无需任何原生编译模块。
 interface ChatSession {
@@ -115,6 +123,204 @@ function resolveDataDir(): string {
 // 默认数据目录（文档/念语数据），供前端展示。
 export function defaultDataDirPath(): string {
   return path.join(app.getPath('documents'), '念语数据');
+}
+
+// ===== 需求 7：TTS / ASR / 生图 / 生视频 多 API 配置的迁移与同步 =====
+// 设计要点（务必保持，它是老用户不丢配置的关键）：
+//   1. 老版本这四类服务各自只有**一组扁平字段**（ttsBaseUrl/ttsApiKey/...），新版本支持多组；
+//   2. 迁移方向：若某服务的数组为空，而扁平字段有内容 → 把扁平字段变成数组的第一项；
+//      若数组已有内容（用户真的配了多条）→ **不动**，扁平字段视为兼容产物；
+//   3. 同步方向：每次 saveSettings 后，把「当前启用项」回写扁平字段，
+//      于是所有仍读扁平字段的老调用点零改动即可拿到当前配置；
+//   4. 双向不覆盖：只要用户改过扁平字段（老界面残留），下一次 load 时会补回数组首项。
+//     这两条一起保证「新旧界面混用」时期配置永远只有一个真源。
+
+/** 生成一个稳定但不易碰撞的配置 id（读盘不会重新生成，故不参与判重之外的逻辑） */
+function newMediaConfigId(prefix: string): string {
+  return `${prefix}_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`;
+}
+
+/** 按「数组优先、扁平兜底」原则取某服务的当前启用配置 */
+export function resolveMediaConfig(
+  list: MediaApiConfig[] | undefined,
+  activeId: string | undefined,
+  flat: Partial<MediaApiConfig>
+): MediaApiConfig | undefined {
+  const arr = Array.isArray(list) ? list : [];
+  if (arr.length > 0) {
+    const byId = activeId ? arr.find((c) => c.id === activeId) : undefined;
+    return byId || arr[0];
+  }
+  // 数组为空但扁平字段有内容（老配置尚未迁移，或用户只填了扁平字段）
+  const hasFlat = !!(flat.baseUrl || flat.apiKey || flat.model);
+  if (!hasFlat) return undefined;
+  return {
+    id: activeId || `${flat.model ? 'legacy' : 'legacy'}`,
+    name: '默认配置',
+    provider: flat.provider || 'custom',
+    baseUrl: flat.baseUrl || '',
+    apiKey: flat.apiKey || '',
+    model: flat.model || '',
+    enabled: true,
+    voice: flat.voice,
+    size: flat.size,
+    duration: flat.duration,
+  };
+}
+
+/**
+ * 读盘时把扁平字段迁移进多配置数组（原地修改 settings）。
+ * 幂等：已迁移过的配置不会重复生成。
+ */
+export function migrateMediaApiConfigs(settings: AppSettings): void {
+  const v = settings.voice;
+  if (v) {
+    if (!Array.isArray(v.ttsConfigs)) v.ttsConfigs = [];
+    if (v.ttsConfigs.length === 0 && (v.ttsBaseUrl || v.ttsApiKey || v.ttsModel || v.ttsVoice)) {
+      v.ttsConfigs.push({
+        id: v.activeTtsId || newMediaConfigId('tts'),
+        name: '默认配置',
+        provider: guessProviderByUrl(v.ttsBaseUrl),
+        baseUrl: v.ttsBaseUrl || '',
+        apiKey: v.ttsApiKey || '',
+        model: v.ttsModel || '',
+        voice: v.ttsVoice || '',
+        enabled: true,
+      });
+    }
+    if (!Array.isArray(v.asrConfigs)) v.asrConfigs = [];
+    if (v.asrConfigs.length === 0 && (v.asrBaseUrl || v.asrApiKey || v.asrModel)) {
+      v.asrConfigs.push({
+        id: v.activeAsrId || newMediaConfigId('asr'),
+        name: '默认配置',
+        provider: guessProviderByUrl(v.asrBaseUrl),
+        baseUrl: v.asrBaseUrl || '',
+        apiKey: v.asrApiKey || '',
+        model: v.asrModel || '',
+        enabled: true,
+      });
+    }
+    // 人物音色绑定：老格式是纯音色名字符串，迁移为带 configId 的对象形式（v 后端本就兼容两种，这里只补齐类型）
+  }
+  const ig = settings.imageGen;
+  if (ig) {
+    if (!Array.isArray(ig.imageConfigs)) ig.imageConfigs = [];
+    if (ig.imageConfigs.length === 0 && (ig.baseUrl || ig.apiKey || ig.model)) {
+      ig.imageConfigs.push({
+        id: ig.activeImageId || newMediaConfigId('img'),
+        name: '默认配置',
+        provider: 'custom',
+        baseUrl: ig.baseUrl || '',
+        apiKey: ig.apiKey || '',
+        model: ig.model || '',
+        size: ig.size || '1024x1024',
+        enabled: true,
+      });
+    }
+  }
+  const vg = settings.videoGen;
+  if (vg) {
+    if (!Array.isArray(vg.videoConfigs)) vg.videoConfigs = [];
+    if (vg.videoConfigs.length === 0 && (vg.baseUrl || vg.apiKey || vg.model)) {
+      vg.videoConfigs.push({
+        id: vg.activeVideoId || newMediaConfigId('vid'),
+        name: '默认配置',
+        provider: 'custom',
+        baseUrl: vg.baseUrl || '',
+        apiKey: vg.apiKey || '',
+        model: vg.model || '',
+        size: vg.size || '1280x720',
+        duration: Number(vg.duration) || 5,
+        enabled: true,
+      });
+    }
+  }
+}
+
+/** 凭 Base URL 猜一个提供商 id（迁移时给个像样的默认值，用户可在界面改） */
+function guessProviderByUrl(baseUrl: string | undefined): string {
+  const u = (baseUrl || '').toLowerCase();
+  const hit = TTS_PROVIDERS.find((p) => p.match && u.includes(p.match.toLowerCase()));
+  return hit ? hit.id : 'openai-compatible';
+}
+
+/**
+ * 把「当前启用配置」回写到扁平字段（保存后调用）。
+ * 这是老调用点（audio:tts / audio:transcribe / image:generate / video:generate）的兼容闸门。
+ */
+export function syncActiveMediaConfigs(settings: AppSettings): void {
+  const v = settings.voice;
+  if (!v) return;
+  const tts = resolveMediaConfig(v.ttsConfigs, v.activeTtsId, {
+    provider: 'openai-compatible',
+    baseUrl: v.ttsBaseUrl,
+    apiKey: v.ttsApiKey,
+    model: v.ttsModel,
+    voice: v.ttsVoice,
+  });
+  if (tts) {
+    v.ttsBaseUrl = tts.baseUrl;
+    v.ttsApiKey = tts.apiKey;
+    v.ttsModel = tts.model;
+    if (tts.voice) v.ttsVoice = tts.voice;
+    if (!v.activeTtsId && Array.isArray(v.ttsConfigs) && v.ttsConfigs.length) {
+      v.activeTtsId = v.ttsConfigs[0].id;
+    }
+  }
+  const asr = resolveMediaConfig(v.asrConfigs, v.activeAsrId, {
+    provider: 'custom',
+    baseUrl: v.asrBaseUrl,
+    apiKey: v.asrApiKey,
+    model: v.asrModel,
+  });
+  if (asr) {
+    v.asrBaseUrl = asr.baseUrl;
+    v.asrApiKey = asr.apiKey;
+    v.asrModel = asr.model;
+    if (!v.activeAsrId && Array.isArray(v.asrConfigs) && v.asrConfigs.length) {
+      v.activeAsrId = v.asrConfigs[0].id;
+    }
+  }
+  const ig = settings.imageGen;
+  if (ig) {
+    const img = resolveMediaConfig(ig.imageConfigs, ig.activeImageId, {
+      provider: 'custom',
+      baseUrl: ig.baseUrl,
+      apiKey: ig.apiKey,
+      model: ig.model,
+      size: ig.size,
+    });
+    if (img) {
+      ig.baseUrl = img.baseUrl;
+      ig.apiKey = img.apiKey;
+      ig.model = img.model;
+      if (img.size) ig.size = img.size;
+      if (!ig.activeImageId && Array.isArray(ig.imageConfigs) && ig.imageConfigs.length) {
+        ig.activeImageId = ig.imageConfigs[0].id;
+      }
+    }
+  }
+  const vg = settings.videoGen;
+  if (vg) {
+    const vid = resolveMediaConfig(vg.videoConfigs, vg.activeVideoId, {
+      provider: 'custom',
+      baseUrl: vg.baseUrl,
+      apiKey: vg.apiKey,
+      model: vg.model,
+      size: vg.size,
+      duration: Number(vg.duration),
+    });
+    if (vid) {
+      vg.baseUrl = vid.baseUrl;
+      vg.apiKey = vid.apiKey;
+      vg.model = vid.model;
+      if (vid.size) vg.size = vid.size;
+      if (vid.duration) vg.duration = String(vid.duration);
+      if (!vg.activeVideoId && Array.isArray(vg.videoConfigs) && vg.videoConfigs.length) {
+        vg.activeVideoId = vg.videoConfigs[0].id;
+      }
+    }
+  }
 }
 
 // 旧版数据位于 userData/data；首次启动（且仍用默认路径、且旧目录有数据、目标目录为空）时一次性迁移到新目录。
@@ -978,6 +1184,8 @@ class DataManager {
                 ? 'all-off'
                 : 'all-on';
         }
+        // 需求 7：多 API 配置迁移（TTS/ASR/生图/生视频）
+        migrateMediaApiConfigs(merged);
         return merged;
       }
     } catch (e) {
@@ -1012,8 +1220,65 @@ class DataManager {
         ...patch.imageGen,
       };
     }
+    // 需求 7：保存后立刻把「当前启用配置」回写到扁平兼容字段，
+    // 这样所有仍读扁平字段的老调用点（audio:tts / image:generate / video:generate 等）
+    // 无需改动就能拿到当前配置，改造范围与回归风险都显著降低。
+    syncActiveMediaConfigs(this.settings);
     fs.writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2), 'utf-8');
     return this.settings;
+  }
+
+  // ---------- 陪伴时长累计（v2.3.94 需求 11）----------
+  //
+  // 为什么要放在**主进程**做累加（而不是渲染进程各自读改写 settings.companionMs）：
+  //   主窗与小窗是两个独立 BrowserWindow，同一个 key（"chatType:chatId"）可能同时在两边计时。
+  //   若渲染进程各自「读出整份 companionMs → 加一秒 → 写回」，两边互相覆盖会**丢秒**；
+  //   而 settings 是整份 JSON 文件，两个窗口并发写还会互相撕裂。
+  //   故 IPC 传的是**增量**（deltaMs），主进程这里是唯一的累加点：只做 `+=`，天然幂等且不丢秒。
+  //
+  // 写盘节流：累加只改内存（this.settings），落盘由 scheduleCompanionFlush() 合并为
+  // 每 COMPANION_FLUSH_MS（默认 30s）至多一次，外加 flushCompanionSync() 在退出前兜底。
+  // 这样「每秒心跳」不会变成「每秒同步写盘」（会造成明显卡顿，见需求硬性约束②）。
+  private companionFlushTimer: NodeJS.Timeout | null = null;
+
+  /** 累计某个会话的陪伴时长（毫秒）。deltaMs ≤ 0 直接忽略。返回累计后的总时长。 */
+  addCompanionMs(key: string, deltaMs: number): number {
+    if (!key || !Number.isFinite(deltaMs) || deltaMs <= 0) return this.getCompanionMs(key);
+    const table = { ...(this.settings.companionMs || {}) };
+    const next = Math.max(0, Math.round(table[key] || 0) + Math.round(deltaMs));
+    table[key] = next;
+    this.settings.companionMs = table;
+    this.scheduleCompanionFlush();
+    return next;
+  }
+
+  /** 取某个会话已累计的陪伴时长（毫秒）。 */
+  getCompanionMs(key: string): number {
+    const v = (this.settings.companionMs || {})[key];
+    return Number.isFinite(v) && (v as number) > 0 ? Math.round(v as number) : 0;
+  }
+
+  /** 合并写盘：30s 内多次累加只落盘一次（退出前由 flushCompanionSync 强制落盘）。 */
+  private scheduleCompanionFlush(): void {
+    if (this.companionFlushTimer) return;
+    this.companionFlushTimer = setTimeout(() => {
+      this.companionFlushTimer = null;
+      this.flushCompanionSync();
+    }, COMPANION_FLUSH_MS);
+    // 定时器不应阻止进程退出（退出前另有 flushCompanionSync 兜底落盘）
+    if (typeof this.companionFlushTimer.unref === 'function') this.companionFlushTimer.unref();
+  }
+
+  /**
+   * 立即把陪伴时长落盘（退出前调用）。不抛异常：写盘失败不应阻断退出流程。
+   * 刻意**不**走 saveSettings（它会把整份 patch 语义化合并并触发广播），此处只写文件。
+   */
+  flushCompanionSync(): void {
+    try {
+      fs.writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2), 'utf-8');
+    } catch (e) {
+      console.error('陪伴时长落盘失败', e);
+    }
   }
 
   // ---------- 一键恢复初始设置 ----------
@@ -1265,8 +1530,11 @@ class DataManager {
    * 记忆按口径截取——自动记忆（sourceMsgIds 全部指向节点前消息）保留；
    * 手动/无关联记忆按 created_at ≤ 节点消息 timestamp 保留。
    * 群聊复制整组成员；单聊绑定原角色（不复制角色卡）。per-chat 设置复制式带到新聊（不影响原聊）。
+   *
+   * v2.3.94 需求 1：新增可选参数 customTitle —— 「从消息分叉」时用它替代节点标题作为新聊天名后缀。
+   * 这样两条路径共用同一份复制/记忆截取逻辑，只在命名上分叉，避免重复实现同一套语义。
    */
-  forkChatFromNode(chatType: string, chatId: string, msgId: number): { chat_type: string; chat_id: string; name: string } {
+  forkChatFromNode(chatType: string, chatId: string, msgId: number, customTitle?: string): { chat_type: string; chat_id: string; name: string } {
     const now = new Date().toISOString();
     const all = this.store.messages.filter((m) => m.chat_type === chatType && m.chat_id === chatId);
     const idx = all.findIndex((m) => m.id === msgId);
@@ -1274,7 +1542,9 @@ class DataManager {
     const before = all.slice(0, idx + 1); // 含节点消息本身
     const beforeIds = new Set(before.map((m) => m.id));
     const nodeMsg = before[before.length - 1];
-    const nodeTitle = this.store.storyNodes.find((n) => n.msg_id === msgId && n.chat_type === chatType && n.chat_id === chatId)?.title || '节点';
+    const nodeTitle = customTitle?.trim()
+      || this.store.storyNodes.find((n) => n.msg_id === msgId && n.chat_type === chatType && n.chat_id === chatId)?.title
+      || '节点';
 
     // 记忆截取口径：sourceMsgIds 非空 → 关联消息全部在节点前才保留；否则按 created_at ≤ 节点消息时间
     const memKeep = (m: (typeof this.store.memories)[number]): boolean => {
@@ -1328,6 +1598,25 @@ class DataManager {
     });
     this.saveStore();
     return { chat_type: 'single', chat_id: newId, name: newName };
+  }
+
+  /**
+   * 从任意消息分叉出新对话（v2.3.94 需求 1）：右键消息气泡 →「从此处开启新对话」。
+   *
+   * 与 forkChatFromNode 的差别**只有命名**：节点版用节点标题，这里改用消息正文摘要。
+   * 复制「该消息及之前的消息」+ 按同一口径截取记忆 + 单聊绑定原角色 + per-chat 设置带走，
+   * 全部复用 forkChatFromNode（只多传一个 customTitle），不重复实现同一套语义。
+   *
+   * 记忆隔离：新聊天是独立 chatId，配合角色级 memoryIsolation（默认开启）即为独立时间线；
+   * 主进程侧还会顺手把新聊天的长记忆开关打开，避免用户分叉后还得手动去开。
+   */
+  forkChatFromMessage(chatType: string, chatId: string, msgId: number): { chat_type: string; chat_id: string; name: string } {
+    const m = this.store.messages.find((x) => x.id === msgId && x.chat_type === chatType && x.chat_id === chatId);
+    if (!m) throw new Error('message not found');
+    // 摘要：取正文首个非空行 → 压掉换行与多余空白 → 截断 12 字（与节点版后缀长度一致）
+    const firstLine = (m.content || '').split('\n').map((s) => s.trim()).find((s) => s.length > 0) || '新对话';
+    const snippet = firstLine.replace(/\s+/g, ' ').slice(0, 12);
+    return this.forkChatFromNode(chatType, chatId, msgId, `分支·${snippet}`);
   }
 
   // per-chat 设置：复制式重映射（与 remapChatSettings 的「移动」语义不同，源聊 key 保留）
@@ -1538,6 +1827,51 @@ class DataManager {
       }
     }
     return Object.values(stats).sort((a, b) => b.tokens - a.tokens);
+  }
+
+  /**
+   * 按角色聚合陪伴时长（毫秒）—— 统计页板块二/板块三用。
+   *
+   * 口径说明（写在代码里以免日后被改错）：
+   *   - `single:<chatId>`：用 {@link resolveSingleRoleId} 解出真实 roleId 后全额记到该人物名下
+   *     （单聊天然只属于一个人，含「复制出的单聊」—— 那种 chat_id 与 roleId 解绑，靠 session.role_id 找回）；
+   *   - `obs:<roleId>`：观察者私密小窗，全额记到该人物；
+   *   - `group:<groupId>`：群聊是多人共享的陪伴，**按成员数均摊**到当前成员名下
+   *     （均摊而非全额重复计入，是为了「所有人陪伴时长之和 ≈ 用户实际投入的总陪伴时间」，
+   *     否则群聊会被重复计入每个人而虚高）；
+   *   - 认不出归属的 key 直接跳过（不猜）。
+   */
+  getCompanionMsByRole(): Record<string, number> {
+    const table = this.settings.companionMs || {};
+    const out: Record<string, number> = {};
+    for (const [key, rawMs] of Object.entries(table)) {
+      const ms = Number(rawMs);
+      if (!Number.isFinite(ms) || ms <= 0) continue;
+      const sep = key.indexOf(':');
+      if (sep <= 0) continue;
+      const chatType = key.slice(0, sep);
+      const chatId = key.slice(sep + 1);
+      if (!chatId) continue;
+
+      if (chatType === 'single' || chatType === 'obs') {
+        const roleId = this.resolveSingleRoleId('single', chatId);
+        if (!roleId) continue;
+        out[roleId] = (out[roleId] || 0) + ms;
+        continue;
+      }
+      if (chatType === 'group') {
+        const g = this.getGroup(chatId);
+        const members = (g?.member_ids || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (members.length === 0) continue;
+        const each = ms / members.length;
+        for (const rid of members) out[rid] = (out[rid] || 0) + each;
+      }
+    }
+    for (const k of Object.keys(out)) out[k] = Math.round(out[k]);
+    return out;
   }
 
   // 记录一次聊天模型调用（token 与次数累计）。modelId 为空则忽略。

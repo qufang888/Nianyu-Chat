@@ -305,16 +305,63 @@ export interface VoiceSettings {
   // 因此只有协议原生支持该参数的提供商才会真正生效，不支持者静默忽略（设置界面已列出各提供商支持情况）。
   ttsSpeed?: number; // 语速倍率 TTS_SPEED_MIN~TTS_SPEED_MAX（0.5~2.0），1=原速（默认）
   ttsPitch?: number; // 音调偏移 TTS_PITCH_MIN~TTS_PITCH_MAX（-12~12，近似半音），0=不变（默认）
+  // ===== 多 API 配置（需求 7）：可添加多个 TTS / ASR 配置，与文本模型一样支持多个 =====
+  // 上面那批扁平字段（ttsBaseUrl/ttsApiKey/ttsModel/ttsVoice/asrBaseUrl/...）是**兼容层**：
+  // 若用户从未使用过多配置，读写都落到 ttsConfigs[activeTtsId] / asrConfigs[activeAsrId] 的第一项；
+  // 一旦用户添加了第二个配置并切换，旧的扁平字段会被同步写入「当前启用配置」，不再被单独使用。
+  ttsConfigs?: MediaApiConfig[]; // TTS 多个 API 配置（增删改查 + 启停）
+  activeTtsId?: string; // 当前启用的 TTS 配置 id；空=用 ttsConfigs[0]
+  asrConfigs?: MediaApiConfig[]; // ASR 多个 API 配置
+  activeAsrId?: string; // 当前启用的 ASR 配置 id；空=用 asrConfigs[0]
+}
+
+// 多 API 配置（TTS / ASR / 生图 / 生视频共用形状，需求 7）。
+// 迁移约定：老版本只有扁平的 ttsBaseUrl/ttsApiKey/... 单一配置，
+// 由 electron/db.ts 的 migrateMediaApiConfigs() 在读 settings 时**一次性**转成 ttsConfigs[0]/asrConfigs[0]，
+// 之后新旧字段双向同步（改数组会回写扁平字段，改扁平字段会补回数组第一项），保证老用户不丢配置、不重复配置。
+export interface MediaApiConfig {
+  id: string; // 稳定 id（"tts_<随机>"），用于 activeXxxId 指向与人物音色绑定
+  name: string; // 配置名（用户可自取，如「主号 / 备用 / GPT-语音」）
+  provider: string; // 提供商 id，对应 TTS_PROVIDERS[].id；生图/生视频填 'custom'
+  baseUrl: string; // Base URL
+  apiKey: string; // API Key
+  model: string; // 模型名（TTS/ASR/生图/生视频各用其模型名）
+  enabled?: boolean; // 停用的配置不出现在可选列表里（默认视为启用）；停用不影响人物已绑定的音色（仍可用）
+  // —— 以下仅 TTS / 生图 / 生视频按需使用，ASR 忽略 ——
+  voice?: string; // 默认音色（可被角色级 ttsVoices[roleId].voice 覆盖）
+  size?: string; // 生图/生视频尺寸
+  duration?: number; // 生视频时长（秒）
+}
+
+// ===== 音色列表拉取结果（需求 8：人物音色绑定） =====
+// audio:listVoices 传 opts 时返回本结构（带失败原因分类），不传 opts 时仍返回 string[]（向后兼容）。
+// reason 分类让 UI 能区分两种完全不同的处置：
+//   - 'no-endpoint'：该提供商根本没有公开音色列表端点 → 引导用户手填音色 ID（不是错误）
+//   - 'auth' / 'network' / 'empty'：真实的请求问题 → 提示检查密钥 / 重试
+export interface VoiceListResult {
+  voices: string[]; // 拉到的音色 id / 名称列表（失败时为空数组）
+  ok: boolean; // 是否成功拉到（voices 非空）
+  reason: 'ok' | 'no-config' | 'no-endpoint' | 'auth' | 'network' | 'empty'; // 失败/成功原因分类
+  message?: string; // 面向用户的中文说明（仅失败时给出）
+  providerId?: string; // 识别到的提供商 id（对应 TTS_PROVIDERS[].id），供 UI 显示「该提供商不支持拉取」
+}
+
+// audio:listVoices 的可选参数（按人物绑定的配置拉音色，而非全局当前启用配置）
+export interface ListVoicesOptions {
+  configId?: string; // 用 ttsConfigs 里该 id 的 baseUrl/apiKey 拉取
+  baseUrl?: string; // 显式 Base URL（优先级最高，用于尚未落盘的草稿）
+  apiKey?: string; // 显式 API Key（优先级最高）
 }
 
 // 按角色的 TTS 独立配置：未填写的字段回退全局 voice 设置（旧版纯音色名字符串自动兼容）
 export interface RoleTtsConfig {
-  voice?: string; // 音色名
+  voice?: string; // 音色名（音色 id / 名称，人物绑定的音色）
   baseUrl?: string; // 独立 TTS API baseUrl（空=用全局 ttsBaseUrl）
   apiKey?: string; // 独立 TTS API Key（空=用全局 ttsApiKey）
   model?: string; // 独立 TTS 模型名（空=用全局 ttsModel）
   speed?: number; // 该角色独立语速倍率（空=用全局 ttsSpeed）
   pitch?: number; // 该角色独立音调偏移（空=用全局 ttsPitch）
+  configId?: string; // 绑定的 TTS 配置 id（需求 8：人物音色绑定到具体某个多配置）；空=用当前启用配置
 }
 
 // ===== 语速 / 音调的可调范围（硬编码上限，改动需同步告知用户）=====
@@ -387,22 +434,29 @@ export function clampPseudoSpeed(v: unknown): number {
 }
 
 // 生图（专用图像生成 API）：拥有独立的 baseUrl/apiKey，与「模型配置中心」完全解耦，调用 OpenAI 兼容 /images/generations
+// 需求 7：支持**多个生图 API 配置**（与文本模型一样可添加多条），activeId 指向当前启用项；
+// 下面的扁平字段是兼容层，由 db 层 migrateMediaApiConfigs() 与 imageConfigs[activeId] 双向同步。
 export interface ImageGenSettings {
-  enabled: boolean; // 总开关
+  enabled: boolean; // 生图功能总开关（与单条配置的 enabled 无关）
   baseUrl: string; // 生图 API baseUrl（手填到版本号，如 https://api.openai.com/v1），系统自动补全 /images/generations
   apiKey: string; // 生图 API 密钥
   model: string; // 生图模型名，如 gpt-image-1 / dall-e-3
   size: string; // 尺寸，如 1024x1024
+  imageConfigs?: MediaApiConfig[]; // 多个生图 API 配置
+  activeImageId?: string; // 当前启用的生图配置 id；空=用 imageConfigs[0]
 }
 
 // 生视频（专用视频生成 API）：使用方式与生图完全一致，调用 OpenAI 兼容 /videos/generations（依供应商支持）
+// 需求 7：同样支持多个配置，activeId 指向当前启用项；扁平字段为兼容层。
 export interface VideoGenSettings {
-  enabled: boolean; // 总开关
+  enabled: boolean; // 生视频功能总开关
   baseUrl: string; // 视频生成 API baseUrl（手填到版本号，如 https://api.openai.com/v1），系统自动补全 /videos/generations
   apiKey: string; // 视频生成 API 密钥
   model: string; // 视频生成模型名，如 wan-2.1 / veo-2 / hunyuan-video
   duration: string; // 时长（秒），如 5
   size: string; // 尺寸，如 1280x720
+  videoConfigs?: MediaApiConfig[]; // 多个生视频 API 配置
+  activeVideoId?: string; // 当前启用的生视频配置 id；空=用 videoConfigs[0]
 }
 
 // 深度思考等级：off=关闭；low/medium/high=不同强度（仅对支持深度思考的模型生效）
@@ -552,6 +606,21 @@ export interface AppSettings {
   worldBookOrder?: string[]; // 世界书管理界面展示顺序（worldBook id 数组，拖拽排序；缺失的按原顺序追加在末尾）
   pinnedChats?: string[]; // 置顶聊天（key="${chatType}:${chatId}"），聊天列表/悬浮球面板置顶展示
   chatOrder?: string[]; // 手动拖动的聊天顺序（key 数组，按显示顺序；新聊天按后端顺序追加末尾）
+  // ===== 不常用聊天文件夹（需求 14）=====
+  // 超过 inactiveChatDays 天没在该聊天说过话的聊天被自动归入「不常用聊天」文件夹；
+  // 置顶聊天不自动移入（仍可手动）；移入后置顶状态消失，移出不恢复置顶。
+  inactiveChatDays: number; // 不常用判定阈值（天），1~3650；默认 30
+  // 手动标记：key="chatType:chatId"
+  //   true  = 手动移入不常用文件夹（此时置顶会被移除）
+  //   false = 用户手动移出并豁免自动判定（否则超期聊天会在下一次刷新立刻弹回文件夹）
+  // 缺key / 置顶 / 时间缺失 → 一律按自动规则判定。判定实现见 src/utils/inactiveChats.ts
+  inactiveChats: Record<string, boolean>;
+  // ===== 统计与最喜爱人物（需求 11）=====
+  companionMs: Record<string, number>; // 累计陪伴时长（毫秒），key="chatType:chatId"；由「前台停留 1s 心跳」累计
+  favoriteRoleId?: string; // 最喜爱人物 roleId；空/失效=未设置（统计页展示加号）
+  favoriteGender?: 'male' | 'female'; // 最喜爱人物性别（用户自选）；空=留空
+  favoriteSignature?: string; // 最喜爱人物个性签名（用户自写）；空=留空
+  favoriteSetAt?: number; // 设置时间戳（毫秒）
   sharedRuleIds: string[]; // 共用规则（所有对话/模型遵守）
   enableAutoMemory: boolean; // AI 自动提炼记忆（默认关）
   memorySummarizePrompt?: string; // 总结记忆提示词（AI 自动提炼与手动「AI 总结记忆」共用；出厂默认见 src/utils/builtinPrompts.ts，清空保存时自动填回默认）
@@ -581,8 +650,16 @@ export interface AppSettings {
   idleRandomMinSec?: number; // 随机模式最小静默时长（秒）：钳制 1~86400（1 秒 ~ 24 小时），默认 60
   idleRandomMaxSec?: number; // 随机模式最大静默时长（秒）：钳制 1~86400 且 ≥ 最小值，默认 1800
   idleWriteMemory: boolean; // 主动消息是否参与 AI 自动记忆提炼（默认 false）
+  // ===== 主动消息「等待你回复」触发阈值（需求 4）=====
+  // 达到该条数才开始进入等待态；在此之前主动消息最多累积到该条数。
+  // 填到最大值（或留空）= 不启用等待功能（等价旧的「无限条」）。
+  idleAwaitingTriggerCount?: number; // 触发等待的主动消息条数；1~9999；undefined/9999=不启用等待
   idleSwitchAction: 'pause' | 'reset' | 'continue'; // 切换聊天时主动消息计时行为：继续（默认，每聊天独立后台触发）/暂停/重置
   idleCooldownUntilReply?: boolean; // 主动消息冷却：发出主动消息后，用户在该聊天回复前不再触发（默认 true；按聊天独立）
+  // ===== 记忆可见性（需求 6）=====
+  // 「记得」= 在角色人设里长期写死的记忆（生日/喜好/雷区等），始终注入 system prompt，不受提炼开关与轮数门槛影响。
+  roleFacts: Record<string, string[]>; // key=roleId，value=多条「记得」文本
+  memoryVisibilityNotice?: boolean; // 是否在记忆面板顶部提示「长记忆未开启导致记忆为空」类原因（默认 true）
   eventMoodImpact: number; // 随机事件影响心情的程度（0~1）：0=事件只改好感度，1=事件必按所选心情改变角色心情
   dialogueMoodImpact: number; // 对话影响心情的程度（0~1）：0=心情只由事件决定，1=AI 充分依据对话判定当前心情
   autoRelationship: boolean; // AI 依据聊天内容自动判定关系值/关系类别（关闭则不更新，纯展示）
@@ -834,6 +911,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     ttsRegenerate: false, // 默认复用已合成音频（重复朗读不消耗 token）
     ttsSpeed: TTS_SPEED_DEFAULT, // 语速默认 1 倍（原速）
     ttsPitch: TTS_PITCH_DEFAULT, // 音调默认 0（不变）
+    // 需求 7：多配置默认为空数组 —— db 层读 settings 时若为空会由扁平字段自动生成首项，
+    // 这里给空数组是为了不预设任何假配置。
+    ttsConfigs: [],
+    asrConfigs: [],
   },
   miniWindow: {
     enabled: true,
@@ -848,6 +929,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     apiKey: '',
     model: 'gpt-image-1',
     size: '1024x1024',
+    imageConfigs: [], // 需求 7：多配置默认为空，由 db 层从扁平字段自动补首项
   },
   videoGen: {
     enabled: false,
@@ -856,7 +938,22 @@ export const DEFAULT_SETTINGS: AppSettings = {
     model: '',
     duration: '5',
     size: '1280x720',
+    videoConfigs: [], // 需求 7：同上
   },
+  // ===== 需求 14：不常用聊天文件夹 =====
+  inactiveChatDays: 30, // 默认 30 天没聊天算不常用
+  inactiveChats: {}, // 手动移入标记；移出即删 key
+  // ===== 需求 11：统计与最喜爱人物 =====
+  companionMs: {}, // 累计陪伴时长（毫秒），key="chatType:chatId"
+  favoriteRoleId: undefined, // 最喜爱人物（空=未设置，统计页显示加号）
+  favoriteGender: undefined,
+  favoriteSignature: '',
+  favoriteSetAt: undefined,
+  // ===== 需求 4：主动消息「等待你回复」触发阈值 =====
+  idleAwaitingTriggerCount: 9999, // 默认 9999=不启用等待（等价旧的「1 条未回复就等待」需用户自行下调）
+  // ===== 需求 6：记忆可见性 =====
+  roleFacts: {}, // 「记得」长期记忆，key=roleId
+  memoryVisibilityNotice: true, // 记忆面板顶部显示「为什么记忆是空的」提示
   // ===== 异步场景生图默认值 =====
   autoSceneImageChats: {},
   sceneImageIntervalSec: 120,

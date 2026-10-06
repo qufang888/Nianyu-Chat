@@ -39,6 +39,10 @@ import { MomentsView } from './MomentsView';
 import { EVENT_COOLDOWN_MS, EVENT_TRIGGER_THRESHOLD } from '../eventThemes';
 import { getEventStore, setEventStore } from '../utils/eventStore';
 import { setIdleActivity } from '../utils/idleTimerStore';
+
+// v2.3.94 需求 11：陪伴时长计时（小窗与主窗共用同一套模块级逻辑；
+// 两边只上报增量、由主进程累加，故同key 同时计时是相加而非互相覆盖）
+import { startCompanionTimer } from '../utils/companionTimer';
 import { applyAnimControl } from '../utils/animControl';
 import { resolveWantStream, resolveStreamInfo, persistStreamToggle, type StreamPref } from '../utils/chatStream';
 import { usePseudoReveal, markPseudoPending, isPseudoPending, clearPseudoPending } from '../utils/pseudoStream';
@@ -47,6 +51,7 @@ import { useVoiceInput } from '../hooks/useVoiceInput';
 import { ClearChatModal } from './ClearChatModal';
 import { MessageSearch } from './MessageSearch';
 import { BondPanel } from './BondPanel';
+import { TranslateModal } from './TranslateModal';
 
 // 快捷聊天小窗（独立无边框窗口，#mini 路由渲染）
 // 交互逻辑与 ChatWindow 主界面保持一致：图片发送/预览、语音输入、TTS、回到底部、重发、@提及、群聊转单聊提示等。
@@ -72,7 +77,9 @@ export const MiniChat: React.FC = () => {
   );
   const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [preview, setPreview] = useState<string | null>(null);
-  const [translateModal, setTranslateModal] = useState<{ source: string; text?: string; loading?: boolean; error?: string } | null>(null);
+  // v2.3.94 需求 10：只存原文 + 发言人；译文/朗读/段落删除状态全在共享组件 TranslateModal 内
+  // （与小窗外的另一处实现是同一份代码，能力天然一致）。
+  const [translateModal, setTranslateModal] = useState<{ source: string; senderName?: string } | null>(null);
   const [genOpen, setGenOpen] = useState(false);
   const [genText, setGenText] = useState('');
   const [genLoading, setGenLoading] = useState(false);
@@ -163,6 +170,16 @@ export const MiniChat: React.FC = () => {
     if (!current) return;
     api.getStoryEnabled(current.chat_type, current.chat_id).then(setStoryOn);
     api.listStoryNodes(current.chat_type, current.chat_id).then(setStoryNodes);
+  }, [current?.chat_type, current?.chat_id]);
+
+  // ===== v2.3.94 需求 11：陪伴时长计时（小窗同步）=====
+  // 与主窗 ChatWindow 完全同一套模块级逻辑：前台可见 + 有焦点才走 1s 心跳，
+  // 切换会话/卸载即停表并结算。小窗与主窗是两个 BrowserWindow，
+  // 两边都只上报增量、由主进程唯一累加，故同 key 同时计时是「相加」不会互相覆盖。
+  useEffect(() => {
+    if (!current) return;
+    const stop = startCompanionTimer(current.chat_type, current.chat_id);
+    return stop;
   }, [current?.chat_type, current?.chat_id]);
   const toggleStory = async () => {
     if (!current) return;
@@ -1972,15 +1989,9 @@ export const MiniChat: React.FC = () => {
     setShowMention(false);
   };
 
-  const handleTranslate = async (text: string) => {
-    setTranslateModal({ source: text, loading: true });
-    try {
-      const res = await api.translate(text);
-      if (res.ok) setTranslateModal({ source: text, text: res.text || '' });
-      else setTranslateModal({ source: text, error: res.error || t('msg.translateFailed') });
-    } catch (e: any) {
-      setTranslateModal({ source: text, error: e?.message || t('msg.translateFailed') });
-    }
+  // 打开翻译弹窗：只带原文 + 发言人，翻译与朗读由 TranslateModal 自行管理
+  const handleTranslate = (text: string, senderName?: string) => {
+    setTranslateModal({ source: text, senderName });
   };
 
   const fmtTime = (iso: string) =>
@@ -2684,29 +2695,18 @@ export const MiniChat: React.FC = () => {
           </div>
         </div>
       )}
+      {/* 翻译弹窗 + 原文/译文朗读（v2.3.94 需求 10）：与主窗共用 TranslateModal，能力完全一致。
+          roleId：单聊取该角色；群聊按发言人名匹配成员，取不到时用第一位成员。 */}
       {translateModal && (
-        <div className="modal-mask" onClick={() => setTranslateModal(null)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480, width: '90%' }}>
-            <div className="modal-title">{t('msg.translate')}</div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 6 }}>{t('msg.translateSource')}</div>
-            <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 140, overflowY: 'auto', padding: 8, background: 'var(--color-panel-alt)', borderRadius: 8, marginBottom: 10 }}>
-              {translateModal.source}
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 6 }}>{t('msg.translateResult')}</div>
-            {translateModal.loading ? (
-              <div style={{ padding: 8 }}>{t('chat.transcribing')}</div>
-            ) : translateModal.error ? (
-              <div style={{ color: '#e74c3c', padding: 8 }}>{translateModal.error}</div>
-            ) : (
-              <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflowY: 'auto', padding: 8, background: 'var(--color-panel)', borderRadius: 8 }}>
-                {translateModal.text}
-              </div>
-            )}
-            <div style={{ textAlign: 'right', marginTop: 12 }}>
-              <button className="btn-primary" onClick={() => setTranslateModal(null)}>{t('common.ok')}</button>
-            </div>
-          </div>
-        </div>
+        <TranslateModal
+          source={translateModal.source}
+          roleId={
+            current?.chat_type === 'single'
+              ? members.find((r) => r.id === current.chat_id || current.chat_id.includes(r.id))?.id || current.chat_id
+              : members.find((r) => r.name === translateModal.senderName)?.id || members[0]?.id
+          }
+          onClose={() => setTranslateModal(null)}
+        />
       )}
 
       {genOpen && (
@@ -2924,7 +2924,8 @@ const MiniMessageRow: React.FC<{
   onRollback?: (msgId: number) => void;
   onDeleteMsg?: (msgId: number) => void;
   onCopy?: (text: string) => void;
-  onTranslate?: (text: string) => void;
+  // v2.3.94 需求 10：第二个参数是发言人名（群聊按它解析该发言人的绑定音色；单聊忽略）
+  onTranslate?: (text: string, senderName?: string) => void;
   onMarkNode?: (msg: ChatMessage) => void;
   onViewPrompt?: (prompt: string) => void; // 右键「查看提示词」：由父组件打开弹窗
   failed?: { content: string; imagePaths: string[]; phase: 'full' | 'ai'; error: string } | null;
@@ -3024,11 +3025,16 @@ const MiniMessageRow: React.FC<{
   // v2.3.77：回复全部生成完毕（占位气泡与流式输出都结束）才让操作栏「弹出」；生成过程中「缩回」。
   const streamed = !(streaming && !msg.content);
   const [actionBarVisible, setActionBarVisible] = useState(false);
+  // v2.3.94 需求 2（与主窗同步）：弹出时机 = 生成完毕 **且** 伪流式逐字放完。
+  // 原实现只看 streamed，开伪流式时按钮会在正文还没放完就弹出来。
+  // 注意本文件的 streamed 口径比主窗松（真实消息恒为 true），但这不影响正确性：
+  // 伪流式开启时 revealing 在放完前恒为 true，取与后行为与主窗一致。
+  const actionBarGate = streamed && !pseudoState.revealing;
   useEffect(() => {
-    if (!streamed) { setActionBarVisible(false); return; }
+    if (!actionBarGate) { setActionBarVisible(false); return; }
     const id = requestAnimationFrame(() => setActionBarVisible(true));
     return () => cancelAnimationFrame(id);
-  }, [streamed]);
+  }, [actionBarGate]);
     const typing = streaming && !msg.content && !msg.reasoning;
     // 流式逐字渐显（v2.3.19）：每个新字固定 0.3s 渐显；输出停滞时仅最后一个字闪烁过渡（同主窗口逻辑）
     const [tailStalled, setTailStalled] = useState(false);
@@ -3167,35 +3173,43 @@ const MiniMessageRow: React.FC<{
                 两者用途不同，用竖线分开避免误点：顺时针 ⟳ 是语音重播、逆时针 ⟲ 是 AI 重写，
                 方向相反极易混淆，隔断同时起到视觉分组作用。*/}
             {showTts && onAiAction && msg.sender_type !== 'user' && <span className="msg-action-divider" aria-hidden="true" />}
+            {/* v2.3.94 需求 2 连带修复（与主窗同步）：AI 操作组显式带上 showAiActions 门。
+                语义依据（见上方 v2.3.78 注释）：语音组每条 AI 消息都有；AI 操作组仅最后一条显示。
+                小窗此前靠外层 branch2 兜底，行为恰好正确，但这是隐式依赖 ——
+                一旦有人调整容器门控（如主窗那样把语音组独立成门），✍ ⟲ 💬 就会到处冒。
+                显式门控让意图不再依赖外层，两端语义也才对齐。 */}
+            {showAiActions && onAiAction && msg.sender_type !== 'user' && (<>
 
-            <button
-              type="button"
-              className="msg-ai-action-btn"
-              disabled={aiActionBusy}
-              title={t('msg.aiContinue')}
-              onClick={(e) => { e.stopPropagation(); void onAiAction?.('continue'); }}
-            >
-              ✍
-            </button>
-            <button
-              type="button"
-              className="msg-ai-action-btn"
-              disabled={aiActionBusy}
-              title={t('msg.aiRewrite')}
-              onClick={(e) => { e.stopPropagation(); void onAiAction?.('rewrite'); }}
-            >
-              ⟲
-            </button>
-            <button
-              type="button"
-              className="msg-ai-action-btn"
-              disabled={aiActionBusy}
-              title={t('msg.aiReplyForUser')}
-              onClick={(e) => { e.stopPropagation(); void onAiAction?.('replyForUser'); }}
-            >
-              💬
-            </button>
-            {aiActionBusy && <span className="msg-ai-actions-tip">{t('msg.aiActionWorking')}</span>}
+
+              <button
+                type="button"
+                className="msg-ai-action-btn"
+                disabled={aiActionBusy}
+                title={t('msg.aiContinue')}
+                onClick={(e) => { e.stopPropagation(); void onAiAction?.('continue'); }}
+              >
+                ✍
+              </button>
+              <button
+                type="button"
+                className="msg-ai-action-btn"
+                disabled={aiActionBusy}
+                title={t('msg.aiRewrite')}
+                onClick={(e) => { e.stopPropagation(); void onAiAction?.('rewrite'); }}
+              >
+                ⟲
+              </button>
+              <button
+                type="button"
+                className="msg-ai-action-btn"
+                disabled={aiActionBusy}
+                title={t('msg.aiReplyForUser')}
+                onClick={(e) => { e.stopPropagation(); void onAiAction?.('replyForUser'); }}
+              >
+                💬
+              </button>
+              {aiActionBusy && <span className="msg-ai-actions-tip">{t('msg.aiActionWorking')}</span>}
+            </>)}
           </div>
           )}
         </div>
@@ -3216,7 +3230,7 @@ const MiniMessageRow: React.FC<{
             <button className="ctx-menu-item" onClick={() => { onViewPrompt?.(msg.genPrompt!); closeMenu(); }}>{t('msg.viewPrompt')}</button>
           )}
           {onQuickMemory && <button className="ctx-menu-item" onClick={() => { onQuickMemory(msg.content); closeMenu(); }}>{t('msg.quickMemory')}</button>}
-          {onTranslate && <button className="ctx-menu-item" onClick={() => { onTranslate(msg.content); closeMenu(); }}>{t('msg.translate')}</button>}
+          {onTranslate && <button className="ctx-menu-item" onClick={() => { onTranslate(msg.content, msg.sender_name); closeMenu(); }}>{t('msg.translate')}</button>}
           {/* 朗读：任何有文本的气泡都可右键朗读（同主窗口） */}
           {hasText && (
             <>

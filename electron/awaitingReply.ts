@@ -37,6 +37,12 @@ export interface AwaitingReplyMaps {
   awaiting: Set<string>;
   frozen: Map<string, number>;
   idleState: Map<string, number>;
+  /**
+   * v2.3.94 需求 4：chatKey -> 等待期内已发出的主动消息条数。
+   * 阈值 > 1 时用它累计：发满阈值才真正进入等待态（进 awaiting 集合）。
+   * 用户回复/主动跳过时清零。
+   */
+  counts?: Map<string, number>;
 }
 
 export interface AwaitingReplyDeps {
@@ -50,7 +56,17 @@ export interface AwaitingReplyDeps {
    * 关闭时不存在等待态：UI 不应显示提示，门禁也不应命中。
    */
   isGateOpen?: () => boolean;
+  /**
+   * v2.3.94 需求 4：触发等待的主动消息条数阈值（读 settings.idleAwaitingTriggerCount）。
+   * - 返回 1 → 旧行为：发出 1 条就进入等待态；
+   * - 返回 n → 发满 n 条主动消息后才进入等待态（期间继续发，达到 n 条即停）；
+   * - 返回 0 或 >= AWAITING_NEVER（9999）→ **不启用等待功能**（等价「无限条」）。
+   */
+  getTriggerThreshold?: () => number;
 }
+
+/** 「无限条」哨兵值：达到或超过它即视为「不启用等待功能」（设置界面填这个值表示最大档） */
+export const AWAITING_NEVER = 9999;
 
 export interface AwaitingReplyClearResult {
   /** 清理前该聊天是否确实处于等待态（false = 本次调用无实际变化） */
@@ -64,16 +80,22 @@ export interface AwaitingReplyClearResult {
 }
 
 export interface AwaitingReplyTracker {
-  /** 记入等待态（handleProactive 成功后调用） */
+  /**
+   * 记入一次「已发出主动消息」（handleProactive 成功后调用）。
+   * v2.3.94 需求 4：按阈值决定是**累计计数**还是**立即进入等待态**。
+   * @returns 本次调用后该聊天是否处于等待态（渲染层据此决定要不要显示提示）
+   */
   mark: (chatKey: string) => void;
   /** 查询等待态；开关关闭时恒 false（与 proactive.ts 的门禁语义保持一致） */
   isAwaiting: (chatKey: string) => boolean;
+  /** 查询当前累计的主动消息条数（UI 展示「第 n/m 条」用；未计数为 0） */
+  count: (chatKey: string) => number;
   /**
    * 解除等待态 —— 「用户回复」与「我不回复」唯一的清理入口。
    * @param dropTimerState true = 连计时基准一起删除（聊天被删除时用）；false = 基准重置为当下
    */
   clear: (chatKey: string, reason: AwaitingReplyReason, opts?: { dropTimerState?: boolean }) => AwaitingReplyClearResult;
-  /** 全量清空（设置开关关闭时用）：清等待集合 + 冻结表，并对每个 chatKey 广播 */
+  /** 全量清空（设置开关关闭时用）：清等待集合 + 冻结表 + 计数，并对每个 chatKey 广播 */
   clearAll: (reason: AwaitingReplyReason) => string[];
 }
 
@@ -85,6 +107,7 @@ export function createAwaitingReplyTracker(deps: AwaitingReplyDeps): AwaitingRep
   const { maps, broadcast } = deps;
   const now = deps.now ?? ((): number => Date.now());
   const isGateOpen = deps.isGateOpen ?? ((): boolean => true);
+  const getTriggerThreshold = deps.getTriggerThreshold ?? ((): number => 1);
 
   /** 安全广播：单窗异常不影响状态机（与 main.ts broadcast 的容错语义一致） */
   const emit = (channel: string, payload: unknown): void => {
@@ -103,14 +126,56 @@ export function createAwaitingReplyTracker(deps: AwaitingReplyDeps): AwaitingRep
     // 永久残留（清不掉，因为开关关闭时 clearAll 不会逐个广播清除）。
     // 与 isAwaiting() 保持同一判据，避免「查得到=false、界面却显示等待」的割裂。
     if (!isGateOpen()) return;
+
+    // v2.3.94 需求 4：阈值化。
+    //   - 阈值 1（默认）→ 旧行为：发一条即进入等待态；
+    //   - 阈值 n>1       → 先累计计数，发满 n 条才进入等待态（期间继续发）；
+    //   - 阈值 0 / ≥9999 → 不启用等待（等价「无限条」），连计数都不记。
+    const raw = getTriggerThreshold();
+    const threshold = Number.isFinite(raw) ? Math.floor(raw) : 1;
+    if (threshold <= 0 || threshold >= AWAITING_NEVER) {
+      // 不启用等待：确保此前若处于等待态也要解开（用户可能刚把阈值调到「无限」）
+      if (maps.awaiting.has(chatKey)) clear(chatKey, 'settings-off');
+      return;
+    }
+
+    if (threshold > 1 && maps.counts) {
+      const next = (maps.counts.get(chatKey) || 0) + 1;
+      maps.counts.set(chatKey, next);
+      if (next < threshold) {
+        // 还没发满：继续发下一条，但要把计数与「当前 n/m」告诉渲染层，
+        // 让用户看得见「再有 (m-n) 条就开始等你回复」。
+        emit(AWAITING_REPLY_CHANNEL, {
+          chatKey,
+          awaiting: false,
+          reason: 'counting',
+          count: next,
+          threshold,
+        });
+        return;
+      }
+    }
+
     maps.awaiting.add(chatKey);
-    emit(AWAITING_REPLY_CHANNEL, { chatKey, awaiting: true, reason: 'sent' });
+    emit(AWAITING_REPLY_CHANNEL, {
+      chatKey,
+      awaiting: true,
+      reason: 'sent',
+      count: maps.counts?.get(chatKey),
+      threshold,
+    });
   };
 
   const isAwaiting = (chatKey: string): boolean => {
     if (!chatKey) return false;
     if (!isGateOpen()) return false;
     return maps.awaiting.has(chatKey);
+  };
+
+  /** v2.3.94 需求 4：当前已累计的主动消息条数（UI 展示用） */
+  const count = (chatKey: string): number => {
+    if (!chatKey) return 0;
+    return maps.counts?.get(chatKey) || 0;
   };
 
   const clear = (
@@ -121,6 +186,8 @@ export function createAwaitingReplyTracker(deps: AwaitingReplyDeps): AwaitingRep
     if (!chatKey) return { wasAwaiting: false, frozenCleared: false, baseReset: false, baseTs: null };
     // 1) 解除调度门禁（legacy 3s 循环 + NHPP 心跳共用这一个 Set）
     const wasAwaiting = maps.awaiting.delete(chatKey);
+    // 1b) v2.3.94 需求 4：计数必须一并清零，否则阈值 >1 时上一轮的 n 会让下一轮提前进入等待态
+    maps.counts?.delete(chatKey);
     // 2) 丢弃冻结基准：残留值会让下次冷却的 elapsed 起点错乱（倒计时走字却不发）
     const frozenCleared = maps.frozen.delete(chatKey);
     // 3) 计时基准：重置为当下 → 下一条主动消息按「刚回复过」重新开始计时（不会解除瞬间补发）
@@ -148,8 +215,10 @@ export function createAwaitingReplyTracker(deps: AwaitingReplyDeps): AwaitingRep
     // 冻结表可能残留没有对应等待条目的键（历史/异常路径）→ 整体清空，
     // 否则残留值会让下次开启开关后计时起点错乱（与 v2.3.92 原行为一致）
     maps.frozen.clear();
+    // v2.3.94 需求 4：计数表同样整体清空（阈值 >1 时可能存在「尚未发满、无等待条目」的键）
+    maps.counts?.clear();
     return keys;
   };
 
-  return { mark, isAwaiting, clear, clearAll };
+  return { mark, isAwaiting, count, clear, clearAll };
 }

@@ -1,12 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
+import { useTheme } from '../theme/ThemeContext';
 import type { MemoryEntry, ChatListItem } from '../types';
 import { useToast, ToastView } from './Toast';
+import { rankCandidates } from '../utils/fuzzySearch';
 
 // 记忆面板：展示并手动编辑某角色的记忆（AI 自动提炼的记忆也会出现在列表中，可手动修改/删除）
 export const MemoryPanel: React.FC<{ roleId: string }> = ({ roleId }) => {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
+  const { settings } = useTheme();
   const { toast, showToast } = useToast();
   const [mems, setMems] = useState<MemoryEntry[]>([]);
   const [editing, setEditing] = useState<MemoryEntry | null>(null);
@@ -84,10 +87,14 @@ export const MemoryPanel: React.FC<{ roleId: string }> = ({ roleId }) => {
     return parts.join(' ');
   };
 
-  const ql = q.trim().toLowerCase();
+  // 需求 12：记忆搜索改走 fuzzySearch —— 模糊匹配 + 按关联程度排序（相关度高的排前面）。
+  // 记忆列表本身是「结果区」而非候选项下拉，故不截断到 5 条（否则用户会以为只有 5 条记忆命中）；
+  // 真正受「最多 5 个」铁律约束的是候选面板，见 components/SearchSuggest.tsx。
+  const ql = q.trim();
   const matches = useMemo(
-    () => (ql ? mems.filter((m) => searchableText(m).toLowerCase().includes(ql)) : mems),
-    [mems, ql, chatNames],
+    () => (ql ? rankCandidates(ql, mems, (m) => ({ label: searchableText(m) })).map((r) => r.item) : mems),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mems, ql, chatNames, lang]
   );
 
   // 在命中项之间跳转：滚动定位 + 闪烁高亮 + 打开顶部编辑器，便于立即修改
@@ -190,6 +197,48 @@ export const MemoryPanel: React.FC<{ roleId: string }> = ({ roleId }) => {
           )}
         </div>
       )}
+      {/* v2.3.94 需求 6：记忆为空时**说清原因**，而不是只丢一句「暂无记忆」。
+        背景（已实测用户真实数据坐实）：自动记忆是三重门控 ——
+          ① 全局 settings.enableAutoMemory（出厂默认 false）
+          ② per-chat settings.longMemory[key]（每聊天独立，默认全关，且入口藏在聊天「⋯」菜单里）
+          ③ 每累计 10 轮用户消息才提炼一次
+        任一不满足就静默返回 0，界面毫无提示 —— 用户只能看到「暂无记忆」，完全无从下手。
+        这里把当前真实状态读出来告诉用户，并给出可点击的操作指引。 */}
+      {mems.length === 0 && settings?.memoryVisibilityNotice !== false && (() => {
+        const onChats = Object.values(settings?.longMemory || {}).filter(Boolean).length;
+        const autoOn = settings?.enableAutoMemory === true;
+        const reasons: string[] = [];
+        if (!autoOn) reasons.push(t('memory.why.autoOff'));
+        if (onChats === 0) reasons.push(t('memory.why.longOffAll'));
+        else reasons.push(t('memory.why.longOnSome', { n: onChats }));
+        if (autoOn && onChats > 0) reasons.push(t('memory.why.needRounds'));
+        return (
+          <div
+            className="memory-why"
+            style={{
+              padding: 10,
+              marginBottom: 10,
+              fontSize: 12,
+              lineHeight: 1.7,
+              color: 'var(--color-text-secondary)',
+              background: 'var(--color-panel-alt)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 8,
+            }}
+          >
+            <div style={{ color: 'var(--color-text)', fontWeight: 600, marginBottom: 4 }}>
+              {t('memory.whyTitle')}
+            </div>
+            <ul style={{ margin: '0 0 6px', paddingLeft: 18 }}>
+              {reasons.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ul>
+            <div>{t('memory.whyHowto')}</div>
+          </div>
+        );
+      })()}
+
       {mems.length === 0 ? (
         <div className="empty-state">{t('memory.empty')}</div>
       ) : ql && matches.length === 0 ? (

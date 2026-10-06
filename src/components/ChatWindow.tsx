@@ -62,6 +62,9 @@ import { getEventStore, setEventStore } from '../utils/eventStore';
 
 import { setIdleActivity } from '../utils/idleTimerStore';
 
+// v2.3.94 需求 11：陪伴时长计时（模块级状态 + 1s 心跳 + 30s 批量上报）
+import { startCompanionTimer } from '../utils/companionTimer';
+
 import { resolveWantStream, resolveStreamInfo, persistStreamToggle, type StreamPref } from '../utils/chatStream';
 
 import { usePseudoReveal, markPseudoPending, isPseudoPending, clearPseudoPending } from '../utils/pseudoStream';
@@ -77,6 +80,7 @@ import { ClearChatModal } from './ClearChatModal';
 import { MessageSearch } from './MessageSearch';
 
 import { BondPanel } from './BondPanel';
+import { TranslateModal } from './TranslateModal';
 
 
 
@@ -126,7 +130,9 @@ export const ChatWindow: React.FC<{
 
   const [affinityPop, setAffinityPop] = useState<string | null>(null);
 
-  const [translateModal, setTranslateModal] = useState<{ source: string; text?: string; loading?: boolean; error?: string } | null>(null);
+  // v2.3.94 需求 10：翻译弹窗改为只存「原文」，其余状态（译文/朗读/段落删除）全部下沉到
+  // 共享组件 TranslateModal —— 主窗与小窗用同一个组件，能力天然一致（小窗同步铁律）。
+  const [translateModal, setTranslateModal] = useState<{ source: string; senderName?: string } | null>(null);
 
   const [genOpen, setGenOpen] = useState(false);
 
@@ -204,6 +210,19 @@ export const ChatWindow: React.FC<{
 
   }, [chatType, chatId]);
 
+  // ===== v2.3.94 需求 11：陪伴时长计时 =====
+
+  // 「前台可见 + 窗口有焦点」时按 1s 心跳累计；卸载/隐藏/失焦自动停表。
+  // 计时状态在模块级（utils/companionTimer.ts），组件只负责起停 —— 因此同一条消息里
+  // 渲染多个组件也不会把时长算多份。增量上报由模块按 30s 批量 flush，主进程再合并落盘。
+  useEffect(() => {
+
+    const stop = startCompanionTimer(chatType, chatId);
+
+    return stop;
+
+  }, [chatType, chatId]);
+
   const toggleStory = async () => {
 
     const next = !storyOn;
@@ -277,6 +296,96 @@ export const ChatWindow: React.FC<{
     } finally {
 
       setForking(false);
+
+    }
+
+  };
+
+  // v2.3.94 需求 1：从任意消息开启新对话（右键菜单入口）。
+  // 与 forkFromNode 的差别：不需要先建剧情节点，命名用消息摘要，
+  // 且后端会自动为新聊天开启长记忆（记忆隔离 + 独立时间线）。
+  const forkFromMessage = async (m: ChatMessage) => {
+
+    if (forking) return;
+
+    // 流式占位气泡是负数 id，尚未落库，无法作为分叉点 —— 直接忽略并提示
+    if ((m.id as number) < 0) {
+
+      showToast(t('msg.forkFailStreaming'), { error: true });
+
+      return;
+
+    }
+
+    setForking(true);
+
+    try {
+
+      const chat = await api.forkChatFromMessage(chatType, chatId, m.id);
+
+      showToast(t('chat.forkOk', { name: chat.name }));
+
+      onForked?.(chat); // 切换到新聊天（原聊天保持不变）
+
+    } catch (e: any) {
+
+      showToast(t('chat.forkFail', { msg: e?.message || String(e) }), { error: true });
+
+    } finally {
+
+      setForking(false);
+
+    }
+
+  };
+
+  // v2.3.94 需求 3：选取文字复制 —— 弹出只读文本框，用户手动选取后点「复制」。
+  // 状态刻意放在父组件（与 translateModal 同一层级），因为它要脱离气泡、
+  // portal 到 body，且需要在两个渲染进程窗口（主窗 / 小窗）各自独立存在。
+  const [selectCopyText, setSelectCopyText] = useState<string | null>(null);
+  const selectCopyRef = useRef<HTMLTextAreaElement | null>(null);
+  const [selectCopied, setSelectCopied] = useState(false);
+
+  const openSelectCopy = (m: ChatMessage) => {
+
+    setSelectCopyText(m.content || '');
+
+    setSelectCopied(false);
+
+  };
+
+  const closeSelectCopy = () => {
+
+    setSelectCopyText(null);
+
+    setSelectCopied(false);
+
+  };
+
+  const doCopySelected = async () => {
+
+    const ta = selectCopyRef.current;
+
+    if (!ta) return;
+
+    // 优先取用户手动选中的部分；没选则视为「全选」（更符合直觉，不让用户空点）
+    const picked = ta.value.substring(ta.selectionStart ?? 0, ta.selectionEnd ?? 0).trim();
+
+    const text = picked || ta.value;
+
+    if (!text) return;
+
+    try {
+
+      await navigator.clipboard.writeText(text);
+
+      setSelectCopied(true);
+
+      showToast(t('toast.copied'));
+
+    } catch (e: any) {
+
+      showToast(t('toast.copyFailed', { msg: e?.message || String(e) }), { error: true });
 
     }
 
@@ -4453,24 +4562,10 @@ export const ChatWindow: React.FC<{
 
 
 
-  const handleTranslate = async (text: string) => {
-
-    setTranslateModal({ source: text, loading: true });
-
-    try {
-
-      const res = await api.translate(text);
-
-      if (res.ok) setTranslateModal({ source: text, text: res.text || '' });
-
-      else setTranslateModal({ source: text, error: res.error || t('msg.translateFailed') });
-
-    } catch (e: any) {
-
-      setTranslateModal({ source: text, error: e?.message || t('msg.translateFailed') });
-
-    }
-
+  // 打开翻译弹窗：只带原文，翻译与朗读由 TranslateModal 自行管理（见 state 注释）。
+  // senderName 记下发言人，供群聊按「发言人」解析其绑定音色（需求 10）。
+  const handleTranslate = (text: string, senderName?: string) => {
+    setTranslateModal({ source: text, senderName });
   };
 
 
@@ -5718,6 +5813,10 @@ export const ChatWindow: React.FC<{
 
                 onOpenSearch={sr && sr.length > 0 ? () => setExpandedStreams((v) => ({ ...v, [expKey]: true })) : undefined}
 
+                onForkFromHere={forkFromMessage}
+
+                onSelectCopy={openSelectCopy}
+
               />
 
               {sr && sr.length > 0 && (
@@ -6594,52 +6693,69 @@ export const ChatWindow: React.FC<{
 
       )}
 
-      {translateModal && (
-
-        <div className="modal-mask" onClick={() => setTranslateModal(null)}>
-
+      {/* v2.3.94 需求 3：选取文字复制弹窗。
+          用 textarea（而非普通输入框）而不是 div：气泡正文含换行，
+          单行 input 无法正确呈现，用户也无法按行选取。
+          颜色一律走 CSS 变量，保证 14 套主题下都清晰可读（WCAG AA）。 */}
+      {selectCopyText !== null && (
+        <div className="modal-mask" onClick={closeSelectCopy}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520, width: '90%' }}>
+            <div className="modal-title">{t('msg.selectCopyTitle')}</div>
 
-            <div className="modal-title">{t('msg.translate')}</div>
-
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 6 }}>{t('msg.translateSource')}</div>
-
-            <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 160, overflowY: 'auto', padding: 8, background: 'var(--color-panel-alt)', borderRadius: 8, marginBottom: 10 }}>
-
-              {translateModal.source}
-
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 6 }}>
+              {t('msg.selectCopyHint')}
             </div>
 
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 6 }}>{t('msg.translateResult')}</div>
+            <textarea
+              ref={selectCopyRef}
+              defaultValue={selectCopyText}
+              readOnly
+              autoFocus
+              spellCheck={false}
+              onSelect={(e) => {
+                // 记录用户当前选区，供「复制选中」使用；不选则复制全文
+                const ta = e.currentTarget;
+                void ta;
+                setSelectCopied(false);
+              }}
+              style={{
+                width: '100%',
+                minHeight: 160,
+                maxHeight: 320,
+                padding: 8,
+                fontSize: 13,
+                lineHeight: 1.5,
+                fontFamily: 'inherit',
+                color: 'var(--color-text)',
+                background: 'var(--color-panel-alt)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 8,
+                resize: 'vertical',
+              }}
+            />
 
-            {translateModal.loading ? (
-
-              <div style={{ padding: 8 }}>{t('chat.transcribing')}</div>
-
-            ) : translateModal.error ? (
-
-              <div style={{ color: '#e74c3c', padding: 8 }}>{translateModal.error}</div>
-
-            ) : (
-
-              <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 200, overflowY: 'auto', padding: 8, background: 'var(--color-panel)', borderRadius: 8 }}>
-
-                {translateModal.text}
-
-              </div>
-
-            )}
-
-            <div style={{ textAlign: 'right', marginTop: 12 }}>
-
-              <button className="btn-primary" onClick={() => setTranslateModal(null)}>{t('common.ok')}</button>
-
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+              <button className="btn-secondary" onClick={closeSelectCopy}>{t('common.cancel')}</button>
+              <button className="btn-primary" onClick={() => { void doCopySelected(); }}>
+                {selectCopied ? t('msg.copied') : t('msg.copySelected')}
+              </button>
             </div>
-
           </div>
-
         </div>
+      )}
 
+      {/* 翻译弹窗 + 原文/译文朗读（v2.3.94 需求 10）：能力全在共享组件内，与小窗同一份实现。
+          roleId 决定朗读音色：单聊取该角色；群聊按发言人名匹配成员（取不到时用第一位成员）。 */}
+      {translateModal && (
+        <TranslateModal
+          source={translateModal.source}
+          roleId={
+            chatType === 'single'
+              ? members[0]?.id || chatId
+              : members.find((r) => r.name === translateModal.senderName)?.id || members[0]?.id
+          }
+          onClose={() => setTranslateModal(null)}
+        />
       )}
 
       {affinityPop && <div className="affinity-pop">{affinityPop}</div>}
@@ -7084,9 +7200,18 @@ const MessageRow: React.FC<{
 
   onCopy?: (text: string) => void;
 
-  onTranslate?: (text: string) => void;
+  // v2.3.94 需求 10：第二个参数是发言人名（群聊按它解析该发言人的绑定音色；单聊忽略）
+  onTranslate?: (text: string, senderName?: string) => void;
 
   onMarkNode?: (msg: ChatMessage) => void;
+
+  // v2.3.94 需求 1：右键任意消息 → 从此处开启新对话
+  // 复用后端 forkChatFromNode（经 forkChatFromMessage），复制该消息及之前的消息与记忆，
+  // 新聊天为独立 chatId（配合角色级记忆隔离 = 独立时间线），并自动开启长记忆。
+  onForkFromHere?: (msg: ChatMessage) => void;
+
+  // v2.3.94 需求 3：选取文字复制（弹出可选文本框，供用户手动选取后复制）
+  onSelectCopy?: (msg: ChatMessage) => void;
 
   roleMood?: string;
 
@@ -7108,7 +7233,7 @@ const MessageRow: React.FC<{
 
   msg, onImage, prevTimestamp, avatarPath, userAvatarPath, showTts, ttsState, typing, streaming, hideReasoning, onSpeak, onReplayTts, onRegenerateTts, onReasoningCopied,
 
-  onQuickMemory, onSaveImageMemory, onViewPrompt, onForward, onEdit, onRollback, onCopy, onTranslate, onMarkNode, onDeleteMsg, onAiAction, showAiActions, aiActionBusy, onToggleCollapse, allCollapsed, roleMood, searchResults, onOpenSearch,
+  onQuickMemory, onSaveImageMemory, onViewPrompt, onForward, onEdit, onRollback, onCopy, onTranslate, onMarkNode, onForkFromHere, onSelectCopy, onDeleteMsg, onAiAction, showAiActions, aiActionBusy, onToggleCollapse, allCollapsed, roleMood, searchResults, onOpenSearch,
 
   pseudoOn, pseudoSpeed, pseudoKey,
 
@@ -7132,14 +7257,53 @@ const MessageRow: React.FC<{
 
   const streamed = !typing && !streaming;
 
+  // v2.3.94 需求 2：伪流式块整体上移到此处（原在下方）。原因：「操作栏何时弹出」需要读
+  // pseudoState.revealing，而 Hook 必须在使用它的 useEffect 之前调用，否则渲染时拿到 undefined。
+
+  // ===== 伪流式输出（v2.3.34）=====
+
+  const isUser = msg.sender_type === 'user';
+
+  // 判定：开启伪流式 + AI 消息 + 已定稿（不在流式中）+ 有正文 + 该消息被标记为「待逐字放出」
+
+  const pseudoText = msg.content || '';
+
+  const pseudoActive = !!pseudoOn && !isUser && !streaming && !!pseudoText.trim() && isPseudoPending(pseudoKey || '');
+
+  const pseudoState = usePseudoReveal(pseudoText, pseudoActive, pseudoSpeed ?? 0.2);
+
+  // 放完即清除标记，避免切换聊天回来后二次重播
+
+  useEffect(() => {
+
+    if (pseudoActive && !pseudoState.revealing) clearPseudoPending(pseudoKey || '');
+
+  }, [pseudoActive, pseudoState.revealing, pseudoKey]);
+
+  // 流式进行中：伪流式开启时气泡内先不显示正文（留到全部生成完毕后逐字放出），思维链照常实时显示
+
+  const pseudoHideLive = !!pseudoOn && !!streaming && !isUser && !!pseudoText.trim();
+
+  // 单字渐显动画时长 = 「动画速度」设置（pseudoSpeed 即 D，秒）；触发间隔由 usePseudoReveal 按 D/4 自动推导
+
+  const pseudoCharDur = `${clampPseudoSpeed(pseudoSpeed ?? 0.8)}s`;
+
   // 缩回 / 弹出（v2.3.77，非渐显渐隐）：streamed 变false → 移除 is-in（CSS 里 scale 缩到 0.4并下移 = 缩回）；
   // 变 true → 下一帧加 is-in（scale 回 1 = 弹出）。占位始终在，故不引起气泡高度跳动。
 
   const [actionBarVisible, setActionBarVisible] = useState(false);
 
+  // v2.3.94 需求 2：弹出时机 = 「模型生成完毕」**且**「伪流式逐字放完」。
+
+  // 旧实现只看 streamed，开伪流式时按钮会在正文还没放完就弹出来。
+
+  // revealing 为 false 即已放完（判定见 src/utils/pseudoStream.ts 的 usePseudoReveal）。
+
+  const actionBarGate = streamed && !pseudoState.revealing;
+
   useEffect(() => {
 
-    if (!streamed) {
+    if (!actionBarGate) {
 
       setActionBarVisible(false);
 
@@ -7153,11 +7317,7 @@ const MessageRow: React.FC<{
 
     return () => cancelAnimationFrame(id);
 
-  }, [streamed]);
-
-  const isUser = msg.sender_type === 'user';
-
-
+  }, [actionBarGate]);
 
   // 发送时间（气泡上方）：同一分钟仅顶部消息显示；1 分钟内显示「刚刚」，否则精确到分钟
 
@@ -7344,34 +7504,6 @@ const MessageRow: React.FC<{
   }, [streaming, msg.content]);
 
   const streamTailClass = `stream-char${tailStalled ? ' stall' : ''}`;
-
-
-
-  // ===== 伪流式输出（v2.3.34）=====
-
-  // 判定：开启伪流式 + AI 消息 + 已定稿（不在流式中）+ 有正文 + 该消息被标记为「待逐字放出」
-
-  const pseudoText = msg.content || '';
-
-  const pseudoActive = !!pseudoOn && !isUser && !streaming && !!pseudoText.trim() && isPseudoPending(pseudoKey || '');
-
-  const pseudoState = usePseudoReveal(pseudoText, pseudoActive, pseudoSpeed ?? 0.2);
-
-  // 放完即清除标记，避免切换聊天回来后二次重播
-
-  useEffect(() => {
-
-    if (pseudoActive && !pseudoState.revealing) clearPseudoPending(pseudoKey || '');
-
-  }, [pseudoActive, pseudoState.revealing, pseudoKey]);
-
-  // 流式进行中：伪流式开启时气泡内先不显示正文（留到全部生成完毕后逐字放出），思维链照常实时显示
-
-  const pseudoHideLive = !!pseudoOn && !!streaming && !isUser && !!pseudoText.trim();
-
-  // 单字渐显动画时长 = 「动画速度」设置（pseudoSpeed 即 D，秒）；触发间隔由 usePseudoReveal 按 D/4 自动推导
-
-  const pseudoCharDur = `${clampPseudoSpeed(pseudoSpeed ?? 0.8)}s`;
 
 
 
@@ -7578,8 +7710,16 @@ const MessageRow: React.FC<{
           )}
 
           {/* v2.3.78：操作栏移至「消耗 N tokens」同一行的右侧（此前在气泡下方独占一行）。
-              语音组 🔊 ⟳：每条 AI 消息都有；AI 操作组 ✍ ⟲ 💬：仅最后一条 AI 消息显示。*/}
-          {((showTts && !typing && !streamed) || (showAiActions && onAiAction && !isUser)) && (
+              语音组 🔊 ⟳：每条 AI 消息都有；AI 操作组 ✍ ⟲ 💬：仅最后一条 AI 消息显示。
+
+              v2.3.94 修复 BUG：原条件 `showTts && !typing && !streamed`，而 streamed = !typing && !streaming，
+              代入后等价于 `!typing && streaming` —— 只在「正在流式输出」时为真，
+              与可见性门（actionBarGate 要求 streamed 为真）**严格互斥**，是事实上的死代码。
+              后果：语音组被错误地挂在 showAiActions（= m.id === lastMsgId）这条兜底分支上，
+              于是**只有最后一条 AI 消息能看到 🔊 ⟳，其余 AI 消息的语音按钮全程不可见**。
+              现改为 `showTts && !isUser`：语音组独立成门，与「是不是最后一条」解耦。
+              容器始终在 DOM（占位不引起气泡高度跳动），可见性统一由 .is-in（actionBarVisible）控制。*/}
+          {((showTts && !isUser) || (showAiActions && onAiAction && !isUser)) && (
 
           <div className={`msg-action-bar ${actionBarVisible ? 'is-in' : ''}`}>
 
@@ -7650,57 +7790,66 @@ const MessageRow: React.FC<{
                 方向相反极易混淆，隔断同时起到视觉分组作用。*/}
             {showTts && onAiAction && !isUser && <span className="msg-action-divider" aria-hidden="true" />}
 
-            <button
-              type="button"
-              className="msg-ai-action-btn"
-              disabled={aiActionBusy}
-              title={t('msg.aiContinue')}
+            {/* v2.3.94 需求 2 连带修复：容器门控拆开后，AI 操作组必须自己带上 showAiActions 门。
+                此前这三颗按钮完全依赖外层 `(showAiActions && onAiAction && !isUser)` 兜底才不出现在
+                每条 AI 消息上；容器一旦改成「语音组独立成门」，兜底就会失效，
+                ✍ ⟲ 💬 会在**每条** AI 消息上冒出来（把一个 BUG 换成另一个 BUG）。
+                语义依据（见上方 v2.3.78 注释）：语音组每条都有；AI 操作组仅最后一条 AI 消息显示。 */}
+            {showAiActions && onAiAction && !isUser && (<>
 
-              onClick={(e) => { e.stopPropagation(); void onAiAction?.('continue'); }}
 
-            >
+              <button
+                type="button"
+                className="msg-ai-action-btn"
+                disabled={aiActionBusy}
+                title={t('msg.aiContinue')}
 
-              ✍
+                onClick={(e) => { e.stopPropagation(); void onAiAction?.('continue'); }}
 
-            </button>
+              >
 
-            <button
+                ✍
 
-              type="button"
+              </button>
 
-              className="msg-ai-action-btn"
+              <button
 
-              disabled={aiActionBusy}
+                type="button"
 
-              title={t('msg.aiRewrite')}
+                className="msg-ai-action-btn"
 
-              onClick={(e) => { e.stopPropagation(); void onAiAction?.('rewrite'); }}
+                disabled={aiActionBusy}
 
-            >
+                title={t('msg.aiRewrite')}
 
-              ⟲
+                onClick={(e) => { e.stopPropagation(); void onAiAction?.('rewrite'); }}
 
-            </button>
+              >
 
-            <button
+                ⟲
 
-              type="button"
+              </button>
 
-              className="msg-ai-action-btn"
+              <button
 
-              disabled={aiActionBusy}
+                type="button"
 
-              title={t('msg.aiReplyForUser')}
+                className="msg-ai-action-btn"
 
-              onClick={(e) => { e.stopPropagation(); void onAiAction?.('replyForUser'); }}
+                disabled={aiActionBusy}
 
-            >
+                title={t('msg.aiReplyForUser')}
 
-              💬
+                onClick={(e) => { e.stopPropagation(); void onAiAction?.('replyForUser'); }}
 
-            </button>
+              >
 
-            {aiActionBusy && <span className="msg-ai-actions-tip">{t('msg.aiActionWorking')}</span>}
+                💬
+
+              </button>
+
+              {aiActionBusy && <span className="msg-ai-actions-tip">{t('msg.aiActionWorking')}</span>}
+            </>)}
 
           </div>
 
@@ -7739,7 +7888,7 @@ const MessageRow: React.FC<{
 
           {onQuickMemory && <button className="ctx-menu-item" onClick={() => handleQuickMemory(msg.content)}>{t('msg.quickMemory')}</button>}
 
-          {onTranslate && <button className="ctx-menu-item" onClick={() => { onTranslate(msg.content); closeMenu(); }}>{t('msg.translate')}</button>}
+          {onTranslate && <button className="ctx-menu-item" onClick={() => { onTranslate(msg.content, msg.sender_name); closeMenu(); }}>{t('msg.translate')}</button>}
 
           {/* 朗读：任何有文本的气泡都可右键朗读（用户消息用全局音色，AI 消息按角色音色） */}
 
@@ -7766,6 +7915,23 @@ const MessageRow: React.FC<{
           )}
 
           {onMarkNode && <button className="ctx-menu-item" onClick={() => { onMarkNode(msg); closeMenu(); }}>{t('chat.markNode')}</button>}
+
+          {/* v2.3.94 需求 1：从此处开启新对话。放在「标记剧情节点」之后 ——
+              两者语义相邻（都是「以这条消息为起点做一条新时间线」），但结果不同：
+              标记节点只打标记，分叉会真的开出一个新聊天。 */}
+          {onForkFromHere && (
+            <button className="ctx-menu-item" onClick={() => { onForkFromHere(msg); closeMenu(); }}>
+              {t('msg.forkFromHere')}
+            </button>
+          )}
+
+          {/* v2.3.94 需求 3：选取文字复制。弹出文本框让用户手动选取气泡内文字，
+              再复制到剪贴板（区别于上面的「复制」——后者直接复制整条）。 */}
+          {onSelectCopy && hasText && (
+            <button className="ctx-menu-item" onClick={() => { onSelectCopy(msg); closeMenu(); }}>
+              {t('msg.selectCopy')}
+            </button>
+          )}
 
           {onSaveImageMemory && (msg.images?.length || msg.image_path) && (
 

@@ -1,7 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 // v2.3.90：面板缩入（关闭）动画
 import { useRetract } from '../hooks/useRetract';
+// 需求 12：输入过滤改走 fuzzySearch（模糊匹配 + 相关度排序），与全局搜索规范一致
+import { rankCandidates } from '../utils/fuzzySearch';
 
 // 可输入 + 可滚动建议列表的组合框（v2.3.39）
 //
@@ -12,13 +14,17 @@ import { useRetract } from '../hooks/useRetract';
 // overflow-y: auto + 高 z-index），并 portal 到 body + fixed 定位 → 天然带滚动条，
 // 且不会被模态/设置面板的滚动容器裁剪。
 //
-// 特性：输入即过滤（不区分大小写）、↑/↓ 移动高亮、回车选中、Esc 只关下拉（不冒泡）、
+// 特性：输入即过滤（模糊匹配，按相关度排序）、↑/↓ 移动高亮、回车选中、Esc 只关下拉（不冒泡）、
 //       点击面板外关闭、resize/scroll 自动重定位、高亮项自动滚入可视区、
 //       openSignal 自增信号可让外部（如「刷新列表」按钮）主动展开。
 // 可选：enterToSelect=false（回车不选中建议，交给使用方自行处理，如标签的「回车=添加」）、
 //       onKeyDown（使用方键盘钩子，先于内部逻辑执行；若已 preventDefault 则内部跳过）。
 const ITEM_HEIGHT = 34; // 与 .select-menu-item 高度对齐，用于估算面板展开方向
 const MAX_VISIBLE = 8;  // 面板最多同时可见项数（与 .select-menu-panel 的 max-height 对齐）
+// 需求 12：排序后**最多渲染**多少条候选（其余靠面板滚动条查看）。
+// ComboBox 是「可输入的选择框」而非纯搜索框（如标签编辑需要能选到第 20 个标签），
+// 故渲染上限不压到 5 条，可见行数仍由 .select-menu-panel 的 max-height 控制。
+const RENDER_CAP = 60;
 
 export interface ComboBoxProps {
   value: string;
@@ -26,15 +32,22 @@ export interface ComboBoxProps {
   options: string[];
   placeholder?: string;
   openSignal?: number; // 自增信号：变化时自动展开（刷新列表后调用）
+  /**
+   * 自增信号：变化时把焦点移入输入框（不展开面板）。
+   * 用于「该提供商没有音色列表端点 → 引导用户直接手填」这类需要主动聚焦的引导场景。
+   */
+  focusSignal?: number;
   style?: React.CSSProperties;
   title?: string;
   disabled?: boolean;
   enterToSelect?: boolean; // 默认 true；false=回车不选中建议（透给 onKeyDown）
   onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+  'aria-label'?: string;
 }
 
 export const ComboBox: React.FC<ComboBoxProps> = ({
-  value, onChange, options, placeholder, openSignal, style, title, disabled, enterToSelect = true, onKeyDown,
+  value, onChange, options, placeholder, openSignal, focusSignal,
+  style, title, disabled, enterToSelect = true, onKeyDown, 'aria-label': ariaLabel,
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -43,11 +56,19 @@ export const ComboBox: React.FC<ComboBoxProps> = ({
   const [rect, setRect] = useState<{ top: number; left: number; width: number; below: boolean }>({
     top: 0, left: 0, width: 0, below: true,
   });
-  // 输入即过滤（不区分大小写）；为空则显示全部
+  // 输入即过滤：走 fuzzySearch（模糊 + 相关度排序）；为空则显示全部（保持原顺序）
   // 注意：必须先算出 shown，再在下面的 useRetract 里读 shown.length（TDZ：const 声明前读取会抛
   // ReferenceError，renderer 走 vite/esbuild 不做类型检查，build 也发现不了，必须靠 tsc --noEmit 兜底）。
-  const q = value.trim().toLowerCase();
-  const shown = q ? options.filter((o) => o.toLowerCase().includes(q)) : options;
+  const q = value.trim();
+  const shown = useMemo(
+    () =>
+      q
+        ? rankCandidates(q, options, (o) => ({ label: o }))
+            .slice(0, RENDER_CAP)
+            .map((r) => r.item)
+        : options,
+    [q, options]
+  );
 
   // v2.3.90：关闭时先播缩入动画再卸载（与 SelectMenu 同一模式）。
   // retract 值带上 shown.length 判定：过滤到 0 条时面板本就不可见，若只在 open 转 null 时才缩入，
@@ -79,6 +100,15 @@ export const ComboBox: React.FC<ComboBoxProps> = ({
     const t = window.setTimeout(() => openPanel(), 0); // 等一帧，确保布局稳定后再定位
     return () => window.clearTimeout(t);
   }, [openSignal]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 主动聚焦但不展开（focusSignal 变化）：用于「无音色列表端点 → 请手填」的引导。
+  // 与 openSignal 分开是因为 options 为空时 openPanel 会直接 return，
+  // 而「没有列表」恰恰是此刻最需要聚焦输入框的场景。
+  useEffect(() => {
+    if (!focusSignal) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [focusSignal]);
 
   // 过滤结果变化时把高亮重置到首项
   useEffect(() => { setActive(0); }, [q]);
@@ -121,6 +151,7 @@ export const ComboBox: React.FC<ComboBoxProps> = ({
         title={title}
         disabled={disabled}
         style={style}
+        aria-label={ariaLabel}
         onChange={(e) => { onChange(e.target.value); if (!open) openPanel(); }}
         onFocus={() => openPanel()}
         onClick={() => openPanel()}

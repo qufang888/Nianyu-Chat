@@ -2971,6 +2971,76 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   border-radius: var(--radius);
 }
 .check-item input { width: auto; }
+/* ===== 人物音色绑定（v2.3.94 需求 8/9，RoleTtsBinding.tsx）=====
+   角色卡编辑器里的「人物音色与朗读」区块。
+   刻意不写任何 transition / animation —— 静态布局样式，天然不受动画开关影响，
+   无需登记进 animControl 的 ANIM_GROUPS（登记的必须是真实存在的 CSS 动画选择器）。 */
+.role-tts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 8px);
+  background: var(--color-panel-alt);
+}
+/* 一行内的控件组（音色框 + 拉取按钮 / 语速滑块 + 数值 + 清除） */
+.role-tts-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* 语速 / 音调各自一格，等宽两列对齐 */
+.role-tts-param {
+  flex: 1 1 180px;
+  min-width: 160px;
+}
+.role-tts-param > label {
+  display: block;
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--color-text-secondary);
+  margin-bottom: 2px;
+}
+.role-tts-param input[type='range'] {
+  flex: 1 1 90px;
+  min-width: 80px;
+  accent-color: var(--color-primary);
+}
+/* 数值 / 「全局」占位：用等宽数字避免滑块拖动时文字宽度跳动 */
+.role-tts-num {
+  flex: 0 0 auto;
+  min-width: 44px;
+  text-align: center;
+  font-size: calc(12px * var(--font-scale, 1));
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+/* 拉取结果的分类提示条：ok / warn / error 三态。
+   颜色 + 左侧色条双重编码，色弱用户也能靠色条位置与文字内容区分。 */
+.role-tts-note {
+  margin-top: 4px;
+  padding: 5px 8px;
+  border-radius: var(--radius, 8px);
+  border-left: 3px solid var(--color-border);
+  background: var(--color-panel);
+  color: var(--color-text-secondary);
+  font-size: calc(12px * var(--font-scale, 1));
+  line-height: 1.5;
+  word-break: break-word;
+}
+.role-tts-note.ok {
+  border-left-color: var(--color-success, #10b981);
+  color: var(--color-success, #10b981);
+}
+.role-tts-note.warn {
+  border-left-color: var(--color-warn, #f59e0b);
+  color: var(--color-warn, #f59e0b);
+}
+.role-tts-note.error {
+  border-left-color: var(--color-danger, #ff4d4f);
+  color: var(--color-danger, #ff4d4f);
+}
 .mem-list {
   display: flex;
   flex-direction: column;
@@ -3565,6 +3635,14 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 .msg-search.compact .msg-search-list {
   max-height: 140px;
 }
+/* 需求 12：命中项超过 5 条时的「还有 N 项」提示（其余靠滚动条查看） */
+.msg-search-more {
+  padding: 5px 8px 3px;
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  border-top: 1px solid var(--color-border);
+  margin-top: 2px;
+}
 .msg-search-item {
   padding: 6px 8px;
   border-radius: 6px;
@@ -3907,6 +3985,165 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 }
 .settings-suggest-item:hover { background: var(--color-hover, rgba(255, 255, 255, 0.18)); }
 .settings-suggest-empty { padding: 10px 12px; font-size: 12.5px; color: var(--color-text-secondary, #888); }
+
+/* ===== 需求 12：通用搜索候选面板（SearchSuggest）=====
+   与 .settings-suggest 同风格，但 portal 到 body + fixed 定位（不会被父容器裁剪），
+   max-height 由组件按「最多可见 5 行」内联设置，超出部分靠 overflow-y 滚动条查看。 */
+.search-suggest {
+  position: fixed;
+  z-index: 2147483645; /* 与 .select-menu-panel 对齐：低于光标 Canvas，高于所有模态/弹窗/Toast */
+  overflow-y: auto;
+  background: var(--color-select-bg);
+  color: var(--color-select-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+  cursor: default;
+  /* 与 .select-menu-panel 同一套弹出/缩入动画（受「右键菜单与下拉」分组控制） */
+  animation: popupLinearIn 0.16s linear;
+}
+.search-suggest.leaving {
+  animation: popupLinearOut 0.15s linear forwards;
+  pointer-events: none;
+}
+.search-suggest::-webkit-scrollbar { width: 6px; }
+.search-suggest::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, 0.4); border-radius: 3px; }
+.search-suggest-item {
+  /* 行高与 SearchSuggest.tsx 的 ITEM_HEIGHT(34) 对齐 */
+  min-height: 26px;
+  padding: 4px 8px;
+  font-size: calc(13px * var(--font-scale));
+  color: var(--color-select-text);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background var(--transition), color var(--transition);
+}
+.search-suggest-item.active {
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+}
+/* 高亮态下命中片段反色（项目既有的 .search-hl 在 wechat 主题下白底绿字对比度偏低，
+   选中行改为「底色/文字互换」以保证命中词依然读得清） */
+.search-suggest-item.active .search-hl {
+  background: var(--color-primary-text);
+  color: var(--color-primary);
+}
+.search-suggest-empty {
+  padding: 8px 10px;
+  font-size: 12.5px;
+  /* 无结果提示是「用户必须读到」的信息，用 --color-text（14 套主题最低 12.4:1，远超 AA），
+     不用偏淡的 --color-text-secondary（wechat 下仅 3.5:1，达不到 AA） */
+  color: var(--color-text);
+}
+.search-suggest-foot {
+  padding: 5px 10px 3px;
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  border-top: 1px solid var(--color-border);
+  margin-top: 3px;
+}
+
+/* ===== 需求 13：聊天列表顶部搜索框 ===== */
+.list-search-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  transition: background var(--transition);
+}
+.list-search-icon { font-size: 13px; opacity: 0.75; flex-shrink: 0; }
+.list-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  padding: 5px 8px;
+  font-size: calc(13px * var(--font-scale));
+  outline: none;
+  transition: border-color var(--transition), background var(--transition);
+}
+.list-search-input:focus { border-color: var(--color-primary); }
+.list-search-clear {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: calc(13px * var(--font-scale));
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition), color var(--transition);
+}
+.list-search-clear:hover { background: var(--color-hover); color: var(--color-text); }
+.list-search-rowline { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.list-search-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-search-badge {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  /* 徽标文字必须读得清 → --color-text（--color-text-secondary 在 wechat 下仅 3.5:1） */
+  color: var(--color-text);
+}
+.list-search-badge.list-search-badge-active,
+.search-suggest-item.active .list-search-badge {
+  border-color: var(--color-primary-text);
+  color: var(--color-primary-text);
+}
+
+/* ===== 需求 14：不常用聊天文件夹 ===== */
+.inactive-folder-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: calc(12px * var(--font-scale));
+  font-weight: 600;
+  /* 文件夹名是「用户必须读到」的结构信息 → 用 --color-text（14 套主题最低 10.8:1，AA 达标）；
+     悬停时才降到 --color-text-secondary 作为「可点击」的视觉暗示 */
+  color: var(--color-text);
+  background: var(--color-panel-alt);
+  border-bottom: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-border);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background var(--transition), color var(--transition);
+}
+.inactive-folder-head:hover { background: var(--color-hover); }
+.inactive-folder-caret {
+  font-size: 10px;
+  line-height: 1;
+  display: inline-block;
+  /* 展开/收起时旋转（受三档动画开关 + 高级设置「主题/过渡」分组控制：
+     .inactive-folder-head 已登记进 animControl.ts 的 theme 组） */
+  transition: transform var(--transition);
+}
+.inactive-folder-head.open .inactive-folder-caret { transform: rotate(0deg); }
+.inactive-folder-head:not(.open) .inactive-folder-caret { transform: rotate(-90deg); }
+.inactive-folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inactive-folder-count {
+  flex-shrink: 0;
+  min-width: 18px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 500;
+  /* 数量是「用户必须读到」的信息 → --color-text（14 套主题 ≥11.7:1） */
+  color: var(--color-text);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  padding: 0 5px;
+}
 .search-hl {
   background: var(--color-primary, #3a8fd0);
   color: var(--color-primary-text, #fff);
@@ -4473,7 +4710,13 @@ body.ny-drop-chat .quick-import-overlay {
      收起时仍完全不可见（scale 0），避免半透明残影。 */
   transform-origin: left center;
   transform: scale(0.4) translateY(6px);
-  transition: transform 0.18s cubic-bezier(0.34, 1.3, 0.64, 1);
+  /* v2.3.94 需求 2：缓动由 cubic-bezier(0.34,1.3,0.64,1)（带回弹）改为 linear（线性弹出）。
+   依据 = 需求原话「用线性弹出动画，不用渐显渐隐动画」。
+   为什么保留 transition 而不用 @keyframes（基态陷阱见 src/hooks/useRetract.ts:10-15）：
+     transition 的基态是**隐藏态**（scale 0.4），动效被总控关掉时是「瞬间跳到可见」，安全；
+     若改用 animation，基态变成动画首帧，`animation:none` 会让按钮**永远停在 scale(0.4) 看不见**。
+   另：pointer-events 是离散属性、不参与过渡，由 .is-in 直接切换，不要塞进关键帧。 */
+  transition: transform 0.18s linear;
   pointer-events: none;
 }
 /* 收起完成态：缩到 0 并不接收点击（占位仍在，故不会引起气泡高度跳动） */
@@ -4730,4 +4973,720 @@ body.ny-drop-chat .quick-import-overlay {
 .tutorial-card-center .tutorial-title,
 .tutorial-card-center .tutorial-body {
   text-align: center;
+}
+
+/* ===== 多媒体API 配置编辑器（TTS / ASR / 生图 / 生视频，v2.3.94 需求 7）=====
+   两处动效均已登记到 src/utils/animControl.ts 的 `theme` 分组（.media-cfg-card /
+   .media-cfg-body），受三档动效开关统一管控 —— 此处不得再出现裸 inline transition。*/
+.media-cfg-card {
+  transition: border-color var(--transition), background var(--transition);
+}
+.media-cfg-body {
+  animation: mediaCfgBodyIn 0.18s ease-out;
+}
+@keyframes mediaCfgBodyIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+/* ============================================================================
+   统计页三大板块（v2.3.94 需求 11）
+   ----------------------------------------------------------------------------
+   动效归属：以下带 transition/animation 的类名已全部登记到
+   `src/utils/animControl.ts` 的 **stats** 分组（.stats-pie-slice /
+   .stats-legend-row / .stats-fav-card / .stats-rank-row / .stats-role-pick-item），
+   可在「设置 → 高级动画设置 → 自定义」里独立关闭；
+   饼图的「从圆心顺时针拉开」是 rAF 内联补间，由 StatsView 里
+   isGroupEnabled(settings, 'stats') 门控（内联优先级高于 .anim-off 的 !important）。
+
+   配色：一律走 CSS 变量（utils/statsChart.ts 现场取色生成调色板），
+   故此处只写「用哪个变量」，不写死任何色值 —— 14 套主题均自动适配。
+   ========================================================================== */
+
+/* ---------- 通用容器 ---------- */
+.stats-section {
+  margin-bottom: 18px;
+}
+.stats-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 10px;
+  /* 标题色用主文字色而非 secondary：WCAG AA 下 12px 小字也能读 */
+  color: var(--color-text);
+}
+.stats-section-title .stats-title-hint {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.stats-empty {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  padding: 18px 0;
+  text-align: center;
+}
+
+/* ---------- 板块一：Token 饼图 ---------- */
+.stats-pie-wrap {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.stats-pie-box {
+  position: relative;
+  width: 200px;
+  height: 200px;
+  flex: 0 0 auto;
+  cursor: pointer;
+  /* 键盘可达：饼图可 Tab 聚焦、回车进入完整榜单 */
+}
+.stats-pie-box:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+  border-radius: 50%;
+}
+.stats-pie-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+}
+/* 扇区：悬停外扩（scale）与形变走 transform，过渡时长跟主题一致 */
+.stats-pie-slice {
+  transform-origin: 100px 100px;
+  transform: scale(1);
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+.stats-pie-slice.is-hover {
+  transform: scale(1.06);
+}
+.stats-pie-center-label {
+  font-size: 11px;
+  fill: var(--color-text-secondary);
+  text-anchor: middle;
+}
+.stats-pie-center-value {
+  font-size: 15px;
+  font-weight: 700;
+  fill: var(--color-text);
+  text-anchor: middle;
+}
+/* tooltip：面板色底 + 主文字色 + 描边，保证任意主题下对比度 ≥ AA */
+.stats-pie-tip {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+  background: var(--color-panel);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-panel);
+  padding: 6px 9px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stats-pie-tip .stats-tip-name {
+  font-weight: 700;
+  color: var(--color-text);
+}
+.stats-pie-tip .stats-tip-val {
+  color: var(--color-text-secondary);
+}
+/* 图例（饼图右侧） */
+.stats-legend {
+  flex: 1 1 200px;
+  min-width: 180px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.stats-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+.stats-legend-row:hover {
+  background: var(--color-hover);
+}
+.stats-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+.stats-legend-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stats-legend-val {
+  color: var(--color-text-secondary);
+  flex: 0 0 auto;
+}
+
+/* ---------- 完整榜单页（点击饼图 / 点击排行进入，带返回） ---------- */
+.stats-subpage-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.stats-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+  color: var(--color-text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+.stats-back-btn:hover {
+  background: var(--color-hover);
+}
+
+/* ---------- 板块二：好感度 / 陪伴时间排行 ---------- */
+.stats-rank-switch {
+  display: inline-flex;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.stats-rank-switch button {
+  padding: 4px 12px;
+  font-size: 12px;
+  border: none;
+  background: var(--color-panel);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.stats-rank-switch button.active {
+  background: var(--color-primary);
+  /* 用主题自带的 --color-primary-text（各主题都已按需配好对比色），
+     不硬编码 #fff —— 部分浅色主题的主色偏亮，白字会不可读 */
+  color: var(--color-primary-text, var(--color-text));
+}
+.stats-rank-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.stats-rank-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-panel-alt);
+  transition: background var(--transition);
+}
+.stats-rank-row:hover {
+  background: var(--color-hover);
+}
+.stats-rank-no {
+  width: 20px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  flex: 0 0 auto;
+}
+.stats-rank-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stats-rank-metrics {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  flex: 0 0 auto;
+}
+.stats-rank-metrics b {
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+/* ---------- 板块三：你最喜欢的人物（最突出，占空间最大） ---------- */
+.stats-fav-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-panel);
+  padding: 22px;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow-panel);
+  transition: border-color var(--transition), background var(--transition);
+}
+/* 主色描边强调（用 var() 跟随主题，不写死色值） */
+.stats-fav-card.is-set {
+  border-color: var(--color-primary);
+}
+.stats-fav-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--color-text);
+  margin-bottom: 14px;
+}
+.stats-fav-body {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.stats-fav-avatar {
+  width: 84px;
+  height: 84px;
+  border-radius: var(--radius);
+  background: var(--color-panel-alt);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 38px;
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+.stats-fav-info {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.stats-fav-name {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--color-text);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.stats-fav-gender {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0 8px;
+}
+.stats-fav-metrics {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  flex-wrap: wrap;
+}
+.stats-fav-metrics b {
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+/* 未设置时的加号：大号、主题主色，视觉上明确「点这里设置」 */
+.stats-fav-plus {
+  width: 84px;
+  height: 84px;
+  border-radius: var(--radius);
+  border: 2px dashed var(--color-primary);
+  background: var(--color-panel-alt);
+  color: var(--color-primary);
+  font-size: 40px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition), transform var(--transition);
+  flex: 0 0 auto;
+}
+.stats-fav-plus:hover {
+  background: var(--color-hover);
+}
+.stats-fav-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.stats-fav-signature {
+  margin-top: 12px;
+}
+.stats-fav-signature input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-input-bg, var(--color-panel-alt));
+  color: var(--color-text);
+  font-size: 13px;
+  font-family: inherit;
+}
+.stats-fav-signature input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+/* 性别选择 */
+.stats-fav-gender-pick {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.stats-fav-gender-pick button {
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+.stats-fav-gender-pick button.active {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+
+/* ---------- 人物选择弹层（模糊搜索 + 候选框） ---------- */
+.stats-role-pick-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+}
+.stats-role-pick {
+  width: min(440px, 92vw);
+  max-height: 78vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-panel);
+  animation: popupLinearIn 0.16s linear;
+  overflow: hidden;
+}
+.stats-role-pick-head {
+  padding: 14px 14px 8px;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.stats-role-pick-close {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.stats-role-pick-close:hover {
+  background: var(--color-hover);
+}
+.stats-role-pick-search {
+  padding: 0 14px 10px;
+}
+.stats-role-pick-search input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-input-bg, var(--color-panel-alt));
+  color: var(--color-text);
+  font-size: 13px;
+  font-family: inherit;
+}
+.stats-role-pick-search input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+/* 候选项框：面板自带 overflow-y（配合 MAX_SUGGESTIONS 与滚动条查看其余候选） */
+.stats-role-pick-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stats-role-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  text-align: left;
+  width: 100%;
+  color: var(--color-text);
+  transition: background var(--transition);
+}
+.stats-role-pick-item:hover {
+  background: var(--color-hover);
+}
+.stats-role-pick-item .stats-role-pick-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stats-role-pick-item mark {
+  background: var(--color-primary);
+  color: var(--color-primary-text, var(--color-text));
+  border-radius: 3px;
+  padding: 0 1px;
+}
+.stats-role-pick-meta {
+  padding: 0 14px 12px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+/* ============================================================================
+   人物音色绑定 / 音色自定义（v2.3.94 需求 8 / 9）
+   ----------------------------------------------------------------------------
+   放在角色编辑器的「消息音效」之后。颜色一律走 variables.css 的 CSS 变量，
+   保证 14 套主题都可读（不硬编码任何色值）。
+   ========================================================================== */
+.role-tts {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 8px);
+  background: var(--color-panel-alt);
+}
+.role-tts-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.role-tts-param {
+  flex: 1 1 220px;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.role-tts-param > label {
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--color-text-secondary);
+}
+/* 语速/音调滑块：拉宽到与旁边数值同排，滑块本体用主题主色，14 套主题都可辨识 */
+.role-tts input[type='range'] {
+  flex: 1;
+  min-width: 90px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+.role-tts input[type='range']:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+/* 「跟随全局」/ 数值：定宽，避免滑块拖动时文字宽度变化导致抖动 */
+.role-tts-num {
+  flex: 0 0 62px;
+  text-align: right;
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+/* 拉取结果提示：ok / warn（该提供商无列表端点，引导手填）/ error（网络或密钥问题） */
+.role-tts-note {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius, 8px);
+  font-size: calc(12px * var(--font-scale, 1));
+  border-left: 3px solid var(--color-border);
+  background: var(--color-panel);
+  color: var(--color-text-secondary);
+}
+.role-tts-note.ok { border-left-color: var(--color-success); color: var(--color-text); }
+.role-tts-note.warn { border-left-color: var(--color-warn); color: var(--color-text); }
+.role-tts-note.error { border-left-color: var(--color-danger); color: var(--color-danger); }
+
+/* ============================================================================
+   翻译弹窗 + 朗读（v2.3.94 需求 10）
+   ----------------------------------------------------------------------------
+   主窗与快捷小窗共用 .tr-* 这套类名，故样式一次定义、两处生效。
+   颜色全部走 CSS 变量（14 套主题都可读）；朗读中的状态用 --color-primary 描边提示。
+   ========================================================================== */
+.tr-modal {
+  max-width: 560px;
+  width: 90%;
+}
+.tr-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.tr-sec-label {
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--color-text-secondary);
+}
+.tr-sec-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+/* 朗读 / 重新生成按钮：图标 + 文字标签并存，保证不靠颜色也能区分（WCAG AA） */
+.tr-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  font-size: calc(12px * var(--font-scale, 1));
+  line-height: 1.4;
+}
+.tr-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+/* 可删除段落列表 */
+.tr-seg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--color-panel-alt);
+  border-radius: var(--radius, 8px);
+}
+.tr-seg {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--radius, 8px);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+}
+.tr-seg-text {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(13px * var(--font-scale, 1));
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text);
+}
+/* 删除按钮：常态低调，hover / focus 才显现对撞色，避免一列红叉视觉噪音 */
+.tr-seg-del {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius, 8px);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.tr-seg-del:hover:not(:disabled) {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+  background: var(--color-panel);
+}
+.tr-seg-del:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.tr-seg-del:disabled { opacity: 0.45; cursor: not-allowed; }
+/* 底部操作行：提示文案 + 撤销 + 翻译按钮 */
+.tr-foot-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.tr-foot-row .muted { flex: 1; min-width: 120px; font-size: calc(11px * var(--font-scale, 1)); }
+.tr-result {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px;
+  background: var(--color-panel);
+  border-radius: var(--radius, 8px);
+  font-size: calc(13px * var(--font-scale, 1));
+  color: var(--color-text);
+}
+.tr-err {
+  padding: 8px;
+  border-radius: var(--radius, 8px);
+  background: var(--color-panel);
+  border-left: 3px solid var(--color-danger);
+  color: var(--color-danger);
+  font-size: calc(13px * var(--font-scale, 1));
+  word-break: break-word;
+}
+/* 合成中提示条（不播放动画，只做静态提示 —— 避免引入不受动画开关管控的动效） */
+.tr-busy {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius, 8px);
+  background: var(--color-panel-alt);
+  border-left: 3px solid var(--color-primary);
+  color: var(--color-text-secondary);
+  font-size: calc(12px * var(--font-scale, 1));
+}
+/* 正在朗读的那一条：aria-pressed=true 时给主色描边 + 底色（不依赖颜色单独传达状态，
+   因为按钮同时有 aria-pressed 与文字标签，色弱用户也能区分）。 */
+.tr-btn[aria-pressed='true'] {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-panel);
 }

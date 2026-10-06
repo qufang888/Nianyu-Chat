@@ -335,6 +335,7 @@ export default function App() {
         <Settings
           onRerunWizard={() => { setView('chats'); setShowOnboarding(true); }}
           onAbout={() => setAboutOpen(true)}
+          onGoToContacts={() => setView('contacts')}
           navResetTick={settingsNavTick}
         />
       )}

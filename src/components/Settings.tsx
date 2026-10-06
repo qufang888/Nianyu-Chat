@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../ipc';
 import { useTheme } from '../theme/ThemeContext';
 import { useI18n } from '../i18n/I18nContext';
@@ -13,6 +13,7 @@ import {
   type DeepThinkLevel,
   type VideoGenSettings,
   type ModelConfig,
+  type MediaApiConfig,
   type ChatListItem,
   type SelfRole,
   type WorldBook,
@@ -39,12 +40,21 @@ import { DEFAULT_MEMORY_SUMMARIZE_PROMPT, DEFAULT_MEMORY_INJECT_PROMPT } from '.
 import { Hint } from './Hint';
 import { ANIM_GROUPS, ANIM_MODES, getAnimMode, isGroupEnabled, type AnimMode } from '../utils/animControl';
 import { ModelEditor } from './ModelEditor';
+import { MediaApiConfigEditor, resolveMediaConfigs } from './MediaApiConfigEditor';
 import { FontSettings } from './FontSettings';
 import { GuideView } from './GuideView';
 import { SelfRoleSettings } from './SelfRoleSettings';
 import { useToast, ToastView } from './Toast';
 import SelectMenu from './SelectMenu';
 import ComboBox from './ComboBox';
+import SearchSuggest from './SearchSuggest';
+import { MAX_SUGGESTIONS, suggest, suggestWithCount } from '../utils/fuzzySearch';
+import {
+  INACTIVE_DAYS_DEFAULT,
+  INACTIVE_DAYS_MAX,
+  INACTIVE_DAYS_MIN,
+  clampInactiveDays,
+} from '../utils/inactiveChats';
 import { invalidateSoundCache, previewSound, type SoundType } from '../utils/sound';
 import { compareVersions } from '../utils/versionCompare';
 import cursorPngUrl from '../assets/cursor/cursor.png';
@@ -100,6 +110,13 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-modelmanage', key: 'settings.modelManage', sub: 'models', kw: ['模型', 'model', 'baseurl', 'base url', 'api key', 'apikey', '接口', 'provider', '模型列表', '添加模型', '新建模型', '默认模型', 'deepseek', 'openai', 'anthropic', '本地模型', '深度思考', '推理', 'qps', '限速', '分组', 'group', '标签', 'tags'] },
   { id: 'sec-modeldetect', key: 'settings.modelCapability', sub: 'models', kw: ['能力', '检测', '探针', 'capability', 'detect', '视觉', '工具', 'json', 'nsfw', '上下文', '流式检测'] },
   { id: 'sec-mcp', key: 'settings.mcp', sub: 'models', kw: ['mcp', '服务器', '工具', 'tool', '协议', '扩展', 'function calling', '工具调用'] },
+  // ===== TTS / ASR / 生图 / 生视频（v2.3.94 需求 7：由「生成」分类移入模型管理页）=====
+  { id: 'sec-voice', key: 'settings.voice', sub: 'models', kw: ['语音', 'voice', 'tts', '朗读', '播报', 'asr', '识别', '语音输入'] },
+  { id: 'sec-tts', key: 'settings.mcfg.ttsTitle', sub: 'models', kw: ['tts', '文本转语音', '语音合成', '播报', '音色', 'voice', '语速', '音调', '多配置', 'api 配置'] },
+  { id: 'sec-asr', key: 'settings.mcfg.asrTitle', sub: 'models', kw: ['asr', '语音识别', '语音输入', '转文字', 'whisper', 'transcribe', 'api 配置'] },
+  { id: 'sec-ttsrole', key: 'settings.ttsVoicePerRole', sub: 'models', kw: ['音色', '按角色', '人物音色', '绑定', 'per role', 'voice', '角色配音', '角色卡'] },
+  { id: 'sec-imgcfg', key: 'settings.mcfg.imageTitle', sub: 'models', kw: ['生图', '画图', 'image', '图像生成', '文生图', 'dalle', '尺寸', 'size', 'api 配置'] },
+  { id: 'sec-vidcfg', key: 'settings.mcfg.videoTitle', sub: 'models', kw: ['生视频', '视频', 'video', '文生视频', '时长', 'duration', '尺寸', 'api 配置'] },
   // ===== 常规区 =====
   { id: 'sec-font', key: 'settings.font', sub: 'font', kw: ['字体', 'font', '字号'] },
   { id: 'sec-self', key: 'self.title', sub: 'self', kw: ['自我', '身份', 'self', '角色'] },
@@ -113,10 +130,7 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-inputappearance', key: 'settings.inputAppearance', kw: ['输入框', 'input', '输入栏', '外观'] },
   { id: 'sec-cursor', key: 'settings.cursor', kw: ['光标', 'cursor', '鼠标指针', '自定义光标'] },
   { id: 'sec-glassbg', key: 'settings.glassBg', kw: ['毛玻璃', 'glass', '背景', '虚化', '颜色', '字体', '边框', '气泡', '透明', 'frost', 'blur', 'color', 'border', 'bubble', 'font'] },
-  { id: 'sec-voice', key: 'settings.voice', kw: ['语音', 'voice', 'tts', '朗读', '播报', 'asr', '识别', '语音输入'] },
   { id: 'sec-debug', key: 'settings.debugMode', kw: ['调试', '测试', 'debug', '快照', '错误报告', '手动触发', '触发'] },
-  { id: 'sec-imagegen', key: 'settings.imageGen', kw: ['生图', '画图', 'image', '图像生成', '文生图'] },
-  { id: 'sec-videogen', key: 'settings.videoGen', kw: ['视频', 'video', '生视频', '文生视频'] },
   { id: 'sec-sceneimage', key: 'settings.sceneImage', kw: ['场景图', 'scene', '配图'] },
   { id: 'sec-websearch', key: 'settings.webSearch', kw: ['联网', '搜索', 'web', 'search', '联网搜索'] },
   { id: 'sec-plugins', key: 'settings.plugins', kw: ['插件', 'plugin', '扩展'] },
@@ -124,6 +138,7 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-translation', key: 'settings.translation', kw: ['翻译', 'translation', '译文'] },
   { id: 'sec-sound', key: 'settings.sound', kw: ['音效', 'sound', '提示音', '通知音', '声音'] },
   { id: 'sec-mini', key: 'settings.mini', kw: ['小窗', '迷你', 'mini', '快捷'] },
+  { id: 'sec-inactive-chat', key: 'settings.inactiveChatDays', kw: ['不常用', '不常用聊天', '不活跃', '闲置', '归档', '收起来', '多少天', '天数', 'inactive', 'archive', 'folder', 'days', 'stale'] },
   { id: 'sec-floatingball', key: 'settings.floatingBall', kw: ['悬浮球', '浮动球', '球', 'floating', '桌面'] },
   { id: 'sec-datapath', key: 'settings.dataPath', kw: ['数据', '路径', 'data', 'path', '存储'] },
   { id: 'sec-closebehavior', key: 'settings.closeBehavior', kw: ['关闭', '退出', 'close', '退出行为'] },
@@ -217,6 +232,8 @@ function CursorHotspotPreview({
 export const Settings: React.FC<{
   onRerunWizard?: () => void;
   onAbout?: () => void;
+  // 跳到「通讯录」（人物音色绑定已迁移到角色卡编辑器，设置页只留跳转入口）
+  onGoToContacts?: () => void;
   // 模型管理独立二级页面模式：只渲染「模型管理」分区 + 模型配置搜索框（不渲染其余设置分区）
   modelsOnly?: boolean;
   // 导航重置信号：再次点击左侧「设置」图标时从二级页退回设置主界面
@@ -224,6 +241,7 @@ export const Settings: React.FC<{
 }> = ({
   onRerunWizard,
   onAbout,
+  onGoToContacts,
   modelsOnly,
   navResetTick,
 }) => {
@@ -542,16 +560,18 @@ export const Settings: React.FC<{
     });
   }, []);
 
-  // TTS 按角色音色：加载角色（含群成员）清单与可选音色列表
-  const [roleVoiceList, setRoleVoiceList] = useState<{ roleId: string; name: string }[]>([]);
+  // TTS 可选音色列表（供「默认音色」下拉用；需求 8 起人物音色改在角色卡里绑定）
   const [voiceOptions, setVoiceOptions] = useState<string[]>([]);
 
   // ===== 设置搜索框（百度建议式候选） =====
   const [searchQ, setSearchQ] = useState('');
   const [showSuggest, setShowSuggest] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [guideOpen, setGuideOpen] = useState(false);
   // ===== 模型管理页（独立二级菜单）搜索：模糊搜索模型配置，点击结果跳转并高亮闪动 3 秒 =====
   const [modelSearchQ, setModelSearchQ] = useState('');
+  const [modelSuggestOpen, setModelSuggestOpen] = useState(false);
+  const modelSearchInputRef = useRef<HTMLInputElement>(null);
   // ===== 软件更新（v2.3.45）：状态来自主进程 updater（订阅 update:status 广播）=====
   const [updateSt, setUpdateSt] = useState<UpdateStatus | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
@@ -564,12 +584,29 @@ export const Settings: React.FC<{
   // 具体控件（勾选框 / 滑块 / 下拉 / 各分区标题），保证「所有设置项」均可被搜到并跳转。
   const [searchIndex, setSearchIndex] = useState<SettingSearchItem[]>(SETTING_SEARCH_INDEX);
   const draftReady = !!draft;
+  // 按场景（主设置页 / 模型管理二级页）分别缓存动态索引条目。
+  // 为什么缓存而不是每次覆盖：设置搜索框**只渲染在主设置页**，而 TTS / ASR / 生图 / 生视频
+  // 的控件现在住在模型管理二级页 —— 若二级页的条目一离开就被丢弃，用户在主页面永远搜不到它们。
+  // 缓存后，主页面搜索能命中二级页条目（带 sub='models'），点击即自动切页并高亮。
+  // 条目 id 由标签文本散列而来（见 stableId），跨场景稳定，重复项按 id 去重。
+  const dynIndexCache = useRef<Record<string, SettingSearchItem[]>>({});
   React.useEffect(() => {
     const root = panelRef.current;
-    if (!root || !draftReady || onlyModels) return; // 模型管理独立页不用设置搜索索引
+    if (!root || !draftReady) return;
+    // v2.3.94 需求 7：模型管理二级页（onlyModels）同样要建索引 —— 旧代码 `|| onlyModels`
+    // 直接早退，导致移进去的这些控件一个都搜不到。该场景产出的条目打上 sub='models'。
+    const sceneSub: SettingSearchItem['sub'] = onlyModels ? 'models' : undefined;
     const dyn: SettingSearchItem[] = [];
     const seen = new Set<string>();
     const clean = (s: string) => s.replace(/\s+/g, ' ').trim();
+    // 稳定 id：按「标签文本」散列，而非遍历序号。
+    // 旧实现用 `${prefix}-${seen.size}`，序号会随前面控件的增删整体错位 ——
+    // 用户先前搜过一次记下了 id，之后设置项一变动，跳转就落到别的控件上（用户反馈过的 bug）。
+    const stableId = (prefix: string, label: string) => {
+      let h = 5381;
+      for (let i = 0; i < label.length; i++) h = ((h << 5) + h + label.charCodeAt(i)) >>> 0;
+      return `${prefix}-${h.toString(36)}`;
+    };
     // 取「设置名」：优先直接 label → .field 内 label → 父容器内首个 fontSize:13 标题 div → 父容器文本
     const nameOf = (el: HTMLElement): string => {
       const lbl = el.closest('label');
@@ -604,9 +641,9 @@ export const Settings: React.FC<{
       const norm = label.toLowerCase();
       if (!label || seen.has(norm)) return;
       seen.add(norm);
-      const id = `${prefix}-${seen.size}`;
+      const id = stableId(prefix, norm);
       el.id = id;
-      dyn.push({ id, key: label, kw: [] });
+      dyn.push({ id, key: label, kw: [], sub: sceneSub });
     };
     // 1) 所有勾选框（兼容 label 包裹与 div 包裹两种写法）
     root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach((el) => {
@@ -648,31 +685,31 @@ export const Settings: React.FC<{
           block = block.parentElement;
         }
       });
-    setSearchIndex([...SETTING_SEARCH_INDEX, ...dyn]);
-  }, [lang, draftReady]);
-  const searchResults = React.useMemo<SettingSearchItem[]>(() => {
-    const raw = searchQ.toLowerCase().trim();
-    if (!raw) return [];
-    // 拆词：支持「语音 输入」式多关键字，每个词都需在标题或关键词中出现才算命中
-    const tokens = raw.split(/\s+/).filter(Boolean);
-    const scored = searchIndex.map((item) => {
-      const label = t(item.key).toLowerCase();
-      const hay = label + ' ' + item.kw.join(' ').toLowerCase();
-      let score = -1;
-      if (label.startsWith(raw)) score = 100;
-      else if (label.includes(raw)) score = 80;
-      else if (hay.includes(raw)) score = 50;
-      // 多词匹配：全部 token 命中（标题内命中优先）
-      if (score < 0 && tokens.length > 0) {
-        const allHit = tokens.every((tk) => hay.includes(tk));
-        if (allHit) score = tokens.every((tk) => label.includes(tk)) ? 70 : 40;
+    // 合并两个场景的缓存条目（按 id 去重，二级页优先 —— 它的条目带 sub，跳转更可靠）
+    const scene = onlyModels ? 'models' : 'main';
+    dynIndexCache.current[scene] = dyn;
+    const merged: SettingSearchItem[] = [];
+    const usedIds = new Set<string>();
+    for (const list of [dynIndexCache.current.models || [], dynIndexCache.current.main || []]) {
+      for (const item of list) {
+        if (usedIds.has(item.id)) continue;
+        usedIds.add(item.id);
+        merged.push(item);
       }
-      return { item, score };
-    })
-      .filter((x) => x.score >= 0)
-      .sort((a, b) => b.score - a.score || a.item.key.length - b.item.key.length);
-    return scored.slice(0, 5).map((x) => x.item);
-  }, [searchQ, lang, searchIndex]);
+    }
+    setSearchIndex([...SETTING_SEARCH_INDEX, ...merged]);
+  }, [lang, draftReady, onlyModels]);
+  // 需求 12：设置搜索改走 fuzzySearch（模糊匹配 + 相关度排序），最多 5 个候选。
+  // 旧实现是自研的 startsWith/includes 打分，只能做「前缀/包含」匹配，
+  // 搜「语音」找不到「朗读与语音」、搜「ms」找不到「Mini」，与全局搜索规范不一致。
+  const searchHit = useMemo(
+    () =>
+      searchQ.trim()
+        ? suggestWithCount(searchQ, searchIndex, (item) => ({ label: t(item.key), keywords: item.kw }), MAX_SUGGESTIONS)
+        : { items: [] as SettingSearchItem[], total: 0 },
+    [searchQ, lang, searchIndex]
+  );
+  const searchResults = searchHit.items;
 
   // 按关键字（多词）高亮标题
   const renderSearchHL = (label: string, q: string): React.ReactNode => {
@@ -689,21 +726,32 @@ export const Settings: React.FC<{
     );
   };
   const goToSetting = (id: string, sub?: SettingSearchItem['sub']) => {
+    // 滚动 + 高亮闪动。目标可能尚未挂载（刚切二级页），故交由 retry 轮询兜底。
     const jump = () => {
       const el = document.getElementById(id);
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        el.classList.remove('setting-flash');
-        void el.offsetWidth; // 触发重排以重启动画
-        el.classList.add('setting-flash');
-        window.setTimeout(() => el.classList.remove('setting-flash'), 5000);
-      }
+      if (!el) return false;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.remove('setting-flash');
+      void el.offsetWidth; // 触发重排以重启动画
+      el.classList.add('setting-flash');
+      window.setTimeout(() => el.classList.remove('setting-flash'), 5000);
+      return true;
     };
     if (id === 'cat-models' || sub) {
-      // 目标在二级页（模型管理/字体/角色卡）：先切入，等渲染后再滚动高亮；
-      // 二级页内不存在该锚点时（如分类入口）仅完成跳转，不再表现为「点了没反应」
+      // 目标在二级页（模型管理/字体/角色卡）：先切入，等渲染后再滚动高亮。
+      // v2.3.94：旧实现用 setTimeout(jump, 150) 硬猜渲染时机 —— 慢机器/配置多时
+      // 150ms 不足以让新页挂载，表现为「点了没反应」。改为「先试一次，不中就按帧重试」，
+      // 上限 ~600ms；到点仍找不到（分类入口等本就没有该锚点）则安静收手。
       setSub(sub || 'models');
-      window.setTimeout(jump, 150);
+      if (!jump()) {
+        let tries = 0;
+        const retry = () => {
+          if (jump()) return;
+          if (++tries >= 30) return; // 约 600ms（20ms/次）后放弃
+          window.setTimeout(retry, 20);
+        };
+        window.setTimeout(retry, 20);
+      }
     } else {
       jump();
     }
@@ -713,23 +761,7 @@ export const Settings: React.FC<{
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const roles: any[] = (await api.getRoles()) || [];
-        const groups: any[] = (await api.getGroups()) || [];
-        const list: { roleId: string; name: string }[] = [];
-        roles.forEach((r) => list.push({ roleId: r.id, name: r.name }));
-        groups.forEach((g) => {
-          const ids = (g.member_ids || '').split(',').filter(Boolean);
-          ids.forEach((id: string) => {
-            if (list.some((l) => l.roleId === id)) return;
-            const r = roles.find((x: any) => x.id === id);
-            list.push({ roleId: id, name: r ? `${r.name}（${g.group_name}）` : `${id}（${g.group_name}）` });
-          });
-        });
-        if (!cancelled) setRoleVoiceList(list);
-      } catch {
-        /* 忽略：未导入角色时为空 */
-      }
+      // 人物音色绑定已迁移到角色卡编辑器，这里只需为「默认音色」下拉拉一次全局音色列表。
       try {
         const voices = await api.listVoices();
         if (!cancelled) setVoiceOptions(voices || []);
@@ -755,33 +787,22 @@ export const Settings: React.FC<{
   const providerLabel = (p: string) =>
     PROVIDER_DEFAULTS[p as keyof typeof PROVIDER_DEFAULTS]?.label || p;
 
-  // ===== 模型管理页搜索：匹配 名称 / 模型 ID / 提供方 / 标签 / 分组名 / Base URL =====
-  // 匹配逻辑与设置搜索一致：多词 AND，前缀命中 > 包含命中 > 全词组命中；大小写不敏感
+  // ===== 模型管理页搜索：匹配 名称 / 模型 ID / 提供方 / 标签 / 分组名 / BaseURL =====
+  // 需求 12：走 fuzzySearch 统一规范（模糊 + 相关度排序 + 最多 5 个候选）。
+  // 名称作主文本（决定档位与排序），其余字段作 keywords（同档排序时降权）。
   const modelSearchResults = (() => {
-    const raw = modelSearchQ.toLowerCase().trim();
-    const all = draft?.models || [];
-    if (!raw) return [];
-    const tokens = raw.split(/\s+/).filter(Boolean);
+    if (!modelSearchQ.trim()) return [] as typeof draft.models;
     const groups = draft?.modelGroups || [];
-    const scored = all.map((m) => {
-      const groupNames = (m.groupIds || [])
-        .map((gid) => groups.find((g) => g.id === gid)?.name || '')
-        .filter(Boolean)
-        .join(' ');
-      const hay = [m.name, m.model, providerLabel(m.provider), (m.tags || []).join(' '), groupNames, m.baseUrl || '']
-        .join(' ')
-        .toLowerCase();
-      let score = -1;
-      if (m.name.toLowerCase().startsWith(raw)) score = 100;
-      else if (hay.includes(raw)) score = 80;
-      if (score < 0 && tokens.length > 0 && tokens.every((tk) => hay.includes(tk))) score = 60;
-      return { m, score };
-    });
-    return scored
-      .filter((x) => x.score >= 0)
-      .sort((a, b) => b.score - a.score || a.m.name.localeCompare(b.m.name))
-      .slice(0, 8)
-      .map((x) => x.m);
+    return suggest(modelSearchQ, draft?.models || [], (m) => ({
+      label: m.name,
+      keywords: [
+        m.model,
+        providerLabel(m.provider),
+        ...(m.tags || []),
+        ...(m.groupIds || []).map((gid) => groups.find((g) => g.id === gid)?.name || '').filter(Boolean),
+        m.baseUrl || '',
+      ].filter(Boolean),
+    }), MAX_SUGGESTIONS);
   })();
   // 点击搜索结果：滚动到对应模型卡片并高亮闪动约 3 秒（3 次 1s 脉冲动画）
   const goToModel = (id: string) => {
@@ -886,6 +907,52 @@ export const Settings: React.FC<{
     patch({ videoGen: next });
     api.saveSettings({ videoGen: next }).then(reloadSettings);
   };
+  // ===== v2.3.94 需求 7：四类服务的多API 配置写入器 =====
+  // 统一口径：编辑器只吐 { configs, activeId }，这里负责落盘到各自的settings 子对象。
+  // **不需要**在此处同步写扁平字段（ttsBaseUrl / baseUrl 等）—— 主进程每次 saveSettings
+  // 都会调 syncActiveMediaConfigs() 把当前启用项回写扁平字段（见 electron/db.ts），
+  // 后端调用点仍读扁平字段，故整条链路自动打通。
+  const patchTtsConfigs = (next: { configs: MediaApiConfig[]; activeId: string }) =>
+    patchVoice({ ttsConfigs: next.configs, activeTtsId: next.activeId });
+  const patchAsrConfigs = (next: { configs: MediaApiConfig[]; activeId: string }) =>
+    patchVoice({ asrConfigs: next.configs, activeAsrId: next.activeId });
+  const patchImageConfigs = (next: { configs: MediaApiConfig[]; activeId: string }) =>
+    patchImageGen({ imageConfigs: next.configs, activeImageId: next.activeId });
+  const patchVideoConfigs = (next: { configs: MediaApiConfig[]; activeId: string }) =>
+    patchVideoGen({ videoConfigs: next.configs, activeVideoId: next.activeId });
+
+  // 四类服务当前要展示的多配置列表。
+  // resolveMediaConfigs 负责「数组为空但扁平字段有值」的兜底（老配置迁移前 / 只填过扁平字段），
+  // 避免用户看到空列表以为自己的配置丢了。
+  const ttsConfigs = resolveMediaConfigs(
+    voice.ttsConfigs,
+    { provider: 'openai-compatible', baseUrl: voice.ttsBaseUrl, apiKey: voice.ttsApiKey, model: voice.ttsModel, voice: voice.ttsVoice },
+    voice.activeTtsId
+  );
+  const asrConfigs = resolveMediaConfigs(
+    voice.asrConfigs,
+    { provider: 'custom', baseUrl: voice.asrBaseUrl, apiKey: voice.asrApiKey, model: voice.asrModel },
+    voice.activeAsrId
+  );
+  const imageConfigs = resolveMediaConfigs(
+    imageGen.imageConfigs,
+    { provider: 'custom', baseUrl: imageGen.baseUrl, apiKey: imageGen.apiKey, model: imageGen.model, size: imageGen.size },
+    imageGen.activeImageId
+  );
+  const videoConfigs = resolveMediaConfigs(
+    videoGen.videoConfigs,
+    {
+      provider: 'custom',
+      baseUrl: videoGen.baseUrl,
+      apiKey: videoGen.apiKey,
+      model: videoGen.model,
+      size: videoGen.size,
+      duration: Number(videoGen.duration) || undefined,
+    },
+    videoGen.activeVideoId
+  );
+  /** TTS 是否已具备可用端点（决定「自动播报」等开关是否可勾） */
+  const activeTtsReady = !!(voice.ttsBaseUrl || '').trim();
   const patchMini = (p: Partial<typeof mini>) => {
     const next = { ...mini, ...p };
     patch({ miniWindow: next });
@@ -894,28 +961,6 @@ export const Settings: React.FC<{
   const patchSound = (p: Partial<typeof sound>) => patch({ sound: { ...sound, ...p } });
   const patchCursor = (p: Partial<typeof cursor>) => patch({ customCursor: { ...cursor, ...p } });
 
-  // TTS 按角色配置：key=角色 id，value=音色名（旧格式，兼容）或 { voice, baseUrl, apiKey, model }（v2.3.19）；
-  // 全部字段为空时删除该角色配置（回退全局默认，存于 voice 子对象）
-  const ttsVoices = voice.ttsVoices || {};
-  type RoleTtsDraft = { voice?: string; baseUrl?: string; apiKey?: string; model?: string; speed?: number; pitch?: number };
-  const getRoleTts = (roleId: string): RoleTtsDraft => {
-    const cur = ttsVoices[roleId];
-    return typeof cur === 'string' ? { voice: cur } : { ...(cur || {}) };
-  };
-  const patchRoleTts = (roleId: string, p: Partial<RoleTtsDraft>) => {
-    const next = { ...ttsVoices } as Record<string, RoleTtsDraft>;
-    const merged = getRoleTts(roleId);
-    for (const [k, val] of Object.entries(p)) {
-      if (val === undefined || val === '') delete (merged as any)[k];
-      else (merged as any)[k] = val;
-    }
-    if (
-      !merged.voice && !merged.baseUrl && !merged.apiKey && !merged.model &&
-      merged.speed === undefined && merged.pitch === undefined
-    ) delete next[roleId];
-    else next[roleId] = merged;
-    patchVoice({ ttsVoices: next });
-  };
   // 光标子设置必须落盘并触发 reloadSettings，否则 ThemeContext.settings 不会更新，
   // CustomCursor 读取不到变化（patch 只改本地 draft）。与 enabled 开关保持一致。
   const saveCursor = (p: Partial<typeof cursor>) =>
@@ -1277,47 +1322,34 @@ export const Settings: React.FC<{
         )}
         {!onlyModels && sub === 'main' && (
           <div className="settings-header-search">
+            {/* 需求 12：候选面板换成 SearchSuggest（portal + 最多 5 行 + 滚动条 + 键盘导航） */}
             <div style={{ position: 'relative', width: 220 }}>
               <input
+                ref={searchInputRef}
                 type="text"
                 className="settings-search-input"
                 placeholder={t('settings.searchPlaceholder')}
                 value={searchQ}
+                aria-label={t('settings.searchPlaceholder')}
                 onChange={(e) => {
                   setSearchQ(e.target.value);
                   setShowSuggest(true);
                 }}
                 onFocus={() => setShowSuggest(true)}
                 onBlur={() => window.setTimeout(() => setShowSuggest(false), 150)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    if (searchResults[0]) goToSetting(searchResults[0].id, searchResults[0].sub);
-                  } else if (e.key === 'Escape') {
-                    setShowSuggest(false);
-                  }
-                }}
               />
-              {showSuggest && searchResults.length > 0 && (
-                <div className="settings-suggest">
-                  {searchResults.map((r) => (
-                    <div
-                      key={r.id}
-                      className="settings-suggest-item"
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        goToSetting(r.id, r.sub);
-                      }}
-                    >
-                      {renderSearchHL(t(r.key), searchQ)}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {showSuggest && searchQ.trim() && searchResults.length === 0 && (
-                <div className="settings-suggest">
-                  <div className="settings-suggest-empty">{t('settings.searchEmpty')}</div>
-                </div>
-              )}
+              <SearchSuggest
+                open={showSuggest}
+                query={searchQ}
+                items={searchResults}
+                max={MAX_SUGGESTIONS}
+                anchorRef={searchInputRef}
+                emptyHint={t('settings.searchEmpty')}
+                itemKey={(r) => r.id}
+                renderItem={(r, ctx) => renderSearchHL(t(r.key), ctx.query)}
+                onPick={(r) => goToSetting(r.id, r.sub)}
+                onClose={() => setShowSuggest(false)}
+              />
             </div>
             <button
               type="button"
@@ -1329,40 +1361,35 @@ export const Settings: React.FC<{
             </button>
           </div>
         )}
-        {/* 模型管理独立页：模型配置搜索框 + 结果列表（点击跳转并高亮闪动 3 秒） */}
+        {/* 模型管理独立页：模型配置搜索框 + 候选面板（点击跳转并高亮闪动 3 秒） */}
         {onlyModels && (
           <div className="settings-header-search" style={{ position: 'relative', flex: 1, marginLeft: 12, minWidth: 0 }}>
             <input
+              ref={modelSearchInputRef}
               type="text"
               className="settings-search-input"
               style={{ width: '100%' }}
               placeholder={t('models.searchPh')}
               value={modelSearchQ}
+              aria-label={t('models.searchPh')}
               onChange={(e) => setModelSearchQ(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && modelSearchResults[0]) goToModel(modelSearchResults[0].id);
-                else if (e.key === 'Escape') setModelSearchQ('');
-              }}
+              onFocus={() => setModelSuggestOpen(true)}
+              onBlur={() => window.setTimeout(() => setModelSuggestOpen(false), 150)}
             />
-            {modelSearchQ.trim() && (
-              <div className="settings-suggest" style={{ maxHeight: 280 }}>
-                {modelSearchResults.map((m) => (
-                  <div
-                    key={m.id}
-                    className="settings-suggest-item"
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      goToModel(m.id);
-                    }}
-                  >
-                    {renderSearchHL(`${m.name} · ${providerLabel(m.provider)} · ${m.model}`, modelSearchQ)}
-                  </div>
-                ))}
-                {modelSearchResults.length === 0 && (
-                  <div className="settings-suggest-empty">{t('models.searchEmpty')}</div>
-                )}
-              </div>
-            )}
+            <SearchSuggest
+              open={modelSuggestOpen}
+              query={modelSearchQ}
+              items={modelSearchResults}
+              max={MAX_SUGGESTIONS}
+              anchorRef={modelSearchInputRef}
+              emptyHint={t('models.searchEmpty')}
+              itemKey={(m) => m.id}
+              renderItem={(m, ctx) =>
+                renderSearchHL(`${m.name} · ${providerLabel(m.provider)} · ${m.model}`, ctx.query)
+              }
+              onPick={(m) => goToModel(m.id)}
+              onClose={() => setModelSuggestOpen(false)}
+            />
           </div>
         )}
       </div>
@@ -2061,6 +2088,47 @@ export const Settings: React.FC<{
             />
           </div>
 
+          {/* ===== 需求 14：不常用聊天文件夹（多少天没聊天算不常用） ===== */}
+          <div id="sec-inactive-chat" className="section-title" style={{ marginTop: 16 }}>
+            {t('settings.inactiveChat')}
+          </div>
+          <div className="field" style={{ maxWidth: 480 }}>
+            <label>
+              {t('settings.inactiveChatDays')}
+              <Hint text={t('settings.inactiveChatDaysDesc')} />
+            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="number"
+                min={INACTIVE_DAYS_MIN}
+                max={INACTIVE_DAYS_MAX}
+                step={1}
+                style={{ width: 100 }}
+                value={clampInactiveDays(draft.inactiveChatDays ?? INACTIVE_DAYS_DEFAULT)}
+                onChange={(e) => {
+                  const raw = Number(e.target.value);
+                  // 输入中途（如清空成''）Number 得NaN：此时不落盘，保留用户输入框内容由其自行恢复
+                  if (!Number.isFinite(raw)) return;
+                  const v = clampInactiveDays(raw);
+                  patch({ inactiveChatDays: v });
+                  api.saveSettings({ inactiveChatDays: v });
+                }}
+                onBlur={(e) => {
+                  // 失焦时把越界值夹回合法区间并落盘（避免 0 / -5 / 99999 这类脏值留在设置里）
+                  const v = clampInactiveDays(Number(e.target.value));
+                  if (v !== draft.inactiveChatDays) {
+                    patch({ inactiveChatDays: v });
+                    api.saveSettings({ inactiveChatDays: v });
+                  }
+                }}
+              />
+              <span style={{ fontSize: 13 }}>{t('settings.inactiveChatDaysUnit')}</span>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 6, lineHeight: 1.6 }}>
+              {t('settings.inactiveChatHint')}
+            </div>
+          </div>
+
           </div>{/* end cat-chat */}
         <div id="cat-proactive" ref={(el) => { catRefs.current['cat-proactive'] = el; }} className="settings-category">
           {/* ===== ① 主动消息机制（最高层决策：先选机制，再配该机制的参数） ===== */}
@@ -2116,6 +2184,40 @@ export const Settings: React.FC<{
               <div style={{ fontSize: 13 }}>{t('settings.idleCooldown')}<Hint text={t('settings.idleCooldownDesc')} /></div>
             </div>
           </div>
+
+          {/* v2.3.94 需求 4：触发等待的主动消息条数阈值。
+              最小 1 条；填到最大档 9999（或留空）= 不启用等待功能（用户原话「最大无限条」）。
+              注意：9999 这个哨兵值必须与 electron/awaitingReply.ts 的 AWAITING_NEVER 保持一致。 */}
+          {(draft.idleCooldownUntilReply !== false) && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 13, marginBottom: 6 }}>
+                {t('settings.idleAwaitingThreshold')}
+                <Hint text={t('settings.idleAwaitingThresholdDesc')} />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="number"
+                  min={1}
+                  max={9999}
+                  step={1}
+                  style={{ width: 110 }}
+                  value={draft.idleAwaitingTriggerCount ?? 9999}
+                  onChange={(e) => {
+                    // 非法输入（空/非数）先回落到 9999（=不启用），避免写入 NaN 污染 settings
+                    const n = Number(e.target.value);
+                    const v = Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), 1), 9999) : 9999;
+                    patch({ idleAwaitingTriggerCount: v });
+                    api.saveSettings({ idleAwaitingTriggerCount: v });
+                  }}
+                />
+                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                  {(draft.idleAwaitingTriggerCount ?? 9999) >= 9999
+                    ? t('settings.idleAwaitingThresholdOff')
+                    : t('settings.idleAwaitingThresholdOn', { n: draft.idleAwaitingTriggerCount ?? 1 })}
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* ===== ③ 经典定时机制参数（仅 legacy 机制下生效/显示） ===== */}
           {(draft.proactiveEngine ?? 'legacy') === 'nhpp' ? (
@@ -3223,6 +3325,295 @@ export const Settings: React.FC<{
           </button>
         <Hint text={t('settings.mcpAddDesc')} /></div>
 
+        {/* ==========================================================================
+            v2.3.94 需求 7：TTS / ASR / 生图 / 生视频 移入「模型设置」分区
+            ==========================================================================
+            为什么移：文本模型本来就在模型设置里，这四类服务的「Base URL / API Key / 模型」
+            性质完全相同，却曾散落在「生成」分类下，导致用户配模型时找不到配TTS 的地方。
+            移过来之后，「模型设置」= 所有 AI 能力的接入点，一处配齐。
+            注意：以下四段内部仍使用 voice / imageGen / videoGen 的**扁平兼容字段**读写
+            （如voice.ttsBaseUrl），改动仍即时落盘；多配置数组是唯一真源，
+            由主进程 syncActiveMediaConfigs() 回写扁平字段，后端调用点零改动。*/}
+
+        {/* ---------- 语音功能总入口（锚点：兼容旧搜索条目 sec-voice） ---------- */}
+        <div id="sec-voice" className="section-title" style={{ marginTop: 20 }}>
+          {t('settings.voice')}
+          <Hint text={t('settings.mcfgMovedDesc')} />
+        </div>
+
+        {/* ---------- ASR（语音输入）多配置 ---------- */}
+        <MediaApiConfigEditor
+          kind="asr"
+          sectionId="sec-asr"
+          titleKey="settings.mcfg.asrTitle"
+          hintKey="settings.asrDesc"
+          configs={asrConfigs}
+          activeId={voice.activeAsrId}
+          onChange={patchAsrConfigs}
+          modelPlaceholderKey="settings.mcfg.asrModelPh"
+          modelOptions={asrModelList}
+          refreshing={!!modelLoading.asr}
+          onRefreshModels={(c) => void refreshModelList('asr', c.baseUrl, c.apiKey)}
+        />
+
+        {/* ---------- TTS（文本转语音）多配置 ---------- */}
+        <MediaApiConfigEditor
+          kind="tts"
+          sectionId="sec-tts"
+          titleKey="settings.mcfg.ttsTitle"
+          hintKey="settings.ttsDesc"
+          configs={ttsConfigs}
+          activeId={voice.activeTtsId}
+          onChange={patchTtsConfigs}
+          showVoiceList
+          roleBind
+          modelOptions={ttsModelList}
+          refreshing={!!modelLoading.tts}
+          onRefreshModels={(c) => void refreshModelList('tts', c.baseUrl, c.apiKey)}
+          voiceOptions={voiceOptions}
+        />
+
+        {/* ---------- TTS 全局朗读行为（自动播报 / 范围 / 缓存） ---------- */}
+        <div id="sec-ttsplay" className="section-title" style={{ marginTop: 18 }}>
+          {t('settings.mcfg.ttsPlayTitle')}
+          <Hint text={t('settings.mcfg.ttsPlayDesc')} />
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              cursor: activeTtsReady ? 'pointer' : 'not-allowed',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={!!voice.ttsAutoPlay}
+              disabled={!activeTtsReady}
+              onChange={(e) => patchVoice({ ttsAutoPlay: e.target.checked })}
+            />
+            <span style={{ fontSize: 13 }}>{t('settings.ttsAutoPlay')}</span>
+          </label>
+          {!activeTtsReady && (
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+              {t('settings.mcfg.noActiveTts')}
+            </div>
+          )}
+
+          {/* 朗读范围（全局）：对话 / 旁白 / 人物心理，默认仅对话 */}
+          <div>
+            <div style={{ fontSize: 13, marginBottom: 6 }}>
+              {t('settings.ttsScopes')}
+              <Hint text={t('settings.ttsScopeDesc')} />
+            </div>
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+              {([
+                ['dialogue', 'settings.ttsScopeDialogue'],
+                ['narration', 'settings.ttsScopeNarration'],
+                ['psyche', 'settings.ttsScopePsyche'],
+              ] as const).map(([k, key]) => (
+                <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={k === 'dialogue' ? voice.ttsScopes?.dialogue !== false : !!voice.ttsScopes?.[k]}
+                    onChange={(e) =>
+                      patchVoice({
+                        ttsScopes: {
+                          dialogue: voice.ttsScopes?.dialogue !== false,
+                          narration: !!voice.ttsScopes?.narration,
+                          psyche: !!voice.ttsScopes?.psyche,
+                          [k]: e.target.checked,
+                        },
+                      })
+                    }
+                  />
+                  {t(key)}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* 朗读缓存：默认复用已合成音频，重复朗读不消耗 token */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={!!voice.ttsRegenerate}
+              onChange={(e) => patchVoice({ ttsRegenerate: e.target.checked })}
+            />
+            <span style={{ fontSize: 13 }}>
+              {t('settings.ttsRegenerate')}
+              <Hint text={t('settings.ttsRegenerateDesc')} />
+            </span>
+          </label>
+
+          {/* ===== 语速 / 音调（由提供商原生参数实现，仅对支持该参数的协议生效） ===== */}
+          <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, display: 'flex', alignItems: 'center' }}>
+              {t('settings.ttsSpeedPitch')}
+              <Hint text={t('settings.ttsSpeedPitchDesc')} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, maxWidth: 420 }}>
+              <span style={{ fontSize: 13, minWidth: 56 }}>{t('settings.ttsSpeed')}</span>
+              <input
+                type="range"
+                min={TTS_SPEED_MIN}
+                max={TTS_SPEED_MAX}
+                step={0.05}
+                value={voice.ttsSpeed ?? TTS_SPEED_DEFAULT}
+                onChange={(e) => patchVoice({ ttsSpeed: Number(e.target.value) })}
+                style={{ flex: 1 }}
+              />
+              <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 52, textAlign: 'right' }}>
+                {(voice.ttsSpeed ?? TTS_SPEED_DEFAULT).toFixed(2)}×
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, maxWidth: 420, marginTop: 6 }}>
+              <span style={{ fontSize: 13, minWidth: 56 }}>{t('settings.ttsPitch')}</span>
+              <input
+                type="range"
+                min={TTS_PITCH_MIN}
+                max={TTS_PITCH_MAX}
+                step={1}
+                value={voice.ttsPitch ?? TTS_PITCH_DEFAULT}
+                onChange={(e) => patchVoice({ ttsPitch: Number(e.target.value) })}
+                style={{ flex: 1 }}
+              />
+              <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 52, textAlign: 'right' }}>
+                {(voice.ttsPitch ?? TTS_PITCH_DEFAULT) > 0 ? '+' : ''}
+                {voice.ttsPitch ?? TTS_PITCH_DEFAULT}
+              </span>
+            </div>
+          </div>
+
+          {/* ===== 已适配的 TTS 提供商（用户明令：界面需列出当前支持的提供商） ===== */}
+          <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, display: 'flex', alignItems: 'center' }}>
+              {t('settings.ttsProviders')}
+              <Hint text={t('settings.ttsProvidersDesc')} />
+            </div>
+            <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-secondary)' }}>
+              {t('settings.ttsProvidersLegend')}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
+              {TTS_PROVIDERS.map((p) => (
+                <div
+                  key={p.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    flexWrap: 'wrap',
+                    padding: '6px 8px',
+                    borderRadius: 8,
+                    background: 'var(--color-panel-alt)',
+                    border: '1px solid var(--color-border)',
+                  }}
+                >
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{p.nameKey ? t(p.nameKey) : p.name}</span>
+                  <Hint text={t(p.noteKey)} />
+                  <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>{p.match}</span>
+                  <span className="tts-prov-badge">
+                    {p.site === 'both'
+                      ? t('settings.ttsSiteBoth')
+                      : p.site === 'cn'
+                        ? t('settings.ttsSiteCn')
+                        : p.site === 'intl'
+                          ? t('settings.ttsSiteIntl')
+                          : t('settings.ttsSiteGlobal')}
+                  </span>
+                  <span className={`tts-prov-badge${p.speed ? ' on' : ''}`}>
+                    {t('settings.ttsSpeed')} {p.speed ? '✓' : '✕'}
+                  </span>
+                  <span className={`tts-prov-badge${p.pitch ? ' on' : ''}`}>
+                    {t('settings.ttsPitch')} {p.pitch ? '✓' : '✕'}
+                  </span>
+                  <span className={`tts-prov-badge${p.voiceList ? ' on' : ''}`}>
+                    {t('settings.ttsVoiceListShort')} {p.voiceList ? '✓' : '✕'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* ---------- 人物音色绑定（v2.3.94 需求 8/9：已迁移到角色卡编辑器）----------
+            这里不再渲染第二套可编辑表单：两处并存会让用户困惑，且可能互相覆盖
+            settings.voice.ttsVoices[roleId]。设置页只保留一个跳转入口。 */}
+        <div id="sec-ttsrole" className="section-title" style={{ marginTop: 18 }}>
+          {t('settings.ttsVoicePerRole')}
+          <Hint text={t('settings.ttsVoicePerRoleDesc')} />
+        </div>
+        <button
+          type="button"
+          className="btn-ghost"
+          style={{ maxWidth: 420 }}
+          onClick={() => onGoToContacts?.()}
+          disabled={!onGoToContacts}
+        >
+          {t('settings.ttsPerRoleGoRoleCard')}
+        </button>
+        <div className="field-hint" style={{ maxWidth: 560 }}>
+          {t('settings.ttsPerRoleGoRoleCardDesc')}
+        </div>
+
+        {/* ---------- 生图多配置 ---------- */}
+        <div id="sec-imagegen" className="section-title" style={{ marginTop: 20 }}>
+          {t('settings.imageGen')}
+          <Hint text={t('settings.imageGenDesc')} />
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 8 }}>
+          <input
+            type="checkbox"
+            checked={!!imageGen.enabled}
+            onChange={(e) => patchImageGen({ enabled: e.target.checked })}
+          />
+          <span style={{ fontSize: 13 }}>{t('settings.imageGenEnabled')}</span>
+        </label>
+        <MediaApiConfigEditor
+          kind="image"
+          sectionId="sec-imgcfg"
+          titleKey="settings.mcfg.imageTitle"
+          configs={imageConfigs}
+          activeId={imageGen.activeImageId}
+          onChange={patchImageConfigs}
+          sizeLabelKey="settings.imageGenSize"
+          sizeHintKey="settings.imageGenSizeDesc"
+          modelPlaceholderKey="settings.imageGenModelPlaceholder"
+          modelOptions={imgModelList}
+          refreshing={!!modelLoading.img}
+          onRefreshModels={(c) => void refreshModelList('img', c.baseUrl, c.apiKey)}
+        />
+
+        {/* ---------- 生视频多配置 ---------- */}
+        <div id="sec-videogen" className="section-title" style={{ marginTop: 20 }}>
+          {t('settings.videoGen')}
+          <Hint text={t('settings.videoGenDesc')} />
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 8 }}>
+          <input
+            type="checkbox"
+            checked={!!videoGen.enabled}
+            onChange={(e) => patchVideoGen({ enabled: e.target.checked })}
+          />
+          <span style={{ fontSize: 13 }}>{t('settings.videoGenEnabled')}</span>
+        </label>
+        <MediaApiConfigEditor
+          kind="video"
+          sectionId="sec-vidcfg"
+          titleKey="settings.mcfg.videoTitle"
+          configs={videoConfigs}
+          activeId={videoGen.activeVideoId}
+          onChange={patchVideoConfigs}
+          showDuration
+          sizeLabelKey="settings.videoGenSize"
+          sizeHintKey="settings.videoGenSizeDesc"
+          modelPlaceholderKey="settings.imageGenModelPlaceholder"
+          modelOptions={imgModelList}
+          refreshing={!!modelLoading.img}
+          onRefreshModels={(c) => void refreshModelList('img', c.baseUrl, c.apiKey)}
+        />
+
         </div>{/* end cat-models */}
         </>)}
         {!onlyModels && (<>
@@ -3658,475 +4049,28 @@ export const Settings: React.FC<{
         {/* ===== 语音功能（ASR + TTS） ===== */}
         {!onlyModels && (<>
         <div id="cat-generation" ref={(el) => { catRefs.current['cat-generation'] = el; }} className="settings-category">
-        <div id="sec-voice" className="section-title">{t('settings.voice')}</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
+        {/* ===== v2.3.94 需求 7：TTS / ASR / 生图 / 生视频 的配置表单已移入「模型设置」=====
+            原先这四类服务的 API 端点表单散落在本分类下，只能填一套；现在它们与文本模型
+            一样支持「多条配置 + 标记当前使用项」，故统一搬到模型设置二级页。
+            本分类只保留一张跳转卡片（不再重复渲染表单，避免两处都能改、互相覆盖）。*/}
+        <div id="sec-mediastub" className="section-title">{t('settings.catGeneration')}</div>
+        <div
+          className="theme-card"
+          style={{ cursor: 'pointer', maxWidth: 480 }}
+          onClick={() => setSub('models')}
+        >
+          <div
+            className="theme-swatch"
+            style={{ background: 'linear-gradient(135deg,#4a9eff,#39ff99)' }}
+          />
           <div>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.asrApi')}<Hint text={t('settings.asrDesc')} />
+            <div style={{ fontWeight: 600 }}>
+              {t('settings.mcfgMovedTitle')}
+              <Hint text={t('settings.mcfgMovedDesc')} />
             </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <input
-                type="text"
-                placeholder="https://api.openai.com/v1"
-                value={voice.asrBaseUrl}
-                style={{ flex: 1, minWidth: 200 }}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  // 首次填写 ASR 专用 API 时即视为接入，语音转文本默认开启
-                  patchVoice({ asrBaseUrl: val });
-                }}
-              />
-              <input
-                type="password"
-                placeholder={t('settings.apiKey')}
-                value={voice.asrApiKey}
-                style={{ width: 180 }}
-                onChange={(e) => patchVoice({ asrApiKey: e.target.value })}
-              />
-              <ComboBox
-                placeholder="whisper-1"
-                value={voice.asrModel}
-                style={{ width: 140 }}
-                options={asrModelList}
-                onChange={(v) => patchVoice({ asrModel: v })}
-              />
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+              {t('settings.mcfgMovedEnter')}
             </div>
-            <div style={{ marginTop: 8 }}>
-              <button
-                type="button"
-                className="btn-ghost"
-                style={{ padding: '3px 10px', fontSize: 12 }}
-                disabled={modelLoading.asr}
-                onClick={() => refreshModelList('asr', voice.asrBaseUrl, voice.asrApiKey)}
-              >
-                {modelLoading.asr ? t('model.refreshing') : t('model.refreshModels')}
-              </button>
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.ttsTitle')}<Hint text={t('settings.ttsDesc')} />
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <input
-                type="text"
-                placeholder="https://api.openai.com/v1"
-                value={voice.ttsBaseUrl}
-                style={{ flex: 1, minWidth: 200 }}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  // 首次填写 TTS 专用 API 时，默认打开全局自动播报
-                  patchVoice({ ttsBaseUrl: val, ...(val && !voice.ttsBaseUrl ? { ttsAutoPlay: true } : {}) });
-                }}
-              />
-              <input
-                type="password"
-                placeholder={t('settings.apiKey')}
-                value={voice.ttsApiKey}
-                style={{ width: 180 }}
-                onChange={(e) => patchVoice({ ttsApiKey: e.target.value })}
-              />
-              <ComboBox
-                placeholder="tts-1"
-                value={voice.ttsModel}
-                style={{ width: 110 }}
-                options={ttsModelList}
-                onChange={(v) => patchVoice({ ttsModel: v })}
-              />
-              <input
-                type="text"
-                placeholder={t('settings.ttsVoicePh')}
-                value={voice.ttsVoice}
-                style={{ width: 90 }}
-                onChange={(e) => patchVoice({ ttsVoice: e.target.value })}
-              />
-            </div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={!!voice.ttsAutoPlay}
-                disabled={!voice.ttsBaseUrl}
-                onChange={(e) => patchVoice({ ttsAutoPlay: e.target.checked })}
-              />
-              <span style={{ fontSize: 13 }}>{t('settings.ttsAutoPlay')}</span>
-            </label>
-
-            {/* 朗读范围（全局）：对话 / 旁白 / 人物心理，默认仅对话 */}
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 13, marginBottom: 6 }}>{t('settings.ttsScopes')}<Hint text={t('settings.ttsScopeDesc')} /></div>
-              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-                {([
-                  ['dialogue', 'settings.ttsScopeDialogue'],
-                  ['narration', 'settings.ttsScopeNarration'],
-                  ['psyche', 'settings.ttsScopePsyche'],
-                ] as const).map(([k, key]) => (
-                  <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={k === 'dialogue' ? voice.ttsScopes?.dialogue !== false : !!voice.ttsScopes?.[k]}
-                      onChange={(e) =>
-                        patchVoice({
-                          ttsScopes: {
-                            dialogue: voice.ttsScopes?.dialogue !== false,
-                            narration: !!voice.ttsScopes?.narration,
-                            psyche: !!voice.ttsScopes?.psyche,
-                            [k]: e.target.checked,
-                          },
-                        })
-                      }
-                    />
-                    {t(key)}
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            {/* 朗读缓存：默认复用已合成音频，重复朗读不消耗 token */}
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={!!voice.ttsRegenerate}
-                disabled={!voice.ttsBaseUrl}
-                onChange={(e) => patchVoice({ ttsRegenerate: e.target.checked })}
-              />
-              <span style={{ fontSize: 13 }}>{t('settings.ttsRegenerate')}<Hint text={t('settings.ttsRegenerateDesc')} /></span>
-            </label>
-
-            <div style={{ marginTop: 8 }}>
-              <button
-                type="button"
-                className="btn-ghost"
-                style={{ padding: '3px 10px', fontSize: 12 }}
-                disabled={modelLoading.tts}
-                onClick={() => refreshModelList('tts', voice.ttsBaseUrl, voice.ttsApiKey)}
-              >
-                {modelLoading.tts ? t('model.refreshing') : t('model.refreshModels')}
-              </button>
-            </div>
-
-            {/* ===== 语速 / 音调（v2.3.34）：由提供商原生参数实现，仅对支持该参数的协议生效 ===== */}
-            <div style={{ marginTop: 12, borderTop: '1px solid var(--color-border, rgba(128,128,128,.18))', paddingTop: 10 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, display: 'flex', alignItems: 'center' }}>
-                {t('settings.ttsSpeedPitch')}
-                <Hint text={t('settings.ttsSpeedPitchDesc')} />
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, maxWidth: 420 }}>
-                <span style={{ fontSize: 13, minWidth: 56 }}>{t('settings.ttsSpeed')}</span>
-                <input
-                  type="range"
-                  min={TTS_SPEED_MIN}
-                  max={TTS_SPEED_MAX}
-                  step={0.05}
-                  value={voice.ttsSpeed ?? TTS_SPEED_DEFAULT}
-                  onChange={(e) => patchVoice({ ttsSpeed: Number(e.target.value) })}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 52, textAlign: 'right' }}>
-                  {(voice.ttsSpeed ?? TTS_SPEED_DEFAULT).toFixed(2)}×
-                </span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, maxWidth: 420, marginTop: 6 }}>
-                <span style={{ fontSize: 13, minWidth: 56 }}>{t('settings.ttsPitch')}</span>
-                <input
-                  type="range"
-                  min={TTS_PITCH_MIN}
-                  max={TTS_PITCH_MAX}
-                  step={1}
-                  value={voice.ttsPitch ?? TTS_PITCH_DEFAULT}
-                  onChange={(e) => patchVoice({ ttsPitch: Number(e.target.value) })}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 52, textAlign: 'right' }}>
-                  {(voice.ttsPitch ?? TTS_PITCH_DEFAULT) > 0 ? '+' : ''}{voice.ttsPitch ?? TTS_PITCH_DEFAULT}
-                </span>
-              </div>
-            </div>
-
-            {/* ===== 已适配的 TTS 提供商（用户明令：界面需列出当前支持的提供商；新增提供商必须同步补描述） ===== */}
-            <div style={{ marginTop: 12, borderTop: '1px solid var(--color-border, rgba(128,128,128,.18))', paddingTop: 10 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, display: 'flex', alignItems: 'center' }}>
-                {t('settings.ttsProviders')}
-                <Hint text={t('settings.ttsProvidersDesc')} />
-              </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, fontSize: 12, color: 'var(--color-text-secondary)' }}>
-                <span>{t('settings.ttsProvidersLegend')}</span>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
-                {TTS_PROVIDERS.map((p) => (
-                  <div
-                    key={p.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      flexWrap: 'wrap',
-                      padding: '6px 8px',
-                      borderRadius: 8,
-                      background: 'var(--color-panel-alt)',
-                      border: '1px solid var(--color-border)',
-                    }}
-                  >
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{p.nameKey ? t(p.nameKey) : p.name}</span>
-                    <Hint text={t(p.noteKey)} />
-                    <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>{p.match}</span>
-                    <span className="tts-prov-badge">
-                      {p.site === 'both'
-                        ? t('settings.ttsSiteBoth')
-                        : p.site === 'cn'
-                          ? t('settings.ttsSiteCn')
-                          : p.site === 'intl'
-                            ? t('settings.ttsSiteIntl')
-                            : t('settings.ttsSiteGlobal')}
-                    </span>
-                    <span className={`tts-prov-badge${p.speed ? ' on' : ''}`}>
-                      {t('settings.ttsSpeed')} {p.speed ? '✓' : '✕'}
-                    </span>
-                    <span className={`tts-prov-badge${p.pitch ? ' on' : ''}`}>
-                      {t('settings.ttsPitch')} {p.pitch ? '✓' : '✕'}
-                    </span>
-                    <span className={`tts-prov-badge${p.voiceList ? ' on' : ''}`}>
-                      {t('settings.ttsVoiceListShort')} {p.voiceList ? '✓' : '✕'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* 按数字人角色分别配置 TTS 音色 */}
-            <div style={{ marginTop: 12, borderTop: '1px solid var(--color-border, rgba(128,128,128,.18))', paddingTop: 10 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('settings.ttsVoicePerRole')}<Hint text={t('settings.ttsVoicePerRoleDesc')} /></div>
-              {roleVoiceList.length === 0 ? (
-                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{t('settings.ttsNoRoles')}</div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto', paddingRight: 4 }}>
-                  {roleVoiceList.map((r) => {
-                    const rt = getRoleTts(r.roleId);
-                    return (
-                      <div key={r.roleId} style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '4px 0', borderBottom: '1px dashed var(--color-border, rgba(128,128,128,.12))' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span
-                            style={{ fontSize: 12, flex: '0 0 150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                            title={r.name}
-                          >
-                            {r.name}
-                          </span>
-                          <ComboBox
-                            placeholder={t('settings.ttsVoicePh')}
-                            value={rt.voice || ''}
-                            style={{ flex: 1, minWidth: 120 }}
-                            options={voiceOptions}
-                            onChange={(v) => patchRoleTts(r.roleId, { voice: v })}
-                          />
-                          {ttsVoices[r.roleId] ? (
-                            <button
-                              type="button"
-                              className="btn-ghost"
-                              style={{ padding: '2px 8px', fontSize: 12 }}
-                              onClick={() => patchRoleTts(r.roleId, { voice: '', baseUrl: '', apiKey: '', model: '', speed: undefined, pitch: undefined })}
-                            >
-                              {t('settings.ttsVoiceClear')}
-                            </button>
-                          ) : null}
-                        </div>
-                        {/* 该角色专属语音 API：留空回退全局（v2.3.19） */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 158, flexWrap: 'wrap' }}>
-                          <input
-                            type="text"
-                            placeholder={t('settings.ttsRoleApiBaseUrl')}
-                            value={rt.baseUrl || ''}
-                            style={{ flex: 2, minWidth: 150, fontSize: 12 }}
-                            onChange={(e) => patchRoleTts(r.roleId, { baseUrl: e.target.value })}
-                          />
-                          <input
-                            type="password"
-                            placeholder={t('settings.ttsRoleApiApiKey')}
-                            value={rt.apiKey || ''}
-                            style={{ flex: 1, minWidth: 110, fontSize: 12 }}
-                            onChange={(e) => patchRoleTts(r.roleId, { apiKey: e.target.value })}
-                          />
-                          <ComboBox
-                            placeholder={t('settings.ttsRoleApiModel')}
-                            value={rt.model || ''}
-                            style={{ flex: 1, minWidth: 90, fontSize: 12 }}
-                            options={ttsModelList}
-                            onChange={(v) => patchRoleTts(r.roleId, { model: v })}
-                          />
-                          {/* 该角色专属语速 / 音调：留空回退全局（v2.3.34） */}
-                          <input
-                            type="number"
-                            min={TTS_SPEED_MIN}
-                            max={TTS_SPEED_MAX}
-                            step={0.05}
-                            title={t('settings.ttsSpeed')}
-                            placeholder={`${t('settings.ttsSpeed')} ×${TTS_SPEED_DEFAULT}`}
-                            value={rt.speed ?? ''}
-                            style={{ width: 92, fontSize: 12 }}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              patchRoleTts(r.roleId, { speed: v === '' ? undefined : Number(v) });
-                            }}
-                          />
-                          <input
-                            type="number"
-                            min={TTS_PITCH_MIN}
-                            max={TTS_PITCH_MAX}
-                            step={1}
-                            title={t('settings.ttsPitch')}
-                            placeholder={`${t('settings.ttsPitch')} ${TTS_PITCH_DEFAULT}`}
-                            value={rt.pitch ?? ''}
-                            style={{ width: 92, fontSize: 12 }}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              patchRoleTts(r.roleId, { pitch: v === '' ? undefined : Number(v) });
-                            }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* ===== 生图（专用图像生成 API） ===== */}
-        <div id="sec-imagegen" className="section-title">{t('settings.imageGen')}</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={!!imageGen.enabled}
-              onChange={(e) => patchImageGen({ enabled: e.target.checked })}
-            />
-            <span style={{ fontSize: 13 }}>{t('settings.imageGenEnabled')}</span>
-          </label>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.imageGenApi')}<Hint text={t('settings.imageGenDesc')} />
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <input
-                type="text"
-                placeholder="https://api.openai.com/v1"
-                value={imageGen.baseUrl}
-                style={{ flex: 1, minWidth: 200 }}
-                onChange={(e) => patchImageGen({ baseUrl: e.target.value })}
-              />
-              <input
-                type="password"
-                placeholder={t('settings.apiKey')}
-                value={imageGen.apiKey}
-                style={{ width: 180 }}
-                onChange={(e) => patchImageGen({ apiKey: e.target.value })}
-              />
-              <ComboBox
-                placeholder={t('settings.imageGenModelPlaceholder')}
-                value={imageGen.model}
-                style={{ width: 150 }}
-                options={imgModelList}
-                onChange={(v) => patchImageGen({ model: v })}
-              />
-            </div>
-            <div style={{ marginTop: 8 }}>
-              <button
-                type="button"
-                className="btn-ghost"
-                style={{ padding: '3px 10px', fontSize: 12 }}
-                disabled={modelLoading.img}
-                onClick={() => refreshModelList('img', imageGen.baseUrl, imageGen.apiKey)}
-              >
-                {modelLoading.img ? t('model.refreshing') : t('model.refreshModels')}
-              </button>
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.imageGenSize')}<Hint text={t('settings.imageGenSizeDesc')} />
-            </div>
-            <input
-              type="text"
-              placeholder="1024x1024"
-              value={imageGen.size}
-              style={{ width: 150 }}
-              onChange={(e) => patchImageGen({ size: e.target.value })}
-            />
-          </div>
-        </div>
-
-        {/* ===== 生视频（专用视频生成 API，使用方式与生图一致） ===== */}
-        <div id="sec-videogen" className="section-title">{t('settings.videoGen')}</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={!!videoGen.enabled}
-              onChange={(e) => patchVideoGen({ enabled: e.target.checked })}
-            />
-            <span style={{ fontSize: 13 }}>{t('settings.videoGenEnabled')}</span>
-          </label>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.videoGenApi')}<Hint text={t('settings.videoGenDesc')} />
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <input
-                type="text"
-                placeholder="https://api.openai.com/v1"
-                value={videoGen.baseUrl}
-                style={{ flex: 1, minWidth: 200 }}
-                onChange={(e) => patchVideoGen({ baseUrl: e.target.value })}
-              />
-              <input
-                type="password"
-                placeholder={t('settings.apiKey')}
-                value={videoGen.apiKey}
-                style={{ width: 180 }}
-                onChange={(e) => patchVideoGen({ apiKey: e.target.value })}
-              />
-              <ComboBox
-                placeholder={t('settings.imageGenModelPlaceholder')}
-                value={videoGen.model}
-                style={{ width: 150 }}
-                options={imgModelList}
-                onChange={(v) => patchVideoGen({ model: v })}
-              />
-            </div>
-            <div style={{ marginTop: 8 }}>
-              <button
-                type="button"
-                className="btn-ghost"
-                style={{ padding: '3px 10px', fontSize: 12 }}
-                disabled={modelLoading.img}
-                onClick={() => refreshModelList('img', videoGen.baseUrl, videoGen.apiKey)}
-              >
-                {modelLoading.img ? t('model.refreshing') : t('model.refreshModels')}
-              </button>
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.videoGenSize')}<Hint text={t('settings.videoGenSizeDesc')} />
-            </div>
-            <input
-              type="text"
-              placeholder="1280x720"
-              value={videoGen.size}
-              style={{ width: 150 }}
-              onChange={(e) => patchVideoGen({ size: e.target.value })}
-            />
-          </div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('settings.videoGenDuration')}<Hint text={t('settings.videoGenDurationDesc')} />
-            </div>
-            <input
-              type="text"
-              placeholder="5"
-              value={videoGen.duration}
-              style={{ width: 150 }}
-              onChange={(e) => patchVideoGen({ duration: e.target.value })}
-            />
           </div>
         </div>
 

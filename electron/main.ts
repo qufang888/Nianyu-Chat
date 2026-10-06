@@ -12,7 +12,7 @@ import {
 } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
-import { getDataManager, defaultDataDirPath } from './db';
+import { getDataManager, defaultDataDirPath, resolveMediaConfig } from './db';
 import {
   setUpdateBroadcaster,
   startAutoCheck,
@@ -89,6 +89,8 @@ import type {
   SceneImageStatusEvent,
   MomentMediaStatus,
   MomentMediaStatusEvent,
+  MediaApiConfig,
+  VoiceListResult,
 } from '../src/types';
 import { normalizeRelation } from '../src/types';
 import { RELATION_TYPES, RELATION_LABELS } from '../src/types';
@@ -2986,7 +2988,11 @@ function markChatRead(chatType: string, chatId: string, lastId?: number): number
 // ===== 翻译（右键菜单翻译文本） =====
 async function translateText(text: string, settings: AppSettings): Promise<string> {
   const modelId = settings.translationModelId || settings.defaultModel;
-  const cfg = settings.models.find((m) => m.id === modelId && m.enabled);
+  // v2.3.94 需求 5：翻译此前直接取裸 cfg，绕过了 effectiveModel →
+  // 用户在「全局模型参数」里设的 temperature/topP/topK 对翻译完全不生效。
+  // 统一走 effectiveModel，与其他内部功能（心情判定 / 记忆提炼等）保持一致。
+  const rawCfg = settings.models.find((m) => m.id === modelId && m.enabled);
+  const cfg = rawCfg ? effectiveModel(rawCfg, settings) : undefined;
   if (!cfg) return text;
   const target = settings.translationLang === 'auto' ? settings.lang : settings.translationLang || settings.lang;
   // 翻译目标语言名称（v2.3.38：全 10 语言）
@@ -3546,6 +3552,9 @@ const idleState = new Map<string, number>();
 // 等待回复期间「冻结」的已静默时长（ms）：命中时记下当时 elapsed 并停止增长（真暂停）；
 // 解除等待时丢弃该值并把基准推到现在 → 从零重新计时，不会在解除瞬间立即补发。
 const idleCooldownFrozenMs = new Map<string, number>();
+// v2.3.94 需求 4：等待期内已发出的主动消息条数（阈值 >1 时用它累计，发满才进入等待态）。
+// 用户回复 / 「我不回复」/ 清全量 三条路径都会把它清零（见 awaitingReply.ts 的 clear/clearAll）。
+const awaitingReplyCounts = new Map<string, number>();
 
 // v2.3.93：等待态跟踪器 —— 「用户真的回复了」与「界面上的『我不回复』」唯一的清理入口。
 // 两条路径都调 tracker.clear()，因此三份状态（等待集合 / 冻结基准 / 计时基准）的清理动作
@@ -3554,10 +3563,17 @@ const idleCooldownFrozenMs = new Map<string, number>();
 // 而不是解除瞬间立即补发。
 // broadcast 是函数声明（已提升），此处可在模块级直接引用。
 const awaitingReplyTracker = createAwaitingReplyTracker({
-  maps: { awaiting: proactiveAwaitingReply, frozen: idleCooldownFrozenMs, idleState },
+  maps: { awaiting: proactiveAwaitingReply, frozen: idleCooldownFrozenMs, idleState, counts: awaitingReplyCounts },
   broadcast,
   // 独立开关关闭时不存在等待态：UI 不显示提示、调度门禁也不命中（与 proactive.ts 语义一致）
   isGateOpen: () => (dm.getSettings().idleCooldownUntilReply ?? true) !== false,
+  // v2.3.94 需求 4：触发等待的主动消息条数（1=旧行为；9999/0=不启用等待，即「无限条」）
+  getTriggerThreshold: () => {
+    const v = dm.getSettings().idleAwaitingTriggerCount;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 1) return 1;
+    return Math.min(Math.floor(n), 9999);
+  },
 });
 
 /**
@@ -3846,9 +3862,8 @@ async function pickNextSpeaker(
     return pickRoundRobin(memberRoles, history);
   }
   // 导演模型：用默认（或第一个可用）模型从成员中挑「最该接话的人」；失败回退轮询
-  const cfg =
-    settings.models.find((m) => m.id === settings.defaultModel && m.enabled) ||
-    settings.models.find((m) => m.enabled);
+  // v2.3.94 需求 5：此前取裸 cfg，绕过 effectiveModel → 全局采样参数不生效。
+  const cfg = getDefaultModelConfig(settings);
   if (!cfg) return pickRoundRobin(memberRoles, history);
   const lastSpeaker =
     [...history].reverse().find((m) => m.sender_type === 'ai')?.sender_name || '';
@@ -4902,9 +4917,11 @@ async function doExtractMemories(chatType: string, chatId: string): Promise<numb
     .filter((m) => m.toMemory !== false)
     .map((m) => `${m.sender_name}: ${m.content || ''}`)
     .join('\n');
-  const cfg =
-    settings.models.find((m) => m.id === settings.defaultModel && m.enabled) ||
-    settings.models.find((m) => m.enabled);
+  // v2.3.94 需求 5：记忆提炼此前取裸 cfg，绕过 effectiveModel → 全局采样参数不生效。
+  // 改用 getDefaultModelConfig（内部已套 effectiveModel），与「翻译」等保持同一口径。
+  // 注意 role 在上面已判过 `if (!roleId) return 0`，但 role 本身可能查不到，
+  // 故此处只在 role 存在时才追加角色模型兜底，避免把 undefined 传进 resolveRoleModel。
+  const cfg = getDefaultModelConfig(settings) || (role ? resolveRoleModel(role, settings) : undefined);
   if (!cfg) return 0;
   // v2.3.36：总结记忆提示词可配置（settings.memorySummarizePrompt，AI 自动提炼与手动总结两条路径共用此函数）。
   // 支持 {existing_memories} / {recent_dialogue} 占位符；两者都未写时，把输入数据（已有记忆 + 最近对话）固定追加到提示词末尾。
@@ -5211,9 +5228,9 @@ function registerIPC(): void {
   ipcMain.handle('roles:delete', (_e, id) => dm.deleteRole(id));
   ipcMain.handle('roles:aiComplete', async (_e, basic, modelId) => {
     const settings = dm.getSettings();
-    const cfg =
-      settings.models.find((m) => m.id === modelId && m.enabled) ||
-      settings.models.find((m) => m.enabled);
+    // v2.3.94 需求 5：此前取裸 cfg，绕过 effectiveModel → 全局采样参数不生效。
+    const picked = settings.models.find((m) => m.id === modelId && m.enabled);
+    const cfg = picked ? effectiveModel(picked, settings) : getDefaultModelConfig(settings);
     if (!cfg) return '（请先在设置-模型管理中添加并启用一个模型配置）';
     await enqueueAndWait(cfg.id, cfg.qps, '角色卡补全');
     return aiCompleteRole(cfg, basic);
@@ -5253,9 +5270,8 @@ function registerIPC(): void {
   // 超限速则直接返回 rateLimited（不消耗请求额度），由前端提示「暂时不可用」；成功才 rateMark。
   ipcMain.handle('prompts:autocomplete', async (_e, p: { type: 'image' | 'video'; text: string }) => {
     const settings = dm.getSettings();
-    const cfg =
-      settings.models.find((m) => m.id === settings.defaultModel && m.enabled) ||
-      settings.models.find((m) => m.enabled);
+    // v2.3.94 需求 5：提示词补全此前取裸 cfg，绕过 effectiveModel → 全局采样参数不生效。
+    const cfg = getDefaultModelConfig(settings);
     if (!cfg) return { ok: false, error: '（请先在设置-模型管理中添加并启用一个模型配置）' };
     const wait = rateWaitMs(cfg.id);
     if (wait > 0) return { ok: false, rateLimited: true, waitMs: wait };
@@ -5323,7 +5339,12 @@ function registerIPC(): void {
     const compareId = String(p?.compareId || `cmp_${Date.now()}`);
     if (!question) throw new Error('请输入要对比的问题');
     if (!ids.length) throw new Error('请至少选择一个模型');
-    const cfgMap = new Map(settings.models.filter((m) => m.enabled).map((m) => [m.id, m]));
+    // v2.3.94 需求 5：模型对比此前直接用裸 cfgMap（settings.models 原样），
+    // 绕过 effectiveModel → 每个被测模型的全局采样参数不生效。
+    // 这里统一套一层 effectiveModel：用户对比时应当看到「这些模型按各自配置跑」的真实表现。
+    const cfgMap = new Map(
+      settings.models.filter((m) => m.enabled).map((m) => [m.id, effectiveModel(m, settings)])
+    );
     const startedAt = Date.now();
     const jobs = ids.map(async (id) => {
       const cfg = cfgMap.get(id);
@@ -5372,9 +5393,10 @@ function registerIPC(): void {
     // 若评测模型本身是被测模型之一（互评），则不评判其自身输出。
     const judgments: Record<string, { score: number; comment: string }> = {};
     let judgeError: string | undefined;
+    // v2.3.94 需求 5：评判模型回退分支同样绕过 effectiveModel，一并修正。
     const judgeCfg =
       (p.judgeModelId && cfgMap.get(p.judgeModelId)) ||
-      settings.models.find((m) => m.id === settings.defaultModel && m.enabled);
+      getDefaultModelConfig(settings);
     if (judgeCfg) {
       const judgeIsCompared = ids.includes(judgeCfg.id);
       for (let i = 0; i < results.length; i++) {
@@ -5453,6 +5475,23 @@ function registerIPC(): void {
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) throw new Error('story node not found');
     return dm.forkChatFromNode(chatType, chatId, node.msg_id);
+  });
+  // v2.3.94 需求 1：右键任意消息气泡 →「从此处开启新对话」。
+  // 与「从剧情节点分叉」共用同一 db 实现（forkChatFromNode 只依赖 msg_id，本就不需要节点），
+  // 差别仅在于：新聊天名用消息摘要而非节点标题；且**强制开启该角色的记忆隔离**，
+  // 保证从这条消息往后各写各的，不会与原对话互相污染。
+  ipcMain.handle('chats:forkFromMessage', (_e, chatType: string, chatId: string, msgId: number) => {
+    const msgs = dm.getMessages(chatType, chatId);
+    const m = msgs.find((x) => x.id === msgId);
+    if (!m) throw new Error('message not found');
+    const forked = dm.forkChatFromMessage(chatType, chatId, msgId);
+    // 记忆隔离：角色级 memoryIsolation 默认已是 true；这里再把新聊天的长记忆开关打开，
+    // 使「从这里分叉出去的新对话」在语义上就是一条全新的时间线。
+    if (chatType === 'single') {
+      const key = `single:${forked.chat_id}`;
+      dm.saveSettings({ longMemory: { ...(dm.getSettings().longMemory || {}), [key]: true } });
+    }
+    return forked;
   });
   // 朋友圈动态：新增 / 列表 / 删除 / 到点发布
   ipcMain.handle('moments:add', (_e, roleId: string, content: string, images: string[], scheduledAt?: string | null, selfRoleId?: string) =>
@@ -5704,6 +5743,25 @@ function registerIPC(): void {
   });
   ipcMain.handle('stats:roles', () => dm.getRoleStats());
   ipcMain.handle('stats:modelUsage', () => dm.getModelStats());
+
+  // ===== v2.3.94 需求 11：陪伴时长 =====
+  // 渲染进程只上报**增量**（心跳经过的毫秒），主进程是唯一累加点：
+  // 主窗与小窗同时对同一个 key 计时时不会互相覆盖丢秒（详见 db.addCompanionMs 注释）。
+  ipcMain.handle('companion:add', (_e, p: { key: string; deltaMs: number }) =>
+    dm.addCompanionMs(String(p?.key || ''), Number(p?.deltaMs) || 0)
+  );
+  ipcMain.handle('companion:all', () => dm.getSettings().companionMs || {});
+  // 按角色聚合的陪伴时长（统计页板块二/板块三直接消费，免去前端复刻 chat→role 归属规则）
+  ipcMain.handle('companion:byRole', () => dm.getCompanionMsByRole());
+
+  // v2.3.94 需求 11：会话 → 角色 id 解析。
+  // 前端（ChatList 右键「快捷设置为最喜爱人物」）只有 chat_type/chat_id，
+  // 而复制出的单聊 chat_id 与 roleId 是解绑的（真实 id 在 chatSessions.role_id 里），
+  // 故必须由主进程用 resolveSingleRoleId 解析，前端不得自行猜测。
+  ipcMain.handle('chat:roleId', (_e, p: { chatType: string; chatId: string }) => {
+    if (p?.chatType !== 'single') return '';
+    return dm.resolveSingleRoleId('single', String(p.chatId || ''));
+  });
 
   ipcMain.handle('affinity:log', (_e, roleId) => dm.getAffinityLog(roleId));
 
@@ -6422,13 +6480,26 @@ function registerIPC(): void {
   ipcMain.handle('audio:tts', async (_e, text: string, roleId?: string, forceRegenerate?: boolean) => {
     const v = dm.getSettings().voice;
     if (v?.ttsEnabled === false) throw new Error('全局 TTS 语音已关闭（可在聊天界面标题栏开启）');
-    if (!v?.ttsBaseUrl || !v?.ttsApiKey) throw new Error('未配置 TTS 专用 API，请在设置中填写独立的 Base URL 与 API Key');
     const rv = (roleId && v.ttsVoices && v.ttsVoices[roleId]) || undefined;
     const rvCfg = typeof rv === 'string' ? { voice: rv } : rv || {};
-    const baseUrl = rvCfg.baseUrl || v.ttsBaseUrl;
-    const apiKey = rvCfg.apiKey || v.ttsApiKey;
-    const voiceName = rvCfg.voice || v.ttsVoice || ''; // 留空由各协议合成函数明确报错提示补填（不内置默认）
-    const model = rvCfg.model || v.ttsModel || '';
+    // v2.3.94 需求 8：角色绑定了某个 ttsConfigs 项（configId）时，baseUrl/apiKey/model/默认音色
+    // 全部取自那一项，而不是全局当前启用配置。角色自己显式填了的字段优先级最高。
+    const boundCfg = rvCfg.configId && Array.isArray(v.ttsConfigs)
+      ? v.ttsConfigs.find((c) => c && c.id === rvCfg.configId)
+      : undefined;
+    // 「当前启用配置」：优先数组里 activeTtsId 命中的项，没有则退回扁平字段（老用户迁移前的唯一来源）。
+    const activeCfg = resolveMediaConfig(v.ttsConfigs, v.activeTtsId, {
+      baseUrl: v.ttsBaseUrl,
+      apiKey: v.ttsApiKey,
+      model: v.ttsModel,
+      voice: v.ttsVoice,
+    });
+    const baseUrl = rvCfg.baseUrl || boundCfg?.baseUrl || activeCfg?.baseUrl || v.ttsBaseUrl;
+    const apiKey = rvCfg.apiKey || boundCfg?.apiKey || activeCfg?.apiKey || v.ttsApiKey;
+    if (!baseUrl || !apiKey) throw new Error('未配置 TTS 专用 API，请在设置中填写独立的 Base URL 与 API Key');
+    // 音色留空时由各协议合成函数明确报错提示补填（不内置默认）
+    const voiceName = rvCfg.voice || boundCfg?.voice || activeCfg?.voice || v.ttsVoice || '';
+    const model = rvCfg.model || boundCfg?.model || activeCfg?.model || v.ttsModel || '';
     // 语速/音调（v2.3.34）：角色级配置优先，其次全局；均未设时用默认（1 倍速 / 0 音调 = 原样）
     const speed = rvCfg.speed ?? v.ttsSpeed ?? 1;
     const pitch = rvCfg.pitch ?? v.ttsPitch ?? 0;
@@ -6546,91 +6617,186 @@ function registerIPC(): void {
 
   // ---------- 语音：拉取 TTS 音色列表（v2.3.22 起全量实时拉取，软件不再内置任何音色清单） ----------
   // 政策（用户明令）：音色一律自动从厂商接口拉取；没有列表 API 的厂商返回空列表，音色由用户手填。
-  // 音色输入框本身是自由文本（datalist 仅作建议），永远不会硬编码音色清单。
-  ipcMain.handle('audio:listVoices', async () => {
+  // 音色输入框本身是自由文本（ComboBox 仅作建议），永远不会硬编码音色清单。
+  //
+  // v2.3.94 需求 8（人物音色绑定）：本 handler 接受可选参数，以支持「按人物绑定的某个 ttsConfigs 项」
+  // 去拉音色列表 —— 否则多配置下音色永远来自全局扁平字段（即当前启用配置），绑到别的配置就拉错。
+  // 解析优先级（自高而低）：
+  //   ① 显式 baseUrl / apiKey（调用方自带凭据，用于角色编辑器里尚未落盘的草稿）
+  //   ② configId 命中的 ttsConfigs 项（人物音色绑定指定的配置）
+  //   ③ 当前启用配置（activeTtsId，未指定时取 ttsConfigs[0]）
+  //   ④ 全局扁平字段 ttsBaseUrl / ttsApiKey（老用户迁移前的唯一来源）
+  //
+  // 返回值（**向后兼容**）：
+  //   - 不传 opts（即旧调用点，如设置页音色框）→ 返回 string[]，与 v2.3.22 行为完全一致；
+  //   - 传 opts（新调用点，角色编辑器）→ 返回 VoiceListResult，带 reason 分类，
+  //     供 UI 区分「该提供商根本没有音色列表端点 → 引导手填」与「网络/密钥错误 → 提示重试」。
+  ipcMain.handle(
+    'audio:listVoices',
+    async (
+      _e,
+      opts?: { configId?: string; baseUrl?: string; apiKey?: string }
+    ): Promise<string[] | VoiceListResult> => {
     const v = dm.getSettings().voice;
-    if (!v?.ttsBaseUrl || !v?.ttsApiKey) return [];
+    // —— 解析本次请求使用的凭据（优先级见上方注释）——
+    const explicitBase = (opts?.baseUrl || '').trim();
+    const explicitKey = (opts?.apiKey || '').trim();
+    let hitConfig: MediaApiConfig | undefined;
+    if (opts?.configId && Array.isArray(v?.ttsConfigs)) {
+      hitConfig = v.ttsConfigs.find((c) => c && c.id === opts.configId);
+    }
+    const activeCfg = resolveMediaConfig(v?.ttsConfigs, v?.activeTtsId, {
+      baseUrl: v?.ttsBaseUrl,
+      apiKey: v?.ttsApiKey,
+      model: v?.ttsModel,
+      voice: v?.ttsVoice,
+    });
+    const baseUrlRaw = explicitBase || hitConfig?.baseUrl || activeCfg?.baseUrl || v?.ttsBaseUrl || '';
+    const apiKeyRaw = explicitKey || hitConfig?.apiKey || activeCfg?.apiKey || v?.ttsApiKey || '';
+    const detail = !!opts; // 是否需要返回带 reason 的结构化结果
+
+    /** 无凭据时的统一出口：旧调用点返回 []，新调用点返回结构化「未配置」 */
+    const bail = (reason: VoiceListResult['reason'], message: string): string[] | VoiceListResult => {
+      if (!detail) return [];
+      return { voices: [], ok: false, reason, message, providerId: '' };
+    };
+
+    if (!baseUrlRaw || !apiKeyRaw) {
+      return bail('no-config', '未配置 TTS API（请先在设置里添加 TTS 配置，或在下方手填 Base URL 与 API Key）');
+    }
     try {
-      const vb = v.ttsBaseUrl.trim().replace(/\/+$/, '').replace(/\/audio\/speech$/i, '');
+      const vb = baseUrlRaw.trim().replace(/\/+$/, '').replace(/\/audio\/speech$/i, '');
       // 无公开列表端点的厂商：返回空列表，音色手填
-      if (/\/t2a_v2$/i.test(vb)) return []; // MiniMax
-      if (/api\.openai\.com/i.test(vb)) return []; // OpenAI 官方（无音色列表端点，音色见官方文档手填）
-      if (/generativelanguage\.googleapis\.com/i.test(vb)) return []; // Gemini（官方文档预置音色，手填）
-      if (/openspeech\.bytedance\.com/i.test(vb)) return []; // 字节火山（voice_type 见控制台）
-      if (/tencentcloudapi\.com/i.test(vb)) return []; // 腾讯云（VoiceType 见控制台）
-      if (/baidubce\.com|tsn\.baidu\.com/i.test(vb)) return []; // 百度（voicer 见控制台）
-      if (/dashscope\.aliyuncs\.com/i.test(vb)) return []; // 阿里 qwen-tts（音色名见文档）
+      const noEndpoint = (providerId: string): string[] | VoiceListResult => {
+        if (!detail) return [];
+        return {
+          voices: [],
+          ok: false,
+          reason: 'no-endpoint',
+          message: '该提供商没有公开的音色列表端点，请在下方直接手填音色 ID',
+          providerId,
+        };
+      };
+      if (/\/t2a_v2$/i.test(vb)) return noEndpoint('minimax'); // MiniMax
+      if (/api\.openai\.com/i.test(vb)) return noEndpoint('openai-native'); // OpenAI 官方（音色见官方文档手填）
+      if (/generativelanguage\.googleapis\.com/i.test(vb)) return noEndpoint('gemini'); // Gemini（官方文档预置音色，手填）
+      if (/openspeech\.bytedance\.com/i.test(vb)) return noEndpoint('bytedance'); // 字节火山（voice_type 见控制台）
+      if (/tencentcloudapi\.com/i.test(vb)) return noEndpoint('tencent'); // 腾讯云（VoiceType 见控制台）
+      if (/baidubce\.com|tsn\.baidu\.com/i.test(vb)) return noEndpoint('baidu'); // 百度（voicer 见控制台）
+      if (/dashscope\.aliyuncs\.com/i.test(vb)) return noEndpoint('aliyun'); // 阿里 qwen-tts（音色名见文档）
       // Azure：GET /cognitiveservices/voices/list → ShortName
       if (/tts\.speech\.microsoft\.com/i.test(vb)) {
         try {
           const origin = new URL(vb).origin;
           const vr = await fetch(`${origin}/cognitiveservices/voices/list`, {
-            headers: { 'Ocp-Apim-Subscription-Key': v.ttsApiKey },
+            headers: { 'Ocp-Apim-Subscription-Key': apiKeyRaw },
           });
           if (vr.ok) {
             const vd: any = await vr.json();
             const names = (Array.isArray(vd) ? vd : []).map((x: any) => x?.ShortName).filter(Boolean);
-            if (names.length) return names;
+            if (names.length) return detail ? { voices: names, ok: true, reason: 'ok', providerId: 'azure' } : names;
           }
-        } catch { /* 拉取失败返回空，音色手填 */ }
-        return [];
+          if (vr.status === 401 || vr.status === 403) {
+            return bail('auth', `Azure 拒绝了该请求（HTTP ${vr.status}），请检查 API Key 是否正确`);
+          }
+          return bail('network', `Azure 音色列表接口返回 HTTP ${vr.status}`);
+        } catch (e: any) {
+          return bail('network', `网络错误：${e?.message || String(e)}`);
+        }
       }
       // ElevenLabs：GET /v1/voices → voice_id
       if (/api\.elevenlabs\.io/i.test(vb)) {
         const lvb = /\/v1/i.test(vb) ? vb : `${vb}/v1`;
-        const vr = await fetch(`${lvb}/voices`, { headers: { 'xi-api-key': v.ttsApiKey } });
-        if (vr.ok) {
-          const vd: any = await vr.json();
-          const ids = (vd?.voices || []).map((x: any) => x?.voice_id).filter(Boolean);
-          if (ids.length) return ids;
+        try {
+          const vr = await fetch(`${lvb}/voices`, { headers: { 'xi-api-key': apiKeyRaw } });
+          if (vr.ok) {
+            const vd: any = await vr.json();
+            const ids = (vd?.voices || []).map((x: any) => x?.voice_id).filter(Boolean);
+            if (ids.length) return detail ? { voices: ids, ok: true, reason: 'ok', providerId: 'elevenlabs' } : ids;
+          }
+          if (vr.status === 401 || vr.status === 403) {
+            return bail('auth', `ElevenLabs 拒绝了该请求（HTTP ${vr.status}），请检查 API Key 是否正确`);
+          }
+          return bail('network', `ElevenLabs 音色列表接口返回 HTTP ${vr.status}`);
+        } catch (e: any) {
+          return bail('network', `网络错误：${e?.message || String(e)}`);
         }
-        return [];
       }
       // Fish Audio：GET /model → _id
       if (/api\.fish\.audio/i.test(vb)) {
-        const fr = await fetch('https://api.fish.audio/model?page_size=30', { headers: { Authorization: `Bearer ${v.ttsApiKey}` } });
-        if (fr.ok) {
-          const fd: any = await fr.json();
-          const ids = (fd?.items || []).map((x: any) => x?._id || x?.id).filter(Boolean);
-          if (ids.length) return ids;
+        try {
+          const fr = await fetch('https://api.fish.audio/model?page_size=30', { headers: { Authorization: `Bearer ${apiKeyRaw}` } });
+          if (fr.ok) {
+            const fd: any = await fr.json();
+            const ids = (fd?.items || []).map((x: any) => x?._id || x?.id).filter(Boolean);
+            if (ids.length) return detail ? { voices: ids, ok: true, reason: 'ok', providerId: 'fishaudio' } : ids;
+          }
+          if (fr.status === 401 || fr.status === 403) {
+            return bail('auth', `Fish Audio 拒绝了该请求（HTTP ${fr.status}），请检查 API Key 是否正确`);
+          }
+          return bail('network', `Fish Audio 音色列表接口返回 HTTP ${fr.status}`);
+        } catch (e: any) {
+          return bail('network', `网络错误：${e?.message || String(e)}`);
         }
-        return [];
       }
       // Cartesia：GET /voices → id
       if (/api\.cartesia\.ai/i.test(vb)) {
-        const cr = await fetch(`${vb}/voices`, { headers: { 'X-API-Key': v.ttsApiKey, 'Cartesia-Version': '2025-04-16' } });
-        if (cr.ok) {
-          const cd: any = await cr.json();
-          const ids = (Array.isArray(cd) ? cd : cd?.voices || []).map((x: any) => x?.id).filter(Boolean);
-          if (ids.length) return ids;
+        try {
+          const cr = await fetch(`${vb}/voices`, { headers: { 'X-API-Key': apiKeyRaw, 'Cartesia-Version': '2025-04-16' } });
+          if (cr.ok) {
+            const cd: any = await cr.json();
+            const ids = (Array.isArray(cd) ? cd : cd?.voices || []).map((x: any) => x?.id).filter(Boolean);
+            if (ids.length) return detail ? { voices: ids, ok: true, reason: 'ok', providerId: 'cartesia' } : ids;
+          }
+          if (cr.status === 401 || cr.status === 403) {
+            return bail('auth', `Cartesia 拒绝了该请求（HTTP ${cr.status}），请检查 API Key 是否正确`);
+          }
+          return bail('network', `Cartesia 音色列表接口返回 HTTP ${cr.status}`);
+        } catch (e: any) {
+          return bail('network', `网络错误：${e?.message || String(e)}`);
         }
-        return [];
       }
       // AWS Polly：DescribeVoices（SigV4 签名，实现在 ai.ts）
       if (/polly\.[a-z0-9-]+\.amazonaws\.com/i.test(vb)) {
         try {
-          const ids = await listPollyVoices(vb, v.ttsApiKey);
-          if (ids.length) return ids;
-        } catch { /* 拉取失败返回空，音色手填 */ }
-        return [];
-      }
-      // OpenAI 兼容：GET /audio/voices；服务端不支持该端点时返回空（不回退任何内置清单）
-      const url = `${vb}/audio/voices`;
-      const resp = await fetch(url, { headers: { Authorization: `Bearer ${v.ttsApiKey}` } });
-      if (resp.ok) {
-        const data: any = await resp.json().catch(() => null);
-        const arr: any[] = Array.isArray(data) ? data : data?.voices ?? data?.data ?? [];
-        if (Array.isArray(arr) && arr.length) {
-          const names = arr
-            .map((x) => (typeof x === 'string' ? x : x?.id || x?.name || x?.voice || ''))
-            .filter((x) => !!x);
-          if (names.length) return names;
+          const ids = await listPollyVoices(vb, apiKeyRaw);
+          if (ids.length) return detail ? { voices: ids, ok: true, reason: 'ok', providerId: 'polly' } : ids;
+          return bail('empty', '该 AWS 账号下没有返回可用音色，请确认区域与凭据');
+        } catch (e: any) {
+          return bail('network', `Polly 签名或网络错误：${e?.message || String(e)}`);
         }
       }
-    } catch {
-      /* 拉取失败返回空，音色手填 */
+      // OpenAI 兼容：GET /audio/voices；服务端不支持该端点时按「网络/端点异常」提示（不回退任何内置清单）
+      const url = `${vb}/audio/voices`;
+      try {
+        const resp = await fetch(url, { headers: { Authorization: `Bearer ${apiKeyRaw}` } });
+        if (resp.ok) {
+          const data: any = await resp.json().catch(() => null);
+          const arr: any[] = Array.isArray(data) ? data : data?.voices ?? data?.data ?? [];
+          if (Array.isArray(arr) && arr.length) {
+            const names = arr
+              .map((x) => (typeof x === 'string' ? x : x?.id || x?.name || x?.voice || ''))
+              .filter((x) => !!x);
+            if (names.length) {
+              return detail ? { voices: names, ok: true, reason: 'ok', providerId: 'openai-compatible' } : names;
+            }
+          }
+          return bail('empty', '该服务端响应中没有音色列表（/audio/voices 返回空），请直接手填音色 ID');
+        }
+        if (resp.status === 401 || resp.status === 403) {
+          return bail('auth', `服务端拒绝了该请求（HTTP ${resp.status}），请检查 API Key 是否正确`);
+        }
+        if (resp.status === 404) {
+          return bail('no-endpoint', '该服务端没有 /audio/voices 音色列表端点，请直接手填音色 ID');
+        }
+        return bail('network', `音色列表接口返回 HTTP ${resp.status}`);
+      } catch (e: any) {
+        return bail('network', `网络错误：${e?.message || String(e)}`);
+      }
+    } catch (e: any) {
+      /* 解析 baseUrl 失败等极端情况：旧调用点返回空，新调用点给出可读原因 */
+      return bail('network', `请求失败：${e?.message || String(e)}`);
     }
-    return [];
   });
 
   // ---------- 快捷小窗 ----------
@@ -7294,6 +7460,13 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   quitting = true;
   autoChatDrivers.clear();
+  // v2.3.94 需求 11：退出前把内存里尚未落盘的陪伴时长（≤30s 合并窗口内的增量）强制写盘，
+  // 否则最后不足 30s 的陪伴时间会随进程一起消失（心跳是内存累加，节流窗口内还没写文件）。
+  try {
+    dm.flushCompanionSync();
+  } catch (e) {
+    console.error('退出前落盘陪伴时长失败', e);
+  }
   if (notifyWindow && !notifyWindow.isDestroyed()) notifyWindow.destroy();
   notifyWindow = null;
 });
