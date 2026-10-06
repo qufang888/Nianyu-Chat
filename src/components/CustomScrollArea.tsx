@@ -1,4 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { useTheme } from '../theme/ThemeContext';
+import { isGroupEnabled } from '../utils/animControl';
 
 /**
  * CustomScrollArea — JS 自定义滚动条
@@ -26,6 +28,11 @@ const CustomScrollArea: React.FC<{
   const [thumbTop, setThumbTop] = useState(0);
   const [showBar, setShowBar] = useState(false);
   const dragging = useRef(false);
+  // 动效开关——滚动条透明度过渡是**内联 style**，优先级高于 `.anim-off *` 的 !important，
+  // 故必须走 isGroupEnabled 判定（三档都管得到）。该函数已封装 all-on/all-off/custom 的分支，
+  // 调用方无需关心档位：'all-off' 或 custom 关掉「滚动条」组都会立即变为无过渡。
+  const { settings } = useTheme();
+  const animOn = isGroupEnabled(settings, 'scrollbar');
   const dragStartY = useRef(0);
   const dragStartScroll = useRef(0);
 
@@ -142,7 +149,7 @@ const CustomScrollArea: React.FC<{
               borderRadius: barWidth / 2,
               cursor: 'default',
               pointerEvents: 'auto',
-              transition: dragging.current ? 'none' : 'opacity 0.15s ease',
+              transition: !animOn || dragging.current ? 'none' : 'opacity 0.15s ease',
               opacity: 0.6,
             }}
             onMouseDown={onThumbMouseDown}

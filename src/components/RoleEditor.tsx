@@ -7,6 +7,7 @@ import { MemoryPanel } from './MemoryPanel';
 import { ImageCropper } from './ImageCropper';
 import { previewSound } from '../utils/sound';
 import SelectMenu from './SelectMenu';
+import { RoleTtsBinding, normalizeRoleTts, isEmptyRoleTts, type RoleTtsDraft } from './RoleTtsBinding';
 
 function emptyRole(): Role {
   const now = new Date().toISOString();
@@ -58,6 +59,28 @@ export const RoleEditor: React.FC<{
   useEffect(() => {
     api.getSettings().then((s) => setModels(s.models || []));
   }, []);
+
+  // ===== 人物音色绑定 + 音色自定义（v2.3.94 需求 8 / 9）=====
+  // 绑定数据存在 settings.voice.ttsVoices[roleId]，与设置页「按角色配置音色」共用同一份数据，
+  // 两处互为镜像：这里改完保存，设置页立刻能看到；反之亦然。
+  // roleId 用 state 里的 role.id（新角色在 emptyRole() 里就生成了 uuid），故新建时也能绑。
+  const [ttsDraft, setTtsDraft] = useState<RoleTtsDraft>(() => normalizeRoleTts(undefined));
+  // 打开已有角色时载入其音色绑定（旧格式纯音色名由 normalizeRoleTts 自动兼容）
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getSettings()
+      .then((s) => {
+        if (cancelled) return;
+        setTtsDraft(normalizeRoleTts(s?.voice?.ttsVoices?.[role.id]));
+      })
+      .catch(() => { /* 忽略：读不到就当作未绑定 */ });
+    return () => {
+      cancelled = true;
+    };
+    // 仅在打开另一个角色时重新载入；角色 id 在本弹窗生命周期内不变（新建时也是一次性 uuid）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initial?.id]);
 
   // 模型能力摘要（用于下拉选项悬停提示与选择器 title）
   const modelCapText = (m: ModelConfig): string => {
@@ -183,6 +206,17 @@ export const RoleEditor: React.FC<{
       model_config_id: selectedModel,
       updated_at: new Date().toISOString(),
     });
+    // 音色绑定单独存 settings（与设置页共用 voice.ttsVoices），故角色保存成功后再写一次。
+    // 全部字段为空 → 删除该角色的键（而不是留空对象），保持与设置页一致的数据卫生。
+    try {
+      const s = await api.getSettings();
+      const map = { ...(s?.voice?.ttsVoices || {}) };
+      if (isEmptyRoleTts(ttsDraft)) delete map[role.id];
+      else map[role.id] = ttsDraft;
+      await api.saveSettings({ voice: { ...(s?.voice || {}), ttsVoices: map } as any });
+    } catch {
+      showToast(t('roleTts.saveFailed'));
+    }
     showToast(t('role.saved'));
     onSaved();
   };
@@ -397,6 +431,16 @@ export const RoleEditor: React.FC<{
                 </button>
               </div>
             </Field>
+            {/* ===== 人物音色绑定 + 语速/音调自定义（v2.3.94 需求 8 / 9）===== */}
+            <div className="section-title" style={{ gridColumn: '1 / -1', margin: '6px 0 4px' }}>
+              {t('roleTts.title')}
+            </div>
+            <RoleTtsBinding
+              roleId={role.id}
+              value={ttsDraft}
+              // 组件用 null 表示「清除绑定」，state 里统一存成空对象（保存时再判断是否删键）
+              onChange={(next) => setTtsDraft(next ?? {})}
+            />
           </div>
           <div className="section-title" style={{ margin: '8px 0 6px' }}>
             {t('memory.title')}

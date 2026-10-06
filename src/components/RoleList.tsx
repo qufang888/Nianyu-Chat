@@ -39,7 +39,13 @@ export const RoleList: React.FC<{ onStartChat: (role: Role) => void }> = ({ onSt
     <div className="main-pane">
       <div className="list-header">
         <span>{t('contacts.title', { n: roles.length })}</span>
-        <button className="btn-add" title={t('contacts.new')} onClick={() => setEditing(null)}>
+        {/* v2.3.90：新手引导第1 步高亮目标——「新建人物卡」按钮 */}
+        <button
+          className="btn-add"
+          title={t('contacts.new')}
+          data-tutorial="add-role"
+          onClick={() => setEditing(null)}
+        >
           ＋
         </button>
       </div>
@@ -67,9 +73,12 @@ export const RoleList: React.FC<{ onStartChat: (role: Role) => void }> = ({ onSt
                   {t('contacts.tokens', { n: stats[r.id]?.tokens ?? 0 })}
                 </div>
                 <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                  {/* v2.3.90：新手引导第 2 步高亮目标——该人物卡的「聊天」按钮（带 role.id 供引导定位） */}
                   <button
                     className="btn-ghost"
                     style={{ padding: '5px 12px', fontSize: 13 }}
+                    data-tutorial="start-chat"
+                    data-tutorial-role={r.id}
                     onClick={(e) => {
                       e.stopPropagation();
                       onStartChat(r);

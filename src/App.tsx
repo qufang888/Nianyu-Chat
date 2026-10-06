@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from './ipc';
 import { useI18n } from './i18n/I18nContext';
 import { useTheme } from './theme/ThemeContext';
@@ -20,6 +20,9 @@ import { useToast, ToastView } from './components/Toast';
 import CustomCursor from './components/CustomCursor';
 import VideoBubble from './components/VideoBubble';
 import ErrorBubble from './components/ErrorBubble';
+import QueueDock from './components/QueueDock';
+import { UpdatePopup } from './components/UpdatePopup';
+import { TutorialOverlay } from './components/TutorialOverlay';
 import type { Role } from './types';
 
 type View = 'chats' | 'contacts' | 'compare' | 'settings' | 'stats' | 'library' | 'moments';
@@ -45,11 +48,83 @@ export default function App() {
   );
   const [aboutOpen, setAboutOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  // 聊天侧边栏缩进：true=收起会话列表，聊天区占满整页
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // 设置页导航重置信号：再次点击左侧「设置」图标时从二级页退回设置主界面
+  const [settingsNavTick, setSettingsNavTick] = useState(0);
+
+  // ===== 快速导入（v2.3.51）：文件拖入窗口任意位置 → 识别角色卡/世界书/规则/插件并直接导入 =====
+  const [dropActive, setDropActive] = useState(false);
+  const [importTick, setImportTick] = useState(0); // 导入成功后重挂载联系人/资料库列表以刷新
+  const dropDepth = useRef(0);
+
+  const hasDragFiles = (e: React.DragEvent): boolean =>
+    Array.from(e.dataTransfer?.types || []).includes('Files');
+
+  const handleQuickImport = async (files: FileList) => {
+    const paths: string[] = [];
+    for (const f of Array.from(files)) {
+      const p = await api.getPathForFile(f);
+      if (p) paths.push(p);
+    }
+    if (!paths.length) return;
+    try {
+      const results = await api.importDroppedFiles(paths);
+      const ok = results.filter((r) => r.ok);
+      const bad = results.filter((r) => !r.ok);
+      const counts: Record<string, number> = {};
+      ok.forEach((r) => {
+        counts[r.kind || 'plugin'] = (counts[r.kind || 'plugin'] || 0) + 1;
+      });
+      const summary = Object.entries(counts)
+        .map(([k, n]) => `${t(`quickimport.${k}`)}×${n}`)
+        .join('、');
+      const failText = bad
+        .map((r) => t('toast.quickImportFail', { name: r.name, reason: t(`quickimport.err_${r.error || 'read_failed'}`) }))
+        .join('；');
+      if (ok.length && !bad.length) showToast(t('toast.quickImportDone', { summary }));
+      else if (!ok.length) showToast(failText, { error: true });
+      else showToast(`${t('toast.quickImportDone', { summary })}；${failText}`, { duration: 5000 });
+      if (ok.length) setImportTick((v) => v + 1);
+    } catch (e: any) {
+      showToast(t('chat.sendFailedShort'), { error: true });
+    }
+  };
 
   // 首次启动向导：未走过初始设置 或 没有配置模型时弹出，添加模型为必填。
   useEffect(() => {
     if (!showSplash && settings && (!settings.firstRunDone || !settings.models?.length)) setShowOnboarding(true);
   }, [showSplash, settings]);
+
+  // ===== 新手引导（v2.3.90，可跳过）=====
+  // 与上面的初始设置向导严格互斥：仅当 firstRunDone === true（初始设置已走完）且
+  // 初始设置向导当前没有展示时，才可能挂载 TutorialOverlay。
+  // 触发条件全部满足才弹：已完成初始设置 + 未完成也未跳过引导 + 还没有任何人物卡。
+  // 人物卡数量为 0 的限制意味着「设置 → 重新运行新手引导」对已有卡的老用户不会自动弹出
+  // （按钮仍会把 tutorialDone 写回 false），这点在设置按钮旁有注释说明。
+  const [tutorialDismissed, setTutorialDismissed] = useState(false);
+  const [roleCount, setRoleCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (tutorialDismissed) return;
+    let alive = true;
+    void api
+      .getRoles()
+      .then((rs) => {
+        if (alive) setRoleCount(rs.length);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [tutorialDismissed, showOnboarding]);
+
+  const tutorialEligible =
+    !showSplash &&
+    !showOnboarding &&
+    !!settings &&
+    settings.firstRunDone === true &&
+    settings.tutorialDone !== true &&
+    roleCount === 0;
 
   // 开屏动画每次启动都展示；此处仅把 hasShownSplash 写入设置做历史记录，不作为展示门槛。
   useEffect(() => {
@@ -81,6 +156,14 @@ export default function App() {
     });
     return off;
   }, []);
+
+  // v2.3.88：上报主窗当前一级视图。朋友圈自动配图 / 配视频的状态提醒需要据此判断
+  // 「用户此刻是否正停在朋友圈页」——在该页弹站内 Toast（有上下文），不在该页弹后台提醒卡片。
+  // 视图切换即上报（含首帧），主进程侧还额外要求窗口真实可见才算「正在看」。
+  useEffect(() => {
+    if (typeof api.setActiveView !== 'function') return;
+    api.setActiveView(view);
+  }, [view]);
 
   const loadMembers = async (type: string, id: string): Promise<Role[]> => {
     if (type !== 'group') return [];
@@ -155,18 +238,73 @@ export default function App() {
   })();
 
   return (
-    <div className="app-root">
+    <div
+      className="app-root"
+      onDragEnter={(e) => {
+        if (!hasDragFiles(e)) return;
+        e.preventDefault();
+        dropDepth.current += 1;
+        setDropActive(true);
+      }}
+      onDragOver={(e) => {
+        if (!hasDragFiles(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      }}
+      onDragLeave={() => {
+        dropDepth.current -= 1;
+        if (dropDepth.current <= 0) {
+          dropDepth.current = 0;
+          setDropActive(false);
+        }
+      }}
+      onDrop={(e) => {
+        dropDepth.current = 0;
+        setDropActive(false);
+        if (!e.dataTransfer?.files?.length) return;
+        e.preventDefault();
+        // 输入区（.composer）内部的下落由 ChatWindow 处理（添加待发图片），不做快速导入
+        const target = e.target as HTMLElement | null;
+        if (target?.closest?.('.composer, .mini-composer')) return;
+        void handleQuickImport(e.dataTransfer.files);
+      }}
+    >
+      {dropActive && (
+        <div className="quick-import-overlay">
+          <div className="quick-import-card">📥 {t('quickimport.overlay')}</div>
+        </div>
+      )}
       <CustomTitleBar title={title} />
       <div className="app-shell">
-        <Sidebar view={view} onChange={setView} />
+        <Sidebar
+          view={view}
+          onChange={(v) => {
+            if (v === 'settings') setSettingsNavTick((t) => t + 1);
+            setView(v);
+          }}
+          extra={
+            view === 'chats' && sidebarCollapsed ? (
+              <button
+                className="sidebar-restore"
+                title={t('chats.expandSidebar')}
+                onClick={() => setSidebarCollapsed(false)}
+              >
+                ›
+              </button>
+            ) : undefined
+          }
+        />
       {view === 'chats' && (
         <>
-          <ChatList
-            selectedId={selected?.id || null}
-            onSelect={(it) => onSelectChat(it)}
-            onNewGroup={() => setShowGroup(true)}
-            onDelete={(it) => onDeleteChat(it)}
-          />
+          {!sidebarCollapsed && (
+            <ChatList
+              selectedId={selected?.id || null}
+              onSelect={(it) => onSelectChat(it)}
+              onNewGroup={() => setShowGroup(true)}
+              onDelete={(it) => onDeleteChat(it)}
+              onToggleCollapse={() => setSidebarCollapsed(true)}
+            />
+          )}
           {selected ? (
             <ChatWindow
               key={`${selected.type}:${selected.id}`}
@@ -178,6 +316,7 @@ export default function App() {
               onChatDeleted={onChatDeleted}
               onConvertedToSingle={onConvertedToSingle}
               onGroupUpdated={onGroupUpdated}
+              onForked={(chat) => openChat(chat.chat_type, chat.chat_id, chat.name)}
             />
           ) : (
             <div className="main-pane">
@@ -190,17 +329,19 @@ export default function App() {
         </>
       )}
 
-      {view === 'contacts' && <RoleList onStartChat={onStartChat} />}
+      {view === 'contacts' && <RoleList key={`roles-${importTick}`} onStartChat={onStartChat} />}
       {view === 'compare' && <ModelCompare />}
       {view === 'settings' && (
         <Settings
           onRerunWizard={() => { setView('chats'); setShowOnboarding(true); }}
           onAbout={() => setAboutOpen(true)}
+          onGoToContacts={() => setView('contacts')}
+          navResetTick={settingsNavTick}
         />
       )}
       {view === 'stats' && <StatsView />}
       {view === 'moments' && <MomentsView />}
-      {view === 'library' && <Library onClose={() => setView('chats')} />}
+      {view === 'library' && <Library key={`lib-${importTick}`} onClose={() => setView('chats')} />}
 
       {showGroup && (
         <GroupEditor onClose={() => setShowGroup(false)} onSaved={onGroupSaved} />
@@ -219,7 +360,18 @@ export default function App() {
       <CustomCursor />
       <VideoBubble />
       <ErrorBubble />
-      </div>
+      <QueueDock />
+{/* v2.3.48：更新提醒弹窗（仅主窗；每版本只弹一次，设置中可永久关闭提醒） */}
+      <UpdatePopup />
+      {/* v2.3.90：新手引导（可跳过；与初始设置向导互斥，仅在「无人物卡」时出现） */}
+      {tutorialEligible && (
+        <TutorialOverlay
+          show
+          onClose={() => setTutorialDismissed(true)}
+          onGoToContacts={() => setView('contacts')}
+        />
+      )}
+    </div>
     </div>
   );
 }

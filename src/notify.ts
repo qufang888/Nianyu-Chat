@@ -2,6 +2,7 @@
 // 仅在「主界面与小窗均未打开/最小化、软件在后台运行」时由主进程弹出。
 // 卡片自动适配系统主题（浅色/深色），色调与主界面一致。
 import { playSoundSync, invalidateSoundCache } from './utils/sound';
+import { applyAnimControl } from './utils/animControl';
 const api = (window as any).api;
 
 const CARD_W = 340;
@@ -63,7 +64,11 @@ function cardCSS(dark: boolean): string {
       font-size:20px;font-weight:700;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.12);}
     .ny-body{position:relative;flex:1 1 auto;min-width:0;display:flex;flex-direction:column;
       justify-content:center;gap:3px;}
-    .ny-label{font-size:10px;letter-spacing:.8px;color:#07c160;text-transform:uppercase;opacity:.85;}
+    /* v2.3.88 可访问性修正：#07c160 + opacity:.85 在白底上实测仅 2.04:1，远低于 WCAG AA 正文 4.5:1。
+       本轮「朋友圈配图/配视频」标签（朋友圈配图中 / 配图失败 等）就走这里，故一并修正：
+       改用 #037a35 且去掉 opacity 衰减（半透明小字是最常见的对比度陷阱），实测 5.24:1。
+       深色卡片的 #6fe3c0 实测 9.06:1，保持不变。 */
+    .ny-label{font-size:10px;letter-spacing:.8px;color:#037a35;text-transform:uppercase;}
     .ny-name{font-size:14px;font-weight:600;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#1a1a1a;}
     .ny-content{font-size:12.5px;color:rgba(0,0,0,.62);line-height:1.35;overflow:hidden;
       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
@@ -127,6 +132,10 @@ function mount(): void {
       html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden;
         font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;}
       #root{width:100%;height:100%;}
+      /* 动效开关（animMode='all-off' 时根元素挂 .anim-off）：禁用卡片滑入/滑出等全部 CSS 动画/过渡 */
+      .anim-off, .anim-off *, .anim-off *::before, .anim-off *::after {
+        animation: none !important; transition: none !important;
+      }
       ${cardCSS(dark)}
     `;
   }
@@ -164,6 +173,18 @@ function mount(): void {
   function show(data: any): void {
     // 每次显示时同步主题（支持运行时切换主题后下次弹出即时适配）
     if (data.theme && data.theme !== currentTheme) applyTheme(data.theme);
+    // 每次显示时读取当前动效开关（通知窗生命周期短，无需订阅 settings 变更）
+    if (api && api.getSettings) {
+      api.getSettings()
+        .then((s: any) => {
+          // 高级动画控制（v2.3.90）：总控 / 单控互斥。通知窗是独立 document，
+          // 总控关闭 → 上面注入的 `.anim-off` 全局 kill 生效（卡片直接跳到终态）；
+          // 单控模式 → 改用 `html[data-anim-off~="toast"]` + 自动生成的 <style> 关掉 .ny-card 过渡。
+          // kind 传 'notify'：该分组在本窗用的是 .ny-card（见 ANIM_GROUPS 的 docSelectors）。
+          applyAnimControl(document, s, 'notify');
+        })
+        .catch(() => {});
+    }
     // 消息提示音效（角色自定义音效优先）
     void playNotifySound(data.chat);
     (window as any).__nyChat = data.chat;
@@ -191,6 +212,14 @@ function mount(): void {
   // 静默模式切换后，立即刷新音效缓存，使「关闭通知提示音」即时生效
   if (api && api.onSettingsChanged) {
     api.onSettingsChanged(() => invalidateSoundCache());
+  }
+
+  // 挂载时先落一次动效门控：show() 里的读取是异步的，首张卡片可能早于它返回，
+  // 故这里预热一次，避免第一张卡片仍播放已被关闭的滑入动画。
+  if (api && api.getSettings) {
+    api.getSettings()
+      .then((s: any) => applyAnimControl(document, s, 'notify'))
+      .catch(() => {});
   }
 }
 

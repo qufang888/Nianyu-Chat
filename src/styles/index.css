@@ -256,6 +256,46 @@ input[type='range']::-moz-range-thumb {
   border-radius: 8px;
   font-size: calc(18px * var(--font-scale));
 }
+.list-header .btn-collapse {
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: calc(18px * var(--font-scale));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+}
+.list-header .btn-collapse:hover,
+.list-header .btn-add:hover {
+  filter: brightness(1.08);
+}
+
+/* 聊天侧边栏收起后的恢复按钮：渲染在左侧导航图标列底部（设置图标下方），视觉与导航项一致 */
+.sidebar-restore {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  border: none;
+  background: transparent;
+  color: var(--color-nav-icon);
+  font-size: calc(22px * var(--font-scale));
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: all var(--transition);
+}
+.sidebar-restore:hover {
+  background: var(--color-hover);
+  color: var(--color-nav-active);
+}
 .list-scroll {
   flex: 1;
   overflow-y: auto;
@@ -297,6 +337,29 @@ input[type='range']::-moz-range-thumb {
 }
 .list-item.active {
   background: var(--color-hover);
+}
+
+/* 聊天置顶：📌角标 + 轻底色，拖拽排序时的视觉指示 */
+.list-item .list-pin {
+  position: absolute;
+  top: 4px;
+  left: 8px;
+  font-size: calc(10px * var(--font-scale));
+  line-height: 1;
+  opacity: 0.9;
+  pointer-events: none;
+}
+.list-item.pinned {
+  background: color-mix(in srgb, var(--color-primary, #3a8fd0) 7%, transparent);
+}
+.list-item.pinned.active {
+  background: var(--color-hover);
+}
+.list-item.dragging {
+  opacity: 0.45;
+}
+.list-item.drag-over {
+  box-shadow: inset 0 2px 0 var(--color-primary);
 }
 .avatar {
   width: 44px;
@@ -376,6 +439,8 @@ input[type='range']::-moz-range-thumb {
   display: flex;
   flex-direction: column;
   min-width: 96px;
+  /* 与 .ctx-menu 统一的 linear 弹出动画（受「动效开关」.anim-off 全局规则控制） */
+  animation: popupLinearIn 0.16s linear;
 }
 .list-menu button {
   text-align: left;
@@ -417,6 +482,32 @@ input[type='range']::-moz-range-thumb {
   margin-left: 8px;
   font-weight: 400;
   white-space: nowrap;
+}
+/* v2.3.44：标题栏模型标签可点击（切换显示 API 配置名 / 实际模型名） */
+.model-tag-click {
+  cursor: pointer;
+  user-select: none;
+  transition: filter 0.15s linear;
+}
+.model-tag-click:hover {
+  filter: brightness(1.08);
+}
+
+/* 主动消息标记：AI 自发（非回复用户）的消息在发送者名旁标注 ⚡主动 */
+/* 颜色全部走主题变量，明暗/毛玻璃等主题自动适配 */
+.proactive-tag {
+  font-size: calc(10px * var(--font-scale));
+  color: var(--color-primary);
+  background: var(--color-hover);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 1px 7px;
+  margin-left: 8px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+.proactive-tag::before {
+  content: '⚡ ';
 }
 
 /* 右侧主区 */
@@ -536,6 +627,11 @@ input[type='range']::-moz-range-thumb {
   display: flex;
   gap: 10px;
   max-width: 78%;
+  /* v2.3.66 曾用 flex-wrap:wrap 让操作栏独占第二行；v2.3.78 起操作栏已移入 .msg-meta 内部，
+     **不再需要换行**。而 `flex-wrap: wrap` 正是长气泡塌陷的元凶之一——长内容会把气泡列挤到
+     第二行（头像下方），且窗口越宽越不容易触发（用户实测「横向拉长就不出问题」，正是此原因）。
+     v2.3.79 起固定 `nowrap`：头像 + 气泡列恒在同一行。 */
+  flex-wrap: nowrap;
 }
 .msg-row.user {
   align-self: flex-end;
@@ -544,12 +640,25 @@ input[type='range']::-moz-range-thumb {
 .msg-row.ai {
   align-self: flex-start;
 }
+/* v2.3.79：气泡容器（头像右侧那一列）必须 min-width:0 **且** flex:1，两者缺一不可。
+   - min-width:0：flex 子项默认 min-width:auto（= min-content），长消息（长段落 / 无空格长串）
+     会把该列撑到超出 .msg-row 的 78% 上限 → 换行把气泡挤到头像下方、人物名称夹在中间。
+   - flex:1：让该列**撑满剩余空间**并可收缩；只写 min-width:0 而不给 flex，列宽仍按内容算，
+     长内容下依然会溢出（v2.3.78 只加了 min-width:0，用户实测问题依旧的根本原因）。
+   - overflow-wrap:anywhere：兜底，让超长无空格串（长 URL / 一串字符）也能在气泡内断行。 */
+.msg-body {
+  min-width: 0;
+  flex: 1;
+}
 /* 已读未读：聊天气泡「● 未读」徽章 / 未读分隔线 / 侧栏未读角标已按用户要求移除（v2.3.11），
    水位线仅在主进程后台记录，界面不再渲染任何未读视觉标记。 */
 .bubble {
   padding: 10px 14px;
   border-radius: var(--bubble-radius, var(--radius));
   word-wrap: break-word;
+  /* v2.3.79：兜底——超长无空格串（长 URL、一长串字符）也要能在气泡内断行，
+     否则 word-wrap:break-word 遇到零断点时仍会溢出容器宽度。 */
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   box-shadow: var(--shadow-panel);
   position: relative;
@@ -579,6 +688,109 @@ input[type='range']::-moz-range-thumb {
 .narration {
   font-style: italic;
   color: var(--color-text-muted);
+}
+/* 人物心理（「」包裹）：与旁白同为次要文本，色调区分（v2.3.19） */
+.psyche {
+  font-style: italic;
+  color: var(--color-text-secondary);
+  opacity: 0.92;
+}
+
+/* ===== 流式逐字渐显（v2.3.19） =====
+   每个新输出的字固定 0.3s 渐显，速度不随模型输出快慢变化；
+   模型输出停滞（超过一个动画周期无新字）时，仅最后一个字切换为
+   渐隐 0.5s + 渐显 0.5s 的闪烁过渡；此前已生成的字绝不参与动画。 */
+.stream-char {
+  display: inline;
+  animation: nyCharIn 0.3s ease both;
+}
+@keyframes nyCharIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.stream-char.stall {
+  animation: nyCharBlink 1s ease-in-out infinite;
+}
+@keyframes nyCharBlink {
+  0% { opacity: 1; }
+  50% { opacity: 0; }
+  100% { opacity: 1; }
+}
+/* ===== 伪流式输出逐字渐显（v2.3.34；v2.3.36 重构为 5 字动画队列） =====
+   动画时长 = 唯一设置「动画速度」（pseudoStreamSpeed，调用方以内联 --pseudo-char-dur 传入，默认 0.8s）；
+   相邻两字的触发间隔由 usePseudoReveal 按「动画时长 ÷ (PSEUDO_QUEUE-1)=4」自动推导：
+   第 5 个字开始渐显时第 1 个字恰好完成，任意时刻 5 个字处于渐显中，首尾无缝、视觉连贯。
+   只作用于正文，思维链不受影响。 */
+.pseudo-char {
+  display: inline;
+  animation: nyCharIn var(--pseudo-char-dur, 0.8s) ease both;
+}
+
+/* ===== 设置项「！」说明提示（v2.3.34） =====
+   取代原先铺在界面上的灰色小字说明；只有悬停/聚焦图标时才显示说明浮层。 */
+.hint-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border, rgba(128, 128, 128, 0.45));
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
+  flex: 0 0 auto;
+  vertical-align: middle;
+  transition: border-color 0.15s, color 0.15s;
+}
+.hint-icon:hover,
+.hint-icon:focus {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  outline: none;
+}
+/* TTS 提供商列表的能力徽章（v2.3.34） */
+.tts-prov-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border, rgba(128, 128, 128, 0.32));
+  color: var(--color-text-secondary);
+  background: transparent;
+  font-size: 10.5px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.tts-prov-badge.on {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+.hint-tip {
+  position: fixed;
+  transform: translateX(-50%);
+  z-index: 400;
+  max-width: 320px;
+  width: max-content;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--color-panel, #1e1e1e);
+  color: var(--color-text);
+  border: 1px solid var(--color-border, rgba(128, 128, 128, 0.35));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.6;
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+  animation: fadeIn 0.12s ease;
 }
 /* 气泡上方发送时间：同一分钟仅顶部显示 */
 .msg-time-above {
@@ -749,6 +961,87 @@ input[type='range']::-moz-range-thumb {
   background: var(--color-primary);
   animation: typing-slide 1.1s ease-in-out infinite;
 }
+/* ===== 异步场景生图状态条（v2.3.81）：会话内「正在生图中…」轻量内联指示 =====
+   由 SceneImageStatusBar 组件驱动。动画只用 CSS class（无内联 transition），
+   因此全局「动效开关」关闭时（根元素 .anim-off）的 `animation: none !important`
+   可直接压制，无需组件内联判定。
+
+   配色（v2.3.81 经 14 主题实测后定稿）：
+   初版用 10% 主色混入 panel 的半透明底 + 副文案叠 opacity:.9 + 副文案用
+   --color-text-secondary，实测仅 8/14 主题达标（wechat 副文案 3.23:1、glass 主文案 3.33:1，
+   vibrant 3.30、sand 3.68、frost 4.19、dark 4.36 均低于 WCAG AA 正文 4.5:1）。
+   根因有二：① 底色半透明过薄，文字被底下渐变/底色稀释；② 多个主题的
+   --color-text-secondary 本身就是浅灰（wechat #888），并非为小字场景保证对比度。
+   定稿方案：
+     1) 底色改为 **不透明**：直接用 --color-panel（各主题本身已保证与 --color-text 达标），
+        仅叠 8% 主色做轻微色调区分，避免半透明稀释对比度；
+     2) 副文案改用 **--color-text**（与主文案同色）而非 secondary，靠字号(11.5px→视觉次级)
+        与字重区分层级，不再依赖一个对比度不受保证的浅灰变量；
+     3) 彻底移除 opacity 叠加（透明度会直接压低有效对比度）。
+   实测结果：14 主题主文案 8.6:1 ~ 14.7:1，副文案同色同值，全部 >= 4.5:1。 */
+.scene-image-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: center;
+  max-width: 86%;
+  margin: 6px auto;
+  padding: 7px 14px;
+  border-radius: 999px;
+  /* 不透明底：直接取 --color-panel（各主题已保证与 --color-text 达标），
+     叠 8% 主色仅作色调区分。不使用半透明混合，避免文字对比度被稀释。 */
+  background: color-mix(in srgb, var(--color-primary, #07c160) 8%, var(--color-panel, #fff));
+  border: 1px solid color-mix(in srgb, var(--color-primary, #07c160) 28%, transparent);
+  font-size: calc(12.5px * var(--font-scale));
+  line-height: 1.4;
+  color: var(--color-text, #1a1a1a);
+  /* 纯展示，不拦截点击 */
+  pointer-events: none;
+  user-select: none;
+}
+.scene-image-text {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.scene-image-sub {
+  /* v2.3.81：改用 --color-text（与主文案同色）。原先用 --color-text-secondary，
+     但多个主题该变量本身是浅灰（wechat #888），在半透明底上仅 3.0:1~4.4:1，低于 AA。
+     层级改由字号（11.5px vs 12.5px）与不透明度以外的方式表达：保持同色但不加 opacity
+     （叠加透明度会直接压低有效对比度），仅靠字号与字重区分。 */
+  color: var(--color-text, #1a1a1a);
+  font-size: calc(11.5px * var(--font-scale));
+  font-weight: 500;
+  white-space: nowrap;
+}
+/* 呼吸光点：与 .typing 的滑块同源视觉语言，表示「进行中」 */
+.scene-image-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-primary, #07c160);
+  animation: scene-image-pulse 1.3s ease-in-out infinite;
+}
+@keyframes scene-image-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.82); }
+  50% { opacity: 1; transform: scale(1); }
+}
+/* 小窗紧凑模式：空间紧张，缩小内边距与字号、隐藏副文案（组件侧亦不渲染副文案） */
+.scene-image-bar.compact {
+  max-width: 96%;
+  margin: 4px auto;
+  padding: 4px 10px;
+  gap: 6px;
+  font-size: calc(11.5px * var(--font-scale));
+}
+/* v2.3.81 毛玻璃（glass）主题可访问性兜底：glass 的 --color-panel 仅 22% 白，叠加在深紫渐变背景上
+   仍偏透，直接做 color-mix 会把 --color-text(#f4f4ff) 的对比度压到 AA 以下。此处按项目既有
+   「glass deepening」思路，为该主题单独把底色提纯为不透明，保证深底浅字始终达标。 */
+[data-theme='glass'] .scene-image-bar {
+  background: color-mix(in srgb, var(--color-primary, #7c83ff) 8%, #3b3070);
+  border-color: color-mix(in srgb, var(--color-primary, #7c83ff) 42%, transparent);
+}
+
 .msg-meta {
   font-size: calc(11px * var(--font-scale));
   color: var(--color-text-secondary);
@@ -937,6 +1230,11 @@ input[type='range']::-moz-range-thumb {
 .idle-toggle.on .idle-toggle-knob::after {
   transform: translateX(12px);
 }
+/* NHPP 引擎接管时：经典主动消息开关不可拨动（显示打开态但略微淡化 + 禁用手势，点击仅提示） */
+.idle-toggle.disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
 .idle-countdown {
   flex: none;
   font-size: calc(11px * var(--font-scale));
@@ -945,6 +1243,57 @@ input[type='range']::-moz-range-thumb {
   white-space: nowrap;
   padding: 0 2px;
   line-height: 1;
+}
+/* v2.3.93：主动消息「等你回复」提示 + 「我不回复」按钮
+   视觉语言沿用 .idle-countdown（小字、tabular-nums、不换行），颜色全部走主题变量，无硬编码。
+   对比度：正文用 --color-text（各主题均为「正文色」，14 套主题全部满足 WCAG AA）；
+   主题色只用于 6px 圆点这类**非文字**图形，不承载文本信息（小字用主题色对比度不足）。 */
+.idle-awaiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  white-space: nowrap;
+  line-height: 1;
+  padding: 0 2px;
+}
+.idle-awaiting-text {
+  position: relative;
+  padding-left: 11px;
+  font-size: calc(11px * var(--font-scale));
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+/* 状态圆点：纯装饰性图形，用主题色表达「正在等待」 */
+.idle-awaiting-text::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: var(--color-primary);
+}
+.idle-awaiting-skip {
+  padding: 2px 8px;
+  font-size: calc(11px * var(--font-scale));
+  line-height: 1.4;
+  border-radius: 999px;
+  color: var(--color-text);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.idle-awaiting-skip:hover:not(:disabled) {
+  background: var(--color-hover);
+  border-color: var(--color-primary);
+}
+.idle-awaiting-skip:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 .mention-pop {
   position: absolute;
@@ -958,6 +1307,8 @@ input[type='range']::-moz-range-thumb {
   overflow-y: auto;
   z-index: 20;
   min-width: 160px;
+  /* linear 弹出动画（与 .ctx-menu 统一；受「动效开关」.anim-off 全局规则控制） */
+  animation: popupLinearIn 0.16s linear;
 }
 .mention-pop .item {
   padding: 8px 14px;
@@ -970,6 +1321,8 @@ input[type='range']::-moz-range-thumb {
 /* 聊天工具栏「其他操作」下拉菜单（原 inline background 移入 CSS，便于主题覆盖） */
 .more-dropdown {
   background: var(--color-panel);
+  /* linear 弹出动画（与 .ctx-menu 统一；受「动效开关」.anim-off 全局规则控制） */
+  animation: popupLinearIn 0.16s linear;
 }
 
 /* 表单 / 设置 */
@@ -1292,6 +1645,11 @@ input[type='range']::-moz-range-thumb {
   outline: 2px solid var(--color-primary);
   outline-offset: 1px;
 }
+/* 越界引用徽标（模型标了编号但无对应搜索结果）：视觉弱化，点击展开搜索结果列表 */
+.cite-badge-miss {
+  opacity: 0.55;
+  font-weight: 400;
+}
 .srb-item {
   cursor: pointer;
 }
@@ -1559,6 +1917,21 @@ input[type='range']::-moz-range-thumb {
   transition: none !important;
 }
 
+/* ===== 流式/打字机动画豁免（v2.3.90）=====
+   需求：逐字渐显属于「内容正在输出」的状态反馈，不是装饰性动效 —— 关掉总控后若一并禁用，
+   用户会看到文字块整段闪现，完全无法感知模型正在打字。故显式豁免这三个类。
+   声明值与上方各自的原始定义逐字一致（`--pseudo-char-dur` 由调用方内联传入，不做改动），
+   视觉与开启动效时完全一致。选择器特异性（0,2,0）+ !important 高于 `.anim-off *`（0,1,0）。 */
+.anim-off .stream-char {
+  animation: nyCharIn 0.3s ease both !important;
+}
+.anim-off .stream-char.stall {
+  animation: nyCharBlink 1s ease-in-out infinite !important;
+}
+.anim-off .pseudo-char {
+  animation: nyCharIn var(--pseudo-char-dur, 0.8s) ease both !important;
+}
+
 /* 自定义 Canvas 光标层：最高层级（2147483646），确保不被任何模态/弹窗/Toast 遮挡。
    pointer-events:none 保证不拦截鼠标事件。z-index 由组件内联 style 覆盖，此处仅作 fallback。 */
 .custom-cursor-canvas {
@@ -1820,9 +2193,12 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 .mini-toast.linear.leaving {
   animation: toastOutLinear 0.3s linear both;
 }
+/* v2.3.88 可访问性修正：底色 #e06c75 + 白字实测仅 3.20:1，低于 WCAG AA 正文 4.5:1。
+   改用 #b3342f（白字 6.09:1），并把边框同步加深到 #8f2823 以保持层次感。
+   本轮「朋友圈配图/配视频失败」「异步生图失败」等红色 Toast 都走这条样式，故一并修正。 */
 .mini-toast.error {
-  background: #e06c75;
-  border-color: #c0392b;
+  background: #b3342f;
+  border-color: #8f2823;
   color: #fff;
 }
 @keyframes toastIn {
@@ -2312,6 +2688,8 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   inset: 0;
   z-index: 60;
   background: rgba(0, 0, 0, 0.28);
+  /* v2.3.90：补齐遮罩淡入（缩出见下方 .mini-drawer-mask.leaving） */
+  animation: miniMaskIn 0.15s ease;
 }
 .mini-drawer {
   position: absolute;
@@ -2593,6 +2971,76 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   border-radius: var(--radius);
 }
 .check-item input { width: auto; }
+/* ===== 人物音色绑定（v2.3.94 需求 8/9，RoleTtsBinding.tsx）=====
+   角色卡编辑器里的「人物音色与朗读」区块。
+   刻意不写任何 transition / animation —— 静态布局样式，天然不受动画开关影响，
+   无需登记进 animControl 的 ANIM_GROUPS（登记的必须是真实存在的 CSS 动画选择器）。 */
+.role-tts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 8px);
+  background: var(--color-panel-alt);
+}
+/* 一行内的控件组（音色框 + 拉取按钮 / 语速滑块 + 数值 + 清除） */
+.role-tts-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* 语速 / 音调各自一格，等宽两列对齐 */
+.role-tts-param {
+  flex: 1 1 180px;
+  min-width: 160px;
+}
+.role-tts-param > label {
+  display: block;
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--color-text-secondary);
+  margin-bottom: 2px;
+}
+.role-tts-param input[type='range'] {
+  flex: 1 1 90px;
+  min-width: 80px;
+  accent-color: var(--color-primary);
+}
+/* 数值 / 「全局」占位：用等宽数字避免滑块拖动时文字宽度跳动 */
+.role-tts-num {
+  flex: 0 0 auto;
+  min-width: 44px;
+  text-align: center;
+  font-size: calc(12px * var(--font-scale, 1));
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+/* 拉取结果的分类提示条：ok / warn / error 三态。
+   颜色 + 左侧色条双重编码，色弱用户也能靠色条位置与文字内容区分。 */
+.role-tts-note {
+  margin-top: 4px;
+  padding: 5px 8px;
+  border-radius: var(--radius, 8px);
+  border-left: 3px solid var(--color-border);
+  background: var(--color-panel);
+  color: var(--color-text-secondary);
+  font-size: calc(12px * var(--font-scale, 1));
+  line-height: 1.5;
+  word-break: break-word;
+}
+.role-tts-note.ok {
+  border-left-color: var(--color-success, #10b981);
+  color: var(--color-success, #10b981);
+}
+.role-tts-note.warn {
+  border-left-color: var(--color-warn, #f59e0b);
+  color: var(--color-warn, #f59e0b);
+}
+.role-tts-note.error {
+  border-left-color: var(--color-danger, #ff4d4f);
+  color: var(--color-danger, #ff4d4f);
+}
 .mem-list {
   display: flex;
   flex-direction: column;
@@ -2617,6 +3065,12 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   justify-content: space-between;
   margin-top: 8px;
 }
+/* 记忆快捷搜索框（修改记忆面板顶部） */
+.mem-search { display: flex; align-items: center; gap: 8px; margin: 10px 0 6px; }
+.mem-search input { flex: 1; }
+.mem-search-count { font-size: 12px; color: var(--color-text-secondary); white-space: nowrap; }
+.mem-search-nav { display: flex; gap: 4px; }
+.mem-date { font-size: 12px; color: var(--color-text-secondary); white-space: nowrap; }
 .muted { color: var(--color-text-secondary); font-size: calc(12px * var(--font-scale)); }
 
 /* ===== 思维链折叠块 ===== */
@@ -2865,6 +3319,8 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   box-shadow: 0 2px 12px rgba(99,102,241,0.25);
   padding: 4px;
   z-index: 300;
+  /* linear 弹出动画（与 .ctx-menu 统一；受「动效开关」.anim-off 全局规则控制） */
+  animation: popupLinearIn 0.16s linear;
 }
 .sel-popup-btn {
   padding: 5px 12px;
@@ -2881,14 +3337,6 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   background: rgba(99,102,241,0.18);
 }
 
-/* 撤回消息标记 */
-.recalled-tag {
-  font-size: calc(12px * var(--font-scale));
-  color: var(--color-text-secondary);
-  background: var(--color-hover-row, rgba(0,0,0,0.05));
-  border-radius: 10px;
-  padding: 2px 12px;
-}
 
 /* 发送失败气泡 */
 .bubble-failed {
@@ -3019,7 +3467,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   background: var(--color-hover);
 }
 .stories-panel {
-  pointer-events: auto;
+  pointer-events: none; /* 收起时不拦截点击（展开由 .open 恢复） */
   width: 224px;
   max-height: 100%;
   margin-left: 2px;
@@ -3030,6 +3478,19 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   border-radius: 0 10px 10px 0;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   overflow: hidden;
+  /* v2.3.38 弹入/弹出过渡（面板常驻 DOM，open 类切换显隐）；
+     「动效开关」关闭时 .anim-off 全局禁用所有 transition/animation */
+  opacity: 0;
+  transform: translateX(-10px) scale(0.97);
+  visibility: hidden;
+  transition: opacity 0.22s ease, transform 0.22s ease, visibility 0.22s, pointer-events 0s 0.22s;
+}
+.stories-panel.open {
+  opacity: 1;
+  transform: none;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity 0.22s ease, transform 0.22s ease, visibility 0.22s, pointer-events 0s;
 }
 .stories-head {
   display: flex;
@@ -3097,11 +3558,26 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   background: var(--color-danger, #e5484d);
   color: #fff;
 }
+/* 节点改名内联输入框（v2.3.37） */
+.story-rename-input {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(12px * var(--font-scale));
+  padding: 2px 6px;
+  border: 1px solid var(--color-border, rgba(0, 0, 0, 0.15));
+  border-radius: 4px;
+  background: var(--color-panel, #fff);
+  color: var(--color-text);
+}
+.story-node > button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 
 /* ===== 消息查找（主窗 + 小窗共用） ===== */
 .msg-search {
   flex-shrink: 0;
-  background: var(--color-surface, #fff);
+  background: var(--color-panel, #fff);
   border-bottom: 1px solid var(--color-border, #eee);
   padding: 8px 10px;
 }
@@ -3158,6 +3634,14 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 }
 .msg-search.compact .msg-search-list {
   max-height: 140px;
+}
+/* 需求 12：命中项超过 5 条时的「还有 N 项」提示（其余靠滚动条查看） */
+.msg-search-more {
+  padding: 5px 8px 3px;
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  border-top: 1px solid var(--color-border);
+  margin-top: 2px;
 }
 .msg-search-item {
   padding: 6px 8px;
@@ -3452,7 +3936,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 }
 .settings-header-search .settings-search-input {
   width: 220px;
-  background: var(--color-bg-input, rgba(128, 128, 128, 0.10));
+  background: var(--color-input-bg, rgba(128, 128, 128, 0.10));
 }
 .section-title { scroll-margin-top: 16px; }
 .settings-search-input {
@@ -3461,7 +3945,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   padding: 9px 14px;
   font-size: 13px;
   color: var(--color-text, #1a1d24);
-  background: var(--color-bg-input, rgba(128, 128, 128, 0.10));
+  background: var(--color-input-bg, rgba(128, 128, 128, 0.10));
   border: 1px solid var(--color-border, rgba(128, 128, 128, 0.25));
   border-radius: 10px;
   outline: none;
@@ -3480,7 +3964,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   top: calc(100% + 6px);
   max-height: 240px;
   overflow-y: auto;
-  background: rgba(140, 145, 165, 0.22);
+  background: var(--color-panel-alt, rgba(140, 145, 165, 0.22));
   backdrop-filter: blur(20px) saturate(160%);
   -webkit-backdrop-filter: blur(20px) saturate(160%);
   border: 1px solid var(--color-border, rgba(255, 255, 255, 0.22));
@@ -3499,8 +3983,167 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   cursor: pointer;
   transition: background 0.12s;
 }
-.settings-suggest-item:hover { background: rgba(255, 255, 255, 0.18); }
+.settings-suggest-item:hover { background: var(--color-hover, rgba(255, 255, 255, 0.18)); }
 .settings-suggest-empty { padding: 10px 12px; font-size: 12.5px; color: var(--color-text-secondary, #888); }
+
+/* ===== 需求 12：通用搜索候选面板（SearchSuggest）=====
+   与 .settings-suggest 同风格，但 portal 到 body + fixed 定位（不会被父容器裁剪），
+   max-height 由组件按「最多可见 5 行」内联设置，超出部分靠 overflow-y 滚动条查看。 */
+.search-suggest {
+  position: fixed;
+  z-index: 2147483645; /* 与 .select-menu-panel 对齐：低于光标 Canvas，高于所有模态/弹窗/Toast */
+  overflow-y: auto;
+  background: var(--color-select-bg);
+  color: var(--color-select-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+  cursor: default;
+  /* 与 .select-menu-panel 同一套弹出/缩入动画（受「右键菜单与下拉」分组控制） */
+  animation: popupLinearIn 0.16s linear;
+}
+.search-suggest.leaving {
+  animation: popupLinearOut 0.15s linear forwards;
+  pointer-events: none;
+}
+.search-suggest::-webkit-scrollbar { width: 6px; }
+.search-suggest::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, 0.4); border-radius: 3px; }
+.search-suggest-item {
+  /* 行高与 SearchSuggest.tsx 的 ITEM_HEIGHT(34) 对齐 */
+  min-height: 26px;
+  padding: 4px 8px;
+  font-size: calc(13px * var(--font-scale));
+  color: var(--color-select-text);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background var(--transition), color var(--transition);
+}
+.search-suggest-item.active {
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+}
+/* 高亮态下命中片段反色（项目既有的 .search-hl 在 wechat 主题下白底绿字对比度偏低，
+   选中行改为「底色/文字互换」以保证命中词依然读得清） */
+.search-suggest-item.active .search-hl {
+  background: var(--color-primary-text);
+  color: var(--color-primary);
+}
+.search-suggest-empty {
+  padding: 8px 10px;
+  font-size: 12.5px;
+  /* 无结果提示是「用户必须读到」的信息，用 --color-text（14 套主题最低 12.4:1，远超 AA），
+     不用偏淡的 --color-text-secondary（wechat 下仅 3.5:1，达不到 AA） */
+  color: var(--color-text);
+}
+.search-suggest-foot {
+  padding: 5px 10px 3px;
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  border-top: 1px solid var(--color-border);
+  margin-top: 3px;
+}
+
+/* ===== 需求 13：聊天列表顶部搜索框 ===== */
+.list-search-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  transition: background var(--transition);
+}
+.list-search-icon { font-size: 13px; opacity: 0.75; flex-shrink: 0; }
+.list-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  padding: 5px 8px;
+  font-size: calc(13px * var(--font-scale));
+  outline: none;
+  transition: border-color var(--transition), background var(--transition);
+}
+.list-search-input:focus { border-color: var(--color-primary); }
+.list-search-clear {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: calc(13px * var(--font-scale));
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition), color var(--transition);
+}
+.list-search-clear:hover { background: var(--color-hover); color: var(--color-text); }
+.list-search-rowline { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.list-search-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-search-badge {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  /* 徽标文字必须读得清 → --color-text（--color-text-secondary 在 wechat 下仅 3.5:1） */
+  color: var(--color-text);
+}
+.list-search-badge.list-search-badge-active,
+.search-suggest-item.active .list-search-badge {
+  border-color: var(--color-primary-text);
+  color: var(--color-primary-text);
+}
+
+/* ===== 需求 14：不常用聊天文件夹 ===== */
+.inactive-folder-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: calc(12px * var(--font-scale));
+  font-weight: 600;
+  /* 文件夹名是「用户必须读到」的结构信息 → 用 --color-text（14 套主题最低 10.8:1，AA 达标）；
+     悬停时才降到 --color-text-secondary 作为「可点击」的视觉暗示 */
+  color: var(--color-text);
+  background: var(--color-panel-alt);
+  border-bottom: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-border);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background var(--transition), color var(--transition);
+}
+.inactive-folder-head:hover { background: var(--color-hover); }
+.inactive-folder-caret {
+  font-size: 10px;
+  line-height: 1;
+  display: inline-block;
+  /* 展开/收起时旋转（受三档动画开关 + 高级设置「主题/过渡」分组控制：
+     .inactive-folder-head 已登记进 animControl.ts 的 theme 组） */
+  transition: transform var(--transition);
+}
+.inactive-folder-head.open .inactive-folder-caret { transform: rotate(0deg); }
+.inactive-folder-head:not(.open) .inactive-folder-caret { transform: rotate(-90deg); }
+.inactive-folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inactive-folder-count {
+  flex-shrink: 0;
+  min-width: 18px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 500;
+  /* 数量是「用户必须读到」的信息 → --color-text（14 套主题 ≥11.7:1） */
+  color: var(--color-text);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  padding: 0 5px;
+}
 .search-hl {
   background: var(--color-primary, #3a8fd0);
   color: var(--color-primary-text, #fff);
@@ -3517,6 +4160,382 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   100% { background: transparent; box-shadow: 0 0 0 0 transparent; }
 }
 
+/* 模型管理页：点击搜索结果后目标模型卡片高亮闪动 3 秒（3 次 1s 脉冲） */
+.model-flash {
+  animation: modelFlash 1s ease-out 3;
+  border-radius: var(--radius-sm, 8px);
+}
+@keyframes modelFlash {
+  0% { background: var(--color-primary, #3a8fd0); box-shadow: 0 0 0 4px var(--color-primary-shadow, rgba(58, 143, 208, 0.4)); }
+  100% { background: var(--color-panel-alt); box-shadow: 0 0 0 0 transparent; }
+}
+
+/* ===== 聊天模型选择器（v2.3.43）：主窗「其他操作」与小窗抽屉共用，所有主题统一走主题变量 =====
+   （此前误用不存在的变量名，导致面板透明、文字与背景重合） */
+.chat-model-picker {
+  background: var(--color-panel);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-panel);
+}
+.chat-model-picker-input {
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.chat-model-picker-input::placeholder {
+  color: var(--color-text-muted);
+}
+.chat-model-picker-results {
+  background: var(--color-select-bg, var(--color-panel));
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.chat-model-picker-item {
+  color: var(--color-text);
+}
+.chat-model-picker-item:hover {
+  background: var(--color-hover);
+}
+.chat-model-picker-sub {
+  color: var(--color-text-secondary);
+}
+.chat-model-picker-empty {
+  color: var(--color-text-muted);
+}
+.chat-model-picker-row {
+  color: var(--color-text);
+}
+
+/* ===== 弹出动画（v2.3.44）：线性淡入 + 上移；由「主题与外观 → 动效开关」（.anim-off）统一控制 ===== */
+@keyframes popupLinearIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* v2.3.90 补齐：观察者下拉（.obs-menu）与通用下拉（.select-menu-panel）此前无任何弹出动画 */
+.chat-model-picker,
+.ctx-menu,
+.obs-menu,
+.select-menu-panel {
+  animation: popupLinearIn 0.16s linear;
+}
+
+/* ===== 缩入动画（v2.3.90）：与上方 popupLinearIn 严格对称，供所有菜单关闭时使用 =====
+   配合 hooks/useRetract：关闭时先加 `.leaving` 播放本动画（forwards 保持末态），
+   约 160ms 后组件才卸载 DOM —— 因此不再「瞬间消失」，且缩入途中不会重复触发点击。
+   全部为 CSS 类动画 → 被总控 `.anim-off *` 的 `animation:none !important` 自动禁用。 */
+@keyframes popupLinearOut {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+/* 缩入中：动画进行时元素虽已透明，但仍在文档流内，必须禁用指针事件以免拦截点击 */
+.ctx-menu.leaving,
+.obs-menu.leaving,
+.select-menu-panel.leaving,
+.chat-model-picker.leaving,
+.list-menu.leaving,
+.sel-popup.leaving,
+.more-dropdown.leaving {
+  animation: popupLinearOut 0.15s linear forwards;
+  pointer-events: none;
+}
+
+/* v2.3.90：小窗左侧抽屉 —— 遮罩淡出 + 抽屉向左滑出（与 miniDrawerIn 对称）。
+   淡入关键帧 miniMaskIn 已合并进上方 .mini-drawer-mask 原规则，避免重复选择器。 */
+.mini-drawer-mask.leaving {
+  animation: miniMaskOut 0.15s ease forwards;
+  pointer-events: none;
+}
+@keyframes miniMaskIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes miniMaskOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes miniDrawerOut {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100%); }
+}
+.mini-drawer.leaving {
+  animation: miniDrawerOut 0.15s ease forwards;
+  pointer-events: none;
+}
+
+/* ===== 软件更新提示条（v2.3.45）：聊天区顶部，主题变量着色，受动效开关控制 ===== */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  background: var(--color-panel-alt);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-size: 13px;
+  animation: popupLinearIn 0.16s linear;
+}
+.update-banner-text {
+  flex: 1;
+  min-width: 180px;
+  color: var(--color-text);
+}
+.update-banner-btn {
+  padding: 3px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 12px;
+}
+.update-banner-btn:hover {
+  background: var(--color-hover);
+}
+.update-banner-btn.primary {
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+  border-color: var(--color-primary);
+}
+.update-banner-close {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+.update-banner-close:hover {
+  color: var(--color-text);
+}
+
+/* ===== 请求队列贴边面板（v2.3.46）：主界面右缘贴边图标 + 线性弹出队列面板 ===== */
+/* 图标 22×56px 贴右缘、可沿右缘上下拖动；面板 340px 宽、0.18s 线性弹出（QueueDock 组件内联判定动效开关） */
+.queue-dock-handle {
+  position: fixed;
+  right: 0;
+  width: 22px;
+  height: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: 1px solid var(--color-border);
+  border-right: none;
+  border-radius: 12px 0 0 12px;
+  background: var(--color-panel-alt);
+  color: var(--color-text);
+  font-size: 12px;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  z-index: 1000;
+  opacity: 0.35;
+}
+.queue-dock-handle:hover {
+  opacity: 1;
+}
+.queue-dock-handle.dragging {
+  cursor: ns-resize;
+}
+.queue-dock-badge {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--color-danger);
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+.queue-dock-panel {
+  /* v2.3.88 修复与贴边小图标重叠：
+     改前 right:10px 而图标宽 22px（right:0），两者横向重叠 12px，面板弹出时会压住小图标。
+     改后 right = 图标宽度(22px) + 间隙(4px) = 26px，面板右边缘紧邻图标左边缘，互不遮挡。
+     用变量而非裸值，是为了让「面板右偏移」与「收起时的滑出距离」共用同一个数，
+     避免以后只改一处导致收起动画滑进图标底下（见下方 --queue-dock-panel-slide）。 */
+  --queue-dock-panel-right: 26px;
+  /* 收起时向右滑出的距离 = 自身宽度(100%) + 到屏幕右缘的间距(--queue-dock-panel-right) + 8px 余量。
+     必须 ≥ 100% + right，否则面板收起时会停在屏幕内（正好压在贴边图标底下）而不是滑出屏幕。 */
+  --queue-dock-panel-slide: calc(100% + var(--queue-dock-panel-right) + 8px);
+  position: fixed;
+  right: var(--queue-dock-panel-right);
+  width: 340px;
+  /* 窄窗保护：面板左边缘至少离屏幕左缘 12px，避免小窗口下溢出左边界被裁掉。
+     与 min-width 无关（未设 min-width），故可直接用 max-width 收窄。 */
+  max-width: calc(100vw - var(--queue-dock-panel-right) - 12px);
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-panel);
+  color: var(--color-text);
+  box-shadow: var(--shadow-panel);
+  z-index: 1001;
+}
+.queue-dock-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.queue-dock-count {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-text-secondary);
+}
+.queue-dock-close {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+.queue-dock-close:hover {
+  color: var(--color-text);
+}
+.queue-dock-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.queue-dock-tab {
+  padding: 3px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+}
+.queue-dock-tab:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+.queue-dock-tab.active {
+  background: var(--color-select-bg);
+  color: var(--color-select-text);
+  border-color: var(--color-select-bg);
+}
+.queue-dock-lane-tip {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-bottom: 8px;
+}
+.queue-dock-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+.queue-dock-item:hover {
+  background: var(--color-hover);
+}
+.queue-dock-item.drag-over {
+  box-shadow: inset 0 2px 0 var(--color-primary);
+}
+.queue-dock-idx {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-hover);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+.queue-dock-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text);
+}
+.queue-dock-locked {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--color-hover);
+  color: var(--color-text-secondary);
+  font-size: 10px;
+}
+.queue-dock-eta {
+  flex: none;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.queue-dock-btn {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 6px;
+  background: var(--color-hover);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0;
+}
+.queue-dock-btn:hover {
+  color: var(--color-text);
+}
+.queue-dock-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.queue-dock-empty {
+  padding: 18px 0;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+}
+.queue-dock-drag-hint {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+/* 世界书管理：拖拽排序视觉指示 */
+.lib-item.dragging {
+  opacity: 0.45;
+}
+.lib-item.drag-over {
+  box-shadow: inset 0 2px 0 var(--color-primary);
+}
+
 /* ===== 毛玻璃主题下浮层面板统一加深：防止下方内容穿透导致文字重叠 ===== */
 /* 这些面板/抽屉/下拉在默认主题下可用半透明白底，但在 glass 主题中 --color-panel 太透，
    直接换成深色高不透明度底，保证菜单文字、思考过程、错误提示等清晰可读。 */
@@ -3528,9 +4547,28 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 [data-theme='glass'] .error-bubble,
 [data-theme='glass'] .reasoning-block,
 [data-theme='glass'] .qps-queue,
-[data-theme='glass'] .mini-toast {
+[data-theme='glass'] .mini-toast,
+[data-theme='glass'] .hint-tip,
+[data-theme='glass'] .chat-model-picker,
+[data-theme='glass'] .update-banner,
+[data-theme='glass'] .queue-dock-handle,
+[data-theme='glass'] .queue-dock-panel,
+[data-theme='glass'] .api-params-panel,
+[data-theme='glass'] .chat-model-picker-results {
   background: rgba(18, 16, 38, 0.88) !important;
   border-color: rgba(255, 255, 255, 0.18);
+}
+/* 毛玻璃主题：选择器输入框/占位符改用低透明白底 + 亮字，避免亮字叠半透明白底看不清 */
+[data-theme='glass'] .chat-model-picker-input {
+  background: rgba(255, 255, 255, 0.10) !important;
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #f4f4ff;
+}
+[data-theme='glass'] .chat-model-picker-input::placeholder {
+  color: rgba(255, 255, 255, 0.55);
+}
+[data-theme='glass'] .chat-model-picker-empty {
+  color: rgba(255, 255, 255, 0.6);
 }
 [data-theme='glass'] .reasoning-block {
   color: rgba(255, 255, 255, 0.85);
@@ -3543,4 +4581,1112 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 [data-theme='glass'] .mini-drawer-item:hover,
 [data-theme='glass'] .qps-queue .qps-cancel:hover {
   background: rgba(255, 255, 255, 0.10);
+}
+
+/* ===== 剧情节点横幅（v2.3.37）：1s 弹入 → 停留 3.5s → 0.6s 渐隐 =====
+   由 NodeBanner 组件驱动 phase 类切换；展示剧情节点名称，弹出时播 achievement-unlock 音效。 */
+.node-banner {
+  position: fixed;
+  top: 64px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  pointer-events: none; /* 纯展示，不拦截点击 */
+  z-index: 2147483640;
+}
+.node-banner-card {
+  background: var(--color-panel, #fff);
+  border: 1px solid var(--color-border, rgba(0, 0, 0, 0.1));
+  border-radius: 14px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.18);
+  padding: 14px 30px;
+  text-align: center;
+  max-width: 70vw;
+}
+.node-banner-sub {
+  font-size: 12px;
+  color: var(--color-text-secondary, #888);
+  margin-bottom: 4px;
+}
+.node-banner-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text, #222);
+  overflow-wrap: break-word;
+}
+@keyframes nodeBannerIn {
+  0% { opacity: 0; transform: translateY(-26px) scale(0.92); }
+  60% { opacity: 1; transform: translateY(4px) scale(1.02); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes nodeBannerOut {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-16px); }
+}
+.node-banner.phase-in .node-banner-card {
+  animation: nodeBannerIn 1s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.node-banner.phase-hold .node-banner-card {
+  opacity: 1;
+}
+.node-banner.phase-out .node-banner-card {
+  animation: nodeBannerOut 0.6s ease both;
+}
+
+/* ===== 文件拖拽添加（v2.3.51）：输入区拖入时的可放置视觉提示 ===== */
+.composer-dragover {
+  outline: 2px dashed var(--color-primary);
+  outline-offset: -3px;
+}
+.drop-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(14px * var(--font-scale));
+  font-weight: 600;
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-panel) 86%, transparent);
+  border: 2px dashed var(--color-primary);
+  border-radius: 10px;
+  pointer-events: none;
+  z-index: 30;
+  animation: popupLinearIn 0.16s linear;
+}
+
+/* ===== 快速导入（v2.3.51）：文件拖入窗口任意位置的全窗遮罩 ===== */
+.quick-import-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--color-panel) 55%, transparent);
+  pointer-events: none;
+  animation: popupLinearIn 0.16s linear;
+}
+.quick-import-card {
+  padding: 18px 28px;
+  border: 2px dashed var(--color-primary);
+  border-radius: 14px;
+  background: var(--color-panel);
+  color: var(--color-text);
+  font-size: calc(15px * var(--font-scale));
+  font-weight: 600;
+  box-shadow: var(--shadow-panel);
+}
+/* 拖悬于聊天输入区（.composer / .mini-composer）时隐藏全窗快速导入遮罩：
+   此时行为是「添加待发图片」，避免快速导入文案误导 */
+body.ny-drop-chat .quick-import-overlay {
+  display: none;
+}
+/* 毛玻璃主题：拖放提示浮层同步加深，保证文字可读 */
+[data-theme='glass'] .drop-hint,
+[data-theme='glass'] .quick-import-card {
+  background: rgba(18, 16, 38, 0.88) !important;
+  border-color: rgba(255, 255, 255, 0.35);
+}
+[data-theme='glass'] .drop-hint,
+[data-theme='glass'] .quick-import-card {
+  color: #f4f4ff;
+}
+
+
+/* ===== v2.3.63：消息下方三个 AI 操作图标（续写 / 重写⟲ / AI代写回复）===== */
+/* v2.3.66：操作栏改为独占一行（flex-basis:100% + 父级 flex-wrap:wrap），
+   这样它落在「头像 + 气泡」那一行之下，真正横向排列在气泡下方。 */
+.msg-action-bar {
+  /* v2.3.78：从「独占一行」改为「与消耗 Tokens 同一行、显示在其右侧」——
+     flex:0 0 100% 已去掉，改由 JSX 移入 .msg-meta 内实现同行。 */
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-left: 4px;   /* 与「消耗 N tokens」之间的间距 */
+  /* v2.3.77：由「渐显渐隐」改为「缩回 / 弹出」——缩放 + 位移，不透明度恒为 1，
+     收起时仍完全不可见（scale 0），避免半透明残影。 */
+  transform-origin: left center;
+  transform: scale(0.4) translateY(6px);
+  /* v2.3.94 需求 2：缓动由 cubic-bezier(0.34,1.3,0.64,1)（带回弹）改为 linear（线性弹出）。
+   依据 = 需求原话「用线性弹出动画，不用渐显渐隐动画」。
+   为什么保留 transition 而不用 @keyframes（基态陷阱见 src/hooks/useRetract.ts:10-15）：
+     transition 的基态是**隐藏态**（scale 0.4），动效被总控关掉时是「瞬间跳到可见」，安全；
+     若改用 animation，基态变成动画首帧，`animation:none` 会让按钮**永远停在 scale(0.4) 看不见**。
+   另：pointer-events 是离散属性、不参与过渡，由 .is-in 直接切换，不要塞进关键帧。 */
+  transition: transform 0.18s linear;
+  pointer-events: none;
+}
+/* 收起完成态：缩到 0 并不接收点击（占位仍在，故不会引起气泡高度跳动） */
+.msg-action-bar.is-in {
+  transform: scale(1) translateY(0);
+  pointer-events: auto;
+}
+/* 用户消息是 row-reverse（头像在右），操作栏需靠右对齐、缩放原点也换到右侧 */
+.msg-row.user .msg-action-bar {
+  justify-content: flex-end;
+  transform-origin: right center;
+}
+/* v2.3.65：工具栏分组隔断——把「语音组」与「AI 操作组」用竖线分开。
+   两侧用途完全不同（听这条消息 vs 让 AI 再干活），且顺时针 ⟳ 与逆时针 ⟲ 极易混淆，
+   故加视觉分组。v2.3.66 实测后改用 --color-text-secondary（--color-border 实测仅 1.2~1.5:1 当线条等于看不见）。 */
+.msg-action-divider {
+  display: inline-block;
+  width: 1px;
+  height: 14px;
+  margin: 0 4px;
+  /* v2.3.65：改用 --color-text-secondary —— --color-border 是为边框设计的淡色（实测仅 1.2~1.5:1），
+     当隔断线会几乎看不见。secondary 实测 13/14 主题 3.54~6.59:1（≥3:1 非文本判据）。
+     glass 主题是半透明白底 + 半透明白字（secondary 实测仅 1.00:1），故单列深色覆盖。*/
+  background: var(--color-text-secondary);
+  flex: none;
+  vertical-align: middle;
+}
+
+/* 旧容器名保留为别名，避免遗漏引用导致样式丢失 */
+.msg-ai-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding-left: 2px;
+}
+.msg-ai-action-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: calc(14px * var(--font-scale));
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: var(--color-text);
+  opacity: 0.7;
+  transition: opacity 0.15s linear, background 0.15s linear;
+}
+.msg-ai-action-btn:hover:not(:disabled) {
+  background: var(--color-hover);
+  opacity: 1;
+}
+.msg-ai-action-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+/* 正文/提示色用 --color-text（14 主题实测 10.75~17.05:1 全达标）*/
+.msg-ai-actions-tip {
+  font-size: calc(12px * var(--font-scale));
+  color: var(--color-text);
+  opacity: 0.75;
+  margin-left: 4px;
+}
+
+/* ===== v2.3.63：消息折叠（只显示一行字）===== */
+.msg-collapse-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+.msg-collapse-count {
+  font-size: calc(12px * var(--font-scale));
+  color: var(--color-text);
+  opacity: 0.75;
+}
+.msg-collapsed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+}
+/* 折叠态每条只占一行：单行省略 */
+.msg-collapsed-item {
+  font-size: calc(13px * var(--font-scale));
+  color: var(--color-text);
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: var(--color-panel-alt);
+  border: 1px solid var(--color-border);
+}
+.msg-collapsed-item.user {
+  opacity: 0.85;
+}
+.msg-collapsed-item:hover {
+  background: var(--color-hover);
+}
+.msg-collapse-reset {
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 2px 10px;
+  font-size: calc(12px * var(--font-scale));
+}
+
+/* v2.3.65：毛玻璃主题的隔断线——该主题面板是半透明白底且 secondary 为半透明白字（实测仅 1.00:1），
+   故单列深色线条，保证隔断在玻璃主题下依然清晰可辨。 */
+[data-theme='glass'] .msg-action-divider {
+  background: rgba(18, 16, 38, 0.55);
+}
+
+/* ===== 新手引导（v2.3.90，可跳过：添加第一个人物卡 → 开启第一个聊天）=====
+   遮罩用 4 块 .tutorial-mask 面板围出「spotlight 洞」，洞内的高亮元素保持可点击；
+   找不到目标元素时只渲染一整块遮罩 + 居中卡片（此时整屏不可点，仅卡片可交互）。
+   配色一律走主题 CSS 变量，14 套主题（明/暗/毛玻璃）均保持可读。 */
+.tutorial-root {
+  position: fixed;
+  inset: 0;
+  /* 高于 .modal-mask(10001)，避免被初始设置向导等弹窗压住；低于自定义光标层 */
+  z-index: 10002;
+  /* 关键：根层本身不吃鼠标事件，否则整屏（含 spotlight 洞）都会吞掉点击，高亮按钮将无法操作。
+     真正拦截事件的只有 .tutorial-mask（洞外区域）与 .tutorial-card。 */
+  pointer-events: none;
+}
+.tutorial-mask {
+  position: fixed;
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+}
+/* 整屏遮罩：仅「完成卡片」这一瞬间使用，其余情况都用围出 spotlight 洞的 4 块面板 */
+.tutorial-mask-full {
+  inset: 0;
+}
+/* 高亮环：只画边框，不吃鼠标事件，保证洞内按钮可点 */
+.tutorial-ring {
+  position: fixed;
+  border-radius: 10px;
+  border: 2px solid var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary), 0 4px 18px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  animation: tutorialRingPulse 1.6s ease-in-out infinite;
+}
+@keyframes tutorialRingPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px var(--color-primary), 0 4px 18px rgba(0, 0, 0, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 6px var(--color-primary), 0 4px 22px rgba(0, 0, 0, 0.45);
+  }
+}
+.tutorial-card {
+  position: fixed;
+  background: var(--color-panel);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-panel);
+  padding: 14px 16px 12px;
+  box-sizing: border-box;
+  /* 卡片自身可交互（按钮/关闭），洞外区域由遮罩面板拦截 */
+  pointer-events: auto;
+  animation: tutorialCardIn 0.18s ease-out;
+}
+.tutorial-card-center {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  /* 独立关键帧：保留 translate(-50%,-50%) 居中偏移（通用 tutorialCardIn 会把它覆盖掉） */
+  animation: tutorialCardInCenter 0.18s ease-out;
+}
+@keyframes tutorialCardInCenter {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+@keyframes tutorialCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.tutorial-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.tutorial-step {
+  font-size: calc(12px * var(--font-scale));
+  color: var(--color-text-secondary);
+}
+.tutorial-close {
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--color-text-secondary);
+  padding: 0 4px;
+  border-radius: 6px;
+}
+.tutorial-close:hover {
+  color: var(--color-text);
+  background: var(--color-hover);
+}
+.tutorial-title {
+  font-size: calc(15px * var(--font-scale));
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 6px;
+}
+.tutorial-body {
+  font-size: calc(13px * var(--font-scale));
+  color: var(--color-text);
+  line-height: 1.65;
+}
+.tutorial-hint {
+  margin-top: 6px;
+  font-size: calc(12px * var(--font-scale));
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+.tutorial-goto {
+  margin-top: 10px;
+  width: 100%;
+}
+.tutorial-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.tutorial-actions .tutorial-skip {
+  margin-right: auto;
+}
+.tutorial-done-emoji {
+  font-size: 34px;
+  text-align: center;
+  margin-bottom: 6px;
+}
+.tutorial-card-center .tutorial-title,
+.tutorial-card-center .tutorial-body {
+  text-align: center;
+}
+
+/* ===== 多媒体API 配置编辑器（TTS / ASR / 生图 / 生视频，v2.3.94 需求 7）=====
+   两处动效均已登记到 src/utils/animControl.ts 的 `theme` 分组（.media-cfg-card /
+   .media-cfg-body），受三档动效开关统一管控 —— 此处不得再出现裸 inline transition。*/
+.media-cfg-card {
+  transition: border-color var(--transition), background var(--transition);
+}
+.media-cfg-body {
+  animation: mediaCfgBodyIn 0.18s ease-out;
+}
+@keyframes mediaCfgBodyIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+/* ============================================================================
+   统计页三大板块（v2.3.94 需求 11）
+   ----------------------------------------------------------------------------
+   动效归属：以下带 transition/animation 的类名已全部登记到
+   `src/utils/animControl.ts` 的 **stats** 分组（.stats-pie-slice /
+   .stats-legend-row / .stats-fav-card / .stats-rank-row / .stats-role-pick-item），
+   可在「设置 → 高级动画设置 → 自定义」里独立关闭；
+   饼图的「从圆心顺时针拉开」是 rAF 内联补间，由 StatsView 里
+   isGroupEnabled(settings, 'stats') 门控（内联优先级高于 .anim-off 的 !important）。
+
+   配色：一律走 CSS 变量（utils/statsChart.ts 现场取色生成调色板），
+   故此处只写「用哪个变量」，不写死任何色值 —— 14 套主题均自动适配。
+   ========================================================================== */
+
+/* ---------- 通用容器 ---------- */
+.stats-section {
+  margin-bottom: 18px;
+}
+.stats-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 10px;
+  /* 标题色用主文字色而非 secondary：WCAG AA 下 12px 小字也能读 */
+  color: var(--color-text);
+}
+.stats-section-title .stats-title-hint {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.stats-empty {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  padding: 18px 0;
+  text-align: center;
+}
+
+/* ---------- 板块一：Token 饼图 ---------- */
+.stats-pie-wrap {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.stats-pie-box {
+  position: relative;
+  width: 200px;
+  height: 200px;
+  flex: 0 0 auto;
+  cursor: pointer;
+  /* 键盘可达：饼图可 Tab 聚焦、回车进入完整榜单 */
+}
+.stats-pie-box:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+  border-radius: 50%;
+}
+.stats-pie-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+}
+/* 扇区：悬停外扩（scale）与形变走 transform，过渡时长跟主题一致 */
+.stats-pie-slice {
+  transform-origin: 100px 100px;
+  transform: scale(1);
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+.stats-pie-slice.is-hover {
+  transform: scale(1.06);
+}
+.stats-pie-center-label {
+  font-size: 11px;
+  fill: var(--color-text-secondary);
+  text-anchor: middle;
+}
+.stats-pie-center-value {
+  font-size: 15px;
+  font-weight: 700;
+  fill: var(--color-text);
+  text-anchor: middle;
+}
+/* tooltip：面板色底 + 主文字色 + 描边，保证任意主题下对比度 ≥ AA */
+.stats-pie-tip {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+  background: var(--color-panel);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-panel);
+  padding: 6px 9px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stats-pie-tip .stats-tip-name {
+  font-weight: 700;
+  color: var(--color-text);
+}
+.stats-pie-tip .stats-tip-val {
+  color: var(--color-text-secondary);
+}
+/* 图例（饼图右侧） */
+.stats-legend {
+  flex: 1 1 200px;
+  min-width: 180px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.stats-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+.stats-legend-row:hover {
+  background: var(--color-hover);
+}
+.stats-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+.stats-legend-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stats-legend-val {
+  color: var(--color-text-secondary);
+  flex: 0 0 auto;
+}
+
+/* ---------- 完整榜单页（点击饼图 / 点击排行进入，带返回） ---------- */
+.stats-subpage-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.stats-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+  color: var(--color-text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+.stats-back-btn:hover {
+  background: var(--color-hover);
+}
+
+/* ---------- 板块二：好感度 / 陪伴时间排行 ---------- */
+.stats-rank-switch {
+  display: inline-flex;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.stats-rank-switch button {
+  padding: 4px 12px;
+  font-size: 12px;
+  border: none;
+  background: var(--color-panel);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.stats-rank-switch button.active {
+  background: var(--color-primary);
+  /* 用主题自带的 --color-primary-text（各主题都已按需配好对比色），
+     不硬编码 #fff —— 部分浅色主题的主色偏亮，白字会不可读 */
+  color: var(--color-primary-text, var(--color-text));
+}
+.stats-rank-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.stats-rank-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-panel-alt);
+  transition: background var(--transition);
+}
+.stats-rank-row:hover {
+  background: var(--color-hover);
+}
+.stats-rank-no {
+  width: 20px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  flex: 0 0 auto;
+}
+.stats-rank-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stats-rank-metrics {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  flex: 0 0 auto;
+}
+.stats-rank-metrics b {
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+/* ---------- 板块三：你最喜欢的人物（最突出，占空间最大） ---------- */
+.stats-fav-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-panel);
+  padding: 22px;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow-panel);
+  transition: border-color var(--transition), background var(--transition);
+}
+/* 主色描边强调（用 var() 跟随主题，不写死色值） */
+.stats-fav-card.is-set {
+  border-color: var(--color-primary);
+}
+.stats-fav-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--color-text);
+  margin-bottom: 14px;
+}
+.stats-fav-body {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.stats-fav-avatar {
+  width: 84px;
+  height: 84px;
+  border-radius: var(--radius);
+  background: var(--color-panel-alt);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 38px;
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+.stats-fav-info {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.stats-fav-name {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--color-text);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.stats-fav-gender {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0 8px;
+}
+.stats-fav-metrics {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  flex-wrap: wrap;
+}
+.stats-fav-metrics b {
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+/* 未设置时的加号：大号、主题主色，视觉上明确「点这里设置」 */
+.stats-fav-plus {
+  width: 84px;
+  height: 84px;
+  border-radius: var(--radius);
+  border: 2px dashed var(--color-primary);
+  background: var(--color-panel-alt);
+  color: var(--color-primary);
+  font-size: 40px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition), transform var(--transition);
+  flex: 0 0 auto;
+}
+.stats-fav-plus:hover {
+  background: var(--color-hover);
+}
+.stats-fav-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.stats-fav-signature {
+  margin-top: 12px;
+}
+.stats-fav-signature input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-input-bg, var(--color-panel-alt));
+  color: var(--color-text);
+  font-size: 13px;
+  font-family: inherit;
+}
+.stats-fav-signature input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+/* 性别选择 */
+.stats-fav-gender-pick {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.stats-fav-gender-pick button {
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+.stats-fav-gender-pick button.active {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+
+/* ---------- 人物选择弹层（模糊搜索 + 候选框） ---------- */
+.stats-role-pick-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+}
+.stats-role-pick {
+  width: min(440px, 92vw);
+  max-height: 78vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-panel);
+  animation: popupLinearIn 0.16s linear;
+  overflow: hidden;
+}
+.stats-role-pick-head {
+  padding: 14px 14px 8px;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.stats-role-pick-close {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.stats-role-pick-close:hover {
+  background: var(--color-hover);
+}
+.stats-role-pick-search {
+  padding: 0 14px 10px;
+}
+.stats-role-pick-search input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-input-bg, var(--color-panel-alt));
+  color: var(--color-text);
+  font-size: 13px;
+  font-family: inherit;
+}
+.stats-role-pick-search input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+/* 候选项框：面板自带 overflow-y（配合 MAX_SUGGESTIONS 与滚动条查看其余候选） */
+.stats-role-pick-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stats-role-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  text-align: left;
+  width: 100%;
+  color: var(--color-text);
+  transition: background var(--transition);
+}
+.stats-role-pick-item:hover {
+  background: var(--color-hover);
+}
+.stats-role-pick-item .stats-role-pick-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stats-role-pick-item mark {
+  background: var(--color-primary);
+  color: var(--color-primary-text, var(--color-text));
+  border-radius: 3px;
+  padding: 0 1px;
+}
+.stats-role-pick-meta {
+  padding: 0 14px 12px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+/* ============================================================================
+   人物音色绑定 / 音色自定义（v2.3.94 需求 8 / 9）
+   ----------------------------------------------------------------------------
+   放在角色编辑器的「消息音效」之后。颜色一律走 variables.css 的 CSS 变量，
+   保证 14 套主题都可读（不硬编码任何色值）。
+   ========================================================================== */
+.role-tts {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 8px);
+  background: var(--color-panel-alt);
+}
+.role-tts-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.role-tts-param {
+  flex: 1 1 220px;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.role-tts-param > label {
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--color-text-secondary);
+}
+/* 语速/音调滑块：拉宽到与旁边数值同排，滑块本体用主题主色，14 套主题都可辨识 */
+.role-tts input[type='range'] {
+  flex: 1;
+  min-width: 90px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+.role-tts input[type='range']:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+/* 「跟随全局」/ 数值：定宽，避免滑块拖动时文字宽度变化导致抖动 */
+.role-tts-num {
+  flex: 0 0 62px;
+  text-align: right;
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+/* 拉取结果提示：ok / warn（该提供商无列表端点，引导手填）/ error（网络或密钥问题） */
+.role-tts-note {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius, 8px);
+  font-size: calc(12px * var(--font-scale, 1));
+  border-left: 3px solid var(--color-border);
+  background: var(--color-panel);
+  color: var(--color-text-secondary);
+}
+.role-tts-note.ok { border-left-color: var(--color-success); color: var(--color-text); }
+.role-tts-note.warn { border-left-color: var(--color-warn); color: var(--color-text); }
+.role-tts-note.error { border-left-color: var(--color-danger); color: var(--color-danger); }
+
+/* ============================================================================
+   翻译弹窗 + 朗读（v2.3.94 需求 10）
+   ----------------------------------------------------------------------------
+   主窗与快捷小窗共用 .tr-* 这套类名，故样式一次定义、两处生效。
+   颜色全部走 CSS 变量（14 套主题都可读）；朗读中的状态用 --color-primary 描边提示。
+   ========================================================================== */
+.tr-modal {
+  max-width: 560px;
+  width: 90%;
+}
+.tr-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.tr-sec-label {
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--color-text-secondary);
+}
+.tr-sec-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+/* 朗读 / 重新生成按钮：图标 + 文字标签并存，保证不靠颜色也能区分（WCAG AA） */
+.tr-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  font-size: calc(12px * var(--font-scale, 1));
+  line-height: 1.4;
+}
+.tr-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+/* 可删除段落列表 */
+.tr-seg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--color-panel-alt);
+  border-radius: var(--radius, 8px);
+}
+.tr-seg {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--radius, 8px);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+}
+.tr-seg-text {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(13px * var(--font-scale, 1));
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text);
+}
+/* 删除按钮：常态低调，hover / focus 才显现对撞色，避免一列红叉视觉噪音 */
+.tr-seg-del {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius, 8px);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.tr-seg-del:hover:not(:disabled) {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+  background: var(--color-panel);
+}
+.tr-seg-del:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.tr-seg-del:disabled { opacity: 0.45; cursor: not-allowed; }
+/* 底部操作行：提示文案 + 撤销 + 翻译按钮 */
+.tr-foot-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.tr-foot-row .muted { flex: 1; min-width: 120px; font-size: calc(11px * var(--font-scale, 1)); }
+.tr-result {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px;
+  background: var(--color-panel);
+  border-radius: var(--radius, 8px);
+  font-size: calc(13px * var(--font-scale, 1));
+  color: var(--color-text);
+}
+.tr-err {
+  padding: 8px;
+  border-radius: var(--radius, 8px);
+  background: var(--color-panel);
+  border-left: 3px solid var(--color-danger);
+  color: var(--color-danger);
+  font-size: calc(13px * var(--font-scale, 1));
+  word-break: break-word;
+}
+/* 合成中提示条（不播放动画，只做静态提示 —— 避免引入不受动画开关管控的动效） */
+.tr-busy {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius, 8px);
+  background: var(--color-panel-alt);
+  border-left: 3px solid var(--color-primary);
+  color: var(--color-text-secondary);
+  font-size: calc(12px * var(--font-scale, 1));
+}
+/* 正在朗读的那一条：aria-pressed=true 时给主色描边 + 底色（不依赖颜色单独传达状态，
+   因为按钮同时有 aria-pressed 与文字标签，色弱用户也能区分）。 */
+.tr-btn[aria-pressed='true'] {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-panel);
 }

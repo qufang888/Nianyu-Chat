@@ -4,64 +4,99 @@
 
 ## 功能覆盖
 
-- 多模型接入：OpenAI / DeepSeek / 自定义兼容端点（OpenAI 格式）
-- 数字人（角色）管理：完整字段（性格/背景/外貌/世界观/规则/示例/开场白等）+ **AI 自动补全简介**
-- 单聊与群聊：群内多数字人依次生成回复；输入 `@` 指定成员优先回复
-- 好感度系统：关键词情感分析动态调整，注入 System Prompt 影响语气，聊天页浮层提示
-- Token 实时统计：每条消息显示消耗，聊天页与全局累计实时更新
-- 图片发送：选择本地图片 → 复制到用户数据目录 → 缩略图 + 点击全屏预览；图片随备份打包
-- 设置页：API Key 管理、默认模型、主题切换
-- 一键备份 / 还原：压缩整个 `data` 目录（含聊天数据、图片、设置），还原后自动重启
-- 多主题系统：微信经典 / 毛玻璃 / 极简暗色 / 活力多彩，纯 CSS 变量驱动，随设置持久化
-- **模型配置管理 + 角色独立绑定模型**：设置页「模型管理」可增删改模型配置（提供商 OpenAI/DeepSeek/Anthropic/自定义、Base URL、Key、模型 ID、上下文长度、温度、启停）；每个角色在「交互设定」中绑定一个已启用模型；单聊/群聊均按各自绑定配置调用，群内多角色可并行用不同模型回复；发送前校验模型失效并阻止；聊天窗显示「🧠 模型名」标签。
+- **多模型接入**：OpenAI / DeepSeek / Anthropic / Anthropic 兼容 / Gemini / OpenAI 兼容 / 本地
+- **多 API 配置**：文本模型、**TTS / ASR / 生图 / 生视频**都能添加多条配置并切换「当前启用项」；
+  老版本只配了一组的用户升级后自动保留为第一个配置项
+- **模型配置管理 + 角色独立绑定模型**：每个模型可设基础参数（上下文长度、maxTokens 等）与
+  高级配置（temperature / topP / topK / frequency & presence penalty / 自定义 Header / 自定义 Body）；
+  每个角色在「交互设定」中绑定一个已启用模型；**所有对模型的调用（含翻译、记忆提炼、模型对比等
+  内部功能）都遵守该模型的配置参数**
+- **数字人（角色）管理**：完整字段（性格/背景/外貌/世界观/规则/示例/开场白等）+ **AI 自动补全简介**
+- **单聊与群聊**：群内多数字人依次生成回复；输入 `@` 指定成员优先回复；支持导演模型智能选人与轮询两种调度
+- **好感度与情绪系统**：关键词情感分析动态调整，注入 System Prompt 影响语气；AI 判定关系值
+- **记忆系统**：AI 自动提炼记忆 + 手动「一键记忆」；按角色 + 可选聊天**双层作用域**，可按聊天独立开关；
+  记忆面板会说明「为什么记忆是空的」
+- **消息分支**：右键任意消息气泡 → **从此处开启新对话**，复制该消息及之前的消息与记忆，新对话独立且自动开启记忆隔离
+- **选取文字复制**：气泡右键弹出文本框，拖动选取后复制到剪贴板
+- **语音**：TTS 朗读（**可按人物绑定音色**、单独调语速/音调、支持试听与音频缓存复用）、ASR 语音输入；
+  **翻译结果可直接朗读**（原文与译文分别可读，支持重新生成音频，不会重叠播放）
+- **Token 实时统计**：每条消息显示消耗；统计页提供 **Token 饼状图排名**、好感度与陪伴时间排行、最喜爱人物
+- **统计界面**：Token 饼状图（<10% 并入「其他」、点图进完整列表、同分按字母序、顺时针拉开动画、
+  悬停放大、**配色随主题变化**）／好感度与陪伴时间排行（三级 tiebreak）／
+  **最喜爱人物**（含头像、陪伴时间、性别、个性签名，可从聊天卡片右键快捷设置）
+- **搜索**：全局搜索规范——候选项最多 5 个、支持模糊搜索、按关联度排序、点击跳转并高亮闪动、可滚动查看其余
+- **不常用聊天文件夹**：超过设定天数未聊自动归入；**置顶聊天不自动移入但可手动移入**；
+  移入后置顶状态消失、移出不恢复
+- **空闲主动回复**：可设置「发满几条主动消息才开始等你回复」，也可完全关闭该等待机制
+- **世界书 / 规则库 / 技能（Skill）**：含内置默认技能（狗头军师）
+- **多主题系统**：**14 套主题**（微信经典 / 毛玻璃 / 极简暗色 / 活力多彩 / 天青 / 星河 / 松林 /
+  余烬 / 霜白 / 玫瑰 / 赛博 / 石墨 / 靛蓝 / 沙丘），纯 CSS 变量驱动，随设置持久化
+- **动画三档控制**：全部开启 / 全部关闭 / 自定义（14 个可独立开关的动画分组）
+- **一键备份 / 还原**：压缩整个数据目录（含聊天数据、图片、设置、记忆）
+- **多语言**：简体中文 / 繁體中文 / English / 日本語 / 한국어 / Deutsch / Français / Español /
+  Português / Русский
+- **桌面悬浮球 / 快捷聊天小窗**：小窗与主窗机制同步
+- **请求队列可视化**：主界面右缘贴边面板，实时展示各模型 QPS 队列并支持拖动调序
 
 ## 目录结构
 
 ```
-nianyu-client/
+Nianyu-Chat/
 ├─ electron/            # 主进程
-│  ├─ main.ts          # 窗口 + IPC + 聊天/好感度/备份逻辑
-│  ├─ preload.ts       # 类型化上下文桥
-│  ├─ db.ts            # DataManager（纯 JS JSON 存储，零原生编译）
-│  ├─ ai.ts            # AI 调用（兼容 OpenAI/DeepSeek）
-│  └─ backup.ts        # 备份/还原（adm-zip）
-├─ src/                # 渲染进程（React）
+│  ├─ main.ts           # 窗口 + IPC + 聊天/好感度/记忆/主动消息逻辑
+│  ├─ preload.ts        # 类型化上下文桥
+│  ├─ db.ts             # DataManager（纯 JS JSON 存储，零原生编译）
+│  ├─ ai.ts             # AI 调用（OpenAI / Anthropic / Gemini 兼容）+ 语音/生图/生视频
+│  ├─ proactive.ts      # 主动消息调度
+│  ├─ awaitingReply.ts  # 「等你回复才发下一条」等待态状态机
+│  └─ backup.ts         # 备份/还原（adm-zip）
+├─ src/                 # 渲染进程（React）
 │  ├─ App.tsx
 │  ├─ ipc.ts
-│  ├─ theme/           # 主题 Context + variables.css（4 套主题）
-│  ├─ components/      # 侧栏/列表/聊天窗/角色编辑器/群组/设置
-│  └─ utils/markdown.tsx
+│  ├─ theme/            # 主题 Context + variables.css（14 套主题）
+│  ├─ components/       # 侧栏/列表/聊天窗/角色编辑器/群组/设置/统计/资源库
+│  ├─ utils/            # 模糊搜索、饼图几何、不常用聊天判定、伪流式、动画控制
+│  └─ i18n/             # 多语言（translations.ts 的 zh/en + 8 个 locale JSON）
+├─ scripts/             # 验证脚本（见下）
 ├─ package.json / tsconfig*.json / vite.config.ts
 ```
 
 ## 运行（零原生编译）
 
-存储已改为纯 JS JSON 文件，无需 `better-sqlite3` 编译，也无需 Python / VS 编译工具。
+存储为纯 JS JSON 文件，无需 `better-sqlite3` 编译，也无需 Python / VS 编译工具。
 
 ```bash
 npm install          # 安装依赖（仅下载，无编译）
 npm run build        # 编译主进程 + 构建界面（一次）
-npm start            # 启动念语（单条命令即可打开应用窗口）
+npm start            # 启动念语
 ```
 
 > 进阶热更新（改代码自动刷新）：开两个终端，A 运行 `npm run dev`（Vite），B 运行 `set NIANYU_DEV=1 && npm start`。
 
-打包：
+## 验证脚本
+
+关键机制均配可运行断言（`scripts/`，共 200+ 条），改动后建议回归：
 
 ```bash
-npm run build        # 编译主进程 + 构建渲染进程
+node scripts/verify-media-migration.mjs          # 多 API 配置迁移（老配置不丢）
+node scripts/verify-fork-from-message.mjs        # 消息分支的消息/记忆截取口径
+node scripts/verify-awaiting-threshold.mjs       # 主动消息等待阈值
+node scripts/verify-model-config-compliance.mjs  # 审计有无绕过模型配置的调用
+node scripts/verify-search-suggest.mjs           # 搜索规范（最多5条/模糊/关联度）
+node scripts/verify-inactive-folder.mjs          # 不常用聊天判定与置顶处理
+node scripts/verify-stats-chart.mjs              # 饼图几何与 WCAG 对比度
 ```
 
 ## 使用要点
 
-1. 打开「设置 - 模型管理」新增模型配置（选提供商、填 Base URL / Key / 模型 ID / 温度，并启用）。
-2. 「通讯录」点击 ＋ 新建数字人，在「交互设定」中为其绑定一个模型，可填基本信息后点 **✨ AI 补全简介**。
-3. 点击角色「聊天」进入单聊；「聊天」页 ＋ 可建群聊并添加多名数字人。
-4. 群聊输入 `@` 弹出成员列表，被 @ 的成员会优先回复。
-5. 输入框 🖼️ 发送本地图片。
-6. 「设置」内可切换 4 套主题、一键备份与还原。
+1. **设置 → 模型设置**里新增模型配置（提供商、Base URL / Key、模型 ID、采样参数），并启用。
+2. **通讯录**点 ＋ 新建数字人，在「交互设定」中绑定模型；「角色语音」区可绑定音色与语速音调。
+3. 点角色「聊天」进单聊；聊天页 ＋ 可建群聊。
+4. **记忆**：聊天工具栏「⋯ 其他操作」里打开「🧠 长记忆」，该聊天才会自动提炼记忆；
+   也可随时选中文字右键「一键记忆」立即写入。
+5. **统计**：左侧栏 📊 查看 Token 排名 / 好感度与陪伴时间 / 最喜爱人物。
 
-数据位置：`%APPDATA%/念语/data`（聊天记录、角色、好感度、图片、设置均在此）。
+数据位置：默认 `文档/念语数据/`（可在「设置 → 窗口 → 数据路径」自定义）。
 
 ## 打包为安装包
 
@@ -70,22 +105,31 @@ npm run build
 CSC_LINK="" CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist
 ```
 
-产物：`release/念语 Setup 1.0.0.exe`（约 77MB）。当前为未签名构建，安装时 Windows 会提示未知发布者；如需消除告警需另行配置代码签名证书（见下方说明）。
+产物：`release/` 下的 NSIS 安装包。当前为未签名构建，安装时 Windows 会提示未知发布者；
+如需消除告警需另行配置代码签名证书。
 
 ## GitHub 自动构建与发布
 
-仓库已配置 GitHub Actions（`.github/workflows/build.yml`）。在 `main` 分支推送 `v*` 标签后，自动在 Windows runner 上构建并发布到 GitHub Release：
+仓库已配置 GitHub Actions。在 `main` 分支推送 `v*` 标签后，自动在 Windows runner 上构建并发布到 GitHub Release：
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v2.3.94
+git push origin v2.3.94
 ```
 
-> 说明：当前工作流沿用本地无签名构建（`CSC_LINK=""`）。若已购代码签名证书，将证书与密码写入仓库 Secrets（`CSC_LINK` / `CSC_KEY_PASSWORD`）并修改工作流对应环境变量即可启用签名。
+> 说明：当前工作流沿用本地无签名构建（`CSC_LINK=""`）。若已购代码签名证书，将证书与密码写入仓库
+> Secrets（`CSC_LINK` / `CSC_KEY_PASSWORD`）并修改工作流对应环境变量即可启用签名。
 
 ## Gitee 镜像（国内可达）
 
-为提升国内下载稳定性，可在 GitHub 仓库 Secrets 配置 `GITEE_TOKEN`、`GITEE_REPO`、`GITEE_PRIVATE_KEY`，Action 会自动将代码与标签同步到 Gitee。Release 安装包资产建议在 Gitee 手动上传或后续补全自动化同步。
+为提升国内下载稳定性，可在 GitHub 仓库 Secrets 配置 `GITEE_TOKEN`、`GITEE_REPO`、`GITEE_PRIVATE_KEY`，
+Action 会自动将代码与标签同步到 Gitee。
+
+## 文档
+
+- `使用说明.md` —— 完整使用文档（软件内「设置 → 内置使用指南」为其同步版）
+- `版本更新记录.md` —— 每个版本改了什么
+- `硬编码清单.md` —— 代码里的硬编码值清单（超时 / 阈值 / 上限等）
 
 ## 许可证
 

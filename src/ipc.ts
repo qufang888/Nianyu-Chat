@@ -12,7 +12,16 @@ import type {
   Rule,
   MemoryEntry,
   Plugin,
+  Skill,
+  SkillImportResult,
   ProbeOptions,
+  UpdateStatus,
+  QueueSnapshot,
+  QuickImportResult,
+  SceneImageStatusEvent,
+  MomentMediaStatusEvent,
+  VoiceListResult,
+  ListVoicesOptions,
 } from './types';
 import type { ImportCharacterResult } from './utils/characterCard';
 export type { ImportCharacterResult };
@@ -59,8 +68,19 @@ export interface NianyuAPI {
   }) => Promise<{ userMessage: ChatMessage; members: { streamId: string; roleId: string; roleName: string }[] }>;
   // 请求限速（QPS）状态查询
   rateInfo: (modelId: string) => Promise<{ enabled: boolean; limit: number; waitMs: number }>;
+  // 请求队列（v2.3.46）：贴边排队面板
+  queueSnapshot: () => Promise<QueueSnapshot>;
+  queueReorder: (key: string, orderedIds: string[]) => Promise<{ ok: boolean }>;
+  onQueueChanged: (cb: (data: QueueSnapshot) => void) => () => void;
   // 当前聊天参与限速的代表模型 id（单聊=角色模型；群聊=默认模型）
   getChatModelId: (chatType: string, chatId: string) => Promise<string>;
+  // 当前聊天生效模型配置（单聊=角色绑定/默认模型，已应用全局参数回退；群聊=null）
+  getChatModel: (chatType: string, chatId: string) => Promise<ModelConfig | null>;
+  // MCP 服务器管理
+  mcpStatus: () => Promise<any[]>;
+  mcpAdd: (p: { key: string; config: { command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean } }) => Promise<{ ok: boolean }>;
+  mcpRemove: (key: string) => Promise<{ ok: boolean }>;
+  mcpToggle: (key: string, enabled: boolean) => Promise<{ ok: boolean }>;
   // 翻译文本（右键菜单翻译）
   translate: (text: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
   // 打断生成：中止某聊天当前流式输出（已生成内容保留）
@@ -116,9 +136,12 @@ export interface NianyuAPI {
   // 群聊选人回复：主进程广播「请选择下一位发言者」
   onNeedSpeaker: (cb: (data: { chatId: string; members: { id: string; name: string; avatar?: string }[] }) => void) => () => void;
 
-  // 消息操作
-  recallMessage: (msgId: number) => Promise<{ ok: boolean; deletedMems: number }>;
-  rollbackMessages: (p: { chatType: string; chatId: string; fromMsgId: number }) => Promise<{ deletedMsgs: number; deletedMems: number }>;
+  // 消息操作（v2.3.63：移除 recallMessage，新增 deleteMessageOnly / rollbackForEdit / aiAction）
+  deleteMessageOnly: (msgId: number) => Promise<{ ok: boolean }>;
+  rollbackMessages: (p: { chatType: string; chatId: string; fromMsgId: number }) => Promise<{ deletedMsgs: number; deletedMems: number; deletedMoments: number; deletedNodes: number }>;
+  rollbackForEdit: (p: { chatType: string; chatId: string; fromMsgId: number }) => Promise<{ deletedMsgs: number; deletedMems: number; deletedMoments: number; deletedNodes: number }>;
+  // 续写 / 重写 / AI 代写回复（replyForUser 只回填输入框，不落库）
+  aiAction: (p: { chatType: string; chatId: string; action: 'continue' | 'rewrite' | 'replyForUser' }) => Promise<{ ok: boolean; content?: string; error?: string; message?: any }>;
   // 快捷记忆（选中文本一键存入）
   addQuickMemory: (p: { roleId: string; content: string }) => Promise<any>;
 
@@ -145,6 +168,14 @@ export interface NianyuAPI {
   onIdleActivity: (cb: (e: any, data: any) => void) => () => void;
   offIdleActivity: (cb: (e: any, data: any) => void) => void;
   onIdleTick: (cb: (e: any, data: Record<string, number>) => void) => () => void;
+  // ===== v2.3.93：主动消息「等你回复」状态 =====
+  /** 查询该聊天是否处于等待用户回复状态（开关 idleCooldownUntilReply 关闭时恒 false） */
+  isAwaitingReply: (chatType: string, chatId: string) => Promise<boolean>;
+  /** 「我不回复」：与用户真的回复完全等价地解除等待，计时按「刚回复过」重新开始 */
+  skipAwaitingReply: (chatType: string, chatId: string) => Promise<{ ok: boolean; wasAwaiting: boolean }>;
+  /** 等待态变化广播（主进程驱动，多窗口同步刷新提示与按钮） */
+  onAwaitingReply: (cb: (e: any, data: { chatKey: string; awaiting: boolean; reason?: string }) => void) => () => void;
+  offAwaitingReply: (cb: (e: any, data: any) => void) => void;
   onRoleMood: (cb: (e: any, data: any) => void) => () => void;
   offRoleMood: (cb: (e: any, data: any) => void) => void;
   // 关系值（bond）变更广播：一端调整，主窗/小窗同步刷新展示
@@ -181,6 +212,10 @@ export interface NianyuAPI {
   addStoryNode: (chatType: string, chatId: string, msgId: number, title: string) => Promise<number>;
   listStoryNodes: (chatType: string, chatId: string) => Promise<any[]>;
   removeStoryNode: (id: number) => Promise<void>;
+  renameStoryNode: (id: number, title: string) => Promise<void>;
+  forkChatFromNode: (chatType: string, chatId: string, nodeId: number) => Promise<{ chat_type: string; chat_id: string; name: string }>;
+  // v2.3.94 需求 1：从任意消息分叉新对话
+  forkChatFromMessage: (chatType: string, chatId: string, msgId: number) => Promise<{ chat_type: string; chat_id: string; name: string }>;
   addMoment: (roleId: string, content: string, images: string[], scheduledAt?: string | null, selfRoleId?: string) => Promise<number>;
   listMoments: (roleId?: string, includeUnpublished?: boolean, selfRoleId?: string, favoritedOnly?: boolean) => Promise<any[]>;
   removeMoment: (id: number) => Promise<void>;
@@ -202,10 +237,20 @@ export interface NianyuAPI {
   // 生视频进度/完成广播（主窗 + 小窗悬浮气泡订阅）
   onVideoProgress: (cb: (e: any, data: { chatType: string; chatId: string; prompt: string; percent: number; status?: string }) => void) => () => void;
   onVideoDone: (cb: (e: any, data: { chatType: string; chatId: string; prompt: string; ok: boolean; imagePath?: string; error?: string }) => void) => () => void;
+  // ===== 异步场景生图状态提醒（v2.3.81）=====
+  // 主进程在异步场景生图的开始 / 成功 / 失败节点广播；主界面与小窗都订阅，
+  // 用于显示「正在生图中…」内联状态条并对成功失败给出提醒。返回退订函数。
+  onSceneImageStatus: (cb: (e: any, data: SceneImageStatusEvent) => void) => () => void;
+  offSceneImageStatus: (cb: (e: any, data: any) => void) => void;
+  // ===== 朋友圈自动配图 / 配视频状态提醒（v2.3.88）=====
+  // 主进程在朋友圈自动配图 / 配视频的开始 / 成功 / 失败节点广播；主界面朋友圈页（MomentsView）订阅，
+  // 在朋友圈页内弹站内 Toast，用户不在该页时由主进程投递后台提醒卡片（cardShown 去重）。返回退订函数。
+  onMomentMediaStatus: (cb: (e: any, data: MomentMediaStatusEvent) => void) => () => void;
+  offMomentMediaStatus: (cb: (e: any, data: any) => void) => void;
   saveImageMemory: (p: { roleId: string; imagePath: string; note?: string }) => Promise<any>;
   clearChatMessages: (chatType: string, chatId: string, withMemories: boolean) => Promise<{ deletedMsgs: number; deletedMems: number }>;
   syncAutoChat: (p: { chatId: string; action: 'start' | 'stop' }) => Promise<void>;
-  syncMessages: (p: { chatType: string; chatId: string; action: 'cleared' | 'recalled' | 'rolledBack' }) => Promise<void>;
+  syncMessages: (p: { chatType: string; chatId: string; action: 'cleared' | 'deleted' | 'rolledBack' }) => Promise<void>;
   onAutoChatSync: (cb: (data: { chatId: string; action: 'start' | 'stop' }) => void) => () => void;
   onMessagesSync: (cb: (data: { chatType: string; chatId: string; action: string }) => void) => () => void;
   onStreamRoundDone: (cb: (data: { chatId: string; chatType: string }) => void) => () => void;
@@ -234,6 +279,12 @@ export interface NianyuAPI {
   getGlobalTokens: () => Promise<number>;
   getRoleStats: () => Promise<RoleStat[]>;
   getModelStats: () => Promise<{ modelId: string; name: string; tokens: number; calls: number }[]>;
+  // v2.3.94 需求 11：陪伴时长（上报增量，主进程累加 —— 主窗/小窗同 key 不互相覆盖）
+  addCompanionMs: (key: string, deltaMs: number) => Promise<number>;
+  getCompanionMap: () => Promise<Record<string, number>>;
+  getCompanionByRole: () => Promise<Record<string, number>>;
+  /** 会话 → 角色 id（单聊专用；群聊返回空串。复制出的单聊由主进程解chatSessions.role_id） */
+  resolveChatRoleId: (chatType: string, chatId: string) => Promise<string>;
 
   getSettings: () => Promise<AppSettings>;
   saveSettings: (patch: Partial<AppSettings>) => Promise<AppSettings>;
@@ -244,6 +295,10 @@ export interface NianyuAPI {
   pickImage: () => Promise<string[] | null>;
   getImage: (path: string) => Promise<string | null>;
   saveImage: (dataUrl: string) => Promise<string | null>;
+  // 拖拽文件取本机路径（Electron 32 起 File.path 已移除，经 preload webUtils）
+  getPathForFile: (file: File) => string;
+  // 快速导入（v2.3.51）：拖入窗口的文件路径批量导入
+  importDroppedFiles: (paths: string[]) => Promise<QuickImportResult[]>;
 
   pickTextFile: (filters?: { name: string; extensions: string[] }[]) => Promise<{ path: string; content: string } | null>;
   // ===== 自定义音效 =====
@@ -253,15 +308,17 @@ export interface NianyuAPI {
   importCharacterCard: () => Promise<ImportCharacterResult | null>;
 
   pickBackupTarget: () => Promise<string | null>;
-  createBackup: (destPath: string) => Promise<void>;
+  createBackup: (destPath: string) => Promise<string>;
   pickRestoreFile: () => Promise<string | null>;
   restoreBackup: (zipPath: string) => Promise<void>;
   pickBackupDir: () => Promise<string | null>;
   exportBackup: () => Promise<string>;
+  peekBackupVersion: (zipPath: string) => Promise<string | null>;
 
   listModels: (cfg: ModelConfig) => Promise<string[]>;
   testModel: (cfg: ModelConfig) => Promise<{ ok: boolean; message: string }>;
-  detectModel: (id: string, opts?: ProbeOptions) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
+  detectModel: (id: string, opts?: ProbeOptions, qpsOverride?: number) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
+  detectModelConfig: (cfg: Partial<ModelConfig>, opts?: ProbeOptions) => Promise<{ ok: boolean; message: string; config: ModelConfig | null; undetected?: string[] }>;
   detectAllModels: (opts?: ProbeOptions) => Promise<{
     results: Array<{
       id: string;
@@ -278,8 +335,21 @@ export interface NianyuAPI {
   }>;
 
   transcribeAudio: (data: Uint8Array, format?: string, language?: string) => Promise<string>;
-  textToSpeech: (text: string, roleId?: string) => Promise<string>;
+  textToSpeech: (text: string, roleId?: string, forceRegenerate?: boolean) => Promise<string>;
+  debugStart: () => Promise<{ ok: boolean; already?: boolean; error?: string }>;
+  debugTrigger: (kind: string, chatType: string, chatId: string) => Promise<{ ok: boolean; message?: string; error?: string }>;
+  debugEnd: () => Promise<{ ok: boolean; restored?: number; error?: string; report?: Record<string, { time: string; message: string }[]> }>;
+  /**
+   * 拉取 TTS 音色列表（旧签名，返回 string[]）。
+   * 内部走 preload 的带参版本但不传 opts，故主进程走「当前启用配置 → 全局扁平字段」的老路径，
+   * 行为与 v2.3.22 完全一致，设置页等旧调用点零改动。
+   */
   listVoices: () => Promise<string[]>;
+  /**
+   * 拉取 TTS 音色列表（需求 8：按人物绑定的 TTS 配置拉取），返回带失败原因的结构化结果。
+   * 与 listVoices 的区别仅在「能按配置 id 拉」与「能区分失败原因」，二者共用同一个 IPC。
+   */
+  listVoicesDetailed: (opts?: ListVoicesOptions) => Promise<VoiceListResult>;
 
   miniOpen: (p?: {
     initialChat?: { chatType: string; chatId: string; isObserverPrivate?: boolean };
@@ -333,6 +403,25 @@ export interface NianyuAPI {
   removePlugin: (id: string) => Promise<{ ok: boolean }>;
   togglePlugin: (id: string, enabled: boolean) => Promise<{ ok: boolean; plugin?: Plugin }>;
   callPluginTool: (pluginId: string, toolName: string, arg: string) => Promise<{ ok: boolean; text?: string }>;
+  // ===== 技能（v2.3.92；SKILL.md 形态，纯提示词注入，不执行任何脚本）=====
+  importSkill: (content: string, fileName: string) => Promise<SkillImportResult>;
+  listSkills: () => Promise<Skill[]>;
+  removeSkill: (id: string) => Promise<{ ok: boolean }>;
+  toggleSkill: (id: string, enabled: boolean) => Promise<{ ok: boolean }>;
+  /** v2.3.93：把内置技能恢复为随念语附带的版本（保留启停状态；已删除则重新种入） */
+  restoreBuiltinSkill: (id: string) => Promise<{ ok: boolean }>;
+  /** v2.3.93：已被用户删除、但仍可一键恢复的内置技能 */
+  listDismissedBuiltins: () => Promise<{ id: string; name: string; description: string }[]>;
+
+  // ===== 软件更新（v2.3.45）=====
+  checkUpdate: (manual?: boolean) => Promise<UpdateStatus>;
+  updateStatus: () => Promise<UpdateStatus>;
+  downloadUpdate: () => Promise<UpdateStatus>;
+  openUpdateFolder: () => Promise<boolean>;
+  installUpdate: () => Promise<boolean>;
+  openReleasePage: () => Promise<boolean>;
+  dismissUpdate: (version: string) => Promise<boolean>;
+  onUpdateStatus: (cb: (e: any, data: UpdateStatus) => void) => () => void;
 
   // ===== 确认对话框 =====
   showConfirm?: (message: string, title?: string) => Promise<boolean>;
@@ -349,6 +438,9 @@ export interface NianyuAPI {
   ballCloseSession: () => void; // 本次关闭悬浮球（不持久化，重启恢复）
   ballOpenChat: (chat: { chatType: string; chatId: string; name?: string }) => void; // 悬浮球面板点击聊天 → 呼出对应小窗
   setActiveChat: (type: string, id: string) => void; // 通知主进程当前聊天（主动消息未读判断）
+  // v2.3.88：上报主窗当前一级视图（'chats' | 'contacts' | ... | 'moments'）。
+  // 供朋友圈自动配图 / 配视频的状态提醒判断「用户此刻是否正停在朋友圈页」。
+  setActiveView: (view: string) => void;
 
   // ===== 主进程错误推送 =====
   onAppError?: (cb: (data: { message: string; cause: string; solution: string; lang: string }) => void) => () => void;
@@ -373,6 +465,14 @@ export interface NianyuAPI {
 
 const raw = (window as any).api as NianyuAPI;
 
+/**
+ * raw 上挂的是 preload 的实现（带 opts 的重载），但本文件的 NianyuAPI 是**渲染层**契约
+ * （listVoices 无参）。这里单独取出带参版本，避免用渲染层签名去调 preload。
+ */
+const rawListVoices = (raw as unknown as {
+  listVoices: (opts?: ListVoicesOptions) => Promise<string[] | VoiceListResult>;
+}).listVoices.bind(raw);
+
 // 外部注入的 showConfirm 前置钩子（sound.ts 初始化时注册，避免循环依赖）
 export let _beforeConfirm: (() => void) | null = null;
 export function setBeforeConfirm(fn: () => void): void { _beforeConfirm = fn; }
@@ -382,10 +482,48 @@ export const api: NianyuAPI = {
   getGlobalTokens: () => raw.getGlobalTokens(),
   getRoleStats: () => raw.getRoleStats(),
   getModelStats: () => raw.getModelStats(),
+  // v2.3.94 需求 11：陪伴时长心跳转发（增量语义，见 preload 注释）
+  addCompanionMs: (key: string, deltaMs: number) => raw.addCompanionMs(key, deltaMs),
+  getCompanionMap: () => raw.getCompanionMap(),
+  getCompanionByRole: () => raw.getCompanionByRole(),
+  resolveChatRoleId: (chatType: string, chatId: string) => raw.resolveChatRoleId(chatType, chatId),
   ballOpenChat: (chat) => raw.ballOpenChat(chat),
   rateInfo: (modelId) => raw.rateInfo(modelId),
+  queueSnapshot: () => raw.queueSnapshot(),
+  queueReorder: (key, orderedIds) => raw.queueReorder(key, orderedIds),
+  onQueueChanged: (cb) => raw.onQueueChanged(cb),
+  // v2.3.81：异步场景生图三态订阅（started / success / failed）
+  onSceneImageStatus: (cb) => raw.onSceneImageStatus(cb),
   getChatModelId: (chatType, chatId) => raw.getChatModelId(chatType, chatId),
+  getChatModel: (chatType, chatId) => raw.getChatModel(chatType, chatId),
+  mcpStatus: () => raw.mcpStatus(),
+  mcpAdd: (p) => raw.mcpAdd(p),
+  mcpRemove: (key) => raw.mcpRemove(key),
+  mcpToggle: (key, enabled) => raw.mcpToggle(key, enabled),
+  // ===== 技能（v2.3.92）=====
+  importSkill: (content, fileName) => raw.importSkill(content, fileName),
+  listSkills: () => raw.listSkills(),
+  removeSkill: (id) => raw.removeSkill(id),
+  toggleSkill: (id, enabled) => raw.toggleSkill(id, enabled),
+  restoreBuiltinSkill: (id) => raw.restoreBuiltinSkill(id),
+  listDismissedBuiltins: () => raw.listDismissedBuiltins(),
   translate: (text) => raw.translate(text),
+  // ===== 音色列表（v2.3.94 需求 8）=====
+  // listVoices 不传 opts → 主进程返回 string[]，这里原样透出（旧调用点零改动）。
+  listVoices: async () => {
+    const r = await rawListVoices();
+    // 兼容：即便主进程返回了结构化结果（旧调用点不会，但类型上仍需收敛），也只取 voices
+    return Array.isArray(r) ? r : r?.voices || [];
+  },
+  // listVoicesDetailed 传 opts → 主进程返回带 reason 的结果，供 UI 区分「无列表端点」与「网络/密钥错误」
+  listVoicesDetailed: async (opts) => {
+    const r = await rawListVoices(opts);
+    if (Array.isArray(r)) {
+      // 主进程走了旧路径（理论上不会，因为传了 opts）→ 兜底成 ok 结果
+      return { voices: r, ok: r.length > 0, reason: r.length ? 'ok' : 'empty' } as VoiceListResult;
+    }
+    return r;
+  },
   interruptStream: (chatId) => raw.interruptStream(chatId),
   copyChat: (type, id) => raw.copyChat(type, id),
   copyRole: (id, includeChats) => raw.copyRole(id, includeChats),
@@ -401,6 +539,10 @@ export const api: NianyuAPI = {
   addStoryNode: (chatType, chatId, msgId, title) => raw.addStoryNode(chatType, chatId, msgId, title),
   listStoryNodes: (chatType, chatId) => raw.listStoryNodes(chatType, chatId),
   removeStoryNode: (id) => raw.removeStoryNode(id),
+  renameStoryNode: (id, title) => raw.renameStoryNode(id, title),
+  forkChatFromNode: (chatType, chatId, nodeId) => raw.forkChatFromNode(chatType, chatId, nodeId),
+  // v2.3.94 需求 1：从任意消息分叉新对话
+  forkChatFromMessage: (chatType, chatId, msgId) => raw.forkChatFromMessage(chatType, chatId, msgId),
   addMoment: (roleId, content, images, scheduledAt, selfRoleId) => raw.addMoment(roleId, content, images, scheduledAt, selfRoleId),
   listMoments: (roleId, includeUnpublished, selfRoleId, favoritedOnly) => raw.listMoments(roleId, includeUnpublished, selfRoleId, favoritedOnly),
   removeMoment: (id) => raw.removeMoment(id),
@@ -413,14 +555,18 @@ export const api: NianyuAPI = {
   generateImageFromImage: (chatType, chatId, prompt, imagePath, kind) => raw.generateImageFromImage(chatType, chatId, prompt, imagePath, kind),
   autocompletePrompt: (type, text) => raw.autocompletePrompt(type, text),
   saveImageMemory: (p) => raw.saveImageMemory(p),
-  recallMessage: (msgId) => raw.recallMessage(msgId),
+  deleteMessageOnly: (msgId) => raw.deleteMessageOnly(msgId),
   rollbackMessages: (p) => raw.rollbackMessages(p),
+  rollbackForEdit: (p) => raw.rollbackForEdit(p),
+  aiAction: (p) => raw.aiAction(p),
   addQuickMemory: (p) => raw.addQuickMemory(p),
   pickTextFile: (filters) => raw.pickTextFile(filters),
   pickAudioFile: () => raw.pickAudioFile(),
   setCustomSound: (p) => raw.setCustomSound(p),
   saveTextFile: (content, defaultName) => raw.saveTextFile(content, defaultName),
   importCharacterCard: () => raw.importCharacterCard(),
+  getPathForFile: (file) => raw.getPathForFile(file),
+  importDroppedFiles: (paths) => raw.importDroppedFiles(paths),
   resetSettings: (keepKeys) => raw.resetSettings(keepKeys),
   deleteAllData: () => raw.deleteAllData(),
   showConfirm: async (message, title) => {
