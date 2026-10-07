@@ -69,8 +69,13 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
     labelKey: 'animCtl.groupPanel',
     selectors: [
       '.stories-panel',
-      // v2.3.94 需求 2：消息下方按钮组改为「线性弹出」后，动画载体仍是 .msg-action-bar 本身
-      //（transition: transform），故**无需新增选择器** —— 它早已登记在本组，可被独立开关。
+      // v2.3.94 需求 2：消息下方按钮组曾改为「线性弹出」，动画载体是 .msg-action-bar 本身
+      //（transition: transform），因此登记在本组以便被独立开关。
+      // v2.3.94 修正：用户否掉了「先很小再放大」的表现方式，该元素已改为
+      //「未就绪 visibility:hidden（保留占位）/ 就绪直接正常大小出现」，**本身不再产生 transform 动画**。
+      // 仍**保留登记**：① 删除登记会让「面板类动画」开关的语义出现缺口；
+      // ② 该元素后续若再加过渡，必须能被面板组开关覆盖；
+      // ③ 保留一条不产生任何效果的登记是**无害**的，而误删后新加动画会漏出总控，属更坏的方向。
       // 刻意不把 .msg-ai-action-btn 也加进来：它属于 bubble 组（animControl.ts 的 bubble 项），
       // 同时登记到两个组会导致「关掉 panel 连带关掉 bubble 想保留的按钮动画」的语义冲突。
       '.msg-action-bar',
