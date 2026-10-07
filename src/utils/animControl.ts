@@ -71,11 +71,14 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.stories-panel',
       // v2.3.94 需求 2：消息下方按钮组曾改为「线性弹出」，动画载体是 .msg-action-bar 本身
       //（transition: transform），因此登记在本组以便被独立开关。
-      // v2.3.94 修正：用户否掉了「先很小再放大」的表现方式，该元素已改为
-      //「未就绪 visibility:hidden（保留占位）/ 就绪直接正常大小出现」，**本身不再产生 transform 动画**。
-      // 仍**保留登记**：① 删除登记会让「面板类动画」开关的语义出现缺口；
-      // ② 该元素后续若再加过渡，必须能被面板组开关覆盖；
-      // ③ 保留一条不产生任何效果的登记是**无害**的，而误删后新加动画会漏出总控，属更坏的方向。
+      // v2.3.94 修正：用户否掉了「先很小再放大」的表现方式，该元素改为无动画直接出现。
+      // v2.3.96（现状）：改为**淡入 + 轻微上移**（opacity 0→1 / translateY(4px)→none，0.5s），
+      // 用的是 **transition 而非 @keyframes** —— 这正是它能被本组开关安全关掉的前提：
+      // `transition:none !important` 只是取消插值，元素**瞬间跳到终态**（opacity:1）仍然可见；
+      // 而 @keyframes 一旦被 `animation:none !important` 抹掉，元素会退回基态（opacity:0）永久不可见。
+      // 因此本条登记从「无害的占位」升级为**功能性必需**：删掉它，动效开关就会对按钮失效。
+      // 另在 index.css 里配了一条 `.anim-off .msg-action-bar.is-in { opacity:1 !important }` 兜底，
+      // 双保险，保证任何关档组合下就绪态都不会卡在透明。
       // 刻意不把 .msg-ai-action-btn 也加进来：它属于 bubble 组（animControl.ts 的 bubble 项），
       // 同时登记到两个组会导致「关掉 panel 连带关掉 bubble 想保留的按钮动画」的语义冲突。
       '.msg-action-bar',
@@ -145,7 +148,18 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
   {
     id: 'queue',
     labelKey: 'animCtl.groupQueue',
-    selectors: ['.queue-dock-handle', '.queue-dock-panel'],
+    // v2.3.96：面板改为「以队列图标为锚点」展开后，动效载体仍在这两个类上 ——
+    // .queue-dock-handle 的 opacity 过渡、.queue-dock-panel 的 transform/opacity/visibility 过渡
+    // 都已从组件的 inline style 收进 index.css 的类规则，故本组门禁能真正 kill 掉它们。
+    // 追加 .expanded（展开态类）：其 transition 写在展开态选择器上，
+    // 只登记基类会让「展开态的 transition」漏出门禁，故两个都登记。
+    // 同时追加 :focus-visible —— 图标已改为真正的 <button>，焦点环过渡也归本组。
+    selectors: [
+      '.queue-dock-handle',
+      '.queue-dock-panel',
+      '.queue-dock-panel.expanded',
+      '.queue-dock-handle:focus-visible',
+    ],
   },
   {
     id: 'floatball',
@@ -275,6 +289,16 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.stats-fav-card',
       '.stats-rank-row',
       '.stats-role-pick-item',
+      // v2.3.95：「你最喜欢的人物」板块移到最上方 + 拆出独立编辑界面（favEdit 子页）。
+      // 新增的三处带动画的元素登记在此，确保它们同样受三档动效开关与自定义分组控制：
+      //   .stats-fav-edit-btn           板块右上角的编辑入口按钮（hover/focus 过渡）
+      //   .stats-fav-editor             编辑界面容器入场动画（statsFavEditorIn）
+      //   .stats-fav-signature textarea 个性签名多行输入框的边框过渡
+      '.stats-fav-edit-btn',
+      '.stats-fav-editor',
+      '.stats-fav-signature textarea',
+      // v2.3.95：编辑界面的性别单选按钮组（选中态/hover 过渡）
+      '.stats-fav-gender-pick button',
     ],
   },
 ];

@@ -1,18 +1,44 @@
-// 请求队列贴边面板（v2.3.46）：仅主界面挂载（App.tsx）；快捷小窗（MiniChat）与悬浮球不支持。
+// 请求队列贴边面板（v2.3.46 创建；v2.3.96 改为「以队列图标为锚点」展开）：
+// 仅主界面挂载（App.tsx）；快捷小窗（MiniChat）与悬浮球不支持。
 // 主进程为每个模型（限速键）维护真实请求队列（electron/queueManager.ts），
 // 本组件通过 queue:snapshot / queue:changed 展示快照，通过 queue:reorder 手动调整发送顺序。
-// 贴边图标只能沿右缘上下拖动；点击图标线性弹出/收起面板（本组件 portal 挂 body，
-// 不在 .anim-off 子树内，动效开关需内联判定）。
+//
+// ===== v2.3.96 用户反馈与改法 =====
+// 反馈原文：「请求队列的面板弹出，应该是从这个队列图标的边缘展开，而不是从软件的边缘展开。」
+// 改前：面板 `right: 26px`（贴软件右缘的常量）+ `top: 图标顶`（顶对齐）。
+//       340px 宽的面板挂在 22px 图标的下方，且横向贴着窗口边缘 —— 视觉上就是「从软件边缘长出来」。
+// 改后：面板位置**全部由图标实测矩形推导**（panelPlacement）：
+//   ① 横向 right = 图标实测宽度 + 间隙 → 面板右缘恒紧邻图标左缘，图标一动面板就跟着动；
+//   ② 纵向 top = 图标垂直中心 − 面板半高（居中对齐），再 clamp 进视口 ——
+//      这同时实现了「靠近上下边缘时的翻转/收缩」：图标在上半屏时面板被下推、
+//      在下半屏时面板被上顶，永远不会超出窗口被裁切（详见 panelPlacement 注释）；
+//   ③ 面板宽度由 max-width 收窄，保证不超过图标左侧的可用空间。
+// 拖动时 dockY 每帧更新 → 面板位置在同一渲染帧重算，实时跟随（非只在打开那一刻算一次）。
+//
+// 动效：全部收进 index.css 的类规则（.queue-dock-panel 基态=收起态，.expanded=展开态），
+// 由 src/utils/animControl.ts 的 queue 分组门禁统一 kill，组件内**不再裸写 inline 动画**。
+// 采用「基态=收起态 + transition」而非「基态=展开态 + animation」，理由见 index.css 对应注释
+// 与 hooks/useRetract.ts 的「基态陷阱」说明：动画被关掉时直接落到基态（收起），不会关不掉。
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
 import type { QueueSnapshot, QueueLaneInfo } from '../types';
-import { isGroupEnabled } from '../utils/animControl';
 
 const DRAG_THRESHOLD = 4; // 位移超过该像素判定为拖动（否则视为点击展开/收起）
 
-// 图标纵坐标范围：[8, 视口高-64]，只能贴右缘上下移动
+/** 面板与图标左缘的水平间隙（px） */
+const PANEL_GAP = 6;
+/** 面板与视口上下边缘的最小留白（px） */
+const PANEL_EDGE = 8;
+/** 面板左缘与视口左边缘的最小留白（px） */
+const PANEL_EDGE_X = 12;
+/** 面板与图标的固定 id 绑定（aria-controls 用） */
+const PANEL_ID = 'queue-dock-panel';
+/** 图标尺寸兜底值（与 index.css 的 .queue-dock-handle 一致；实测成功前使用） */
+const ICON_FALLBACK = { w: 22, h: 56 };
+
+/** 图标纵坐标范围：[8, 视口高-64]，只能贴右缘上下移动 */
 function clampY(y: number): number {
   const max = window.innerHeight - 64;
   return Math.min(Math.max(y, 8), Math.max(8, max));
@@ -23,13 +49,14 @@ export default function QueueDock() {
   const [snap, setSnap] = useState<QueueSnapshot | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [dockY, setDockY] = useState<number>(() => Math.round(window.innerHeight * 0.4));
-  // 动效开关：走 isGroupEnabled（总控关闭 或 单控关掉「请求队列」分组都应变为无过渡）。
-  // 本组件 portal 挂 body（不在 .anim-off 子树语义内），故必须自行订阅设置变化。
-  const [anim, setAnim] = useState(true);
+  const [iconSize, setIconSize] = useState(ICON_FALLBACK); // 图标实测尺寸（锚点基准）
   const [dragging, setDragging] = useState(false);
   const [dragOverIdx, setDragOverIdx] = useState(-1);
-  const [panelH, setPanelH] = useState(0); // 面板实测高度（防面板底部溢出视口）
-  const [viewportH, setViewportH] = useState(() => window.innerHeight); // 视口高度（resize 时触发重渲染重算 clamp）
+  const [panelH, setPanelH] = useState(0); // 面板实测高度（定位与防溢出用）
+  const [viewport, setViewport] = useState(() => ({
+    w: typeof window === 'undefined' ? 1024 : window.innerWidth,
+    h: typeof window === 'undefined' ? 768 : window.innerHeight,
+  }));
   const [activeKey, setActiveKey] = useState('');
   const [tick, setTick] = useState(0); // 每秒自增，驱动 ETA 本地倒数重渲染
 
@@ -37,6 +64,7 @@ export default function QueueDock() {
   const dragRef = useRef<{ startY: number; startDockY: number; moved: boolean } | null>(null);
   const dragSrcRef = useRef(-1); // 拖拽排序的源 index
   const panelRef = useRef<HTMLDivElement | null>(null); // 面板元素（实测高度用）
+  const handleRef = useRef<HTMLButtonElement | null>(null); // 图标元素（实测尺寸用）
 
   const lanes = snap?.lanes ?? [];
   const total = snap?.total ?? 0;
@@ -46,7 +74,7 @@ export default function QueueDock() {
     [lanes, activeKey]
   );
 
-  // 初始化：位置/动效开关 + 首个快照 + 订阅
+  // 初始化：位置 + 首个快照 + 订阅
   useEffect(() => {
     let disposed = false;
     (async () => {
@@ -54,22 +82,12 @@ export default function QueueDock() {
         const s = await api.getSettings();
         if (disposed) return;
         if (typeof s.queueDockY === 'number') setDockY(clampY(s.queueDockY));
-        setAnim(isGroupEnabled(s, 'queue'));
       } catch {
         /* 忽略：使用缺省值 */
       }
     })();
     const offSettings = api.onSettingsChanged((_e, patch: Record<string, unknown> | undefined) => {
       if (!patch) return;
-      // 任意与动效相关的键变化（三档 animMode / 兼容字段 / 任一分组）都要重算，改动后由 settings-changed 广播兜底
-      if (
-        'enableAnimations' in patch ||
-        'animMode' in patch ||
-        'animControlMode' in patch ||
-        'animGroups' in patch
-      ) {
-        api.getSettings().then((s2) => setAnim(isGroupEnabled(s2, 'queue'))).catch(() => {});
-      }
       if (typeof patch.queueDockY === 'number') setDockY(clampY(patch.queueDockY));
     });
     const offQueue = api.onQueueChanged((data) => {
@@ -97,7 +115,25 @@ export default function QueueDock() {
     return () => window.clearInterval(timer);
   }, []);
 
-  // 面板实测高度：mount 与内容变化时更新（offsetHeight 不受 transform/opacity 影响，隐藏态也可量）
+  // 图标实测尺寸：面板锚点的基准。挂载后 + 主题/字号变化导致尺寸变化时（ResizeObserver）更新，
+  // 这样 CSS 里改了图标宽高，面板会自动跟着走，不会又变成「贴软件边缘」。
+  useEffect(() => {
+    const el = handleRef.current;
+    if (!el) return;
+    const measure = (): void => {
+      const w = el.offsetWidth || ICON_FALLBACK.w;
+      const h = el.offsetHeight || ICON_FALLBACK.h;
+      setIconSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // 面板实测高度：mount 与内容变化时更新（offsetHeight 不受 transform/opacity/visibility 影响，
+  // 收起态也可量）。用于纵向居中定位与 max-height 收缩。
   useEffect(() => {
     const el = panelRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -107,9 +143,9 @@ export default function QueueDock() {
     return () => ro.disconnect();
   }, []);
 
-  // 窗口 resize：触发重渲染，把手/面板 top 重新 clamp（面板高度由 ResizeObserver 自动跟随）
+  // 窗口 resize：重算视口尺寸 → 面板位置与 max-width/max-height 跟着重算（不依赖展开态）
   useEffect(() => {
-    const onResize = () => setViewportH(window.innerHeight);
+    const onResize = (): void => setViewport({ w: window.innerWidth, h: window.innerHeight });
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
@@ -138,7 +174,7 @@ export default function QueueDock() {
     if (d.moved) setDockY(clampY(d.startDockY + dy));
   };
   // 清理拖动状态（pointerup 与 pointercancel 共用）
-  const resetDrag = () => {
+  const resetDrag = (): void => {
     dragRef.current = null;
     setDragging(false);
   };
@@ -161,6 +197,53 @@ export default function QueueDock() {
     resetDrag();
     (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
   };
+  // 键盘操作：图标是真正的 <button>，但展开/收起逻辑在 pointerup 里判定拖动，
+  // 故键盘需单独走 onKeyDown（Enter / 空格），并 preventDefault 避免空格滚动页面。
+  // 不绑 onClick：否则鼠标点击会「pointerup 一次 + click 一次」双触发。
+  const onHandleKeyDown = (e: React.KeyboardEvent): void => {
+    if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+    e.preventDefault();
+    setExpanded((v) => !v);
+  };
+
+  // ===== 面板定位：全部由「图标实测矩形」推导 =====
+  // 图标：right:0、宽 iconSize.w、高 iconSize.h、顶 dockY（clamp 后）
+  // 面板：右缘紧邻图标左缘 → right = iconSize.w + PANEL_GAP
+  //      纵向与图标中心对齐 → top = 图标中心 − 面板半高，再 clamp 进视口
+  // 边界翻转/收缩：clamp 天然实现「翻转」——
+  //   · 图标靠近上边缘时，居中值 < PANEL_EDGE，面板被下推到 PANEL_EDGE（不会顶出视口）；
+  //   · 图标靠近下边缘时，居中值 > 视口高−面板高−PANEL_EDGE，面板被上顶（不会底出视口）；
+  //   · 图标贴右缘，右侧无空间，故水平方向只做「收缩」（max-width），不做左右翻转。
+  // 面板高度本身也受 max-height 限制（CSS），所以面板再高也不会超出视口。
+  // 由于 dockY 每次 pointermove 都更新，本段在每次渲染重算 → 面板实时跟随图标。
+  const placement = useMemo(() => {
+    const iconTop = clampY(dockY);
+    const iconCenterY = iconTop + iconSize.h / 2;
+    const right = iconSize.w + PANEL_GAP;
+    // 纵向可用高度（视口上下各留 PANEL_EDGE），面板高度超了就由 CSS max-height 内部滚动
+    const maxH = Math.max(0, viewport.h - PANEL_EDGE * 2);
+    const h = Math.min(panelH, maxH);
+    const top = Math.min(
+      Math.max(iconCenterY - h / 2, PANEL_EDGE),
+      Math.max(PANEL_EDGE, viewport.h - h - PANEL_EDGE)
+    );
+    // 水平可用宽度：图标左侧留 PANEL_EDGE_X；不足时收窄（面板 CSS 里 width:340px + max-width）
+    const maxW = Math.max(120, viewport.w - right - PANEL_EDGE_X);
+    return { top, right, maxW };
+  }, [dockY, iconSize, panelH, viewport]);
+
+  // 面板定位样式：只输出几何量（top / right / max-width），**不含任何 transition/animation**。
+  // 刻意覆盖 CSS 里的兜底值（--queue-dock-panel-right: 26px / max-width calc(...)）：
+  // 那两个值只在图标尚未测量完成的首帧生效，测量完成后一律以本处按图标实测推导的值为准。
+  const panelStyle = {
+    top: placement.top,
+    right: placement.right,
+    maxWidth: placement.maxW,
+  } as React.CSSProperties;
+
+  // 说明：v2.3.96 起本组件**不再内联判定动效开关**（原先靠 isGroupEnabled 拼 inline transition，
+  // 那既不受 animControl 门禁管理、也是「裸写动画」）。动画已全部收进 index.css 的类规则，
+  // 由 animControl 的 queue 分组（.anim-off / data-anim-off~="queue"）统一 kill。
 
   // ===== 调序：乐观更新本地快照 + 调用主进程（广播回来后覆盖）=====
   const applyReorder = useCallback(async (key: string, ids: string[]) => {
@@ -219,45 +302,50 @@ export default function QueueDock() {
     void applyReorder(lane.key, ids);
   };
 
-  // 面板顶部与图标对齐（用实测面板高度防溢出视口底部：top ≤ innerHeight − panelH − 12）
-  void viewportH; // resize 时经该 state 触发重渲染，保证此处读到最新视口尺寸
-  const panelTop = Math.max(8, Math.min(clampY(dockY), window.innerHeight - panelH - 12));
-
   return createPortal(
     <>
-      {/* 贴边把手：22×56px 贴右缘，只能沿右缘上下拖动 */}
-      <div
+      {/* 贴边把手：22×56px 贴右缘，只能沿右缘上下拖动。
+          用 <button> 而非 <div>：图标本身就是一个「展开/收起」控件，
+          键盘可达（Enter/空格）+ aria-expanded/aria-haspopup 都依赖原生按钮语义。 */}
+      <button
+        type="button"
+        ref={handleRef}
+        id="queue-dock-handle"
         className={`queue-dock-handle${dragging ? ' dragging' : ''}`}
-        style={{ top: clampY(dockY), transition: anim ? 'opacity .18s linear' : 'none' }}
+        style={{ top: clampY(dockY) }}
         title={t('queue.dockTip')}
+        aria-label={t('queue.title')}
+        aria-expanded={expanded}
+        aria-haspopup="dialog"
+        aria-controls={PANEL_ID}
+        onKeyDown={onHandleKeyDown}
         onPointerDown={onHandlePointerDown}
         onPointerMove={onHandlePointerMove}
         onPointerUp={onHandlePointerUp}
         onPointerCancel={onHandlePointerCancel}
       >
-        <span>🕒</span>
-        {total > 0 && <span className="queue-dock-badge">{total}</span>}
-      </div>
+        <span aria-hidden="true">🕒</span>
+        {total > 0 && (
+          <span className="queue-dock-badge" aria-hidden="true">
+            {total}
+          </span>
+        )}
+      </button>
 
-      {/* 完整队列面板：线性弹出/缩回（0.18s linear） */}
+      {/* 完整队列面板：从「队列图标」那一侧（右侧）生长展开。
+          role="dialog" + aria-modal="false"：它不是模态框（无遮罩、不抢焦点），
+          但语义上确实是「由图标唤起的一组控件」，故用 dialog 而非 region。 */}
       <div
+        id={PANEL_ID}
         ref={panelRef}
-        className="queue-dock-panel"
-        style={{
-          top: panelTop,
-          // v2.3.88：收起时的滑出距离改用 CSS 变量 --queue-dock-panel-slide
-          // （= 100% + right(26px) + 8px 余量，与新的 right 自洽）。
-          // 改前这里是写死的 calc(100% + 24px)：配 right:10px 时恰好够滑出屏幕，
-          // 但 right 改成 26px 后就不够了 —— 面板会停在屏幕内 2px，
-          // 正好压在贴边小图标底下（handle 在 right:0、宽 22px，是常驻可见的）。
-          transform: expanded ? 'none' : 'translateX(var(--queue-dock-panel-slide))',
-          opacity: expanded ? 1 : 0,
-          pointerEvents: expanded ? 'auto' : 'none',
-          transition: anim ? 'transform .18s linear, opacity .18s linear' : 'none',
-        }}
+        className={`queue-dock-panel${expanded ? ' expanded' : ''}`}
+        style={panelStyle}
+        role="dialog"
+        aria-modal="false"
+        aria-label={t('queue.title')}
       >
         <div className="queue-dock-head">
-          <span>⏳</span>
+          <span aria-hidden="true">⏳</span>
           <span>{t('queue.title')}</span>
           <span className="queue-dock-count">{t('queue.count', { n: total })}</span>
           <button
@@ -271,14 +359,19 @@ export default function QueueDock() {
           </button>
         </div>
 
-        {/* 多模型时按模型分页展示（不同模型队列互不影响） */}
+        {/* 多模型时按模型分页展示（不同模型队列互不影响）。
+            刻意用 role="group" + aria-pressed 而非 role="tablist"：
+            tablist 要求必须有 role="tabpanel" 的关联面板与 aria-controls，
+            本组件的列表区不是独立可切换面板，硬套 tab 语义会做出「有 tab 无 tabpanel」的
+            残缺结构（违反 WCAG 4.1.2）。aria-pressed 的切换按钮组语义准确且无此问题。 */}
         {lanes.length > 1 && (
           <>
-            <div className="queue-dock-tabs">
+            <div className="queue-dock-tabs" role="group" aria-label={t('queue.title')}>
               {lanes.map((l) => (
                 <button
                   key={l.key}
                   type="button"
+                  aria-pressed={activeLane?.key === l.key}
                   className={`queue-dock-tab${activeLane?.key === l.key ? ' active' : ''}`}
                   onClick={() => setActiveKey(l.key)}
                 >
@@ -320,6 +413,7 @@ export default function QueueDock() {
                   className="queue-dock-btn"
                   disabled={it.locked || idx === 0 || !!activeLane.items[idx - 1]?.locked}
                   title={t('queue.moveUp')}
+                  aria-label={t('queue.moveUp')}
                   onClick={() => moveItem(activeLane, idx, -1)}
                 >
                   ↑
@@ -331,6 +425,7 @@ export default function QueueDock() {
                     it.locked || idx === activeLane.items.length - 1 || !!activeLane.items[idx + 1]?.locked
                   }
                   title={t('queue.moveDown')}
+                  aria-label={t('queue.moveDown')}
                   onClick={() => moveItem(activeLane, idx, 1)}
                 >
                   ↓

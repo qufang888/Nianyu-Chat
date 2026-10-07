@@ -36,11 +36,42 @@ const PIE_R_OUT = 88;
 const PIE_R_IN = 44;
 /** 扇区之间的角度缝隙（度）：避免相邻色块糊在一起 */
 const SLICE_GAP_DEG = 1.2;
-/** 「从圆心顺时针拉开」的总时长（ms） */
+/**
+ * 「从圆心顺时针拉开」的总时长（ms）。
+ *
+ * 取值依据：900ms 属于 800~1000ms 区间 —— 够长到用户能看清「一条线从圆心
+ * 顺时针拉开、各区块依次浮现」的全过程，又不至于慢到像卡住。
+ * 注意该动画是 rAF 内联补间，**必须**由 isGroupEnabled(settings,'stats') 门控
+ * （见 PieChart 内 useEffect），不能靠 CSS 类名kill。
+ */
 const PIE_ANIM_MS = 900;
 
-/** 子页面 */
-type SubPage = 'main' | 'tokenRank' | 'bondRank';
+/**
+ * 子页面。
+ * v2.3.95 新增 `favEdit`：「你最喜欢的人物」的**独立编辑界面**。
+ * 用户要求统计页主界面「只是一个展示窗口」，写签名 / 选性别必须进编辑界面才做得到，
+ * 入口在「我最喜欢的人物」板块卡片右上角的编辑按钮。
+ */
+type SubPage = 'main' | 'tokenRank' | 'bondRank' | 'favEdit';
+
+/**
+ * 编辑界面里的**草稿**状态（用户正在改、还没点保存）。
+ * 与 settings 里的已保存值分开，这样「取消」才能真正丢弃改动。
+ */
+interface FavDraft {
+  /** 选中的 roleId；空串 = 未选（与 settings.favoriteRoleId 的 undefined 对应） */
+  roleId: string;
+  /** 用户自选性别；undefined = 不选（留空） */
+  gender: 'male' | 'female' | undefined;
+  /** 个性签名原文（保存时才做 trim） */
+  signature: string;
+}
+
+/** 空草稿（未选人物时的初始值） */
+const EMPTY_FAV_DRAFT: FavDraft = { roleId: '', gender: undefined, signature: '' };
+
+/** 个性签名最大长度（多行文本，比旧版单行 input 的 60 放宽） */
+const FAV_SIGNATURE_MAXLEN = 120;
 
 /** 把陪伴毫秒渲染成带 i18n 单位的串（只显示最大的两个单位，保持紧凑） */
 function useCompanionText(): (ms: number) => string {
@@ -72,7 +103,11 @@ export const StatsView: React.FC = () => {
   const [page, setPage] = useState<SubPage>('main');
   const [rankMode, setRankMode] = useState<RankMode>('affinity');
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [signatureDraft, setSignatureDraft] = useState<string | null>(null);
+  // v2.3.95：编辑界面（favEdit 子页）是独立的 early-return 分支，没法共用主页面那份
+  // pickerOpen 的渲染节点，故单独一个状态，语义也更清楚（互不影响）。
+  const [editorPickerOpen, setEditorPickerOpen] = useState(false);
+  // v2.3.95：签名草稿只在**编辑界面**里存在（主页面已改为纯展示，不再有输入框）
+  const [favDraft, setFavDraft] = useState<FavDraft>(EMPTY_FAV_DRAFT);
 
   const refresh = useCallback(() => {
     api.getRoleStats().then(setStats);
@@ -156,22 +191,40 @@ export const StatsView: React.FC = () => {
     []
   );
 
-  const setFavoriteRole = useCallback(
-    (roleId: string) => {
-      setSignatureDraft(null);
-      void saveFavorite({
-        favoriteRoleId: roleId,
-        favoriteSetAt: Date.now(),
-        // 换人时清掉上一位人物的性别/签名（否则会把 A 的签名显示到 B 头上）
-        favoriteGender: undefined,
-        favoriteSignature: '',
-      });
-    },
-    [saveFavorite]
+  /**
+   * 换人物时清掉上一位人物的性别/签名。
+   *
+   * ⚠️ 铁律：favoriteGender / favoriteSignature 描述的是**某一个具体人物**，
+   * 换人却不清空就会把 A 的签名显示到 B 头上（用户明确要求「换人物要重置」）。
+   * 本函数是「**直接落盘**换人」的唯一出处（主页面未设置时的加号走它）；
+   * 编辑界面里的换人走 `pickFavoriteInEditor`，它对**草稿**做同样的重置，
+   * 但要等用户点「保存」才落盘 —— 两条入口的最终效果一致，只是时机不同。
+   */
+  const clearFavoritePersonFields = useCallback(
+    (keepRoleId: string): Partial<AppSettings> => ({
+      favoriteRoleId: keepRoleId,
+      favoriteSetAt: Date.now(),
+      favoriteGender: undefined,
+      favoriteSignature: '',
+    }),
+    []
   );
 
+  /**
+   * 直接设置最喜爱人物（**会重置性别与签名**）。
+   * 仅用于「主页面未设置时的加号」这一条不想先进编辑界面的快捷入口。
+   */
+  const setFavoriteRole = useCallback(
+    (roleId: string) => {
+      setFavDraft(EMPTY_FAV_DRAFT);
+      void saveFavorite(clearFavoritePersonFields(roleId));
+    },
+    [saveFavorite, clearFavoritePersonFields]
+  );
+
+  /** 清除全部最喜爱人物设置（编辑界面与主页面共用） */
   const clearFavorite = useCallback(() => {
-    setSignatureDraft(null);
+    setFavDraft(EMPTY_FAV_DRAFT);
     void saveFavorite({
       favoriteRoleId: undefined,
       favoriteGender: undefined,
@@ -180,7 +233,105 @@ export const StatsView: React.FC = () => {
     });
   }, [saveFavorite]);
 
+  /** 进入编辑界面：把当前已保存的值复制成草稿，取消时才能干净地丢弃改动 */
+  const openFavoriteEditor = useCallback(() => {
+    setFavDraft({
+      roleId: favId || '',
+      gender: settings?.favoriteGender,
+      signature: settings?.favoriteSignature || '',
+    });
+    setPage('favEdit');
+  }, [favId, settings?.favoriteGender, settings?.favoriteSignature]);
+
+  /**
+   * 编辑界面里换人物 → **立即清空草稿里的性别与签名**，
+   * 否则用户会看到（并可能保存）上一位人物的签名。
+   * 这里只改草稿、不落盘：用户若点了「取消」，一切照旧。
+   */
+  const pickFavoriteInEditor = useCallback((roleId: string) => {
+    setFavDraft((prev) =>
+      prev.roleId === roleId
+        ? prev
+        : { roleId, gender: undefined, signature: '' }
+    );
+  }, []);
+
+  /** 保存草稿：roleId / gender / signature / setAt 一起写回 settings */
+  const saveFavoriteDraft = useCallback(() => {
+    const roleId = favDraft.roleId;
+    // 未选人物时保存 = 什么都不该发生（编辑界面本身就要求先选一位）
+    if (!roleId) return;
+    const changed = roleId !== (settings?.favoriteRoleId || '');
+    void saveFavorite({
+      favoriteRoleId: roleId,
+      favoriteGender: favDraft.gender,
+      favoriteSignature: favDraft.signature.trim(),
+      // 换人时刷新设置时间；同一人只改性别/签名不算「重新设置」
+      favoriteSetAt: changed ? Date.now() : settings?.favoriteSetAt ?? Date.now(),
+    });
+    setPage('main');
+  }, [favDraft, saveFavorite, settings?.favoriteRoleId, settings?.favoriteSetAt]);
+
+  /** 取消编辑：丢弃草稿（不改任何已保存值），回主页面 */
+  const cancelFavoriteEdit = useCallback(() => {
+    setFavDraft(EMPTY_FAV_DRAFT);
+    setPage('main');
+  }, []);
+
+  /** 编辑界面里清除设置：落盘清空 + 回主页面 */
+  const clearFavoriteInEditor = useCallback(() => {
+    clearFavorite();
+    setPage('main');
+  }, [clearFavorite]);
+
   // ---------- 渲染 ----------
+
+  // ===== 子页：「你最喜欢的人物」编辑界面（v2.3.95 新增）=====
+  // 主页面只做展示（用户原话：「统计界面只是一个展示窗口而已」），
+  // 写签名 / 选性别 / 换人物全部集中在这里，改完点保存才落盘。
+  if (page === 'favEdit') {
+    const draftRow = favDraft.roleId ? rows.find((r) => r.roleId === favDraft.roleId) || null : null;
+    return (
+      <div className="main-pane">
+        <div className="list-header">
+          <span>{t('stats.favEditTitle')}</span>
+        </div>
+        <div className="list-scroll">
+          <div className="panel" style={{ padding: 16 }}>
+            <div className="stats-subpage-head">
+              <button className="stats-back-btn" onClick={cancelFavoriteEdit}>
+                ← {t('stats.back')}
+              </button>
+            </div>
+            <FavoriteEditor
+              draft={favDraft}
+              draftRow={draftRow}
+              savedRoleId={favId || ''}
+              roleCount={Object.keys(roles).length}
+              onOpenPicker={() => setEditorPickerOpen(true)}
+              onGenderChange={(g) => setFavDraft((prev) => ({ ...prev, gender: g }))}
+              onSignatureChange={(v) => setFavDraft((prev) => ({ ...prev, signature: v }))}
+              onSave={saveFavoriteDraft}
+              onCancel={cancelFavoriteEdit}
+              onClear={clearFavoriteInEditor}
+            />
+          </div>
+        </div>
+
+        {editorPickerOpen && (
+          <RolePicker
+            roles={Object.values(roles)}
+            onPick={(r) => {
+              pickFavoriteInEditor(r.id);
+              setEditorPickerOpen(false);
+            }}
+            onClose={() => setEditorPickerOpen(false)}
+          />
+        )}
+      </div>
+    );
+  }
+
   if (page === 'tokenRank') {
     return (
       <div className="main-pane">
@@ -229,16 +380,37 @@ export const StatsView: React.FC = () => {
       </div>
       <div className="list-scroll">
         <div className="panel" style={{ padding: 16 }}>
+          {/* ===== 板块一（v2.3.95 调整为「最上方」）：你最喜欢的人物 =====
+              用户原话：「我最喜欢的人物板块应该在统计界面的最上方」。
+              因此它渲染在**累计总 Token 之上、板块二之前**，是整个统计页的第一屏第一块。
+              视觉权重仍是全页最大：22px 内边距 + 84px 头像 + 主色描边 + 阴影卡片。
+
+              ⚠️ v2.3.95：这一块已改为**纯展示**（不再有签名输入框与性别按钮），
+              一切编辑操作都搬进了 `favEdit` 子页，入口是卡片右上角的编辑按钮。
+              未设置时仍保留大号加号作为入口（点它直接打开人物选择弹层）。 */}
+          <FavoriteSection
+            favRow={favRow}
+            gender={settings?.favoriteGender}
+            signature={settings?.favoriteSignature || ''}
+            onOpenEditor={openFavoriteEditor}
+            onOpenPicker={() => setPickerOpen(true)}
+            animOn={animOn}
+          />
+
           <div style={{ marginBottom: 16, fontSize: 14 }}>{t('stats.global', { n: global })}</div>
 
-          {/* ===== 板块一：Token 消耗排名（饼状图） ===== */}
+          {/* ===== 板块二：Token 消耗排名（饼状图） ===== */}
           <div className="stats-section">
             <div className="stats-section-title">
               <span>{t('stats.tokenRank')}</span>
               <span className="stats-title-hint">{t('stats.tokenRankHint')}</span>
             </div>
+            {/* v2.3.95：原来这里是 `slices.length === 0 ? <div className="stats-empty">…</div> : <PieChart/>`，
+                即「没数据 → 整块饼图连位置一起消失」，用户只看到一行字，饼图从未出现。
+                现在改为：无数据时也画出「空圆环」占位 + 提示文案，
+                让饼图区域始终存在、也让用户知道这里本该有内容。 */}
             {slices.length === 0 ? (
-              <div className="stats-empty">{t('stats.empty')}</div>
+              <PieEmptyState />
             ) : (
               <PieChart
                 slices={slices}
@@ -249,23 +421,7 @@ export const StatsView: React.FC = () => {
             )}
           </div>
 
-          {/* ===== 板块三：你最喜欢的人物（中间偏上、最突出、占用空间最大）=====
-              用户要求位置在三大板块的「中间偏上」：这里渲染在板块一之后、板块二之前，
-              即三块内容的中段偏上；同时它又是三者中面积最大的一张卡
-              （22px 内边距 + 84px 头像 + 主色描边），因此仍是全页最突出的元素。 */}
-          <FavoriteSection
-            favRow={favRow}
-            gender={settings?.favoriteGender}
-            signature={signatureDraft ?? settings?.favoriteSignature ?? ''}
-            onOpenPicker={() => setPickerOpen(true)}
-            onClear={clearFavorite}
-            onSetGender={(g) => void saveFavorite({ favoriteGender: g })}
-            onSignatureChange={setSignatureDraft}
-            onSignatureCommit={(v) => void saveFavorite({ favoriteSignature: v })}
-            animOn={animOn}
-          />
-
-          {/* ===== 板块二：好感度排行 + 陪伴时间排行 ===== */}
+          {/* ===== 板块三：好感度排行 + 陪伴时间排行 ===== */}
           <div className="stats-section">
             <div className="stats-section-title">
               <span>{t('stats.bondRank')}</span>
@@ -317,6 +473,59 @@ export const StatsView: React.FC = () => {
 // 板块一：Token 饼图
 // ============================================================================
 
+/**
+ * 饼图空态（v2.3.95）。
+ *
+ * 为什么需要它：用户反馈「聊天统计界面的饼图呢？饼图去哪了」。
+ * 真实原因是没有任何人物产生过 Token 消耗时，`buildPieSlices` 按设计返回空数组
+ * （它的对外签名与语义本任务不改，见 statsRank.ts 注释），
+ * 而旧代码在空数组时**直接把整个饼图区域替换成一行文字**——
+ * 于是「没有数据」被渲染成了「饼图不存在」，两件事在视觉上无法区分。
+ *
+ * 现在无数据时画一个**只有底色圆环、没有扇区**的空饼，
+ * 并配一行i18n 提示「去聊几句就会出现」，明确表达「这里该有饼图，只是还没有数据」。
+ *
+ * 无障碍：圆环用 --color-text-muted + --color-border 双层描边
+ * （实测 --color-panel-alt 与面板底仅 1.0~1.15:1，用它画环等于隐形；
+ *   text-muted 实测 3.45~5.43:1，满足 WCAG 1.4.11 非文本对比 ≥3:1），
+ *   圆环纯装饰故aria-hidden；提示文字用 --color-text / --color-text-secondary
+ * （14 套主题均 ≥ WCAG AA），并用 role="status" 让屏幕阅读器能播报这段状态变化。
+ */
+const PieEmptyState: React.FC = () => {
+  const { t } = useI18n();
+  return (
+    <div className="stats-pie-wrap">
+      <div className="stats-pie-box" aria-hidden="true">
+        <svg className="stats-pie-svg" viewBox={`0 0 ${PIE_SIZE} ${PIE_SIZE}`}>
+          {/* 空圆环：内外半径与有数据时完全一致，保证空态 ↔ 有数据切换时不跳动。
+              画两层（外圈 --color-border / 内圈 --color-text-muted）：
+              实测 --color-panel-alt 与面板底只有 1.0~1.15:1（肉眼分不出），
+              用它画环等于「空环依旧隐形」，那就等于没修这个BUG；
+              text-muted 实测 3.45~5.43:1，满足非文本对比 ≥3:1。 */}
+          <circle
+            className="stats-pie-empty-ring is-outer"
+            cx={PIE_CX}
+            cy={PIE_CY}
+            r={(PIE_R_OUT + PIE_R_IN) / 2}
+            strokeWidth={PIE_R_OUT - PIE_R_IN}
+          />
+          <circle
+            className="stats-pie-empty-ring is-inner"
+            cx={PIE_CX}
+            cy={PIE_CY}
+            r={(PIE_R_OUT + PIE_R_IN) / 2}
+            strokeWidth={Math.max(2, (PIE_R_OUT - PIE_R_IN) * 0.4)}
+          />
+        </svg>
+      </div>
+      <div className="stats-pie-empty-text" role="status">
+        <div className="stats-pie-empty-title">{t('stats.pieEmptyTitle')}</div>
+        <div className="stats-pie-empty-hint">{t('stats.pieEmptyHint')}</div>
+      </div>
+    </div>
+  );
+};
+
 /** 饼图（手写 SVG，无图表库） */
 const PieChart: React.FC<{
   slices: PieSlice[];
@@ -354,15 +563,25 @@ const PieChart: React.FC<{
   }, [animOn, slices]);
 
   // 各扇区的起止角（12 点为 0，顺时针）
+  //
+  // 非法项保护（v2.3.95）：ratio 可能是 NaN / Infinity / 负数（脏数据或除零），
+  // 一旦算出 NaN 角度，arcPath 会返回含 "NaN" 的 path 串，浏览器**整条 path 都画不出来**
+  // （不是只丢一个扇区）—— 实测中这正是「饼图整块消失」的直接原因之一。
+  // 故这里先把非有限值按 0 处理并过滤掉，再做累加。
   const geo = useMemo(() => {
+    const valid = slices.filter((s) => Number.isFinite(s.ratio) && s.ratio > 0);
     let acc = 0;
-    return slices.map((s) => {
+    return valid.map((s) => {
       const span = s.ratio * 360;
       const start = acc;
       acc += span;
       return { slice: s, start, span };
     });
   }, [slices]);
+
+  // 归一化后的总角度：用于把「各扇区 span 之和」拉回精确的 360°，
+  // 避免浮点累加误差让最后一条扇区差一点点角度而出现缺口。
+  const totalSpan = geo.length > 0 ? geo[geo.length - 1].start + geo[geo.length - 1].span : 0;
 
   const hovered = geo.find((g) => g.slice.key === hoverKey) || null;
 
@@ -382,15 +601,28 @@ const PieChart: React.FC<{
         }}
       >
         <svg className="stats-pie-svg" viewBox={`0 0 ${PIE_SIZE} ${PIE_SIZE}`}>
-          {/* 每个区块按 progress 从 0 长到满；最后再整体淡入（"浮现"） */}
+          {/* 每个区块按 progress 从 0 长到满；最后再整体淡入（"浮现"）
+
+              ⚠️ v2.3.95 修复的致命 BUG：原来写的是 `Math.min(1, g.span * progress)`。
+              这里的上限必须是**扇区自己的 span（度）**，不是常量 1：
+              写成 1 等于把「弧长」当成「占比」来截断，任何扇区动画结束时都只画
+              **1 度**（≈1.5px 头发丝）→ 整块饼图看起来就是「没有」。
+              这才是「饼图去哪了」的第一主因（比空数组更致命：它连有数据时也不显示）。
+              另外 animOn=false 时直接给终态 g.span，绝不能停在 progress=0。 */}
           {geo.map((g) => {
-            const shown = animOn ? Math.max(0, Math.min(1, g.span * progress)) : g.span;
+            const p = animOn ? Math.max(0, Math.min(1, progress)) : 1;
+            const shown = Math.max(0, Math.min(g.span, g.span * p));
             if (shown <= 0.05) return null;
+            // 归一化：把最后一条扇区的终点对齐到 360°，消除浮点累加误差造成的缺口
+            const scale = totalSpan > 0 && Math.abs(totalSpan - 360) > 1e-6 ? 360 / totalSpan : 1;
+            const fullEnd = g.start + g.span * scale;
+            const shownEnd = g.start + shown * scale;
             const half = SLICE_GAP_DEG / 2;
-            const start = g.start + (shown >= g.span ? 0 : half);
-            const end = g.start + shown - (shown >= g.span ? 0 : half);
+            const complete = shownEnd >= fullEnd - 1e-6;
+            const start = g.start + (complete ? 0 : half);
+            const end = shownEnd - (complete ? 0 : half);
             const d = arcPath(PIE_CX, PIE_CY, PIE_R_OUT, PIE_R_IN, start, Math.max(start, end));
-            if (!d) return null;
+            if (!d || /NaN|Infinity/.test(d)) return null;
             return (
               <path
                 key={g.slice.key}
@@ -399,7 +631,7 @@ const PieChart: React.FC<{
                 fill={g.slice.color}
                 stroke="var(--color-panel)"
                 strokeWidth={1}
-                opacity={animOn ? progress : 1}
+                opacity={animOn ? Math.max(0, Math.min(1, progress)) : 1}
                 onMouseEnter={() => setHoverKey(g.slice.key)}
                 onMouseLeave={() => setHoverKey((k) => (k === g.slice.key ? null : k))}
               />
@@ -430,27 +662,34 @@ const PieChart: React.FC<{
             >
               {t('stats.tipTokens', {
                 n: hovered.slice.tokens,
-                p: (hovered.slice.ratio * 100).toFixed(1),
+                p: ((Number.isFinite(hovered.slice.ratio) ? hovered.slice.ratio : 0) * 100).toFixed(1),
               })}
             </div>
           </div>
         )}
       </div>
 
+      {/* 图例走 geo（而非原始 slices），保证「图例条目」与「实际画出的扇区」严格一一对应：
+          非法 ratio 的项在 geo 里已被过滤掉，不会出现「图例有、饼上没有」的幽灵条目。 */}
       <div className="stats-legend">
-        {slices.map((s) => (
-          <div
-            key={s.key}
-            className="stats-legend-row"
-            onMouseEnter={() => setHoverKey(s.key)}
-            onMouseLeave={() => setHoverKey((k) => (k === s.key ? null : k))}
-            onClick={onEnterDetail}
-          >
-            <span className="stats-legend-dot" style={{ background: s.color }} />
-            <span className="stats-legend-name">{s.name}</span>
-            <span className="stats-legend-val">{(s.ratio * 100).toFixed(1)}%</span>
-          </div>
-        ))}
+        {geo.map((g) => {
+          const s = g.slice;
+          // 非有限 ratio 一律显示 0.0%，绝不把 "NaN%" 抛给用户
+          const pct = (Number.isFinite(s.ratio) ? s.ratio : 0) * 100;
+          return (
+            <div
+              key={s.key}
+              className="stats-legend-row"
+              onMouseEnter={() => setHoverKey(s.key)}
+              onMouseLeave={() => setHoverKey((k) => (k === s.key ? null : k))}
+              onClick={onEnterDetail}
+            >
+              <span className="stats-legend-dot" style={{ background: s.color }} />
+              <span className="stats-legend-name">{s.name}</span>
+              <span className="stats-legend-val">{pct.toFixed(1)}%</span>
+            </div>
+          );
+        })}
         <div className="stats-legend-row" style={{ cursor: 'default' }}>
           <span className="stats-legend-name" style={{ color: 'var(--color-text-secondary)' }}>
             {t('stats.otherThreshold', { p: Math.round(OTHER_THRESHOLD * 100) })}
@@ -661,28 +900,37 @@ const ModelRankList: React.FC<{
 };
 
 // ============================================================================
-// 板块三：你最喜欢的人物
+// 板块一（最上方）：你最喜欢的人物 —— **主页面纯展示**
 // ============================================================================
 
+/**
+ * 「你最喜欢的人物」卡片（统计页**主界面**，v2.3.95 起为纯展示）。
+ *
+ * 设计约束（用户原话）：「统计界面只是一个展示窗口而已，在这个编辑界面才能写个性签名、
+ * 选择性别」。因此这里**不再有签名输入框与性别按钮**，只剩：
+ *   - 头像、名字、陪伴时长、Token 数、消息数；
+ *   - 性别（设置过才显示，未设置留空）；
+ *   - 个性签名（写過才显示，未写留空）；
+ *   - 右上角的**编辑入口**（进入 favEdit 子页）。
+ *
+ * 未设置人物时仍显示大号加号：这是「**选一个**」而不是「改内容」，
+ * 属于入口行为而非编辑控件，故仍留在主页面（沿用 v2.3.94 的既有行为）。
+ */
 const FavoriteSection: React.FC<{
   favRow: RankRow | null;
   gender: 'male' | 'female' | undefined;
   signature: string;
+  /** 进入独立编辑界面（favEdit 子页） */
+  onOpenEditor: () => void;
+  /** 未设置时点大号加号 → 打开人物选择弹层 */
   onOpenPicker: () => void;
-  onClear: () => void;
-  onSetGender: (g: 'male' | 'female' | undefined) => void;
-  onSignatureChange: (v: string) => void;
-  onSignatureCommit: (v: string) => void;
   animOn: boolean;
 }> = ({
   favRow,
   gender,
   signature,
+  onOpenEditor,
   onOpenPicker,
-  onClear,
-  onSetGender,
-  onSignatureChange,
-  onSignatureCommit,
   // animOn 已由外层门控进 stats 分组；此处保留入参以便将来给卡片加入场动画
 }) => {
   const { t } = useI18n();
@@ -691,10 +939,25 @@ const FavoriteSection: React.FC<{
     <div className={`stats-fav-card${favRow ? ' is-set' : ''}`}>
       <div className="stats-fav-head">
         <span>{t('stats.favTitle')}</span>
+        {/* 编辑入口固定在板块**右上角**（用户指定的位置）。
+            未设置人物时也显示：用户可以直接进编辑界面再挑人，不必先点加号。 */}
+        <button
+          className="stats-fav-edit-btn"
+          title={t('stats.favEdit')}
+          aria-label={t('stats.favEdit')}
+          onClick={onOpenEditor}
+        >
+          <span aria-hidden="true">✎</span>
+        </button>
       </div>
       {!favRow ? (
         <div className="stats-fav-body">
-          <button className="stats-fav-plus" title={t('stats.favSet')} onClick={onOpenPicker}>
+          <button
+            className="stats-fav-plus"
+            title={t('stats.favSet')}
+            aria-label={t('stats.favSet')}
+            onClick={onOpenPicker}
+          >
             ＋
           </button>
           <div className="stats-fav-info">
@@ -730,46 +993,169 @@ const FavoriteSection: React.FC<{
             </div>
           </div>
 
-          <div className="stats-fav-actions">
-            <button className="stats-back-btn" onClick={onOpenPicker}>
-              {t('stats.favChange')}
-            </button>
-            <button className="stats-back-btn" onClick={onClear}>
-              {t('stats.favClear')}
-            </button>
-            {/* 性别：用户自己选男/女，不选就留空 */}
-            <div className="stats-fav-gender-pick">
-              <span>{t('stats.favGenderLabel')}</span>
-              <button
-                className={gender === 'male' ? 'active' : ''}
-                onClick={() => onSetGender(gender === 'male' ? undefined : 'male')}
-              >
-                {t('stats.gender.male')}
-              </button>
-              <button
-                className={gender === 'female' ? 'active' : ''}
-                onClick={() => onSetGender(gender === 'female' ? undefined : 'female')}
-              >
-                {t('stats.gender.female')}
-              </button>
-            </div>
-          </div>
-
-          {/* 个性签名：用户自己写，未写留空 */}
-          <div className="stats-fav-signature">
-            <input
-              value={signature}
-              placeholder={t('stats.favSignaturePh')}
-              maxLength={60}
-              onChange={(e) => onSignatureChange(e.target.value)}
-              onBlur={(e) => onSignatureCommit(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-              }}
-            />
-          </div>
+          {/* 个性签名：只读展示。用户自己写；未写则整块留空（不占位、不显示占位符）。 */}
+          {signature.trim() && (
+            <div className="stats-fav-signature-view">{signature}</div>
+          )}
         </>
       )}
+    </div>
+  );
+};
+
+// ============================================================================
+// favEdit 子页：「你最喜欢的人物」编辑界面
+// ============================================================================
+
+/**
+ * 编辑界面（`page === 'favEdit'`）。
+ *
+ * 为什么要有独立界面：用户要求统计页主界面「只是一个展示窗口」，
+ * 所有会**改动数据**的控件（换人物 / 选性别 / 写签名）都集中在这里，
+ * 并且必须点「保存」才写回 settings —— 点「取消」则一行都不改。
+ *
+ * 三个字段各自独立：
+ *   1. 人物：复用 RolePicker（内部走 fuzzySearch.suggest，最多 5 条候选）；
+ *   2. 性别：单选按钮组（男 / 女 / 不选），不用下拉 —— 当前选择一眼可见；
+ *   3. 个性签名：多行 textarea（人物签名可能较长，input 单行不够用）。
+ */
+const FavoriteEditor: React.FC<{
+  /** 草稿（用户正在改、还没保存） */
+  draft: FavDraft;
+  /** 草稿里那位人物的展示数据（可能为 null：刚选完还没进统计缓存） */
+  draftRow: RankRow | null;
+  /** 已保存的最喜爱人物 roleId（空串 = 尚未设置过）；只用于决定「清除设置」是否显示 */
+  savedRoleId: string;
+  /** 人物总数：0 时提示「还没有任何人物」并禁用保存 */
+  roleCount: number;
+  onOpenPicker: () => void;
+  onGenderChange: (g: 'male' | 'female' | undefined) => void;
+  onSignatureChange: (v: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  onClear: () => void;
+}> = ({
+  draft,
+  draftRow,
+  savedRoleId,
+  roleCount,
+  onOpenPicker,
+  onGenderChange,
+  onSignatureChange,
+  onSave,
+  onCancel,
+  onClear,
+}) => {
+  const { t } = useI18n();
+  const hasRole = !!draft.roleId;
+  // 「清除设置」只在**确实已保存过**一位人物时才显示（否则点了无事发生，是骗人的 UI）
+  const canClear = !!savedRoleId;
+
+  return (
+    <div className="stats-fav-editor">
+      {/* ---- 1. 人物 ---- */}
+      <div className="stats-fav-editor-block">
+        <div className="stats-fav-editor-label">{t('stats.favRoleLabel')}</div>
+        <div className="stats-fav-editor-pick">
+          {draftRow ? (
+            <>
+              <div className="avatar" style={{ width: 40, height: 40, borderRadius: 10, fontSize: 19 }}>
+                {draftRow.avatar ? <AvatarImg path={draftRow.avatar} /> : '🤖'}
+              </div>
+              <span className="stats-fav-editor-picked">{draftRow.name}</span>
+            </>
+          ) : (
+            <span className="stats-fav-editor-picked is-empty">
+              {hasRole ? draft.roleId : t('stats.favUnset')}
+            </span>
+          )}
+          <button
+            className="stats-back-btn"
+            style={{ marginLeft: 'auto' }}
+            onClick={onOpenPicker}
+            disabled={roleCount === 0}
+          >
+            {hasRole ? t('stats.favChange') : t('stats.favSet')}
+          </button>
+        </div>
+        {roleCount === 0 && <div className="stats-fav-editor-hint">{t('stats.noRoles')}</div>}
+      </div>
+
+      {/* ---- 2. 性别（单选按钮组，不用下拉：当前选择一眼可见） ---- */}
+      <div className="stats-fav-editor-block">
+        <div className="stats-fav-editor-label">{t('stats.favGenderLabel')}</div>
+        <div className="stats-fav-gender-pick" role="radiogroup" aria-label={t('stats.favGenderLabel')}>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={draft.gender === 'male'}
+            className={draft.gender === 'male' ? 'active' : ''}
+            onClick={() => onGenderChange('male')}
+          >
+            {t('stats.gender.male')}
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={draft.gender === 'female'}
+            className={draft.gender === 'female' ? 'active' : ''}
+            onClick={() => onGenderChange('female')}
+          >
+            {t('stats.gender.female')}
+          </button>
+          {/* 「不选」= 清空性别（settings 里存undefined → 主页面留空不显示） */}
+          <button
+            type="button"
+            role="radio"
+            aria-checked={draft.gender === undefined}
+            className={draft.gender === undefined ? 'active' : ''}
+            onClick={() => onGenderChange(undefined)}
+          >
+            {t('stats.favGenderNone')}
+          </button>
+        </div>
+      </div>
+
+      {/* ---- 3. 个性签名（多行） ---- */}
+      <div className="stats-fav-editor-block">
+        <div className="stats-fav-editor-label" id="stats-fav-signature-label">
+          {t('stats.favSignatureLabel')}
+        </div>
+        <div className="stats-fav-signature">
+          <textarea
+            rows={3}
+            value={draft.signature}
+            aria-labelledby="stats-fav-signature-label"
+            placeholder={t('stats.favSignaturePh')}
+            maxLength={FAV_SIGNATURE_MAXLEN}
+            onChange={(e) => onSignatureChange(e.target.value)}
+          />
+        </div>
+        {/* 字数提示（仅在接近上限时出现，避免平时噪音） */}
+        {draft.signature.trim().length >= FAV_SIGNATURE_MAXLEN - 20 && (
+          <div className="stats-fav-editor-hint">
+            {draft.signature.length} / {FAV_SIGNATURE_MAXLEN}
+          </div>
+        )}
+      </div>
+
+      {/* ---- 4. 保存 / 取消 / 清除设置 ---- */}
+      <div className="stats-fav-editor-actions">
+        {/* disabled 的原生 button 在部分浏览器里不派发鼠标事件，title 提示会失效，
+            故把「先选人物」的提示做成**常驻可见**的一行字（且仅在未选时出现）。 */}
+        <button className="btn-primary" onClick={onSave} disabled={!hasRole}>
+          {t('stats.favSave')}
+        </button>
+        <button className="btn-ghost" onClick={onCancel}>
+          {t('common.cancel')}
+        </button>
+        {canClear && (
+          <button className="stats-back-btn" style={{ marginLeft: 'auto' }} onClick={onClear}>
+            {t('stats.favClear')}
+          </button>
+        )}
+      </div>
+      {!hasRole && <div className="stats-fav-editor-hint">{t('stats.favPickFirst')}</div>}
     </div>
   );
 };

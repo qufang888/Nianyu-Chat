@@ -642,13 +642,16 @@ export const translations: Record<Lang, Dict> = {
     'stats.tokenRankEnter': '点击查看完整排名',
     'stats.tokenRankAll': 'Token 消耗完整排名',
     'stats.pieCenterLabel': '总 Token',
+    // v2.3.95：饼图空态（没有任何 Token 消耗时，仍画出空圆环 + 提示，而不是让饼图消失）
+    'stats.pieEmptyTitle': '还没有 Token 统计',
+    'stats.pieEmptyHint': '去聊几句，饼图就会出现',
     'stats.tipTokens': '{n} Token · {p}%',
     // 板块二：好感度 / 陪伴时间排行
     'stats.bondRank': '好感度排行',
     'stats.bondRankAll': '好感度与陪伴时间排行',
     'stats.sortByAffinity': '按好感度',
     'stats.sortByCompanion': '按陪伴时间',
-    // 板块三：你最喜欢的人物
+    // 板块一（v2.3.95 移到统计页最上方）：你最喜欢的人物
     'stats.favTitle': '你最喜欢的人物',
     'stats.favSet': '设置最喜爱人物',
     'stats.favUnset': '还没有设置最喜爱人物',
@@ -663,6 +666,14 @@ export const translations: Record<Lang, Dict> = {
     'stats.favSearchPh': '搜索人物名称…',
     'stats.favNoResult': '没有找到匹配的人物',
     'stats.favPickMeta': '显示 {shown} / {total} 位人物（最多 {max} 条候选）',
+    // ===== v2.3.95：独立编辑界面（主页面改为纯展示）=====
+    'stats.favEdit': '编辑',
+    'stats.favEditTitle': '编辑最喜爱人物',
+    'stats.favRoleLabel': '人物',
+    'stats.favGenderNone': '不选',
+    'stats.favSignatureLabel': '个性签名',
+    'stats.favSave': '保存',
+    'stats.favPickFirst': '请先选择一位人物',
     // 陪伴时长单位（只显示最大的两个单位）
     'stats.durSeconds': '{n} 秒',
     'stats.durMinsSecs': '{m} 分 {s} 秒',
@@ -2316,13 +2327,16 @@ export const translations: Record<Lang, Dict> = {
     'stats.tokenRankEnter': 'Click to see the full ranking',
     'stats.tokenRankAll': 'Full token consumption ranking',
     'stats.pieCenterLabel': 'Total tokens',
+    // v2.3.95: pie-chart empty state (empty ring + hint instead of vanishing)
+    'stats.pieEmptyTitle': 'No token stats yet',
+    'stats.pieEmptyHint': 'Chat a few messages and the pie chart will appear',
     'stats.tipTokens': '{n} tokens · {p}%',
     // Section 2: affinity / time-together ranking
     'stats.bondRank': 'Affinity ranking',
     'stats.bondRankAll': 'Affinity & time-together ranking',
     'stats.sortByAffinity': 'By affinity',
     'stats.sortByCompanion': 'By time together',
-    // Section 3: your favorite character
+    // Section 1 (moved to the very top in v2.3.95): your favorite character
     'stats.favTitle': 'Your favorite character',
     'stats.favSet': 'Set favorite character',
     'stats.favUnset': 'No favorite character set yet',
@@ -2337,6 +2351,14 @@ export const translations: Record<Lang, Dict> = {
     'stats.favSearchPh': 'Search character name…',
     'stats.favNoResult': 'No matching character found',
     'stats.favPickMeta': 'Showing {shown} of {total} characters (up to {max} suggestions)',
+    // ===== v2.3.95: standalone editor (main page is display-only) =====
+    'stats.favEdit': 'Edit',
+    'stats.favEditTitle': 'Edit favorite character',
+    'stats.favRoleLabel': 'Character',
+    'stats.favGenderNone': 'Not set',
+    'stats.favSignatureLabel': 'Signature',
+    'stats.favSave': 'Save',
+    'stats.favPickFirst': 'Pick a character first',
     // Companion duration units (only the two largest units are shown)
     'stats.durSeconds': '{n}s',
     'stats.durMinsSecs': '{m}m {s}s',
