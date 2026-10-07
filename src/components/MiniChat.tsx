@@ -3022,7 +3022,9 @@ const MiniMessageRow: React.FC<{
   }
   const isUser = msg.sender_type === 'user';
     const streaming = msg.sender_type === 'ai' && (msg.id as number) < 0;
-  // v2.3.77：回复全部生成完毕（占位气泡与流式输出都结束）才让操作栏「弹出」；生成过程中「缩回」。
+  // v2.3.77：回复全部生成完毕（占位气泡与流式输出都结束）才让操作栏出现；生成过程中不可见。
+  // v2.3.94 修正：CSS 表现由「缩回 / 弹出」（scale 过渡）改为「未就绪 visibility:hidden（保留占位）、
+  // 就绪直接以正常大小出现」，本处状态逻辑不变。
   const streamed = !(streaming && !msg.content);
   const [actionBarVisible, setActionBarVisible] = useState(false);
   // v2.3.94 需求 2（与主窗同步）：弹出时机 = 生成完毕 **且** 伪流式逐字放完。

@@ -7288,8 +7288,9 @@ const MessageRow: React.FC<{
 
   const pseudoCharDur = `${clampPseudoSpeed(pseudoSpeed ?? 0.8)}s`;
 
-  // 缩回 / 弹出（v2.3.77，非渐显渐隐）：streamed 变false → 移除 is-in（CSS 里 scale 缩到 0.4并下移 = 缩回）；
-  // 变 true → 下一帧加 is-in（scale 回 1 = 弹出）。占位始终在，故不引起气泡高度跳动。
+  // 操作栏可见性（v2.3.94 修正·仅改表现方式）：streamed 变 false → 移除 is-in（CSS 里 visibility:hidden = 完全不可见）；
+  // 变 true → 下一帧加 is-in（visibility:visible = 以正常大小直接出现，无缩放动画）。
+  // 占位始终在（visibility 不影响布局），故不引起气泡高度跳动。
 
   const [actionBarVisible, setActionBarVisible] = useState(false);
 
@@ -7311,7 +7312,11 @@ const MessageRow: React.FC<{
 
     }
 
-    // 下一帧再加类，确保初始态（scale 0.4）已提交，transition 才会播放（否则不播放 = 瞬现）
+    // v2.3.94 修正：表现方式改为「直接出现」后，本行的 rAF 在时序上已非必需
+    //（visibility 切换无需等待基态提交，瞬时生效）。
+    // 仍然保留：既维持与 v2.3.77 一致的「下一帧才切可见」的时序（避免与同帧的正文 DOM 更新抢帧），
+    // 也避免因「动效开关开/关」两种环境下可能出现的首帧差异而导致按钮延后一帧出现。
+    // 保守起见不动状态逻辑——本次改动只涉及 CSS 表现。
 
     const id = requestAnimationFrame(() => setActionBarVisible(true));
 
@@ -7718,7 +7723,8 @@ const MessageRow: React.FC<{
               后果：语音组被错误地挂在 showAiActions（= m.id === lastMsgId）这条兜底分支上，
               于是**只有最后一条 AI 消息能看到 🔊 ⟳，其余 AI 消息的语音按钮全程不可见**。
               现改为 `showTts && !isUser`：语音组独立成门，与「是不是最后一条」解耦。
-              容器始终在 DOM（占位不引起气泡高度跳动），可见性统一由 .is-in（actionBarVisible）控制。*/}
+              容器始终在 DOM（占位不引起气泡高度跳动），可见性统一由 .is-in（actionBarVisible）控制。
+              v2.3.94 修正：.is-in 由「scale 0.4 缩放过渡」改为「visibility 切换」，按钮直接以正常大小出现。*/}
           {((showTts && !isUser) || (showAiActions && onAiAction && !isUser)) && (
 
           <div className={`msg-action-bar ${actionBarVisible ? 'is-in' : ''}`}>
