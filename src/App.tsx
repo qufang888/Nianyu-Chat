@@ -13,7 +13,14 @@ import { CustomTitleBar } from './components/CustomTitleBar';
 import { SplashScreen } from './components/SplashScreen';
 import { AboutModal } from './components/AboutModal';
 import { OnboardingWizard } from './components/OnboardingWizard';
-import { Library } from './components/Library';
+import { Library, type LibraryTab } from './components/Library';
+import { WorldBookEditor } from './components/WorldBookEditor';
+import { RuleEditor } from './components/RuleEditor';
+import { RoleEditor } from './components/RoleEditor';
+import {
+  QuickImportPreviewModal,
+  type QuickImportPreviewState as QuickImportPreviewModalState,
+} from './components/QuickImportPreviewModal';
 import { ModelCompare } from './components/ModelCompare';
 import { MomentsView } from './components/MomentsView';
 import { useToast, ToastView } from './components/Toast';
@@ -23,7 +30,7 @@ import ErrorBubble from './components/ErrorBubble';
 import QueueDock from './components/QueueDock';
 import { UpdatePopup } from './components/UpdatePopup';
 import { TutorialOverlay } from './components/TutorialOverlay';
-import type { Role } from './types';
+import type { Role, QuickImportResult, QuickImportPreviewItem } from './types';
 
 type View = 'chats' | 'contacts' | 'compare' | 'settings' | 'stats' | 'library' | 'moments';
 interface Selected {
@@ -54,13 +61,52 @@ export default function App() {
   const [settingsNavTick, setSettingsNavTick] = useState(0);
 
   // ===== 快速导入（v2.3.51）：文件拖入窗口任意位置 → 识别角色卡/世界书/规则/插件并直接导入 =====
+  // v2.3.97：改为「先预检 → 弹确认 → 再导入」。松手不再直接落库，误拖可以反悔。
   const [dropActive, setDropActive] = useState(false);
   const [importTick, setImportTick] = useState(0); // 导入成功后重挂载联系人/资料库列表以刷新
   const dropDepth = useRef(0);
+  // 预检弹窗状态（loading 时 result 为 null）
+  const [preview, setPreview] = useState<QuickImportPreviewModalState | null>(null);
+  // 「导入并编辑」的工作队列：按顺序逐个打开编辑器，点保存才落库；取消即跳过（完全不导入）
+  const [editQueue, setEditQueue] = useState<QuickImportPreviewItem[]>([]);
+  // 本轮队列里**实际保存成功**的项（收尾时用它决定跳到哪个页面）。
+  // 用 ref 而不是 state：onSaved 回调里紧接着就要读它，state 更新是异步的读不到。
+  const savedRef = useRef<QuickImportPreviewItem[]>([]);
+  // 资料库深链页签（导入完插件/规则后跳到对应页签「稍后编辑」）
+  const [libraryTab, setLibraryTab] = useState<LibraryTab | undefined>(undefined);
 
   const hasDragFiles = (e: React.DragEvent): boolean =>
     Array.from(e.dataTransfer?.types || []).includes('Files');
 
+  // 把既有「导入完成」的 Toast 汇报抽成独立函数：仅导入 / 导入并编辑两条路径共用
+  const reportImportResults = (results: QuickImportResult[]) => {
+    const ok = results.filter((r) => r.ok);
+    const bad = results.filter((r) => !r.ok);
+    const counts: Record<string, number> = {};
+    ok.forEach((r) => {
+      const k = r.kind || 'plugin';
+      counts[k] = (counts[k] || 0) + 1;
+    });
+    const summary = Object.entries(counts)
+      .map(([k, n]) => `${t(`quickimport.${k}`)}×${n}`)
+      .join('、');
+    const failText = bad
+      .map((r) => t('toast.quickImportFail', { name: r.name, reason: t(`quickimport.err_${r.error || 'read_failed'}`) }))
+      .join('；');
+    if (ok.length && !bad.length) showToast(t('toast.quickImportDone', { summary }));
+    else if (!ok.length) showToast(failText, { error: true });
+    else showToast(`${t('toast.quickImportDone', { summary })}；${failText}`, { duration: 5000 });
+    if (ok.length) setImportTick((v) => v + 1);
+  };
+
+  /** 「取消」：关弹窗，什么都不做（预检本身无副作用，所以这里不需要任何回滚） */
+  const closePreview = useCallback(() => setPreview(null), []);
+
+  /**
+   * 拖放入口：先拿路径 → 调预检（只读）→ 弹确认弹窗。
+   * 注意顺序：previewFiles 的调用点行号必须早于弹窗渲染与 importDroppedFiles 的调用点，
+   * `scripts/verify-quick-import-preview.mjs` 第 3 条断言按行号校验这个先后关系。
+   */
   const handleQuickImport = async (files: FileList) => {
     const paths: string[] = [];
     for (const f of Array.from(files)) {
@@ -68,28 +114,124 @@ export default function App() {
       if (p) paths.push(p);
     }
     if (!paths.length) return;
+    // ① 预检：主进程只读解析，不落库
+    setPreview({ loading: true, result: null, error: '' });
     try {
-      const results = await api.importDroppedFiles(paths);
-      const ok = results.filter((r) => r.ok);
-      const bad = results.filter((r) => !r.ok);
-      const counts: Record<string, number> = {};
-      ok.forEach((r) => {
-        counts[r.kind || 'plugin'] = (counts[r.kind || 'plugin'] || 0) + 1;
-      });
-      const summary = Object.entries(counts)
-        .map(([k, n]) => `${t(`quickimport.${k}`)}×${n}`)
-        .join('、');
-      const failText = bad
-        .map((r) => t('toast.quickImportFail', { name: r.name, reason: t(`quickimport.err_${r.error || 'read_failed'}`) }))
-        .join('；');
-      if (ok.length && !bad.length) showToast(t('toast.quickImportDone', { summary }));
-      else if (!ok.length) showToast(failText, { error: true });
-      else showToast(`${t('toast.quickImportDone', { summary })}；${failText}`, { duration: 5000 });
-      if (ok.length) setImportTick((v) => v + 1);
+      const result = await api.previewFiles(paths);
+      setPreview({ loading: false, result, error: '' });
     } catch (e: any) {
-      showToast(t('chat.sendFailedShort'), { error: true });
+      setPreview({ loading: false, result: null, error: t('quickimport.preview.failed') });
     }
   };
+
+  /** 「仅导入」：走既有 api.importDroppedFiles，语义与 v2.3.51 完全一致 */
+  const onPreviewImportOnly = useCallback(
+    async (items: QuickImportPreviewItem[]) => {
+      setPreview(null);
+      if (!items.length) return;
+      try {
+        // ② 确认之后才真正落库
+        const results = await api.importDroppedFiles(items.map((i) => i.path));
+        reportImportResults(results);
+      } catch (e: any) {
+        showToast(t('chat.sendFailedShort'), { error: true });
+      }
+    },
+    [showToast, t]
+  );
+
+  /**
+   * 把 PNG 角色卡的头像「归位」到图片目录。
+   *
+   * 背景：预检阶段不允许写盘（不复制头像文件），所以 draft.role.avatar_path 暂借用户
+   * **原文件**的路径当头像。但编辑器保存时会把 avatar_path 原样写进角色记录 ——
+   * 而用户随时可能把那个 PNG 挪走/删掉，于是头像就断了。
+   * 「仅导入」路径没这个问题：既有 import:dropFiles 会 fs.copyFileSync 一份进 imagesDir。
+   *
+   * 这里用**既有 IPC** 补上这一步，不新增接口：
+   *   api.getImage(原路径) → data URL → api.saveImage(data URL) → imagesDir 里的新路径。
+   * 只在用户点了「导入并编辑」之后才执行（此时用户已明确同意导入），预检阶段不碰。
+   * 失败则退回原路径 —— 头像仍能显示，只是不再随图片目录一起被管理。
+   */
+  const rehomeAvatar = async (items: QuickImportPreviewItem[]): Promise<QuickImportPreviewItem[]> =>
+    Promise.all(
+      items.map(async (it) => {
+        const role = it.draft?.role;
+        // avatar_path 等于 item.path ⇒ 它是预检时暂借的原始 PNG，不是已归位的图片
+        if (!role || !role.avatar_path || role.avatar_path !== it.path) return it;
+        try {
+          const dataUrl = await api.getImage(it.path);
+          if (!dataUrl) return it;
+          const stored = await api.saveImage(dataUrl);
+          if (!stored) return it;
+          return { ...it, draft: { ...it.draft, role: { ...role, avatar_path: stored } } };
+        } catch {
+          return it;
+        }
+      })
+    );
+
+  /** 「导入并编辑」：编辑器保存才落库；取消 = 完全不导入 */
+  const onPreviewImportAndEdit = useCallback(async (items: QuickImportPreviewItem[]) => {
+    setPreview(null);
+    if (!items.length) return;
+    savedRef.current = [];
+    setEditQueue(await rehomeAvatar(items));
+  }, []);
+
+  /**
+   * 编辑队列的收尾：刷新列表 + 把用户带到「刚导入的东西所在的页面」。
+   * 无论队列是被onEditSaved（保存）还是 onEditClosed（取消）走完的都要调 ——
+   * 否则「保存了第 1 项、取消了第 2 项」这种混合结局下，第 1 项已落库但列表不刷新，
+   * 用户会以为没导进去。
+   * @param saved 本轮队列里实际保存成功的项数（0 = 全取消了，什么都没落库）
+   */
+  const finishEditQueue = useCallback(
+    (saved: QuickImportPreviewItem[]) => {
+      setImportTick((v) => v + 1);
+      if (!saved.length) return; // 全取消：没有任何东西落库，别乱跳页面
+      showToast(t('quickimport.preview.edited'));
+      const kinds = saved.map((i) => i.kind);
+      // 角色卡 → 通讯录；世界书/规则 → 资料库对应页签；插件 → 资料库插件页
+      if (kinds.includes('role')) setView('contacts');
+      else if (kinds.includes('worldbook')) {
+        setLibraryTab('worldbook');
+        setView('library');
+      } else if (kinds.includes('rule')) {
+        setLibraryTab('rule');
+        setView('library');
+      } else if (kinds.includes('plugin')) {
+        setLibraryTab('plugin');
+        setView('library');
+      }
+    },
+    [showToast, t]
+  );
+
+  /** 编辑器保存成功：关掉当前编辑器，弹下一个；队列走完则收尾 */
+  const onEditSaved = useCallback(() => {
+    // 记下本轮保存过的项：编辑器的 onSaved 回调不携带是哪一项，用队列头推断即可
+    const savedAcc = savedRef.current;
+    savedAcc.push(editQueue[0]);
+    setEditQueue((q) => {
+      const next = q.slice(1);
+      if (next.length) return next;
+      finishEditQueue(savedAcc.splice(0, savedAcc.length));
+      return next;
+    });
+  }, [editQueue, finishEditQueue]);
+
+  /** 编辑器被关闭（放弃）：跳过这一项，继续下一个；全跳完则收尾（saved 列表为空 → 不跳页） */
+  const onEditClosed = useCallback(() => {
+    setEditQueue((q) => {
+      const next = q.slice(1);
+      if (next.length) return next;
+      finishEditQueue(savedRef.current.splice(0, savedRef.current.length));
+      return next;
+    });
+  }, [finishEditQueue]);
+
+  const currentEdit = editQueue[0] || null;
 
   // 首次启动向导：未走过初始设置 或 没有配置模型时弹出，添加模型为必填。
   useEffect(() => {
@@ -341,7 +483,81 @@ export default function App() {
       )}
       {view === 'stats' && <StatsView />}
       {view === 'moments' && <MomentsView />}
-      {view === 'library' && <Library key={`lib-${importTick}`} onClose={() => setView('chats')} />}
+      {view === 'library' && (
+        <Library
+          key={`lib-${importTick}`}
+          onClose={() => setView('chats')}
+          initialTab={libraryTab}
+        />
+      )}
+
+      {/* v2.3.97：拖拽导入预检确认弹窗。
+          用项目现成的 .modal-mask / .modal 类，因此自动继承统一的线性入场动画
+          （index.css 的 maskFadeIn / popupLinearIn，且已在 animControl 的 theme 组登记）。 */}
+      {preview && (
+        <QuickImportPreviewModal
+          state={preview}
+          onImportOnly={onPreviewImportOnly}
+          onImportAndEdit={onPreviewImportAndEdit}
+          onClose={closePreview}
+        />
+      )}
+
+      {/* v2.3.97：「导入并编辑」——预检已返回未落库的草稿，这里逐个交给对应编辑器。
+          编辑器点保存才真正落库；点取消/叉号则这一项**完全不导入**。
+          三种类型分流：角色卡→RoleEditor(initial) / 世界书→WorldBookEditor(wb) / 规则→RuleEditor(rule)；
+          插件无编辑器，预检阶段就不给 draft，故不会走到这里。 */}
+      {currentEdit?.draft?.role && (
+        <RoleEditor
+          initial={currentEdit.draft.role}
+          onClose={onEditClosed}
+          onSaved={onEditSaved}
+        />
+      )}
+      {currentEdit?.draft?.worldBook && (
+        <div className="modal-mask" onClick={onEditClosed}>
+          <div className="modal" style={{ width: 640, maxWidth: '94vw' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <span>
+                📖 {t('library.edit')} · {currentEdit.draft.worldBook.name || currentEdit.fileName}
+              </span>
+              <span className="modal-close" onClick={onEditClosed}>
+                ×
+              </span>
+            </div>
+            <div className="modal-body">
+              <p className="qip-desc">{t('quickimport.preview.editHint')}</p>
+              <WorldBookEditor
+                wb={currentEdit.draft.worldBook}
+                onClose={onEditClosed}
+                onSaved={onEditSaved}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+      {currentEdit?.draft?.rule && (
+        <div className="modal-mask" onClick={onEditClosed}>
+          <div className="modal" style={{ width: 560, maxWidth: '94vw' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <span>
+                📝 {t('library.edit')} · {currentEdit.draft.rule.name || currentEdit.fileName}
+              </span>
+              <span className="modal-close" onClick={onEditClosed}>
+                ×
+              </span>
+            </div>
+            <div className="modal-body">
+              <p className="qip-desc">{t('quickimport.preview.editHint')}</p>
+              <RuleEditor
+                rule={currentEdit.draft.rule}
+                onClose={onEditClosed}
+                onSaved={onEditSaved}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {showGroup && (
         <GroupEditor onClose={() => setShowGroup(false)} onSaved={onGroupSaved} />

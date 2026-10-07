@@ -149,7 +149,7 @@ const CustomScrollArea: React.FC<{
               borderRadius: barWidth / 2,
               cursor: 'default',
               pointerEvents: 'auto',
-              transition: !animOn || dragging.current ? 'none' : 'opacity 0.15s ease',
+              transition: !animOn || dragging.current ? 'none' : `opacity calc(0.15s * var(--anim-speed, 1)) ease`,
               opacity: 0.6,
             }}
             onMouseDown={onThumbMouseDown}

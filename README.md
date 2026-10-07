@@ -131,6 +131,23 @@ Action 会自动将代码与标签同步到 Gitee。
 - `版本更新记录.md` —— 每个版本改了什么
 - `硬编码清单.md` —— 代码里的硬编码值清单（超时 / 阈值 / 上限等）
 
+## 第三方素材与致谢
+
+本项目声明式致谢以下第三方内容：
+
+- **内置技能「狗头军师」** —— 引入自开源仓库 [`shengjidaguai-china/goutoujunshi`](https://github.com/shengjidaguai-china/goutoujunshi)，
+  MIT 许可，`Copyright (c) 2026 powerycy`。仅使用其 `SKILL.md` 作为提示词种子（与上游逐字节一致），
+  未引入其脚本与知识库分册。本项目不主张该内容的原始著作权。
+- **开源依赖** —— 共 457 个传递依赖全部为宽松许可（MIT / ISC / BSD / Apache-2.0 等），
+  **无 GPL / AGPL / LGPL / MPL 类依赖**，故 MIT 开源不受传染。其中 `caniuse-lite` 采用
+  CC-BY-4.0（强制署名），已在 `NOTICE` 中署名。
+- **音频素材** —— 项目**全部音效均为程序合成自制**（见 `scripts/gen-builtin-sounds.mjs`），
+  不含任何第三方采样素材。图标亦为自制。
+- **数据格式兼容** —— 实现了 SillyTavern 角色卡 / 世界书、OpenAI `ai-plugin.json` 等
+  第三方**格式**的解析器（独立实现，未复制任何来源项目代码）。
+
+完整清单与详细说明见 [`NOTICE`](./NOTICE) 与 [`ASSETS-LICENSES.md`](./ASSETS-LICENSES.md)。
+
 ## 许可证
 
 本项目基于 MIT License 开源，版权归「前方」所有，详见 `LICENSE`。

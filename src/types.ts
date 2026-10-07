@@ -433,6 +433,73 @@ export function clampPseudoSpeed(v: unknown): number {
   return Math.min(PSEUDO_SPEED_MAX, Math.max(PSEUDO_SPEED_MIN, n));
 }
 
+// ===== 全局界面动画速度（v2.3.97）=====
+// 与上面的 pseudoStreamSpeed（伪流式逐字渐显，秒/字）**完全独立**：那个是内容状态反馈、
+// 有自己单独设置；本模块管的是「界面动效」——弹窗缩放、面板展开、Toast 滑入、悬停过渡等。
+//
+// 统一语义为**倍率**（倍率 = 实际时长 ÷ 原始时长）：
+//   1.5 = 慢 1.5 倍（时长 ×1.5）；0.5 = 快一倍（时长 ÷2）；1 = 原始速度（默认）。
+// 之所以选倍率而非秒数作为内部真源：CSS 侧统一写 `calc(<原值> * var(--anim-speed))`，
+// 倍率是唯一能同时喂给 CSS 与 JS 的形式（JS 只需 `base / speed`），秒数则要先反推基准。
+export const ANIM_SPEED_MIN = 0.5; // 最快档倍率（对应「很快」）
+export const ANIM_SPEED_MAX = 1.5; // 最慢档倍率（对应「很慢」）
+export const ANIM_SPEED_DEFAULT = 1; // 默认「正常」= 原始速度，不改变任何现有观感
+
+/** 设置页的五个预设档（渲染顺序即此数组顺序；倍率从大到小 = 从慢到快） */
+export const ANIM_SPEED_PRESETS: number[] = [1.5, 1.25, 1, 0.75, 0.5];
+
+/**
+ * 自定义档的基准时长（秒）——「以这个秒数为单个弹窗的标准时长，其余动画按比例缩放」。
+ * 取 0.16s 是因为它是本项目弹窗入场动画的事实标准时长（`popupLinearIn 0.16s`，
+ * index.css 中出现 20+ 次，占全部动画条目约 1/4），用它做基准换算最符合直觉。
+ */
+export const ANIM_SPEED_REF_SECONDS = 0.16;
+/** 自定义秒数的取值范围（防止用户输入 0 / 负数 / 荒诞的超大值把动画压成瞬变或长到卡死） */
+export const ANIM_SPEED_SECONDS_MIN = 0.02;
+export const ANIM_SPEED_SECONDS_MAX = 2;
+export const ANIM_SPEED_SECONDS_DEFAULT = ANIM_SPEED_REF_SECONDS; // 0.16s → 倍率 1 → 与「正常」档等价
+
+/**
+ * 倍率钳位 —— **animSpeed 字段的唯一校验入口**。
+ * 倍率本身允许超出 [ANIM_SPEED_MIN, ANIM_SPEED_MAX]：自定义档换算出的倍率可能落在区间外
+ * （例如基准 2s → 倍率 0.08），此时按「秒数范围」而非「倍率范围」兜底，
+ * 故这里只做**下界保护**（倍率必须 > 0 且有上限），不强行夹回预设区间。
+ * 上界取 ANIM_SPEED_MAX*4 是为了挡住脏数据导致的「动画长到看起来像卡死」。
+ */
+export const ANIM_SPEED_HARD_MAX = ANIM_SPEED_MAX * 4; // 倍率硬上限（防脏数据）
+
+/** 倍率 → 自定义基准秒数（设置页回显用） */
+export function animSpeedToSeconds(speed: number): number {
+  return ANIM_SPEED_REF_SECONDS / speed;
+}
+
+/** 自定义基准秒数的钳位 —— 设置页输入框与 `animSpeedFromSeconds` 共用同一套边界 */
+export function clampAnimSpeedSeconds(v: unknown): number {
+  const n = Number(v);
+  const safe = Number.isFinite(n) && n > 0 ? n : ANIM_SPEED_SECONDS_DEFAULT;
+  return Math.min(ANIM_SPEED_SECONDS_MAX, Math.max(ANIM_SPEED_SECONDS_MIN, safe));
+}
+
+/**
+ * 自定义基准秒数 → 倍率。这是**自定义档的换算公式**，也是唯一入口。
+ * 语义：以 `sec` 秒为「弹窗标准时长」时，其余所有动画按 `0.16 / sec` 缩放。
+ */
+export function animSpeedFromSeconds(sec: unknown): number {
+  return clampAnimSpeed(ANIM_SPEED_REF_SECONDS / clampAnimSpeedSeconds(sec));
+}
+
+/** 倍率是否等于某个预设档（容差 1e-6，规避浮点误差导致「自定义」被误判成「1×」） */
+export function isAnimSpeedPreset(speed: number): boolean {
+  return ANIM_SPEED_PRESETS.some((p) => Math.abs(p - speed) < 1e-6);
+}
+
+/** 钳位一个倍率到合法区间；非法值（含 NaN / ≤0 / 脏数据）一律回落到默认 1 */
+export function clampAnimSpeed(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return ANIM_SPEED_DEFAULT;
+  return Math.min(ANIM_SPEED_HARD_MAX, Math.max(0.01, n));
+}
+
 // 生图（专用图像生成 API）：拥有独立的 baseUrl/apiKey，与「模型配置中心」完全解耦，调用 OpenAI 兼容 /images/generations
 // 需求 7：支持**多个生图 API 配置**（与文本模型一样可添加多条），activeId 指向当前启用项；
 // 下面的扁平字段是兼容层，由 db 层 migrateMediaApiConfigs() 与 imageConfigs[activeId] 双向同步。
@@ -584,6 +651,20 @@ export interface AppSettings {
   // animControlMode：'master'=全开/'single'=自定义；'master' 另可对应全关（配合 enableAnimations=false）
   animControlMode?: 'master' | 'single';
   animGroups?: Record<string, boolean>; // 分组 id → 是否开启动效（缺 key 视为开）；分组表见 src/utils/animControl.ts
+  // ===== 界面动效速度（v2.3.97）=====
+  // 与上面的 animMode/animGroups 正交：**档位决定「动不动」，速度决定「动不动得快慢」**。
+  // 内部统一存**倍率**（1 = 原始速度），CSS 侧写成 `calc(<原值> * var(--anim-speed))`，
+  // JS 侧（饼图补间 / useRetract 延迟卸载 / 光标淡入淡出）写成 `base / speed`。
+  // 缺省视为 ANIM_SPEED_DEFAULT(1)，即不改变任何既有观感。
+  animSpeed?: number;
+  // 自定义档（`animSpeedPreset === 'custom'`）下用户输入的**基准秒数**：
+  // 语义为「以这个秒数作为单个弹窗的标准时长」，换算成倍率 = ANIM_SPEED_REF_SECONDS / 该值。
+  // 单独存秒数（而非只存换算后的倍率）是为了设置页能原样回显用户填的数，且改档位时不丢输入。
+  animSpeedSeconds?: number;
+  // 当前速度档位选择：五档预设之一（'preset' 语义）或 'custom'。
+  // 不存具体倍率而存档位，是为了让 UI 的「选中哪个 radio」有唯一真源 —— 否则用户选了 1.25×
+  // 但数值被 clamp 成 1 时，radio 会跳回 1×，造成界面与实际值不一致。
+  animSpeedPreset?: 'preset' | 'custom';
   // ===== 软件更新（v2.3.45）=====
   autoCheckUpdate?: boolean; // 启动时自动检查更新（默认 true）；关闭后仅手动检查
   autoDownloadUpdate?: boolean; // 发现新版本后自动从 GitHub 下载安装包（默认 false）
@@ -641,6 +722,10 @@ export interface AppSettings {
   glassBubbleUserText?: string; // 毛玻璃主题：用户气泡文字色（空=跟随主题）
   glassBubbleAiText?: string; // 毛玻璃主题：AI 气泡文字色（空=跟随主题）
   glassBubbleBorder?: string; // 毛玻璃主题：气泡边框色（空=透明/无）
+  // ===== 液态玻璃主题（liquid）专属（v2.3.97）=====
+  // 背景缓慢流动动画开关。留空 / true = 流动（默认）；false = 静止。
+  // 实现见 ThemeContext（挂 html[data-liquid-flow="off"]）与 index.css 的 liquid-flow-drift。
+  liquidFlow?: boolean;
   enableRandomEvents: boolean; // 随机事件：开启后聊天过程中会自动弹出随机事件（关闭则仅手动触发）
   // ===== 空闲主动回复 =====
   idleEnabled: boolean; // 全局主开关：关闭时所有按聊天的主动消息都失效（默认开）
@@ -782,7 +867,9 @@ export type ThemeName =
   | 'cyber'
   | 'graphite'
   | 'indigo'
-  | 'sand';
+  | 'sand'
+  // v2.3.97：液态玻璃（第 15 套主题）。半透明 + 多色渐变，背景带缓慢流动动画。
+  | 'liquid';
 
 // v2.3.44：model 一律留空（不预填模型名，由用户手填或从「刷新模型列表」选取）；
 // 仅 baseUrl 对固定官方端点的提供商预填（openai/deepseek/anthropic/gemini），兼容类留空手填。
@@ -825,6 +912,94 @@ export interface QuickImportResult {
   ok: boolean;
   kind?: QuickImportKind; // 成功时的导入类型
   error?: 'not_character_png' | 'read_failed' | 'unsupported'; // 失败原因
+}
+
+// ===== 快速导入「预检」（v2.3.97）=====
+// 用户拖入文件后、真正落库**之前**先跑一遍只读解析，把每个文件的识别结果与
+// 关键信息回传给渲染层弹确认弹窗。预检与导入共用同一套识别逻辑（主进程
+// `classifyImportContent` / `parseCharacterPng` / `parseWorldBook`），
+// 但**预检阶段严禁写盘写库**（不建角色、不建世界书/规则、不写头像文件、不建 Plugin 记录）。
+/** 预检失败原因。比 QuickImportResult 更细：多一个 `unknown`（既非 JSON 也非纯文本规则）。 */
+export type QuickImportPreviewErrorCode =
+  | 'not_character_png' // 是 PNG 但没有 chara 元数据（普通图片）
+  | 'read_failed' // 文件读不了（被占用/无权限/已删除）
+  | 'unsupported' // 扩展名不在白名单
+  | 'unknown'; // 读到了但完全无法识别
+
+/** 角色卡预览里的单个关键字段。`labelKey` 是 i18n 键（复用 role.* 现有键），由渲染层翻译。 */
+export interface QuickImportRoleField {
+  labelKey: string;
+  value: string;
+}
+
+export interface QuickImportRolePreview {
+  name: string;
+  /** PNG 角色卡：头像就是这张 PNG 本身（**不复制文件**，渲染层用 api.getImage 读原路径） */
+  avatarPath?: string;
+  /** JSON 角色卡内嵌的 base64 头像 → data URL（超过 256KB 则省略，避免 IPC 传大包） */
+  avatarDataUrl?: string;
+  /** 一句话简介（short_intro / personality 摘要），截断 100 字 */
+  summary: string;
+  fields: QuickImportRoleField[];
+}
+
+export interface QuickImportBookPreview {
+  name: string;
+  description?: string;
+  entryCount: number;
+  /** 前若干条条目的关键词，供用户一眼确认内容对不对 */
+  keysSample: string[];
+}
+
+export interface QuickImportRulePreview {
+  name: string;
+  /** 提示词正文前 120 字 */
+  excerpt: string;
+  charCount: number;
+}
+
+export interface QuickImportPluginPreview {
+  name: string;
+  description?: string;
+  toolCount: number;
+  /** promptSegments 段数（会作为系统提示注入 AI 回复） */
+  segmentCount: number;
+}
+
+/**
+ * 「导入并编辑」用的未落库草稿：由主进程用**与真正导入完全相同**的构造函数产出
+ * （buildRoleFromParsed / parseWorldBook / parseRule），只是不调用 dm.* 写库。
+ * 渲染层把它直接交给对应编辑器的 initial/wb/rule，编辑器点保存时才真正落库 ——
+ * 于是「取消」等于「完全没导入」，不会留下半截数据。
+ * 没有 draft 字段 = 该类型暂不支持「导入并编辑」（插件：项目内本来就没有插件编辑器）。
+ */
+export interface QuickImportEditDraft {
+  role?: Role;
+  worldBook?: WorldBook;
+  rule?: Rule;
+}
+
+export interface QuickImportPreviewItem {
+  path: string;
+  fileName: string;
+  size: number; // 字节
+  ext: string; // 小写扩展名（无扩展名时为空串）
+  kind: QuickImportKind; // 预判的导入类型（失败时按最可能的类型给，仅用于图标/排序）
+  rolePreview?: QuickImportRolePreview;
+  bookPreview?: QuickImportBookPreview;
+  rulePreview?: QuickImportRulePreview;
+  pluginPreview?: QuickImportPluginPreview;
+  /** 可编辑草稿；与 error 互斥（解析失败时不会有 draft） */
+  draft?: QuickImportEditDraft;
+  error?: { code: QuickImportPreviewErrorCode; message?: string };
+}
+
+export interface QuickImportPreviewResult {
+  items: QuickImportPreviewItem[];
+  /** 因超过单次上限而被丢弃的文件数（0 = 全部都列出来了） */
+  truncated: number;
+  /** 本次生效的上限（与 import:dropFiles 一致，当前 20） */
+  limit: number;
 }
 
 export const PROVIDER_DEFAULTS: Record<
@@ -994,6 +1169,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     scrollbar: true,
     tutorial: true,
   },
+  // ===== 界面动效速度（v2.3.97）：默认「正常」= 倍率 1，不改变任何既有观感 =====
+  animSpeed: ANIM_SPEED_DEFAULT,
+  animSpeedSeconds: ANIM_SPEED_SECONDS_DEFAULT,
+  animSpeedPreset: 'preset',
   autoCheckUpdate: true,
   autoDownloadUpdate: false,
   modelTagMode: 'api',
@@ -1024,6 +1203,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   glassBubbleUserText: '',
   glassBubbleAiText: '',
   glassBubbleBorder: '',
+  // v2.3.97：液态玻璃默认开启背景流动（用户可在毛玻璃面板里关掉）
+  liquidFlow: true,
   enableRandomEvents: true,
   idleEnabled: true,
   chatIdleEnabled: {},

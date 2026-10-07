@@ -49,6 +49,15 @@ import {
   ModelApiError,
 } from './ai';
 import { createBackup, restoreBackup, peekBackupVersion } from './backup';
+// v2.3.97：自绘弹窗桥。接管原先 2 处 dialog.showMessageBox + 9 处
+// dialog.showOpenDialog/showSaveDialog —— 全部改为「推给渲染层弹主题内弹窗 + 等回传」。
+import {
+  registerDialogIpc,
+  requestConfirmFromMain,
+  setBackupProviders,
+  setCharacterCardImporter,
+  setDataDirProvider,
+} from './dialogBridge';
 import { parseCharacterCard, parseCharacterCardText } from '../src/utils/characterCard';
 import { diagnoseError } from '../src/utils/errorDiagnosis';
 // v2.3.88：复用渲染端 i18n 字典给朋友圈配图/配视频的提醒卡片取文案。
@@ -91,6 +100,11 @@ import type {
   MomentMediaStatusEvent,
   MediaApiConfig,
   VoiceListResult,
+  // v2.3.97：快速导入预检的返回结构（QuickImportPreviewItem 等）
+  QuickImportPreviewItem,
+  QuickImportRoleField,
+  QuickImportRolePreview,
+  QuickImportPluginPreview,
 } from '../src/types';
 import { normalizeRelation } from '../src/types';
 import { RELATION_TYPES, RELATION_LABELS } from '../src/types';
@@ -233,6 +247,35 @@ let lastNotifySig = '';
 let lastNotifyTime = 0;
 
 const DEV_SERVER = 'http://localhost:5173';
+
+/**
+ * v2.3.97：判断一个 URL 是否属于「应用自身的文档」，用于主窗口 `will-navigate` 兜底。
+ *
+ * 拖入本地文件时，若渲染层漏了 preventDefault，Electron 会把窗口导航到该文件，
+ * SPA 文档被替换 → 整个窗口白屏且无法恢复（应用无 hash 路由，刷新也回不来）。
+ * 故主进程在 `createMainWindow` 里对所有 will-navigate 做白名单校验。
+ *
+ * 放行两类（**改动前务必确认，拦错会废掉 dev 或启动流程**）：
+ *   1. `file:` —— 生产模式 `loadFile(dist/index.html)`，以及应用内 `file:` 资源（图片/音频）。
+ *   2. `http(s)://localhost|127.0.0.1|[::1]` 的**任意端口** —— dev 模式 Vite dev server。
+ *      必须是任意端口而非只 5173：端口被占用时 Vite 会自动顺延（5174/5175…），
+ *      而 Vite 的 HMR 与「源码变更后整页重载」都表现为一次 localhost 导航，
+ *      一旦被拦，dev 模式下改代码不会自动刷新。
+ *
+ * 其余（外部站点、拖入的 .txt/.png 等任意本地文件、自定义协议）一律拒绝。
+ */
+function isAppOwnNavigation(url: string): boolean {
+  if (!url) return false;
+  if (url.startsWith('file:')) return true;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    const h = u.hostname.toLowerCase();
+    return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1';
+  } catch {
+    return false;
+  }
+}
 
 type Lang = 'zh' | 'en' | 'fr' | 'de' | 'ja' | 'ko' | 'es' | 'pt' | 'ru' | 'zh-Hant';
 
@@ -542,6 +585,21 @@ function createWindow(opts?: { coldStart?: boolean }): void {
       splashQuery ? { search: splashQuery } : {}
     );
   }
+
+  // ===== v2.3.97：主窗口导航兜底（防止拖入文件导致整窗白屏）=====
+  // 背景：拖拽文件时，若渲染层某个分支漏了 e.preventDefault()，Electron 会**导航到
+  // 那个本地文件**并用它替换掉整个 SPA 文档 —— 结果就是标题栏还在、内容区全白，
+  // 且因为应用是 SPA（无 hash 路由），刷新也回不来，只能重启进程。
+  // 这里在主进程兜底：只放行「应用自身的文档」与「dev server」，其余导航一律拦下。
+  //放行条件的详细说明见上方 isAppOwnNavigation 的注释（务必一起看）。
+  mainWindow.webContents.on('will-navigate', (e, url) => {
+    if (isAppOwnNavigation(url)) return;
+    e.preventDefault();
+    console.warn('[nav] 已拦截窗口导航：', url);
+  });
+  // 同样地，禁止 window.open / target=_blank 打开新窗口（外链一律不开）
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
   // 同步悬浮球模块持有的主窗引用（主窗可能被 recreate，需刷新）
   setBallMainWindow(mainWindow);
 
@@ -1531,27 +1589,19 @@ function saveGeneratedImage(b64: string): string | null {
   }
 }
 
-// 主进程内直接弹出确认框（与 app:confirm 完全一致：question 图标 + OK/Cancel）。
+// 主进程内直接弹出确认框（v2.3.97：已从原生 dialog.showMessageBox 改为**自绘**弹窗）。
 // 供自动生图 / 自动生视频等后台流程在调用模型前取得用户许可（手动生图生视频不走这里）。
+//
+// 改造要点：
+//  - 原生框在深色主题下是刺眼白底黑字的系统对话框，视觉上与软件割裂 → 改为渲染层自绘；
+//  - 旧实现关闭后需要 `mainWindow.focus(); mainWindow.webContents.focus();` 兜底，
+//    因为**原生对话框关闭会破坏渲染器输入框的焦点路由**（键击无法进入任何输入框，
+//    直到窗口失去并重新获得 OS 焦点才恢复）。自绘弹窗全程在渲染器内，
+//    焦点由 ConfirmDialog 自己锁在弹窗内并在关闭时归还原触发元素，
+//    该 bug **根除**，兜底 focus 调用随之删除。
+//  - 窗口不存在 / 已销毁 / 用户 60s 未响应 → 一律按「不同意」处理（安全侧默认）。
 async function confirmFromMain(message: string, title?: string): Promise<boolean> {
-  if (!mainWindow || mainWindow.isDestroyed()) return false;
-  const res = await dialog.showMessageBox(mainWindow, {
-    type: 'question',
-    buttons: ['OK', 'Cancel'],
-    defaultId: 0,
-    cancelId: 1,
-    title: title || '确认',
-    message: message || '',
-  });
-  // 原生对话框关闭后会破坏渲染器输入框的焦点路由：键击无法进入任何输入框，
-  // 直到窗口失去并重新获得 OS 焦点才恢复。此处主动重置窗口 OS 焦点修复该问题。
-  try {
-    mainWindow.focus();
-    mainWindow.webContents.focus();
-  } catch {
-    /* 窗口可能已销毁，忽略 */
-  }
-  return res.response === 0;
+  return requestConfirmFromMain({ message, title });
 }
 
 // 自动生图 / 生视频调用模型前的许可判定：
@@ -4715,6 +4765,52 @@ function buildRoleFromParsed(p: any, nameHint?: string): Role {
   };
 }
 
+// ===== v2.3.97：快速导入预检的角色卡摘要（纯计算，不写盘）=====
+// 内嵌base64 头像超过此大小就不带进预览，避免几十 MB 的 data URL 走 IPC 拖慢弹窗。
+const PREVIEW_AVATAR_MAX = 256 * 1024;
+
+/**
+ * 把解析结果整理成预检弹窗要展示的角色卡摘要。
+ * @param parsed   parseCharacterCard 的产出（字段对齐 Role）
+ * @param role     buildRoleFromParsed 的产出（用于取最终 name，回退到文件名）
+ * @param pngPath  若是 PNG 角色卡，传原文件绝对路径当头像（**不复制文件**）；否则空串
+ * @param avatarB64 JSON 角色卡内嵌的 base64 头像（可能是裸base64 或 data: URL）
+ */
+function buildRolePreview(
+  parsed: any,
+  role: Role,
+  pngPath: string,
+  avatarB64: string
+): QuickImportRolePreview {
+  const ageText = parsed.age === null || parsed.age === undefined ? '' : String(parsed.age);
+  const fields: QuickImportRoleField[] = [];
+  // labelKey 复用角色编辑器已有的 i18n 键，10 种语言无需另翻一遍
+  if (parsed.gender) fields.push({ labelKey: 'role.gender', value: String(parsed.gender) });
+  if (ageText) fields.push({ labelKey: 'role.age', value: ageText });
+  if (parsed.occupation) fields.push({ labelKey: 'role.occupation', value: String(parsed.occupation) });
+  if (parsed.appearance) fields.push({ labelKey: 'role.appearance', value: String(parsed.appearance).slice(0, 40) });
+  if (parsed.world_setting) {
+    fields.push({ labelKey: 'role.worldSetting', value: String(parsed.world_setting).slice(0, 40) });
+  }
+  if (parsed.personality) fields.push({ labelKey: 'role.personality', value: String(parsed.personality).slice(0, 40) });
+
+  let avatarDataUrl: string | undefined;
+  if (!pngPath && typeof avatarB64 === 'string' && avatarB64 && avatarB64.length <= PREVIEW_AVATAR_MAX) {
+    avatarDataUrl = avatarB64.startsWith('data:')
+      ? avatarB64
+      : `data:image/png;base64,${avatarB64.replace(/^data:image\/\w+;base64,/, '')}`;
+  }
+
+  const rawSummary = String(parsed.short_intro || parsed.personality || parsed.background || '');
+  return {
+    name: role.name,
+    avatarPath: pngPath || undefined,
+    avatarDataUrl,
+    summary: rawSummary.slice(0, 100),
+    fields,
+  };
+}
+
 function normalizePluginTool(t: any): PluginTool {
   return {
     name: String(t?.name || 'tool'),
@@ -4736,6 +4832,58 @@ function getEnabledPluginContext(): string {
   return plugins.map((p) => `【插件「${p.name}」】\n${p.promptSegments!.join('\n')}`).join('\n\n');
 }
 
+// ===== v2.3.97：快速导入「内容识别」的纯函数（无副作用）=====
+// `importPluginLogic` 里内联的 kind 判断被提取到这里，供两条链路共用：
+//   ① 真正导入（import:dropFiles / plugin:import）—— 识别后**继续**建库；
+//   ② 预检（import:previewFiles）—— **只识别，不建库**。
+//
+// ⚠️ 为什么不直接调 importPluginLogic 做预检：它在走通世界书/角色/规则任一分支时
+// 都会额外 `dm.savePlugin(...)` 建一条 Plugin 记录（见下方三处），也就是「看一眼预览
+// 就会往库里塞一堆 Plugin 记录」。故这里只抽出**判定 kind 的那一段**，绝不碰 dm。
+type ImportDetect =
+  | { kind: 'plugin'; form: 'nianyu' | 'openai' }
+  | { kind: 'worldbook' }
+  | { kind: 'role' }
+  | { kind: 'rule' };
+
+// 判定一份**已反序列化的 JSON** 会被 importPluginLogic 归到哪一类。
+// 判定顺序必须与 importPluginLogic 完全一致（插件 → 世界书 → 角色 → 规则兜底），
+// 否则预检显示的类型会和真正导入的结果不符。
+function detectImportContent(raw: any): ImportDetect {
+  // 念语原生插件清单
+  if (raw && typeof raw === 'object' && (raw.tools || raw.promptSegments || raw.source === 'tool' || raw.jsEntry)) {
+    return { kind: 'plugin', form: 'nianyu' };
+  }
+  // OpenAI 插件清单 ai-plugin.json
+  if (raw && typeof raw === 'object' && raw.name_for_model && (raw.description_for_model || raw.api?.url)) {
+    return { kind: 'plugin', form: 'openai' };
+  }
+  if (raw && typeof raw === 'object') {
+    const ent = extractLoreEntries(raw);
+    if (ent.length > 0 || raw.lorebook || raw.worldbook || raw.world_book) return { kind: 'worldbook' };
+    const d = raw.data && typeof raw.data === 'object' ? raw.data : raw;
+    const isRole =
+      d.name || d.char_name || d.character_name || d.title || d.description || d.char_persona || d.personality || d.first_mes;
+    if (isRole) return { kind: 'role' };
+  }
+  // 兜底：提示词规则（纯文本也走这里）
+  return { kind: 'rule' };
+}
+
+// 单次快速导入的文件数上限（import:dropFiles 与 import:previewFiles 共用同一个常量）
+const QUICK_IMPORT_MAX_FILES = 20;
+// 可被快速导入的扩展名白名单（PNG 另按文件头识别）
+const QUICK_IMPORT_TEXT_EXTS = ['json', 'txt', 'md', 'yaml', 'yml', 'card', 'chara', 'text', 'lorebook'];
+
+// 把一段文本安全地反序列化为 JSON；失败返回 null（纯文本规则走 null 分支）
+function tryParseJson(text: string): any {
+  try {
+    return JSON.parse((text || '').trim());
+  } catch {
+    return null;
+  }
+}
+
 // 插件导入：自动识别为外部插件清单 / 世界书 / 角色预设包 / 提示词规则包
 // 统一落为声明式 Plugin 记录（兼容 SillyTavern / NovelAI / OpenAI ai-plugin.json / 念语原生清单）。
 // 安全约束：默认不执行任何 JS；只有 settings.pluginAllowJs 为真且插件带 jsEntry 时才在受限上下文加载。
@@ -4744,15 +4892,13 @@ async function importPluginLogic(
   name: string
 ): Promise<{ kind: 'worldbook' | 'rule' | 'role' | 'plugin'; id: string; name: string }> {
   const text = (content || '').trim();
-  let raw: any = null;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    raw = null;
-  }
+  const raw = tryParseJson(text);
+  // v2.3.97：kind 判定改为调用纯函数 detectImportContent（预检链路复用同一份逻辑）。
+  // 下面的建库动作一字未改，仍是「识别 + 落库」在同一个函数里。
+  const detected = detectImportContent(raw);
 
   // 念语原生插件清单：直接采用声明的 Plugin 结构
-  if (raw && typeof raw === 'object' && (raw.tools || raw.promptSegments || raw.source === 'tool' || raw.jsEntry)) {
+  if (detected.kind === 'plugin' && detected.form === 'nianyu') {
     const plugin: Plugin = {
       id: uid('plugin'),
       name: String(raw.name || name || '导入的插件'),
@@ -4771,7 +4917,7 @@ async function importPluginLogic(
   }
 
   // OpenAI 插件清单 ai-plugin.json
-  if (raw && typeof raw === 'object' && raw.name_for_model && (raw.description_for_model || raw.api?.url)) {
+  if (detected.kind === 'plugin') {
     const plugin: Plugin = {
       id: uid('plugin'),
       name: String(raw.name_for_human || raw.name_for_model || name || 'OpenAI 插件'),
@@ -4800,43 +4946,37 @@ async function importPluginLogic(
   }
 
   // 其余走原有世界书/角色/规则识别
-  if (raw && typeof raw === 'object') {
-    const ent = extractLoreEntries(raw);
-    if (ent.length > 0 || raw.lorebook || raw.worldbook || raw.world_book) {
-      const wb = parseWorldBook(content, name || '导入的世界书');
-      wb.id = uid('wb');
-      dm.saveWorldBook(wb);
-      const plugin: Plugin = {
-        id: uid('plugin'),
-        name: wb.name,
-        description: '导入的世界书',
-        source: 'worldbook',
-        worldBookId: wb.id,
-        enabled: true,
-        created_at: new Date().toISOString(),
-      };
-      dm.savePlugin(plugin);
-      return { kind: 'worldbook', id: wb.id, name: wb.name };
-    }
-    const d = raw.data && typeof raw.data === 'object' ? raw.data : raw;
-    const isRole =
-      d.name || d.char_name || d.character_name || d.title || d.description || d.char_persona || d.personality || d.first_mes;
-    if (isRole) {
-      const parsed = parseCharacterCard(raw);
-      const role = buildRoleFromParsed(parsed, name);
-      dm.createRole(role);
-      const plugin: Plugin = {
-        id: uid('plugin'),
-        name: role.name,
-        description: '导入的角色卡',
-        source: 'role',
-        roleId: role.id,
-        enabled: true,
-        created_at: new Date().toISOString(),
-      };
-      dm.savePlugin(plugin);
-      return { kind: 'role', id: role.id, name: role.name };
-    }
+  if (detected.kind === 'worldbook') {
+    const wb = parseWorldBook(content, name || '导入的世界书');
+    wb.id = uid('wb');
+    dm.saveWorldBook(wb);
+    const plugin: Plugin = {
+      id: uid('plugin'),
+      name: wb.name,
+      description: '导入的世界书',
+      source: 'worldbook',
+      worldBookId: wb.id,
+      enabled: true,
+      created_at: new Date().toISOString(),
+    };
+    dm.savePlugin(plugin);
+    return { kind: 'worldbook', id: wb.id, name: wb.name };
+  }
+  if (detected.kind === 'role') {
+    const parsed = parseCharacterCard(raw);
+    const role = buildRoleFromParsed(parsed, name);
+    dm.createRole(role);
+    const plugin: Plugin = {
+      id: uid('plugin'),
+      name: role.name,
+      description: '导入的角色卡',
+      source: 'role',
+      roleId: role.id,
+      enabled: true,
+      created_at: new Date().toISOString(),
+    };
+    dm.savePlugin(plugin);
+    return { kind: 'role', id: role.id, name: role.name };
   }
   const rule = parseRule(content, name || '导入的规则');
   rule.id = uid('rule');
@@ -6035,84 +6175,14 @@ function registerIPC(): void {
     if ((MENU_LANGS as string[]).includes(lang)) Menu.setApplicationMenu(buildMenu(lang as Lang));
   });
 
-  ipcMain.handle('dialog:pickImage', async () => {
-    if (!mainWindow) return null;
-    const res = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openFile', 'multiSelections'],
-      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] }],
-    });
-    return res.canceled ? null : res.filePaths;
-  });
+  // ⚠️ v2.3.97：`dialog:pickImage` / `file:pickText` / `sound:pick` / `character:importCard` /
+  // `file:saveText` / `backup:pickTarget` / `backup:pickDir` / `backup:pickFile` / `data:pickDir`
+  // 这 9 处原生对话框已全部迁到 `electron/dialogBridge.ts`（registerDialogIpc 内注册）。
+  // **channel 名、入参、返回值结构全部保持不变** → 渲染层 30+ 处 api.pick* 调用点零改动。
+  // 下面是「选好文件之后」的解析/写入逻辑，逐字保留。
 
-  // 选择并读取文本文件（用于导入世界书 / 角色卡）
-  ipcMain.handle('file:pickText', async (_e, filters) => {
-    if (!mainWindow) return null;
-    const res = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openFile'],
-      filters:
-        filters && filters.length
-          ? filters
-          : [{ name: '文本 / 角色卡', extensions: ['json', 'txt', 'md', 'yaml', 'yml'] }],
-    });
-    if (res.canceled || !res.filePaths[0]) return null;
-    const p = res.filePaths[0];
-    try {
-      const content = fs.readFileSync(p, 'utf-8');
-      return { path: p, content };
-    } catch (e) {
-      console.error('读取文本文件失败', e);
-      return null;
-    }
-  });
-
-  // 自定义音效：选择 MP3 / WAV 文件
-  ipcMain.handle('sound:pick', async () => {
-    if (!mainWindow) return null;
-    const res = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openFile'],
-      filters: [{ name: '音效文件 (MP3 / WAV)', extensions: ['mp3', 'wav'] }],
-    });
-    if (res.canceled || !res.filePaths[0]) return null;
-    return res.filePaths[0];
-  });
-
-  // 自定义音效：将用户选择的文件复制到 userData/custom-sounds 并返回目标文件名
-  // key: 'error' | 'click' | 'notification' | 'role:<roleId>'
-  ipcMain.handle('sound:setCustom', async (_e, payload: { key: string; srcPath: string }) => {
-    const { key, srcPath } = payload || ({} as any);
-    if (!key || !srcPath) return null;
-    const ext = srcPath.split('.').pop()?.toLowerCase();
-    if (ext !== 'mp3' && ext !== 'wav') return null;
-    const baseName =
-      key === 'error' || key === 'click' || key === 'notification'
-        ? `snd-${key}.${ext}`
-        : `snd-${key.replace(/[^a-zA-Z0-9_-]/g, '_')}.${ext}`;
-    const dir = path.join(app.getPath('userData'), 'custom-sounds');
-    try {
-      fs.mkdirSync(dir, { recursive: true });
-    } catch {
-      /* ignore */
-    }
-    const dest = path.join(dir, baseName);
-    try {
-      fs.copyFileSync(srcPath, dest);
-      return baseName;
-    } catch (err) {
-      console.error('[nianyu] 复制自定义音效失败', err);
-      return null;
-    }
-  });
-
-  // 导入角色卡：兼容本软件格式、SillyTavern JSON 以及 SillyTavern PNG 角色卡。
-  // PNG 角色卡以图自身作为头像；JSON 内嵌 base64 头像也会被提取保存。
-  ipcMain.handle('character:importCard', async () => {
-    if (!mainWindow) return null;
-    const res = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openFile'],
-      filters: [{ name: '角色卡 (JSON / PNG)', extensions: ['json', 'png', 'txt', 'card', 'chara'] }],
-    });
-    if (res.canceled || !res.filePaths[0]) return null;
-    const p = res.filePaths[0];
+  // 解析角色卡文件（供 dialogBridge 的 character:importCard 复用，避免逻辑二次实现走偏）
+  const importCharacterCardFrom = async (p: string) => {
     const fileName = path.basename(p);
     try {
       const buf = fs.readFileSync(p);
@@ -6153,25 +6223,37 @@ function registerIPC(): void {
       console.error('导入角色卡失败', e);
       return { error: 'read_failed', fileName };
     }
-  });
+  };
 
-  // 将文本写入文件（用于导出世界书）
-  ipcMain.handle('file:saveText', async (_e, content: string, defaultName?: string) => {
-    if (!mainWindow) return null;
-    const res = await dialog.showSaveDialog(mainWindow, {
-      title: '保存文本',
-      defaultPath: defaultName || 'export.txt',
-      filters: [{ name: '文本', extensions: ['txt'] }],
-    });
-    if (res.canceled || !res.filePath) return null;
+  // 自定义音效：将用户选择的文件复制到 userData/custom-sounds 并返回目标文件名
+  // key: 'error' | 'click' | 'notification' | 'role:<roleId>'
+  ipcMain.handle('sound:setCustom', async (_e, payload: { key: string; srcPath: string }) => {
+    const { key, srcPath } = payload || ({} as any);
+    if (!key || !srcPath) return null;
+    const ext = srcPath.split('.').pop()?.toLowerCase();
+    if (ext !== 'mp3' && ext !== 'wav') return null;
+    const baseName =
+      key === 'error' || key === 'click' || key === 'notification'
+        ? `snd-${key}.${ext}`
+        : `snd-${key.replace(/[^a-zA-Z0-9_-]/g, '_')}.${ext}`;
+    const dir = path.join(app.getPath('userData'), 'custom-sounds');
     try {
-      fs.writeFileSync(res.filePath, content || '', 'utf-8');
-      return res.filePath;
-    } catch (e) {
-      console.error('保存文本文件失败', e);
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {
+      /* ignore */
+    }
+    const dest = path.join(dir, baseName);
+    try {
+      fs.copyFileSync(srcPath, dest);
+      return baseName;
+    } catch (err) {
+      console.error('[nianyu] 复制自定义音效失败', err);
       return null;
     }
   });
+
+  // `character:importCard` 与 `file:saveText` 已迁至 dialogBridge.ts（v2.3.97 自绘选择器）；
+  // 前者的解析逻辑抽成本文件的 `importCharacterCardFrom`，由 dialogBridge 复用。
 
   ipcMain.handle('image:get', (_e, p) => {
     try {
@@ -6356,30 +6438,14 @@ function registerIPC(): void {
     return cand;
   };
 
-  ipcMain.handle('backup:pickTarget', async () => {
-    if (!mainWindow) return null;
-    const s = dm.getSettings();
-    const fileName = backupFileName();
-    const defaultPath =
-      s.backupDir && fs.existsSync(s.backupDir)
-        ? path.join(s.backupDir, fileName)
-        : fileName;
-    const res = await dialog.showSaveDialog(mainWindow, {
-      title: '选择备份保存位置',
-      defaultPath,
-      filters: [{ name: 'Zip', extensions: ['zip'] }],
-    });
-    return res.canceled ? null : res.filePath;
-  });
-  // 选择默认备份目录
-  ipcMain.handle('backup:pickDir', async () => {
-    if (!mainWindow) return null;
-    const res = await dialog.showOpenDialog(mainWindow, {
-      title: '选择默认备份目录',
-      properties: ['openDirectory', 'createDirectory'],
-    });
-    return res.canceled ? null : res.filePaths[0];
-  });
+  // ⚠️ v2.3.97：`backup:pickTarget` / `backup:pickDir` / `backup:pickFile` / `data:pickDir`
+  // 四处原生对话框已迁至 dialogBridge.ts（channel 名与返回值不变 → 渲染层零改动）。
+  // 备份文件名生成器注入给 dialogBridge，让「另存为」的默认名与自动防覆盖改名保持一致。
+  setBackupProviders(
+    () => dm.getSettings() as unknown as { backupDir?: string | null },
+    backupFileName
+  );
+
   // 一键导出备份到默认备份目录（无对话框）
   ipcMain.handle('backup:export', () => {
     const s = dm.getSettings();
@@ -6398,14 +6464,7 @@ function registerIPC(): void {
     dm.saveSettings({ lastBackupTime: new Date().toISOString() });
     return dest;
   });
-  ipcMain.handle('backup:pickFile', async () => {
-    if (!mainWindow) return null;
-    const res = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openFile'],
-      filters: [{ name: 'Zip', extensions: ['zip'] }],
-    });
-    return res.canceled ? null : res.filePaths[0];
-  });
+  // `backup:pickFile` 已迁至 dialogBridge.ts（v2.3.97）
   ipcMain.handle('backup:restore', (_e, zipPath) => {
     restoreBackup(zipPath, dm.dataDirectory);
     dm.reloadAll();
@@ -6441,14 +6500,7 @@ function registerIPC(): void {
     }
     return res;
   });
-  ipcMain.handle('data:pickDir', async () => {
-    if (!mainWindow) return null;
-    const res = await dialog.showOpenDialog(mainWindow, {
-      title: '选择应用数据保存目录',
-      properties: ['openDirectory', 'createDirectory'],
-    });
-    return res.canceled ? null : res.filePaths[0];
-  });
+  // `data:pickDir` 已迁至 dialogBridge.ts（v2.3.97）
 
   // ---------- 错误日志 ----------
   ipcMain.handle('error:log', (_e, category: 'functional' | 'model' | 'other', message: string, detail?: string) => {
@@ -7086,14 +7138,16 @@ function registerIPC(): void {
 
   // 快速导入（v2.3.51）：把拖入窗口的文件直接导入——PNG 角色卡（含头像）/ 世界书 / 规则 / 插件清单。
   // 逐文件独立处理，单个失败不影响其余；扩展名白名单先行过滤，防止二进制文件被当文本误建规则。
+  // v2.3.97：拖放入口已改为「先 import:previewFiles 预检 → 渲染层弹确认 → 再调本 handler」。
+  // 本 handler 保持原样（单文件单次导入语义不变），只是把上限/白名单改为与预检共用常量。
   ipcMain.handle('import:dropFiles', async (_e, paths: string[]) => {
     const out: { name: string; ok: boolean; kind?: string; error?: string }[] = [];
     const list = (Array.isArray(paths) ? paths : []).filter((p: unknown) => typeof p === 'string' && p);
-    for (const p of list.slice(0, 20)) {
+    for (const p of list.slice(0, QUICK_IMPORT_MAX_FILES)) {
       const fileName = path.basename(p);
       try {
         const ext = (fileName.split('.').pop() || '').toLowerCase();
-        const textOk = ['json', 'txt', 'md', 'yaml', 'yml', 'card', 'chara', 'text', 'lorebook'].includes(ext);
+        const textOk = QUICK_IMPORT_TEXT_EXTS.includes(ext);
         if (ext !== 'png' && !textOk) {
           out.push({ name: fileName, ok: false, error: 'unsupported' });
           continue;
@@ -7125,6 +7179,140 @@ function registerIPC(): void {
       }
     }
     return out;
+  });
+
+  // ---------- 快速导入「预检」（v2.3.97）----------
+  // 用户拖入文件后、真正落库**之前**先跑这一条：只读文件、只解析，产出每个文件的
+  // 类型 / 大小 / 关键字段摘要 / 失败原因，交渲染层弹确认弹窗。
+  //
+  // ⚠️ 本 handler **绝不允许有副作用**。具体三条禁令（verify 脚本第 4 条断言守着）：
+  //   1) 不调 `importPluginLogic` —— 它走通世界书/角色/规则任一分支都会 dm.savePlugin
+  //      建一条 Plugin 记录，预检调一次就等于「看一眼就往库里塞记录」。
+  //      改用纯函数 `detectImportContent`（与 importPluginLogic 同一份判定逻辑）。
+  //   2) 不调 `dm.createRole` / `dm.saveWorldBook` / `dm.saveRule` / `dm.savePlugin`。
+  //   3) 不调 `writeBase64Avatar`，也不 fs.copyFileSync —— 头像一律走「只给路径/内存 data URL」。
+  // 落库统一发生在用户点确认之后：走既有 import:dropFiles，或交给编辑器保存。
+  ipcMain.handle('import:previewFiles', async (_e, paths: string[]) => {
+    const list = (Array.isArray(paths) ? paths : []).filter((p: unknown) => typeof p === 'string' && p);
+    const capped = list.slice(0, QUICK_IMPORT_MAX_FILES);
+    const items: QuickImportPreviewItem[] = [];
+
+    for (const p of capped) {
+      const fileName = path.basename(p);
+      const ext = (fileName.split('.').pop() || '').toLowerCase();
+      const base = { path: p, fileName, size: 0, ext };
+      try {
+        // 取大小失败不致命（拿不到就报 0），不影响后续解析
+        try {
+          base.size = fs.statSync(p).size;
+        } catch {
+          base.size = 0;
+        }
+        const textOk = QUICK_IMPORT_TEXT_EXTS.includes(ext);
+        if (ext !== 'png' && !textOk) {
+          items.push({ ...base, kind: 'plugin', error: { code: 'unsupported' } });
+          continue;
+        }
+        const buf = fs.readFileSync(p);
+        if (buf.subarray(0, 8).equals(PNG_SIG)) {
+          // PNG 角色卡：解析 tEXt/chara。**不复制头像文件**，直接把原路径给渲染层显示。
+          const json = parseCharacterPng(buf);
+          if (!json) {
+            items.push({ ...base, kind: 'role', error: { code: 'not_character_png' } });
+            continue;
+          }
+          const parsed = parseCharacterCard(json);
+          const role = buildRoleFromParsed(parsed, fileName.replace(/\.[^.]+$/, ''));
+          role.avatar_path = p; // ← 只是路径，不落盘
+          items.push({
+            ...base,
+            kind: 'role',
+            rolePreview: buildRolePreview(parsed, role, p, ''),
+            draft: { role },
+          });
+          continue;
+        }
+        const text = buf.toString('utf-8');
+        const name = fileName.replace(/\.[^.]+$/, '');
+        const raw = tryParseJson(text);
+        const detected = detectImportContent(raw);
+        if (detected.kind === 'worldbook') {
+          const wb = parseWorldBook(text, name || '导入的世界书');
+          // 空 id：编辑器点保存时 saveWorldBook 会当成新记录插入（db 按 id 匹配，匹配不到就 push）
+          wb.id = '';
+          items.push({
+            ...base,
+            kind: 'worldbook',
+            bookPreview: {
+              name: wb.name,
+              description: wb.description || undefined,
+              entryCount: wb.entries.length,
+              keysSample: wb.entries
+                .map((e) => (e.key || '').split(',')[0]?.trim())
+                .filter(Boolean)
+                .slice(0, 5),
+            },
+            draft: { worldBook: wb },
+          });
+          continue;
+        }
+        if (detected.kind === 'role') {
+          const parsed = parseCharacterCard(raw);
+          const role = buildRoleFromParsed(parsed, name);
+          items.push({
+            ...base,
+            kind: 'role',
+            rolePreview: buildRolePreview(parsed, role, '', parsed.avatar || ''),
+            draft: { role },
+          });
+          continue;
+        }
+        if (detected.kind === 'plugin') {
+          const preview: QuickImportPluginPreview = {
+            name: String(raw.name || raw.name_for_human || raw.name_for_model || name),
+            description: String(raw.description || raw.description_for_human || '') || undefined,
+            toolCount: Array.isArray(raw.tools)
+              ? raw.tools.length
+              : raw.api?.url
+                ? 1
+                : 0,
+            segmentCount: Array.isArray(raw.promptSegments)
+              ? raw.promptSegments.length
+              : raw.description_for_model
+                ? 1
+                : 0,
+          };
+          // 插件没有草稿：项目内本来就没有插件编辑器，故不支持「导入并编辑」
+          items.push({ ...base, kind: 'plugin', pluginPreview: preview });
+          continue;
+        }
+        // 规则
+        const rule = parseRule(text, name || '导入的规则');
+        rule.id = '';
+        items.push({
+          ...base,
+          kind: 'rule',
+          rulePreview: {
+            name: rule.name,
+            excerpt: (rule.content || '').slice(0, 120),
+            charCount: (rule.content || '').length,
+          },
+          draft: { rule },
+        });
+      } catch (e: any) {
+        // 读不了 / 解不开：给出具体原因，不再一律 read_failed（v2.3.97 修正的 gap④）
+        const isFsError = e && typeof e === 'object' && typeof e.code === 'string';
+        items.push({
+          ...base,
+          kind: 'plugin',
+          error: {
+            code: 'read_failed',
+            message: isFsError ? `${e.code}` : String(e?.message || e || '').slice(0, 200),
+          },
+        });
+      }
+    }
+    return { items, truncated: Math.max(0, list.length - capped.length), limit: QUICK_IMPORT_MAX_FILES };
   });
 
   // 插件列表
@@ -7209,29 +7397,16 @@ function registerIPC(): void {
     if (win && !win.isDestroyed()) win.setPosition(Math.round(x), Math.round(y));
   });
 
-  // ---------- 确认对话框（替换 window.confirm 避免 Electron 阻塞渲染器事件循环） ----------
-  ipcMain.handle('app:confirm', async (_e, message: string, title?: string) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return false;
-    const res = await dialog.showMessageBox(mainWindow, {
-      type: 'question',
-      buttons: ['OK', 'Cancel'],
-      defaultId: 0,
-      cancelId: 1,
-      title: title || '确认',
-      message: message || '',
-    });
-    // 原生对话框关闭后会破坏渲染器输入框的焦点路由：键击无法进入任何输入框，
-    // 直到窗口失去并重新获得 OS 焦点才恢复（即用户手动切到小窗再切回的现象）。
-    // 此处主动重置窗口 OS 焦点，等价于一次真实的窗口焦点切换，彻底修复
-    // 「删除角色/模型配置后主界面输入框锁死」的同类 bug（覆盖所有 confirm 流程）。
-    try {
-      mainWindow.focus();
-      mainWindow.webContents.focus();
-    } catch {
-      /* 窗口可能已销毁，忽略 */
-    }
-    return res.response === 0;
-  });
+  // ---------- 确认对话框（v2.3.97：已从原生 dialog.showMessageBox 改为自绘）----------
+  // 已迁至 `electron/dialogBridge.ts` 的 `registerDialogIpc()`：主进程把请求推给渲染层，
+  // 由 `ConfirmHost` 弹主题内的 `ConfirmDialog`，再回传结果。
+  // channel 名 `app:confirm` 与签名 `(message, title?) => Promise<boolean>` **保持不变**，
+  // 故 preload 与 17 处 `api.showConfirm` 调用点零改动。
+  //
+  // 附带根除的历史 bug：旧实现里 `dialog.showMessageBox` 关闭后会破坏渲染器输入框的
+  // 焦点路由（键击无法进入任何输入框，直到窗口失去并重新获得 OS 焦点才恢复），
+  // 当时靠 `mainWindow.focus(); mainWindow.webContents.focus();` 兜底。
+  // 自绘弹窗全程在渲染器内、焦点自行管理，该 bug 与兜底代码一并消失。
 
   // ---------- 后台消息提醒（Steam 风格卡片） ----------
   ipcMain.handle('notify:card', (_e, item) => {
@@ -7304,6 +7479,21 @@ function registerIPC(): void {
       destroyFloatingBall();
     }
   });
+
+  // ===== v2.3.97：自绘弹窗桥 =====
+  // 注入依赖（必须在 registerDialogIpc 之前）：
+  //  - 数据目录：文件选择器左侧「念语数据目录」入口 + 打开时的默认起点；
+  //  - 角色卡解析：复用本文件已有的实现，避免解析逻辑出现第二份。
+  setDataDirProvider(() => {
+    try {
+      return dm.getCurrentDataPath();
+    } catch {
+      return null;
+    }
+  });
+  setCharacterCardImporter(async (p: string) => importCharacterCardFrom(p));
+  // 注册确认框 + 9 处文件选择器 + fs:listDir + 两条回传通道
+  registerDialogIpc();
 }
 
 // ===== 全局错误监听（主进程） =====
@@ -7327,6 +7517,18 @@ process.on('uncaughtException', (error) => {
   const diag = diagnoseError(msg);
   console.error('[nianyu] uncaughtException:', msg);
   const isZh = lang === 'zh';
+  // ⚠️ 【有意保留原生框 · 全项目唯一一处 `dialog.showErrorBox`】（v2.3.97 审计结论）
+  //
+  // 为什么这一处**不**自绘：它紧跟在 `app.quit()` 之前触发，也就是说**渲染进程此刻已经
+  // 不可靠**（正是渲染进程崩溃/无响应才走到 uncaughtException）。自绘弹窗要靠渲染层
+  // 存活才能显示，此时大概率根本画不出来 —— 用户只会看到「应用一闪而过」，
+  // 比白底黑字的系统框**更糟**（系统框由浏览器进程绘制，不依赖渲染进程，一定能弹出来）。
+  // 因此这里保留原生框是**有意识的取舍**，而非遗漏。
+  //
+  // 对照组（说明「其余错误都已走自绘路径」）：`unhandledRejection`（见下方）
+  // 不退出应用，走 `app:error` → 渲染层 `ErrorBubble` 全自绘；
+  // 其余所有可交互弹窗（确认框 2 处、文件选择器 9 处）本次全部自绘。
+  // 验证脚本 scripts/verify-no-native-dialog.mjs 的断言 1 正是把这一处标为白名单。
   dialog.showErrorBox(
     isZh ? '念语 - 发生错误' : 'Nianyu - Error',
     `${isZh ? '错误信息' : 'Error'}: ${msg}\n\n${isZh ? '可能原因' : 'Cause'}: ${diag.cause[lang]}\n\n${isZh ? '解决方法' : 'Solution'}: ${diag.solution[lang]}\n\n${isZh ? '应用将自动退出。请根据解决方法排查后重启。' : 'The app will exit. Please follow the solution and restart.'}`

@@ -1,0 +1,129 @@
+# NOTICE
+
+念语（Nianyu）—— 本文件登记项目使用的第三方开源软件。
+
+本项目自身采用 **MIT License**（见 [`LICENSE`](./LICENSE)），版权归「前方」所有。
+
+---
+
+## 一、许可合规总览
+
+经对 `node_modules` 全量递归扫描（**457 个包，含所有嵌套依赖**）：
+
+| 许可 | 包数 | 说明 |
+|---|---|---|
+| MIT | 370 | 宽松 |
+| ISC | 46 | 宽松 |
+| BSD-3-Clause | 11 | 宽松 |
+| BSD-2-Clause | 7 | 宽松 |
+| Apache-2.0 | 8 | 宽松（须保留 NOTICE，见下） |
+| BlueOak-1.0.0 | 8 | 宽松 |
+| 0BSD | 1 | 宽松 |
+| WTFPL（含双许可形式） | 4 | 极宽松 |
+| **(MIT OR CC0-1.0)** | 1 | 双许可，作者可选 MIT |
+| **CC-BY-4.0** | 1 | ⚠️ **强制署名**，见 §4 |
+| **Python-2.0** | 1 | ⚠️ 非 OSI 认证，列出以示透明 |
+| **GPL / AGPL / LGPL / MPL / UNLICENSED** | **0** | ✅ **无强/弱著佐权依赖** |
+
+**结论**：无 GPL/AGPL/LGPL/MPL 类依赖，本项目以 MIT 协议开源**不受传染**。
+无「声明缺失」（UNLICENSED）的包。
+
+---
+
+## 二、直接依赖（`package.json`）
+
+### 运行时依赖
+
+| 包名 | 版本 | 许可 | 仓库 |
+|---|---|---|---|
+| `react` | 18.3.1 | MIT | https://github.com/facebook/react |
+| `react-dom` | 18.3.1 | MIT | https://github.com/facebook/react |
+| `@modelcontextprotocol/sdk` | 1.30.0 | MIT | https://github.com/modelcontextprotocol/typescript-sdk |
+| `adm-zip` | 0.5.18 | MIT | https://github.com/cthackers/adm-zip |
+
+### 构建期依赖（不进入分发产物）
+
+| 包名 | 版本 | 许可 | 仓库 |
+|---|---|---|---|
+| `electron` | 32.3.3 | MIT | https://github.com/electron/electron |
+| `electron-builder` | 26.15.3 | MIT | https://github.com/electron-userland/electron-builder |
+| `vite` | 5.4.21 | MIT | https://github.com/vitejs/vite |
+| `@vitejs/plugin-react` | 4.7.0 | MIT | https://github.com/vitejs/vite-plugin-react |
+| `typescript` | 5.9.3 | **Apache-2.0** | https://github.com/microsoft/TypeScript |
+
+### 类型声明
+
+| 包名 | 版本 | 许可 |
+|---|---|---|
+| `@types/node` | 22.20.1 | MIT |
+| `@types/react` | 18.3.31 | MIT |
+| `@types/react-dom` | 18.3.7 | MIT |
+| `@types/adm-zip` | 0.5.8 | MIT |
+
+---
+
+## 三、需要单独关注的传递依赖
+
+以下传递依赖许可较特殊，在此明确列出：
+
+| 包名 | 版本 | 许可 | 归属 | 说明 |
+|---|---|---|---|---|
+| `caniuse-lite` | 1.0.30001806 | **CC-BY-4.0** | 运行时（经 `@vitejs/plugin-react` / `browserslist`） | ⚠️ **CC-BY 强制署名**。见 §4 |
+| `argparse` | 2.0.1 | Python-2.0 | 构建期（经 `electron-builder`） | 非 OSI 认证许可 |
+| `truncate-utf8-bytes` | 1.0.2 | WTFPL | 构建期（经 `jake`） | 极宽松 |
+| `sanitize-filename` | 1.6.4 | WTFPL OR ISC | 构建期 | 双许可 |
+| `utf8-byte-length` | 1.0.5 | WTFPL OR MIT | 构建期 | 双许可 |
+| `tslib` | 2.8.1 | 0BSD | 构建期 | 极宽松 |
+| `type-fest` | 0.13.1 | MIT OR CC0-1.0 | 构建期 | 双许可 |
+| `jake` / `filelist` / `ejs` | 10.9.4 / 1.0.6 / 3.1.10 | Apache-2.0 | 构建期（electron-builder 工具链） | Apache-2.0 保留 NOTICE 义务 |
+| `osx-sign` / `windows-sign` | 1.3.3 / 1.2.2 | BSD-2-Clause | 构建期（electron-builder） | |
+| `pkijs` / `asn1js` / `bytestreamjs` | 3.4.0 / 3.0.10 / 2.0.1 | BSD-3-Clause | 运行时（经 MCP SDK） | |
+
+其余数百个传递依赖均为 MIT / ISC / BSD 变体，不再逐条列出。
+
+---
+
+## 四、`caniuse-lite` 的 CC-BY-4.0 署名（强制义务）
+
+`caniuse-lite`（版本 1.0.30006，含于 `caniuse-db`）采用 **CC-BY-4.0**，
+该许可**要求署名**。本项目现予署名：
+
+> **caniuse-lite** © [ Browserslist contributors](https://github.com/browserslist/browserslist#users)
+> 来源：https://github.com/browserslist/caniuse-lite
+> 许可：Creative Commons Attribution 4.0 International（CC BY 4.0）
+> 许可全文：https://creativecommons.org/licenses/by/4.0/legalcode
+
+---
+
+## 五、`typescript` 的 Apache-2.0 NOTICE 义务
+
+`typescript`（v5.9.3）是唯一采用 Apache-2.0 的直接依赖。
+Apache-2.0 §4(d) 要求：若上游附带 NOTICE 文件，须在分发产品中转录其内容。
+
+**本项目说明**：`typescript` 属**纯开发期工具**，其产物（JavaScript）不进入最终分发物。
+转录其 NOTICE 对使用者无实际意义，故此处仅作声明性署名：
+
+> **TypeScript** © Microsoft Corporation. Apache License 2.0.
+> 来源：https://github.com/microsoft/TypeScript
+> 许可全文：https://www.apache.org/licenses/LICENSE-2.0
+
+---
+
+## 六、非代码素材
+
+项目的**全部音频素材均为程序合成自制**，图标为自制，
+**未使用任何第三方图片、字体、图标库资源**。
+
+完整清单与详细说明见 [`ASSETS-LICENSES.md`](./ASSETS-LICENSES.md)，其中亦记载了
+v2.3.97 对旧版第三方音效的安全处置过程。
+
+---
+
+## 七、第三方 AI 提示词资产
+
+内置技能「狗头军师」引入自开源仓库 [`shengjidaguai-china/goutoujunshi`](https://github.com/shengjidaguai-china/goutoujunshi)，
+MIT 许可，`Copyright (c) 2026 powerycy`。详见 [`ASSETS-LICENSES.md`](./ASSETS-LICENSES.md) §2.1。
+
+---
+
+**如有许可合规疑问，请提交 issue。**

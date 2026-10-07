@@ -4,19 +4,25 @@ export type SoundType = 'error' | 'click' | 'notification' | 'popup' | 'miniPopu
 
 // 内置音效：使用相对路径，同时兼容生产环境（file:// 加载 dist/index.html）
 // 与开发环境（vite dev server http://localhost:5173）两种加载方式。
+//
+// v2.3.97 安全处置：此前这里是 11 个第三方音效站的 mp3
+//（`audley_fergine-*` / `dragon-studio-*` / `universfield-*`）。
+// 作者已无法回忆下载站点，无法确认许可是否允许**原样再分发**；
+// 而此类站点的通行条款（Pixabay Content License 为例）明文禁止
+// "sell or redistribute the sound effects as they are"。
+// 念语把 mp3 提交进 git 并随安装包分发，正落在该禁止条款内 ——
+// 这是本项目唯一有实质法律风险的项，故已全部替换。
+//
+// 现用 `scripts/gen-builtin-sounds.mjs` **程序合成**（正弦/三角/方波 + 指数包络，
+// 纯数学波形，不含任何采样素材）→ 不触发任何第三方许可，作者本人即著作权人。
+// 旧的 11 个 mp3 已从仓库与 public/sounds 删除，不再随安装包分发。
 const BUILTIN: Record<SoundType, string | string[]> = {
-  error: 'sounds/audley_fergine-ui-button-click-5-327756.mp3',
-  click: 'sounds/dragon-studio-mouse-click-sfx-free-376869.mp3',
-  notification: [
-    'sounds/universfield-new-notification-012-363675.mp3',
-    'sounds/universfield-new-notification-021-370045.mp3',
-    'sounds/universfield-new-notification-022-370046.mp3',
-    'sounds/universfield-new-notification-026-380249.mp3',
-    'sounds/universfield-new-notification-036-485897.mp3',
-  ],
-  popup: 'sounds/弹窗提示音.mp3',
-  miniPopup: 'sounds/小窗弹出音.mp3',
-  messageSend: 'sounds/消息发送.mp3',
+  error: 'sounds/error.wav',
+  click: 'sounds/click.wav',
+  notification: 'sounds/notification.wav',
+  popup: 'sounds/popup.wav',
+  miniPopup: 'sounds/miniPopup.wav',
+  messageSend: 'sounds/messageSend.wav',
 };
 
 // 用户自定义音效通过 nysound:// 协议读取（主进程映射到 userData/custom-sounds 目录）
@@ -120,7 +126,8 @@ export function playSoundSync(type: SoundType, opts?: { characterSound?: string 
 
 // 剧情节点横幅音效（v2.3.37）：固定内置文件（public/sounds/），跟随音效总开关与音量；
 // 不进自定义音效类型系统，避免牵连设置页 UI。
-const NODE_BANNER_SOUND = 'sounds/universfield-achievement-unlock-243762.mp3';
+// v2.3.97：同 BUILTIN 的安全处置，改用程序合成音（原为 universfield-achievement-unlock-*.mp3）。
+const NODE_BANNER_SOUND = 'sounds/nodeBanner.wav';
 export async function playNodeBannerSound(): Promise<void> {
   const s = await getSettings();
   if (!s.enabled || s.volume <= 0) return;

@@ -440,7 +440,7 @@ input[type='range']::-moz-range-thumb {
   flex-direction: column;
   min-width: 96px;
   /* 与 .ctx-menu 统一的 linear 弹出动画（受「动效开关」.anim-off 全局规则控制） */
-  animation: popupLinearIn 0.16s linear;
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 .list-menu button {
   text-align: left;
@@ -487,7 +487,7 @@ input[type='range']::-moz-range-thumb {
 .model-tag-click {
   cursor: pointer;
   user-select: none;
-  transition: filter 0.15s linear;
+  transition: filter calc(0.15s * var(--anim-speed, 1)) linear;
 }
 .model-tag-click:hover {
   filter: brightness(1.08);
@@ -746,7 +746,7 @@ input[type='range']::-moz-range-thumb {
   user-select: none;
   flex: 0 0 auto;
   vertical-align: middle;
-  transition: border-color 0.15s, color 0.15s;
+  transition: border-color calc(0.15s * var(--anim-speed, 1)), color calc(0.15s * var(--anim-speed, 1));
 }
 .hint-icon:hover,
 .hint-icon:focus {
@@ -790,7 +790,7 @@ input[type='range']::-moz-range-thumb {
   text-align: left;
   white-space: normal;
   pointer-events: none;
-  animation: fadeIn 0.12s ease;
+  animation: fadeIn calc(0.12s * var(--anim-speed, 1)) linear;
 }
 /* 气泡上方发送时间：同一分钟仅顶部显示 */
 .msg-time-above {
@@ -1077,7 +1077,7 @@ input[type='range']::-moz-range-thumb {
   gap: 6px;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.2s linear, transform 0.2s linear;
+  transition: opacity calc(0.2s * var(--anim-speed, 1)) linear, transform calc(0.2s * var(--anim-speed, 1)) linear;
 }
 .scroll-to-bottom.visible {
   opacity: 0.95;
@@ -1185,6 +1185,29 @@ input[type='range']::-moz-range-thumb {
 .btn-ghost:hover {
   background: var(--color-hover);
 }
+/* v2.3.97 新增：实心「危险操作」按钮（恢复出厂·彻底重置 / 删除全部数据 / 错误日志清空）。
+   此前这些按钮都是组件里写死的内联 `background:'#e06c75'; color:'#fff'`——
+   硬编码色值既不随14套主题变化，也躲过了动效开关的门禁，且那个颜色配白字
+   只有 3.20:1（本就不达 WCAG AA）。现改为走 --color-danger-solid 令牌
+   （白字 6.09:1，达 AA；理由见 theme/variables.css 的注释）。
+   已登记进 animControl 的 theme 组（.btn-danger 在该组 selectors 里）。 */
+.btn-danger {
+  background: var(--color-danger-solid, #b3342f);
+  color: var(--color-danger-solid-text, #fff);
+  border: 1px solid var(--color-danger-solid-border, #8f2823);
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity var(--transition);
+}
+.btn-danger:hover {
+  opacity: 0.88;
+}
+.btn-danger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 /* 空闲主动回复开关（聊天界面内） */
 .idle-toggle {
   display: inline-flex;
@@ -1198,7 +1221,7 @@ input[type='range']::-moz-range-thumb {
   color: var(--color-text-secondary);
   cursor: pointer;
   flex-shrink: 0;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  transition: color calc(0.15s * var(--anim-speed, 1)), border-color calc(0.15s * var(--anim-speed, 1)), background calc(0.15s * var(--anim-speed, 1));
 }
 .idle-toggle .idle-toggle-knob {
   width: 26px;
@@ -1206,7 +1229,7 @@ input[type='range']::-moz-range-thumb {
   border-radius: 999px;
   background: var(--color-border);
   position: relative;
-  transition: background 0.15s;
+  transition: background calc(0.15s * var(--anim-speed, 1));
   flex-shrink: 0;
 }
 .idle-toggle .idle-toggle-knob::after {
@@ -1218,7 +1241,7 @@ input[type='range']::-moz-range-thumb {
   height: 10px;
   border-radius: 50%;
   background: var(--color-panel);
-  transition: transform 0.15s;
+  transition: transform calc(0.15s * var(--anim-speed, 1));
 }
 .idle-toggle.on {
   color: var(--color-text);
@@ -1308,7 +1331,7 @@ input[type='range']::-moz-range-thumb {
   z-index: 20;
   min-width: 160px;
   /* linear 弹出动画（与 .ctx-menu 统一；受「动效开关」.anim-off 全局规则控制） */
-  animation: popupLinearIn 0.16s linear;
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 .mention-pop .item {
   padding: 8px 14px;
@@ -1322,7 +1345,7 @@ input[type='range']::-moz-range-thumb {
 .more-dropdown {
   background: var(--color-panel);
   /* linear 弹出动画（与 .ctx-menu 统一；受「动效开关」.anim-off 全局规则控制） */
-  animation: popupLinearIn 0.16s linear;
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 
 /* 表单 / 设置 */
@@ -1423,6 +1446,31 @@ input[type='range']::-moz-range-thumb {
 }
 
 /* 弹窗 */
+/* ─────────────────────────────────────────────────────────────────────────
+   v2.3.97：给**通用模态三件套**补上线性入场动画。
+   这三个类（.modal-mask / .modal / .modal-card）被 18 个弹窗共用 ——
+   AboutModal / BondPanel / ChatWindow 的8 个（生图·生视频·选人回复·图片预览·
+   查看提示词·选取复制·观察者·转发）/ CustomTitleBar 退出确认 / GroupEditor /
+   ImageCropper / Library×2 / MiniChat×5 / ModelEditor / MomentsView×2 /
+   OnboardingWizard / RoleEditor / SelfRoleEditor / Settings / TranslateModal /
+   UpdatePopup —— 改这一处，18 个弹窗同时生效（本项目最高杠杆的一处改动）。
+
+   为什么遮罩与本体用两套关键帧：
+     · 遮罩铺满全屏（position:fixed; inset:0），**位移它毫无意义只会显得诡异**，
+       所以只做 opacity 0→1（maskFadeIn）；
+     · 本体是居中的卡片，位移才有「弹出来」的方位感，沿用项目自 v2.3.44 起
+       的事实标准 popupLinearIn（translateY(-6px)→none，**绝不含 scale**）。
+
+   为什么敢用 @keyframes 而不是 transition（项目已踩过两次的坑，见
+   index.css 的 .msg-action-bar 注释与 hooks/useRetract.ts）：
+     本模态三件套的**基态本来就是「正常可见」**（没有 opacity:0、没有位移），
+     所以被 `.anim-off *` 的 `animation:none !important` 抹掉时，元素直接
+     呈现基态 = 照常可见 ✅。这与 .msg-action-bar 那种「基态=隐藏态」的情况
+     恰好相反 —— 那里用 @keyframes 才会永久不可见。
+     这一点由 scripts/verify-modal-animations.mjs 用 Electron 真渲染实测锁死。
+
+   缓动一律 linear（用户要求「线性动画」，且已两次否定 scale 表现）。
+   ───────────────────────────────────────────────────────────────────────── */
 .modal-mask {
   position: fixed;
   inset: 0;
@@ -1434,6 +1482,7 @@ input[type='range']::-moz-range-thumb {
   justify-content: center;
   /* 必须覆盖自定义标题栏（9999）与启动屏（10000），避免弹窗顶部被遮挡导致无法点击/输入 */
   z-index: 10001;
+  animation: maskFadeIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 .modal {
   background: var(--color-panel);
@@ -1442,11 +1491,15 @@ input[type='range']::-moz-range-thumb {
   width: 720px;
   max-width: 92vw;
   max-height: 88vh;
-  box-shadow: var(--shadow-panel);
+  /* v2.3.98：按用户要求**去掉投影**（与 .modal-card 同步处理）。
+     半透明 / 液态玻璃这类主题下，弹窗四周的方形灰边与整体通透感冲突。
+     层次改由「1px 描边 + 遮罩明暗差」承担。
+     ⚠️ 不要"顺手补回"，理由见 .modal-card 处的注释。 */
   /* 外层负责圆角裁剪，内层 .modal-body 负责滚动，避免滚动条顶穿圆角 */
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 .modal-head {
   padding: 16px 20px;
@@ -1481,7 +1534,181 @@ input[type='range']::-moz-range-thumb {
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   padding: 20px;
-  box-shadow: var(--shadow-panel);
+  /* v2.3.98：按用户要求**去掉投影**。原先是 box-shadow: var(--shadow-panel)，
+     在半透明 / 液态玻璃这类主题下会在弹窗四周形成一圈明显的方形灰边，
+     与整体的通透感冲突（且 .modal 与 .modal-card 两处都投影，叠加在
+     ConfirmDialog 这类「modal 里再套 modal-card」的结构上会显得更重）。
+     现在弹窗靠 1px 描边（--color-border）与遮罩的明暗差来区分层次。
+     ⚠️ 不要"顺手补回"投影：若将来某主题确需层次感，应在该主题里单独加深，
+        而不是给通用模态本体加全局投影。 */
+  /* v2.3.97：与 .modal 同为「通用模态本体」，同一套线性入场动画（见上方 .modal 注释） */
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
+}
+/* ─────────────────────────────────────────────────────────────────────────
+   v2.3.97：通用模态的**共享零件样式**。
+   此前 .modal-title / .modal-desc 只在 `.modal-card` 作用域下有定义，
+   于是想复用通用 `.modal` 的弹窗（ClearChatModal 等去内联化后的弹窗）
+   只能继续写内联 style。现把这两个零件提升为独立类，两种模态共用同一套排版，
+   颜色一律走主题变量，14 套主题下对比度均达WCAG AA。
+   （`.modal-card .modal-title` 等旧选择器保留，特异性相同故视觉不变。）
+   ───────────────────────────────────────────────────────────────────────── */
+.modal-title {
+  font-size: calc(16px * var(--font-scale));
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--color-text);
+}
+.modal-desc {
+  font-size: calc(12px * var(--font-scale));
+  color: var(--color-text-secondary);
+  margin-bottom: 12px;
+}
+/* 弹窗底部按钮行：右对齐、间距 10px（与既有 .modal-head 的 flex 风格一致） */
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+/* 清空聊天弹窗的「同时删除记忆」勾选项（ClearChatModal） */
+.clear-chat-mem-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(13px * var(--font-scale));
+  color: var(--color-text);
+  margin-bottom: 18px;
+  cursor: pointer;
+  user-select: none;
+}
+.clear-chat-mem-option input {
+  cursor: pointer;
+}
+/* 使用指南弹窗（GuideView）：在通用 .modal 之上覆盖尺寸 —— 它是**定高**的长文档面板，
+   且沿用原来的毛玻璃观感。底色仍走 --color-panel（玻璃主题下由上方的
+   [data-theme='glass'] .modal 加深规则接管，14 套主题均可读）。 */
+.modal-guide {
+  width: min(760px, 92vw);
+  height: min(82vh, 760px);
+  max-height: min(82vh, 760px);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+.modal-guide-title {
+  font-size: calc(16px * var(--font-scale));
+  font-weight: 700;
+  color: var(--color-text);
+}
+/* 二次确认类弹窗（恢复出厂 / 删除全部数据）：比通用 .modal 更窄，正文行高更松*/
+.modal-confirm {
+  width: auto;
+  max-width: 460px;
+  padding: 24px 28px;
+}
+.modal-confirm .modal-title {
+  margin-bottom: 10px;
+}
+.modal-confirm .modal-desc {
+  font-size: calc(13px * var(--font-scale));
+  line-height: 1.7;
+}
+/* 调试报告弹窗（设置页）：比通用 .modal 窄一点，标题与关闭按钮同一行 */
+.modal-debug-report {
+  width: 580px;
+  max-width: 92vw;
+  max-height: 70vh;
+  padding: 0; /* 头部/正文各自带内边距 */
+}
+.modal-debug-report .modal-head {
+  padding: 12px 14px;
+}
+.modal-debug-report .modal-title {
+  font-size: calc(14px * var(--font-scale));
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 0;
+}
+.modal-debug-report .modal-body {
+  padding: 0 14px 14px;
+  font-size: calc(13px * var(--font-scale));
+}
+/* ─────────────────────────────────────────────────────────────────────────
+   错误日志弹窗（设置页，v2.3.97 从「固定深色」改造为「完全跟随主题」）
+   原实现硬编码 #1e1e1e / #f0f0f0 / #3a3a3a / #555 / #333 / #aaa / #999 / #bbb，
+   在 13 套浅色主题下是黑底白字的反向刺眼块。现全部走主题变量，14 套主题均达 WCAG AA。
+   ───────────────────────────────────────────────────────────────────────── */
+.modal-error-log {
+  width: 92%;
+  max-width: 680px;
+  max-height: 80vh;
+  padding: 0; /* 头部/正文各自带内边距，避免与 .modal-head 的 padding 叠加 */
+}
+.error-log-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.error-log-btn {
+  padding: 5px 14px;
+  font-size: calc(13px * var(--font-scale));
+}
+.error-log-body {
+  font-size: calc(12.5 * var(--font-scale));
+  padding-top: 12px;
+}
+.error-log-empty {
+  color: var(--color-text-secondary);
+  padding: 16px 4px;
+}
+.error-log-row {
+  border-bottom: 1px solid var(--color-border);
+  padding: 10px 4px;
+}
+.error-log-row:last-child {
+  border-bottom: none;
+}
+.error-log-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+/* 分类标签：底色改用语义令牌。model=深橙 / functional=红 / 其他=中性蓝灰。
+   标签文字仅 11px（属「小字」，须≥4.5:1），三档底色的白字对比度**实测值**
+   分别为 5.24:1 / 6.09:1 / 7.11:1，全部达 WCAG AA。
+   （model 一档特意不用 --color-warn #f59e0b —— 它配白字只有 2.15:1，远不达标。） */
+.error-log-badge {
+  font-size: calc(11px * var(--font-scale));
+  padding: 1px 8px;
+  border-radius: 10px;
+  color: var(--color-danger-solid-text, #fff);
+  background: var(--color-info, #3b82f6);
+}
+.error-log-badge-model {
+  background: #9a5f00;
+}
+.error-log-badge-functional {
+  background: var(--color-danger-solid, #b3342f);
+}
+.error-log-badge-other {
+  background: #4a5a68;
+}
+.error-log-time {
+  color: var(--color-text-muted);
+  font-size: calc(12px * var(--font-scale));
+}
+.error-log-msg {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-bottom: 4px;
+  color: var(--color-text);
+}
+.error-log-detail {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text-secondary);
+  font-size: calc(11.5 * var(--font-scale));
 }
 .modal-card .modal-title {
   font-size: calc(16px * var(--font-scale));
@@ -1600,7 +1827,7 @@ input[type='range']::-moz-range-thumb {
   background: var(--color-input-bg);
   border: 1px solid var(--color-border);
   color: var(--color-text);
-  transition: background 0.15s, border-color 0.15s;
+  transition: background calc(0.15s * var(--anim-speed, 1)), border-color calc(0.15s * var(--anim-speed, 1));
 }
 .srb-item:hover {
   background: var(--color-hover);
@@ -1635,7 +1862,7 @@ input[type='range']::-moz-range-thumb {
   cursor: pointer;
   padding: 0 1px;
   border-radius: 3px;
-  transition: background 0.15s ease;
+  transition: background calc(0.15s * var(--anim-speed, 1)) ease;
 }
 .cite-badge:hover {
   background: rgba(128, 128, 128, 0.18);
@@ -1830,7 +2057,7 @@ input[type='range']::-moz-range-thumb {
   cursor: pointer;
   font-size: 13px;
   color: var(--color-text-secondary);
-  transition: all 0.15s ease;
+  transition: all calc(0.15s * var(--anim-speed, 1)) ease;
 }
 .moment-act:hover {
   border-color: var(--color-primary);
@@ -2017,6 +2244,9 @@ body.cursor-hidden * {
   line-height: 1.5;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
   pointer-events: none;
+  /* v2.3.97：此前无入场动画。tooltip 面积小、跟随光标，位移会显得「追着鼠标跑」，
+     故只做纯淡入（与 .hint-tip 同档位 0.12s linear）。 */
+  animation: fadeIn calc(0.12s * var(--anim-speed, 1)) linear;
 }
 
 /* 开屏欢迎语 */
@@ -2032,7 +2262,7 @@ body.cursor-hidden * {
   background: var(--color-bg);
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  transition: opacity 0.5s ease;
+  transition: opacity calc(0.5s * var(--anim-speed, 1)) linear;
   cursor: pointer;
 }
 .splash.hide {
@@ -2163,7 +2393,9 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   right: 8px;
   font-size: calc(12px * var(--font-scale));
   color: var(--color-primary);
-  animation: floatUp 0.6s ease;
+  /* v2.3.97：原为 floatUp 0.6s ease（0.6s 偏长且非线性）→ 改用项目统一的
+     popupLinearIn 0.16s linear。keyframes floatUp 现已零引用，保留在下方以备复用。 */
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
   pointer-events: none;
 }
 
@@ -2182,16 +2414,21 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   font-size: calc(13px * var(--font-scale));
   z-index: 999;
   pointer-events: none;
-  animation: toastIn 0.28s ease both;
+  /* v2.3.97：入场/离场一律走 linear 变体（toastInLinear / toastOutLinear）。
+     原来的 toastIn / toastOut 带 scale(0.96→1) 且用 ease —— 用户已两次否定 scale 表现，
+     且明确要求线性动画，故连同这两个关键帧一并删除（现已零引用）。
+     兜底：即使有调用方漏传 animation='linear'、ToastView 退回默认分支，
+     这里的默认规则本身也已是 linear，不会退回非线性表现。 */
+  animation: toastInLinear calc(0.25s * var(--anim-speed, 1)) linear both;
 }
 .mini-toast.leaving {
-  animation: toastOut 0.4s ease both;
+  animation: toastOutLinear calc(0.3s * var(--anim-speed, 1)) linear both;
 }
 .mini-toast.linear {
-  animation: toastInLinear 0.25s linear both;
+  animation: toastInLinear calc(0.25s * var(--anim-speed, 1)) linear both;
 }
 .mini-toast.linear.leaving {
-  animation: toastOutLinear 0.3s linear both;
+  animation: toastOutLinear calc(0.3s * var(--anim-speed, 1)) linear both;
 }
 /* v2.3.88 可访问性修正：底色 #e06c75 + 白字实测仅 3.20:1，低于 WCAG AA 正文 4.5:1。
    改用 #b3342f（白字 6.09:1），并把边框同步加深到 #8f2823 以保持层次感。
@@ -2200,26 +2437,6 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   background: #b3342f;
   border-color: #8f2823;
   color: #fff;
-}
-@keyframes toastIn {
-  from {
-    opacity: 0;
-    transform: translateX(-50%) translateY(14px) scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0) scale(1);
-  }
-}
-@keyframes toastOut {
-  from {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0) scale(1);
-  }
-  to {
-    opacity: 0;
-    transform: translateX(-50%) translateY(10px) scale(0.96);
-  }
 }
 @keyframes toastInLinear {
   from {
@@ -2280,7 +2497,8 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
      焦点不会因此被偷走——遮罩为普通 div 无 autoFocus，点击至多 blur 到 body，
      由关闭时焦点归还 + a29 键盘安全网自动恢复；弹窗打开期间安全网守卫不抢焦。 */
   pointer-events: auto;
-  animation: fadeIn 0.18s ease both;
+  /* v2.3.97：遮罩与 .modal-mask 同理，只淡入不位移 */
+  animation: maskFadeIn calc(0.16s * var(--anim-speed, 1)) linear both;
 }
 .event-modal {
   /* 仅弹窗本体接收交互，遮罩层透传点击到下层界面 */
@@ -2292,7 +2510,9 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   border: 1px solid var(--color-border);
   border-radius: var(--ui-radius, 10px);
   box-shadow: var(--shadow-panel);
-  animation: popIn 0.22s ease both;
+  /* v2.3.97：原 popIn 0.22s ease **含 scale(0.96)** —— 用户已两次否定「先很小再放大」，
+     故整体换成不带 scale 的 popupLinearIn 0.16s linear。 */
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear both;
   /* 外层负责圆角裁剪，内层 .event-modal-inner 负责滚动，避免滚动条顶穿圆角 */
   overflow: hidden;
   display: flex;
@@ -2347,7 +2567,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   color: var(--color-text);
   cursor: pointer;
   font-size: calc(13px * var(--font-scale));
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.05s ease;
+  transition: border-color calc(0.15s * var(--anim-speed, 1)) ease, background calc(0.15s * var(--anim-speed, 1)) ease, transform calc(0.05s * var(--anim-speed, 1)) ease;
   user-select: none;
 }
 .event-modal .event-option:hover {
@@ -2407,36 +2627,10 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   vertical-align: middle;
   white-space: nowrap;
 }
-/* 🎲 随机事件主题快捷菜单 */
-.event-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 50;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 130px;
-  padding: 6px;
-  background: var(--color-panel, #fff);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm, 8px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-}
-.event-menu-item {
-  text-align: left;
-  font-size: calc(13px * var(--font-scale));
-  color: var(--color-text);
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  padding: 7px 10px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.event-menu-item:hover {
-  background: var(--color-primary-soft, rgba(127, 127, 255, 0.1));
-}
+/* v2.3.97 清理死CSS：.event-menu / .event-menu-item / .event-menu-item:hover 原先在此，
+   全仓 TSX/TS 零引用（含 `event-${...}` 动态拼接也不产生这两个类名）——随机事件的
+   主题快捷菜单早已改用 .list-menu。该菜单类已带 popupLinearIn 动画，故删除后
+   **没有任何视觉回归**，只是去掉三段永远不生效的规则。 */
 .event-modal .event-close-top {
   position: absolute;
   top: 12px;
@@ -2452,7 +2646,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   border: none;
   border-radius: 6px;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background calc(0.15s * var(--anim-speed, 1)), color calc(0.15s * var(--anim-speed, 1));
 }
 .event-modal .event-close-top:hover {
   background: rgba(0,0,0,0.08);
@@ -2478,7 +2672,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   padding-top: 14px;
   margin-top: 8px;
   border-top: 1px solid var(--color-border, rgba(0,0,0,0.06));
-  transition: color 0.3s ease;
+  transition: color calc(0.3s * var(--anim-speed, 1)) ease;
 }
 .event-countdown.urgent {
   color: #e74c3c;
@@ -2689,7 +2883,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   z-index: 60;
   background: rgba(0, 0, 0, 0.28);
   /* v2.3.90：补齐遮罩淡入（缩出见下方 .mini-drawer-mask.leaving） */
-  animation: miniMaskIn 0.15s ease;
+  animation: miniMaskIn calc(0.15s * var(--anim-speed, 1)) linear;
 }
 .mini-drawer {
   position: absolute;
@@ -2705,7 +2899,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   padding: 10px;
   gap: 4px;
   box-sizing: border-box;
-  animation: miniDrawerIn 0.16s ease;
+  animation: miniDrawerIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 @keyframes miniDrawerIn {
   from { transform: translateX(-100%); }
@@ -2882,7 +3076,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   color: var(--color-text-secondary);
   cursor: pointer;
   font-size: calc(13px * var(--font-scale));
-  transition: all 0.15s ease;
+  transition: all calc(0.15s * var(--anim-speed, 1)) ease;
 }
 .tab:hover { border-color: var(--color-primary); }
 .tab.active {
@@ -3098,7 +3292,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 .reasoning-arrow {
   display: inline-block;
   font-size: calc(9px * var(--font-scale));
-  transition: transform 0.18s ease;
+  transition: transform calc(0.18s * var(--anim-speed, 1)) ease;
 }
 .reasoning-arrow.open {
   transform: rotate(90deg);
@@ -3191,16 +3385,12 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   background: rgba(231, 76, 60, 0.1) !important;
 }
 
-/* 观察面板 modal */
-.obs-panel-mask {
-  position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0,0,0,0.3);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 200;
-}
+/* 观察面板 modal（ChatWindow 的观察者面板直接用 `className="modal obs-panel"`，
+   遮罩由通用 .modal-mask 承担，故下面只需保留面板本体样式） */
+/* v2.3.97 清理死 CSS：原 .obs-panel-mask 全仓零引用 —— 观察者面板早已改用
+   通用 .modal-mask（那18 个弹窗之一，本轮已给它补上 maskFadeIn 淡入）。
+   留着这条旧规则的风险是：z-index:200 远低于通用遮罩的 10001，一旦将来有人
+   误用它，会得到一个「点击穿透到弹窗之下」的幽灵遮罩。 */
 .obs-panel {
   background: var(--color-bg);
   border-radius: var(--radius-lg);
@@ -3320,7 +3510,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   padding: 4px;
   z-index: 300;
   /* linear 弹出动画（与 .ctx-menu 统一；受「动效开关」.anim-off 全局规则控制） */
-  animation: popupLinearIn 0.16s linear;
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 .sel-popup-btn {
   padding: 5px 12px;
@@ -3479,18 +3669,20 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   overflow: hidden;
   /* v2.3.38 弹入/弹出过渡（面板常驻 DOM，open 类切换显隐）；
-     「动效开关」关闭时 .anim-off 全局禁用所有 transition/animation */
+     「动效开关」关闭时 .anim-off 全局禁用所有 transition/animation
+     v2.3.97：**去掉 scale(0.97)** —— 用户已两次明确否定「先很小再放大」的表现，
+     只保留横向位移；缓动一并改为 linear。 */
   opacity: 0;
-  transform: translateX(-10px) scale(0.97);
+  transform: translateX(-10px);
   visibility: hidden;
-  transition: opacity 0.22s ease, transform 0.22s ease, visibility 0.22s, pointer-events 0s 0.22s;
+  transition: opacity calc(0.2s * var(--anim-speed, 1)) linear, transform calc(0.2s * var(--anim-speed, 1)) linear, visibility calc(0.2s * var(--anim-speed, 1)), pointer-events 0s calc(0.2s * var(--anim-speed, 1));
 }
 .stories-panel.open {
   opacity: 1;
   transform: none;
   visibility: visible;
   pointer-events: auto;
-  transition: opacity 0.22s ease, transform 0.22s ease, visibility 0.22s, pointer-events 0s;
+  transition: opacity calc(0.2s * var(--anim-speed, 1)) linear, transform calc(0.2s * var(--anim-speed, 1)) linear, visibility calc(0.2s * var(--anim-speed, 1)), pointer-events 0s;
 }
 .stories-head {
   display: flex;
@@ -3580,6 +3772,9 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   background: var(--color-panel, #fff);
   border-bottom: 1px solid var(--color-border, #eee);
   padding: 8px 10px;
+  /* v2.3.97：此前无入场动画。它是**从消息列表上方展开的横条**（不是居中卡片），
+     用 popupLinearIn 的 -6px 上移最贴合「从列表里推出来」的方位感。 */
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 .msg-search.compact {
   padding: 6px 8px;
@@ -3731,7 +3926,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 .bond-bar-fill {
   height: 100%;
   background: linear-gradient(90deg, #ff9a9e, #fad0c4);
-  transition: width 0.25s ease;
+  transition: width calc(0.25s * var(--anim-speed, 1)) ease;
 }
 .bond-bar-label {
   font-size: 12px;
@@ -3808,7 +4003,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
   color: var(--color-text);
   cursor: pointer;
-  animation: errorBubbleIn 0.22s ease-out;
+  animation: errorBubbleIn calc(0.16s * var(--anim-speed, 1)) linear;
   user-select: none;
 }
 @keyframes errorBubbleIn {
@@ -3895,7 +4090,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   color: var(--color-text, #222);
   font-size: 13px;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background calc(0.15s * var(--anim-speed, 1));
 }
 .settings-nav-item:hover {
   background: var(--color-hover, rgba(127, 127, 127, 0.12));
@@ -3949,7 +4144,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   border: 1px solid var(--color-border, rgba(128, 128, 128, 0.25));
   border-radius: 10px;
   outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color calc(0.15s * var(--anim-speed, 1)), box-shadow calc(0.15s * var(--anim-speed, 1));
 }
 .settings-search-input:focus {
   border-color: var(--color-primary, #3a8fd0);
@@ -3972,6 +4167,9 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28), 0 2px 8px rgba(0, 0, 0, 0.14);
   padding: 4px;
   z-index: 20;
+  /* v2.3.97：此前**完全没有入场动画**（与同样定位的 .search-suggest 行为不一致，
+     视觉上「凭空冒出」）。统一成项目事实标准 popupLinearIn 0.16s linear。 */
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 .settings-suggest::-webkit-scrollbar { width: 6px; }
 .settings-suggest::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, 0.4); border-radius: 3px; }
@@ -3981,7 +4179,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   color: var(--color-text, #1a1d24);
   border-radius: 8px;
   cursor: pointer;
-  transition: background 0.12s;
+  transition: background calc(0.12s * var(--anim-speed, 1));
 }
 .settings-suggest-item:hover { background: var(--color-hover, rgba(255, 255, 255, 0.18)); }
 .settings-suggest-empty { padding: 10px 12px; font-size: 12.5px; color: var(--color-text-secondary, #888); }
@@ -4001,10 +4199,10 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   padding: 4px;
   cursor: default;
   /* 与 .select-menu-panel 同一套弹出/缩入动画（受「右键菜单与下拉」分组控制） */
-  animation: popupLinearIn 0.16s linear;
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 .search-suggest.leaving {
-  animation: popupLinearOut 0.15s linear forwards;
+  animation: popupLinearOut calc(0.15s * var(--anim-speed, 1)) linear forwards;
   pointer-events: none;
 }
 .search-suggest::-webkit-scrollbar { width: 6px; }
@@ -4211,6 +4409,18 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 }
 
 /* ===== 弹出动画（v2.3.44）：线性淡入 + 上移；由「主题与外观 → 动效开关」（.anim-off）统一控制 ===== */
+/* v2.3.97 新增：遮罩专用关键帧。**只做 opacity 0→1，绝不位移** ——
+   遮罩是 inset:0 铺满全屏的固定层，位移它既无视觉意义又会露出未遮住的边缘，
+   反而比「直接出现」更糟。与 popupLinearIn 分开是为了避免有人图省事
+   往遮罩上套带位移的关键帧。 */
+@keyframes maskFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
 @keyframes popupLinearIn {
   from {
     opacity: 0;
@@ -4226,7 +4436,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 .ctx-menu,
 .obs-menu,
 .select-menu-panel {
-  animation: popupLinearIn 0.16s linear;
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 
 /* ===== 缩入动画（v2.3.90）：与上方 popupLinearIn 严格对称，供所有菜单关闭时使用 =====
@@ -4251,14 +4461,14 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 .list-menu.leaving,
 .sel-popup.leaving,
 .more-dropdown.leaving {
-  animation: popupLinearOut 0.15s linear forwards;
+  animation: popupLinearOut calc(0.15s * var(--anim-speed, 1)) linear forwards;
   pointer-events: none;
 }
 
 /* v2.3.90：小窗左侧抽屉 —— 遮罩淡出 + 抽屉向左滑出（与 miniDrawerIn 对称）。
    淡入关键帧 miniMaskIn 已合并进上方 .mini-drawer-mask 原规则，避免重复选择器。 */
 .mini-drawer-mask.leaving {
-  animation: miniMaskOut 0.15s ease forwards;
+  animation: miniMaskOut calc(0.15s * var(--anim-speed, 1)) ease forwards;
   pointer-events: none;
 }
 @keyframes miniMaskIn {
@@ -4274,7 +4484,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   to { transform: translateX(-100%); }
 }
 .mini-drawer.leaving {
-  animation: miniDrawerOut 0.15s ease forwards;
+  animation: miniDrawerOut calc(0.15s * var(--anim-speed, 1)) ease forwards;
   pointer-events: none;
 }
 
@@ -4289,7 +4499,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   border-bottom: 1px solid var(--color-border);
   color: var(--color-text);
   font-size: 13px;
-  animation: popupLinearIn 0.16s linear;
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 .update-banner-text {
   flex: 1;
@@ -4360,7 +4570,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   opacity: 0.35;
   /* v2.3.96：原先 transition 写在组件的 inline style 里（裸写动画），
      现统一收进 CSS，由 animControl 的 queue 分组门禁统一 kill。 */
-  transition: opacity 0.18s linear;
+  transition: opacity calc(0.18s * var(--anim-speed, 1)) linear;
 }
 .queue-dock-handle:hover {
   opacity: 1;
@@ -4427,9 +4637,9 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   visibility: hidden;
   pointer-events: none;
   transition:
-    transform 0.2s linear,
-    opacity 0.2s linear,
-    visibility 0s linear 0.2s;
+    transform calc(0.2s * var(--anim-speed, 1)) linear,
+    opacity calc(0.2s * var(--anim-speed, 1)) linear,
+    visibility 0s linear calc(0.2s * var(--anim-speed, 1));
 }
 .queue-dock-panel.expanded {
   transform: none;
@@ -4437,8 +4647,8 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   visibility: visible;
   pointer-events: auto;
   transition:
-    transform 0.2s linear,
-    opacity 0.2s linear,
+    transform calc(0.2s * var(--anim-speed, 1)) linear,
+    opacity calc(0.2s * var(--anim-speed, 1)) linear,
     visibility 0s linear 0s;
 }
 .queue-dock-head {
@@ -4663,23 +4873,30 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   color: var(--color-text, #222);
   overflow-wrap: break-word;
 }
+/* v2.3.97：原为
+     0%   translateY(-26px) scale(0.92)
+     60%  translateY(4px)   scale(1.02)   ← 回弹过冲
+     100% translateY(0)     scale(1)
+   即「先很小 → 略大于原大小 → 归位」，正是用户两次明确否定的 scale 表现；
+   且 1s + cubic-bezier(.22,1,.36,1) 既非线性又偏长。
+   现改为**纯位移的单段线性滑入**（无 scale、无过冲），时长 0.2s。 */
 @keyframes nodeBannerIn {
-  0% { opacity: 0; transform: translateY(-26px) scale(0.92); }
-  60% { opacity: 1; transform: translateY(4px) scale(1.02); }
-  100% { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0; transform: translateY(-26px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 @keyframes nodeBannerOut {
   from { opacity: 1; transform: translateY(0); }
   to { opacity: 0; transform: translateY(-16px); }
 }
 .node-banner.phase-in .node-banner-card {
-  animation: nodeBannerIn 1s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: nodeBannerIn calc(0.2s * var(--anim-speed, 1)) linear both;
 }
 .node-banner.phase-hold .node-banner-card {
   opacity: 1;
 }
 .node-banner.phase-out .node-banner-card {
-  animation: nodeBannerOut 0.6s ease both;
+  /* v2.3.97：0.6s ease → 0.2s linear（与入场对称；审计清单漏记的第 16 处非线性缓动） */
+  animation: nodeBannerOut calc(0.2s * var(--anim-speed, 1)) linear both;
 }
 
 /* ===== 文件拖拽添加（v2.3.51）：输入区拖入时的可放置视觉提示 ===== */
@@ -4701,7 +4918,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   border-radius: 10px;
   pointer-events: none;
   z-index: 30;
-  animation: popupLinearIn 0.16s linear;
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 
 /* ===== 快速导入（v2.3.51）：文件拖入窗口任意位置的全窗遮罩 ===== */
@@ -4714,7 +4931,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   justify-content: center;
   background: color-mix(in srgb, var(--color-panel) 55%, transparent);
   pointer-events: none;
-  animation: popupLinearIn 0.16s linear;
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 .quick-import-card {
   padding: 18px 28px;
@@ -4742,6 +4959,207 @@ body.ny-drop-chat .quick-import-overlay {
   color: #f4f4ff;
 }
 
+/* ================================================================
+   v2.3.97：拖拽导入「预检确认弹窗」（QuickImportPreviewModal）
+   ---------------------------------------------------------------
+   弹窗本体直接复用通用模态三件套 .modal-mask / .modal / .modal-head /
+   .modal-body / .modal-actions，因此入场动画（maskFadeIn + popupLinearIn）
+   与全站 18 个弹窗完全一致，且已被 animControl 的 theme 组登记。
+   这里只补「文件列表 / 类型徽标 / 关键字段摘要 / 失败行」这些内容零件。
+   颜色一律走主题变量（--color-* / --color-danger），14 套主题下均达 WCAG AA。
+   ================================================================ */
+.qip-modal {
+  display: flex;
+  flex-direction: column;
+  max-height: 86vh;
+}
+.qip-desc {
+  margin: 0 0 12px;
+  font-size: calc(12px * var(--font-scale));
+  color: var(--color-text-secondary);
+}
+.qip-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  color: var(--color-danger);
+  font-size: calc(12px * var(--font-scale));
+}
+/* 文件列表：整块自己滚动，头尾（标题/按钮）固定 */
+.qip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.qip-item {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-panel-alt);
+  padding: 8px 10px;
+  /* 列表行入场：淡入 + 4px 上移。用 transition 而非 @keyframes ——
+     这样动画被关掉（animControl 任一档）时元素直接跳到终态（opacity:1），
+     不会像 @keyframes 那样退回 opacity:0 的基态导致永久不可见。 */
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity calc(0.18s * var(--anim-speed, 1)) linear,
+    transform calc(0.18s * var(--anim-speed, 1)) linear,
+    border-color calc(0.15s * var(--anim-speed, 1)) linear;
+}
+.qip-item.is-in {
+  opacity: 1;
+  transform: none;
+}
+/* 失败项：描边 + 左侧色条双重提示；⚠ 图标与「无法导入」文字由组件渲染，
+   因此不依赖颜色也能区分（WCAG 1.4.1） */
+.qip-item-bad {
+  border-color: var(--color-danger);
+  box-shadow: inset 3px 0 0 var(--color-danger);
+}
+.qip-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.qip-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--color-hover);
+}
+.qip-thumb-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(14px * var(--font-scale));
+}
+.qip-name {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(13px * var(--font-scale));
+  font-weight: 600;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qip-size {
+  flex-shrink: 0;
+  font-size: calc(11px * var(--font-scale));
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+/* 类型徽标：底色用 color-mix 从主题色派生，14 套主题都不需要额外覆盖 */
+.qip-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-hover);
+  color: var(--color-primary);
+  font-size: calc(11px * var(--font-scale));
+  white-space: nowrap;
+}
+.qip-badge-bad {
+  border-color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 14%, transparent);
+  color: var(--color-danger);
+}
+.qip-reason {
+  margin-top: 5px;
+  font-size: calc(11px * var(--font-scale));
+  color: var(--color-danger);
+}
+.qip-detail {
+  margin-top: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.qip-detail-name {
+  font-size: calc(12px * var(--font-scale));
+  color: var(--color-text);
+  font-weight: 600;
+}
+.qip-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.qip-field {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--color-hover);
+  font-size: calc(11px * var(--font-scale));
+  max-width: 100%;
+}
+.qip-field-label {
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+/* 字段值可能很长（背景/世界观摘要），单行省略而不是撑破弹窗 */
+.qip-field-value {
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qip-summary {
+  font-size: calc(11px * var(--font-scale));
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  /* 摘要最多 3 行 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.qip-truncated {
+  margin: 10px 0 0;
+  font-size: calc(11px * var(--font-scale));
+  color: var(--color-text-secondary);
+}
+.qip-hint {
+  margin: 10px 0 0;
+  font-size: calc(11px * var(--font-scale));
+  color: var(--color-text-secondary);
+}
+.qip-empty {
+  padding: 22px 0;
+  text-align: center;
+  font-size: calc(12px * var(--font-scale));
+  color: var(--color-text-secondary);
+}
+.qip-actions {
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--color-border);
+}
+/* 全关档兜底：即便列表行的入场 transition 被 kill，也强制可见（与 .msg-action-bar 同款双保险） */
+.anim-off .qip-item,
+html[data-anim-off~='theme'] .qip-item {
+  opacity: 1 !important;
+  transform: none !important;
+}
+
 
 /* ===== v2.3.63：消息下方三个 AI 操作图标（续写 / 重写⟲ / AI代写回复）===== */
 /* v2.3.66：操作栏改为独占一行（flex-basis:100% + 父级 flex-wrap:wrap），
@@ -4763,7 +5181,8 @@ body.ny-drop-chat .quick-import-overlay {
                  ❌ 用户否定：「不是先很小，最后消息弄完之后再放大」
        v2.3.95：改成 visibility 瞬时切换、完全无动画
                  ❌ 用户否定：「没有动画了，直接凭空出现，正常来说应该有动画」
-       v2.3.96（本版）：**不缩放**，只做 opacity 0→1 + translateY(4px)→none，0.5s
+       v2.3.96：opacity 0→1 + translateY(4px)→none，0.5s
+         v2.3.97：位移方向由 +4px 改为 **-6px**（从气泡边缘向下弹，而非凭空冒出）
                  ✅ 满足两条硬约束：① 有 0.5s 弹出动画 ② 全程不出现 scale()
 
      ── 为什么隐藏态用 visibility:hidden 而不是 display:none / opacity:0 ──
@@ -4781,7 +5200,7 @@ body.ny-drop-chat .quick-import-overlay {
        · transition：基态 = 未就绪（opacity:0）。被 `transition:none !important` 抹掉后，
          加 .is-in 就是**瞬间跳到 opacity:1** → 按钮照常可见，两档表现一致。
        · @keyframes：`animation:none !important` 会把关键帧**整个移除**，元素退回
-         **基态样式**，而基态恰恰是 opacity:0 / translateY(4px) → **按钮永久不可见**。
+         **基态样式**，而基态恰恰是 opacity:0 / translateY(-6px) → **按钮永久不可见**。
      同一个坑项目里已踩过两次，见 hooks/useRetract.ts 的 isRetractSuppressed 注释
      （缩入动画被 kill 后元素停在「初始态」导致菜单点不掉；悬浮球那套免疫正是
      因为它用 transition 而非 animation）。
@@ -4793,13 +5212,19 @@ body.ny-drop-chat .quick-import-overlay {
   visibility: hidden;
   opacity: 0;
   /* 仅**位移**，绝不是缩放。用户已两次否定 scale 表现，此处不得引入任何 scale()。 */
-  transform: translateY(4px);
+  /* v2.3.97：方向由 +4px 改为 **-6px**。用户原话：「按钮位移方向应该是从消息气泡边缘弹下来，
+     不应该凭空冒出来。」
+     依据：操作栏位于 `.msg-meta` 内（与「消耗 N tokens」同一行、贴在气泡**下方**），
+     所以「从气泡边缘弹下来」= 从**上方**（靠气泡那一侧）向下展开到自然位置。
+     之前工程师取 +4px 是「自下而上升起」，方向正好相反 —— 视觉上就成了「凭空冒出来」。
+     -6px 与项目既有 `popupLinearIn` 的 -6px 一致，两个弹层方向统一。 */
+  transform: translateY(-6px);
   /* 占位保留（visibility 不影响布局），故生成完成时气泡高度不跳动 */
   pointer-events: none;   /* 离散属性、不参与过渡，由 .is-in 直接切换 */
   /* ⚠️ 只过渡 opacity / transform 两项：**不要**把 visibility 写进来。
      visibility 一旦参与过渡，收起态就会退化成 0.5s 淡出（与「直接消失」相悖），
      且从 hidden 过渡时还会带来中间态的可见性抖动。*/
-  transition: opacity 0.5s ease, transform 0.5s ease;
+  transition: opacity calc(0.5s * var(--anim-speed, 1)) ease, transform calc(0.5s * var(--anim-speed, 1)) ease;
 }
 /* 就绪态：淡入 + 归位。**不缩放** —— transform 的终值是 none（恒等矩阵）。 */
 .msg-action-bar.is-in {
@@ -4864,7 +5289,7 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
   border-radius: 6px;
   color: var(--color-text);
   opacity: 0.7;
-  transition: opacity 0.15s linear, background 0.15s linear;
+  transition: opacity calc(0.15s * var(--anim-speed, 1)) linear, background calc(0.15s * var(--anim-speed, 1)) linear;
 }
 .msg-ai-action-btn:hover:not(:disabled) {
   background: var(--color-hover);
@@ -4950,6 +5375,10 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
   position: fixed;
   background: rgba(0, 0, 0, 0.5);
   pointer-events: auto;
+  /* v2.3.97：此前无动画。遮罩只淡入不位移（与 .modal-mask 同理）。
+     用 maskFadeIn 而非现成的 fadeIn，是为了让「模态/遮罩类淡入」在全项目
+     收敛到同一个关键帧名，便于验证脚本按名字统一断言。 */
+  animation: maskFadeIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 /* 整屏遮罩：仅「完成卡片」这一瞬间使用，其余情况都用围出 spotlight 洞的 4 块面板 */
 .tutorial-mask-full {
@@ -4984,35 +5413,30 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
   box-sizing: border-box;
   /* 卡片自身可交互（按钮/关闭），洞外区域由遮罩面板拦截 */
   pointer-events: auto;
-  animation: tutorialCardIn 0.18s ease-out;
+  /* v2.3.97：原 tutorialCardIn 0.18s ease-out **含 scale(0.97)**，用户已两次否定
+     「先很小再放大」→ 改用项目统一的 popupLinearIn 0.16s linear（纯位移+淡入，无 scale）。 */
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 .tutorial-card-center {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  /* 独立关键帧：保留 translate(-50%,-50%) 居中偏移（通用 tutorialCardIn 会把它覆盖掉） */
-  animation: tutorialCardInCenter 0.18s ease-out;
+  /* 独立关键帧：保留 translate(-50%,-50%) 居中偏移（通用 popupLinearIn 会把它覆盖掉）。
+     v2.3.97：同步去掉 scale(0.97) → scale(1)，只保留居中偏移的 8px 上移。 */
+  animation: tutorialCardInCenter calc(0.16s * var(--anim-speed, 1)) linear;
 }
 @keyframes tutorialCardInCenter {
   from {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(0.97);
+    transform: translate(-50%, calc(-50% - 8px));
   }
   to {
     opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
+    transform: translate(-50%, -50%);
   }
 }
-@keyframes tutorialCardIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px) scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
+/* v2.3.97：原 keyframes tutorialCardIn 已删除 —— .tutorial-card 改用通用的
+   popupLinearIn 后零引用。它带 scale(0.97)，留着只会被人误用回退到 scale 表现。 */
 .tutorial-head {
   display: flex;
   align-items: center;
@@ -5083,7 +5507,7 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
   transition: border-color var(--transition), background var(--transition);
 }
 .media-cfg-body {
-  animation: mediaCfgBodyIn 0.18s ease-out;
+  animation: mediaCfgBodyIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 @keyframes mediaCfgBodyIn {
   from { opacity: 0; transform: translateY(-3px); }
@@ -5202,7 +5626,7 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
 .stats-pie-slice {
   transform-origin: 100px 100px;
   transform: scale(1);
-  transition: transform 0.18s ease, opacity 0.18s ease;
+  transition: transform calc(0.18s * var(--anim-speed, 1)) ease, opacity calc(0.18s * var(--anim-speed, 1)) ease;
 }
 .stats-pie-slice.is-hover {
   transform: scale(1.06);
@@ -5235,6 +5659,8 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* v2.3.97：此前无入场动画。tooltip 同 .select-menu-tip，只做纯淡入不位移。 */
+  animation: fadeIn calc(0.12s * var(--anim-speed, 1)) linear;
 }
 .stats-pie-tip .stats-tip-name {
   font-weight: 700;
@@ -5533,9 +5959,9 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  /* 入场动画：只做极轻的位移+淡入（0.18s），不喧宾夺主。
+  /* 入场动画：只做极轻的位移+淡入（0.16s），不喧宾夺主。
      该类名已登记进 animControl 的 stats 分组（见文件头说明）。 */
-  animation: statsFavEditorIn 0.18s ease-out;
+  animation: statsFavEditorIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 @keyframes statsFavEditorIn {
   from { opacity: 0; transform: translateY(-4px); }
@@ -5660,6 +6086,8 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
   align-items: center;
   justify-content: center;
   z-index: 300;
+  /* v2.3.97：遮罩补淡入（与 .modal-mask 同理，只opacity 不位移） */
+  animation: maskFadeIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 .stats-role-pick {
   width: min(440px, 92vw);
@@ -5670,7 +6098,7 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-panel);
-  animation: popupLinearIn 0.16s linear;
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
   overflow: hidden;
 }
 .stats-role-pick-head {
@@ -5908,7 +6336,7 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
   font-size: 15px;
   line-height: 1;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  transition: color calc(0.15s * var(--anim-speed, 1)), background calc(0.15s * var(--anim-speed, 1)), border-color calc(0.15s * var(--anim-speed, 1));
 }
 .tr-seg-del:hover:not(:disabled) {
   color: var(--color-danger);
@@ -5965,4 +6393,624 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
   border-color: var(--color-primary);
   color: var(--color-primary);
   background: var(--color-panel);
+}
+
+/* ============================================================================
+   v2.3.97 · 自绘弹窗：确认框（ConfirmDialog）与文件选择器（FilePickerModal）
+   ----------------------------------------------------------------------------
+   设计约束（勿违反）：
+   1. **容器样式不重写** —— `.modal-mask` / `.modal` / `.modal-head/body/foot` 全部沿用
+      既有定义（含 modal-anim 同事统一加的入场动画与 animControl 门禁），此处只补
+      「本组件特有」的类，不碰 `.modal` 本身，避免两处动画定义打架。
+   2. **零硬编码色值** —— 全部走 CSS 变量，保证 14 套主题都可读。
+      （唯一例外是 `[data-theme='glass']` 的加深覆写，那里也只用 rgba 白/黑叠加，
+        与既有 glass deepening 段落同风格。）
+   3. **只写按钮态/交互态过渡，不写入场关键帧** —— 入场由 `.modal` 统一负责。
+   ============================================================================ */
+
+/* ---------- 确认框 ---------- */
+.confirm-mask {
+  /* 确认框比普通弹窗更「重」，遮罩略深一档以突出破坏性操作的严肃性 */
+  background: rgba(0, 0, 0, 0.55);
+}
+.confirm-dialog {
+  /* 覆盖 .modal 的 720px 默认宽度：确认框内容短，过宽会显得空旷 */
+  width: 420px;
+}
+.confirm-head {
+  gap: 10px;
+  align-items: center;
+}
+.confirm-icon {
+  /* 危险操作标记：形状 + 颜色双重编码，不单独依赖颜色传达状态（WCAG 1.4.1） */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border-radius: 50%;
+  background: var(--color-danger-solid);
+  color: var(--color-danger-solid-text);
+  font-size: calc(14px * var(--font-scale));
+  font-weight: 700;
+  line-height: 1;
+}
+.confirm-title {
+  min-width: 0;
+  word-break: break-word;
+}
+.confirm-body {
+  /* 正文默认给足行高与字间距，长句（带角色名的确认语）不至于挤成一行 */
+  line-height: 1.6;
+}
+.confirm-message {
+  margin: 0;
+  font-size: calc(14px * var(--font-scale));
+  color: var(--color-text);
+  white-space: pre-wrap;
+  /* 超长消息（异常情况下拼接了很长的名字）在弹窗内滚动而非撑破布局 */
+  max-height: 40vh;
+  overflow-y: auto;
+  word-break: break-word;
+}
+.confirm-foot {
+  justify-content: flex-end;
+  gap: 10px;
+}
+/* 确认按钮：普通态用主色、危险态用危险色。
+   transition 而非 @keyframes —— 这样被 animControl 关掉时是「瞬间跳到终态」，
+   元素**不会**卡在 opacity:0 变成全透明（这是 animation 才会踩的坑）。 */
+.confirm-confirm-btn {
+  padding: 8px 20px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  font-size: calc(13px * var(--font-scale));
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color calc(0.15s * var(--anim-speed, 1)) ease, border-color calc(0.15s * var(--anim-speed, 1)) ease, opacity calc(0.15s * var(--anim-speed, 1)) ease;
+}
+.confirm-confirm-btn.is-normal {
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+  border-color: var(--color-primary);
+}
+.confirm-confirm-btn.is-normal:hover:not(:disabled) {
+  background: var(--color-primary);
+  opacity: 0.85;
+  opacity: 0.88;
+}
+/* 危险态：描边 + 实心双层，hover 时加深而不改变色相，避免主题下对比度塌掉 */
+.confirm-confirm-btn.is-danger {
+  background: var(--color-danger-solid);
+  color: var(--color-danger-solid-text);
+  border-color: var(--color-danger-solid-border);
+}
+.confirm-confirm-btn.is-danger:hover:not(:disabled) {
+  opacity: 0.88;
+}
+.confirm-confirm-btn:disabled,
+.confirm-cancel-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* 键盘可达性：焦点环必须清晰可见（WCAG 2.4.7），用 outline 而非 box-shadow 以免被圆角裁掉 */
+.confirm-confirm-btn:focus-visible,
+.confirm-cancel-btn:focus-visible,
+.filepicker-row:focus-visible,
+.filepicker-place:focus-visible,
+.filepicker-up:focus-visible,
+.filepicker-namefield input:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ---------- 文件选择器 ---------- */
+.file-picker {
+  /* 文件列表需要更多横向空间，比通用 .modal 宽 */
+  width: 860px;
+}
+/* 退场期间的遮罩：不吃点击（配合组件里的 leaving 判断双保险） */
+.modal-mask.leaving {
+  pointer-events: none;
+}
+.filepicker-body {
+  display: flex;
+  gap: 14px;
+  padding: 0;
+  /* 列表区自己滚动，头尾固定 */
+  overflow: hidden;
+  min-height: 380px;
+}
+/* 左侧位置栏 */
+.filepicker-places {
+  width: 168px;
+  flex: 0 0 168px;
+  border-right: 1px solid var(--color-border);
+  padding: 12px 8px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--color-panel-alt);
+}
+.filepicker-place {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: calc(12px * var(--font-scale));
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color calc(0.15s * var(--anim-speed, 1)) ease, color calc(0.15s * var(--anim-speed, 1)) ease;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filepicker-place:hover:not(:disabled) {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+.filepicker-place.is-active {
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+}
+/* 右侧主区 */
+.filepicker-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.filepicker-pathbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+.filepicker-up {
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  font-size: calc(12px * var(--font-scale));
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+  color: var(--color-text);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color calc(0.15s * var(--anim-speed, 1)) ease, opacity calc(0.15s * var(--anim-speed, 1)) ease;
+}
+.filepicker-up:hover:not(:disabled) {
+  background: var(--color-hover);
+}
+.filepicker-up:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* 当前路径：超长时中间省略，完整路径靠 title 提示 */
+.filepicker-cwd {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(11px * var(--font-scale));
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl; /* 省略号落在左侧，更符合「路径尾部才是文件名」的阅读直觉 */
+  text-align: left;
+}
+.filepicker-err {
+  margin: 8px 12px 0;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  border-left: 3px solid var(--color-danger);
+  background: var(--color-panel-alt);
+  color: var(--color-danger);
+  font-size: calc(12px * var(--font-scale));
+}
+.filepicker-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+}
+.filepicker-hint {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: calc(12px * var(--font-scale));
+}
+.filepicker-group + .filepicker-group {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+.filepicker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-text);
+  font-size: calc(12px * var(--font-scale));
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color calc(0.12s * var(--anim-speed, 1)) ease;
+}
+.filepicker-row:hover {
+  background: var(--color-hover);
+}
+/* 高亮（键盘 ↑↓ 或点击）与勾选是两个独立状态，分别用背景色与左侧标记区分 */
+.filepicker-row.is-active {
+  background: var(--color-hover);
+  box-shadow: inset 2px 0 0 var(--color-primary);
+}
+.filepicker-row.is-picked {
+  background: var(--color-hover);
+}
+.filepicker-check {
+  flex: 0 0 auto;
+  font-size: calc(13px * var(--font-scale));
+  line-height: 1;
+}
+.filepicker-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filepicker-size,
+.filepicker-time {
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
+  font-size: calc(11px * var(--font-scale));
+  /* 数字列用等宽，避免位数变化导致列宽抖动 */
+  font-variant-numeric: tabular-nums;
+}
+.filepicker-size {
+  width: 76px;
+  text-align: right;
+}
+.filepicker-time {
+  width: 92px;
+  text-align: right;
+}
+/* 底部：文件名输入 + 计数 + 按钮 */
+.filepicker-foot {
+  gap: 10px;
+  align-items: center;
+}
+.filepicker-namefield {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.filepicker-namelabel {
+  flex: 0 0 auto;
+  font-size: calc(12px * var(--font-scale));
+  color: var(--color-text-secondary);
+}
+.filepicker-namefield input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  font-size: calc(13px * var(--font-scale));
+  font-family: inherit;
+  transition: border-color calc(0.15s * var(--anim-speed, 1)) ease;
+}
+.filepicker-namefield input:focus {
+  border-color: var(--color-primary);
+}
+.filepicker-count {
+  flex: 0 0 auto;
+  font-size: calc(12px * var(--font-scale));
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 毛玻璃主题：选择器是半透明大面板，参照既有 glass deepening 段落加深，
+   否则下方聊天内容会穿透上来与文件名重叠 */
+[data-theme='glass'] .filepicker-places,
+[data-theme='glass'] .filepicker-namefield input {
+  background: rgba(255, 255, 255, 0.10) !important;
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #f4f4ff;
+}
+[data-theme='glass'] .filepicker-namefield input::placeholder {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+/* ---------- v2.3.97 选图引导弹窗（ImagePickGuide）---------- */
+/* 容器复用既有 .modal-card，因此只补本组件特有的内部结构。
+   同样零硬编码色值；拖放提示区用虚线框 + 面板色，任何主题下都能看清边界。 */
+.imagepick-guide {
+  width: 380px;
+  max-width: 92vw;
+}
+.imagepick-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 14px;
+  margin: 4px 0 14px;
+  border: 2px dashed var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-panel-alt);
+  text-align: center;
+}
+.imagepick-dropzone-icon {
+  font-size: calc(24px * var(--font-scale));
+  line-height: 1;
+}
+.imagepick-dropzone-text {
+  font-size: calc(12px * var(--font-scale));
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+.imagepick-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+[data-theme='glass'] .imagepick-dropzone {
+  background: rgba(255, 255, 255, 0.10) !important;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+/* ---------- v2.3.97 新建文件夹（补回旧 createDirectory 能力）---------- */
+/* 只在「选目录」模式出现。仍是零硬编码色值 + 全部按钮态 transition，
+   入场/退场动画沿用 .modal-mask / .modal（由 modal-anim 统一登记在 theme 组）。 */
+.filepicker-newdir {
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  font-size: calc(12px * var(--font-scale));
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+  color: var(--color-text);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color calc(0.15s * var(--anim-speed, 1)) ease, opacity calc(0.15s * var(--anim-speed, 1)) ease;
+}
+.filepicker-newdir:hover:not(:disabled) {
+  background: var(--color-hover);
+}
+.filepicker-newdir:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* 内联输入行：紧贴路径栏下方，横向排布 */
+.filepicker-mkdir {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--color-panel-alt);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+.filepicker-mkdir input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  font-size: calc(12px * var(--font-scale));
+  font-family: inherit;
+  transition: border-color calc(0.15s * var(--anim-speed, 1)) ease;
+}
+.filepicker-mkdir input:focus {
+  border-color: var(--color-primary);
+}
+.filepicker-mkdir button {
+  flex: 0 0 auto;
+  padding: 6px 14px;
+  font-size: calc(12px * var(--font-scale));
+  border-radius: var(--radius);
+  font-family: inherit;
+  cursor: pointer;
+}
+.filepicker-mkdir button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* 错误提示去掉上边距（内联输入行下方紧贴显示） */
+.filepicker-err + .filepicker-err,
+.filepicker-mkdir + .filepicker-err {
+  margin-top: 0;
+}
+.filepicker-newdir:focus-visible,
+.filepicker-mkdir input:focus-visible,
+.filepicker-mkdir button:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+[data-theme='glass'] .filepicker-mkdir input {
+  background: rgba(255, 255, 255, 0.10) !important;
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #f4f4ff;
+}
+
+/* ============================================================================
+   液态玻璃主题（liquid）· v2.3.97 新增
+   ----------------------------------------------------------------------------
+   本段为本任务的**独占新增段落**，追加在文件末尾，不修改任何他人段落。
+   配套：src/theme/variables.css 的 [data-theme='liquid'] 块（28 个变量）。
+
+   ── 1. 背景「流动」动画 ────────────────────────────────────────────────
+   载体选择：`.app-root`（主窗）与 `.mini-shell`（小窗）的背景层。
+   方案：`background-position` 位移（不是伪元素位移）。
+     · 选它的理由：伪元素需要额外图层与 z-index 协调，而 .app-root /
+       .mini-shell 本来就因 transform:translateZ(0) 建立了独立合成层，
+       在其上做 background 位移动画最省事，且不会与任何浮层的 z-index 打架。
+     · background-size 必须 > 100%（这里 220%），否则渐变被拉伸铺满、
+       没有「可位移的余量」，动画会变成原地抖动。
+   为什么 `0%` 与 `100%` 声明值相同：
+     位移类动画若首尾状态不同，循环点会出现**跳变**（渐变瞬间弹回原位）。
+     本动画把 0%/100% 都声明为 `0% 0%`，并让 50% 走到 `100% 100%`，
+     于是每一轮都是「起点→对角→起点」的完整往返，首尾严格重合，无缝。
+   为什么周期 36s + linear：
+     · 36s 远长于 15s 阈值 —— 背景层不该抢注意力，低于 ~15s 会明显「躁动」；
+     · linear 保证往返两段速度一致，不会出现 ease-in-out 那种两端一顿一顿的
+       「呼吸泵」感（液体是匀质流动，不该有加减速）。
+   为什么注册进 animControl 的 theme 组：
+     它是**主题外观**的一部分（换主题就该换），与 .theme-card / body 同族；
+     且某些用户会觉得背景持续流动 distracting，需要一个能单独关掉的开关，
+     故同时提供 liquidFlow 独立开关（默认开）。
+   关掉后的兜底：`animation:none` 后元素退回**基态**——
+   基态是 `background-position: 0% 0%`（动画的 0% 声明值），
+   即「静止的第一帧」，背景照常可见，**不会变透明/不可见**。
+   ========================================================================== */
+@keyframes liquid-flow-drift {
+  0% {
+    background-position: 0% 0%;
+  }
+  50% {
+    background-position: 100% 100%;
+  }
+  100% {
+    background-position: 0% 0%;
+  }
+}
+/* 背景层本体：四色相柔和渐变，色标 alpha 压低（理由见 variables.css 文件头）。
+   background-size:220% 给出可位移余量；no-repeat 防拼接缝。
+   用 `background-image: var(--app-bg)` 而不是硬编码渐变 —— variables.css 的
+   --app-bg 就是这套渐变，而 ThemeContext 在用户自定义背景时会**覆盖** --app-bg。
+   这样写才能在「用户自定义背景图」时自动让位（见下方 data-liquid-custom-bg）。 */
+[data-theme='liquid'] .app-root,
+[data-theme='liquid'] .mini-shell {
+  background-image: var(--app-bg);
+  background-size: 220% 220%;
+  background-repeat: no-repeat;
+  animation: liquid-flow-drift 36s linear infinite;
+}
+/* 「液态流动」开关关掉 → 完全静止（不是暂停在首帧，那会让用户以为坏了）。
+   选择器同时命中主窗与小窗。data-liquid-flow 由 ThemeContext / MiniChat 挂载。 */
+[data-theme='liquid'][data-liquid-flow='off'] .app-root,
+[data-theme='liquid'][data-liquid-flow='off'] .mini-shell {
+  animation: none;
+  background-position: 0% 0%;
+}
+/* 用户自定义了背景色/图（data-liquid-custom-bg，由 ThemeContext 挂载）：
+   此时 --app-bg 已是 `url(...) center/cover no-repeat`，若继续跑 background-position
+   位移，等于让用户的照片在窗口里缓慢漂移。故停掉流动、按原样铺满显示。
+   （--app-bg 里的 center/cover 已自带尺寸与定位，故把 background-size 交还 auto。） */
+[data-theme='liquid'][data-liquid-custom-bg] .app-root,
+[data-theme='liquid'][data-liquid-custom-bg] .mini-shell {
+  animation: none;
+  background-size: auto;
+  background-repeat: no-repeat;
+  background-position: 0% 0%;
+}
+
+/* ── 2. deepening 覆盖块：半透明浮层提纯为近不透明 ────────────────────────
+   模式完全照抄 index.css:4765 的 glass deepening（16 个选择器），
+   底色换成与本主题蓝紫基调一致的深蓝紫（--liquid-overlay，alpha 0.90）。
+   为什么必须做：这些面板默认用 --color-panel（20% 半透明白），
+   在液态玻璃的多色高饱和流动背景上，文字会与穿过的高亮色斑打架。
+   模糊（backdrop-filter）不改变亮度关系，所以「加模糊」不能替代「加深底」。
+   注意：底色 alpha 取 0.90 而非 glass 的 0.88（值已收进 --liquid-overlay）——
+   本主题背景色斑饱和度更高，
+   需要更实一点才能把透过来的亮斑压到文字可读的范围。 */
+[data-theme='liquid'] .more-dropdown,
+[data-theme='liquid'] .mention-pop,
+[data-theme='liquid'] .mini-drawer,
+[data-theme='liquid'] .modal-card,
+[data-theme='liquid'] .modal,
+[data-theme='liquid'] .error-bubble,
+[data-theme='liquid'] .reasoning-block,
+[data-theme='liquid'] .qps-queue,
+[data-theme='liquid'] .mini-toast,
+[data-theme='liquid'] .hint-tip,
+[data-theme='liquid'] .chat-model-picker,
+[data-theme='liquid'] .update-banner,
+[data-theme='liquid'] .queue-dock-handle,
+[data-theme='liquid'] .queue-dock-panel,
+[data-theme='liquid'] .api-params-panel,
+[data-theme='liquid'] .chat-model-picker-results {
+  background: var(--liquid-overlay) !important;
+  border-color: var(--liquid-overlay-border);
+}
+/* 选择器输入框：低透明白底 + 亮字（照抄 glass 同款做法换色相） */
+[data-theme='liquid'] .chat-model-picker-input {
+  background: var(--liquid-overlay-field) !important;
+  border-color: var(--liquid-overlay-field-border);
+  color: var(--liquid-overlay-text);
+}
+[data-theme='liquid'] .chat-model-picker-input::placeholder {
+  color: var(--liquid-overlay-text-dim);
+}
+[data-theme='liquid'] .chat-model-picker-empty {
+  color: var(--liquid-overlay-text-dim);
+}
+[data-theme='liquid'] .reasoning-block {
+  color: var(--liquid-overlay-text-strong);
+}
+[data-theme='liquid'] .reasoning-body {
+  color: var(--liquid-overlay-text-body);
+}
+[data-theme='liquid'] .mention-pop .item:hover,
+[data-theme='liquid'] .more-dropdown .tool-btn:hover,
+[data-theme='liquid'] .mini-drawer-item:hover,
+[data-theme='liquid'] .qps-queue .qps-cancel:hover {
+  background: var(--liquid-overlay-hover);
+}
+/* 拖放提示浮层（同 glass deepening 的第二处，一并提纯） */
+[data-theme='liquid'] .drop-hint,
+[data-theme='liquid'] .quick-import-card {
+  background: var(--liquid-overlay) !important;
+  border-color: var(--liquid-overlay-border-strong);
+  color: var(--liquid-overlay-text);
+}
+/* 场景图状态条：glass 主题已有同类兜底（index.css:1037），本主题复制一份。
+   直接 color-mix 到 --color-panel 会把浅色文字的对比度稀释到 AA 以下，
+   故底色直接给不透明的深蓝紫。 */
+[data-theme='liquid'] .scene-image-bar {
+  /* var() 不带 fallback：--color-primary 在 [data-theme='liquid'] 块里必定已定义，
+     写 fallback 反而会在此处留下硬编码色值字面量（违反「颜色一律走变量」的铁律）。*/
+  background: color-mix(in srgb, var(--color-primary) 8%, var(--liquid-bar-base));
+  border-color: color-mix(in srgb, var(--color-primary) 42%, transparent);
+}
+/* 悬浮球（独立文档，floating-ball.ts 注入自己的样式；此处补 liquid 分支，
+   与该文件里 [data-theme='glass'] 的三处加深同款做法） */
+[data-theme='liquid'] .fb-ctx {
+  background: var(--liquid-overlay);
+  border-color: var(--liquid-overlay-border-strong);
+}
+
+/* ── 3. 半透明承载面上的小字：禁用 secondary，改用 --color-text + 字号/字重 ──
+   依据：index.css:978-979 已定的方案（v2.3.81）。半透明底上的浅灰 secondary
+   （经典微信主题用的是中灰）合成后普遍只有 3.0~4.4:1，低于 AA。
+   这里覆盖本主题里所有「小字 + 承载面为半透明」的常见元素。 */
+[data-theme='liquid'] .msg-meta,
+[data-theme='liquid'] .scene-image-sub {
+  color: var(--color-text);
+}
+[data-theme='liquid'] .msg-meta {
+  font-weight: 500;
+}
+[data-theme='liquid'] .narration,
+[data-theme='liquid'] .psyche {
+  color: var(--color-text);
+  font-weight: 500;
 }

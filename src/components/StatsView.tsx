@@ -5,7 +5,7 @@ import { useTheme } from '../theme/ThemeContext';
 import type { AppSettings, Role, RoleStat } from '../types';
 import { AvatarImg } from './ChatList';
 import { normalizeRelation, RELATION_LABELS } from '../types';
-import { isGroupEnabled } from '../utils/animControl';
+import { isGroupEnabled, getAnimSpeed } from '../utils/animControl';
 import {
   arcPath,
   buildPiePalette,
@@ -43,6 +43,11 @@ const SLICE_GAP_DEG = 1.2;
  * 顺时针拉开、各区块依次浮现」的全过程，又不至于慢到像卡住。
  * 注意该动画是 rAF 内联补间，**必须**由 isGroupEnabled(settings,'stats') 门控
  * （见 PieChart 内 useEffect），不能靠 CSS 类名kill。
+ *
+ * v2.3.97：基准时长（1× 速度下）。实际时长 = `PIE_ANIM_MS * speed`，
+ * speed 由外层用 getAnimSpeed(settings) 算好后作为 `animSpeed` prop 传进来
+ * （与 CSS 侧 `calc(原值 * var(--anim-speed))` 是同一套倍率，故两者必然同步）。
+ * ⚠️ 是**乘**不是除：`--anim-speed` 是时长倍率（1.5 = 很慢 = 时长 ×1.5）。
  */
 const PIE_ANIM_MS = 900;
 
@@ -94,6 +99,9 @@ export const StatsView: React.FC = () => {
   // 由设置内三档动效开关独立控制（内联动画必须读 isGroupEnabled，不能靠 CSS 类名）。
   const { settings } = useTheme();
   const animOn = isGroupEnabled(settings, 'stats');
+  // v2.3.97：界面动效速度倍率（1 = 正常）。饼图的 rAF 补间是内联动画、CSS 管不到，
+  // 必须显式按倍率缩短/延长，否则用户调快速度后唯独饼图还是老样子。
+  const animSpeed = getAnimSpeed(settings);
 
   const [stats, setStats] = useState<RoleStat[]>([]);
   const [global, setGlobal] = useState(0);
@@ -415,6 +423,7 @@ export const StatsView: React.FC = () => {
               <PieChart
                 slices={slices}
                 animOn={animOn}
+                animSpeed={animSpeed}
                 total={global}
                 onEnterDetail={() => setPage('tokenRank')}
               />
@@ -530,15 +539,23 @@ const PieEmptyState: React.FC = () => {
 const PieChart: React.FC<{
   slices: PieSlice[];
   animOn: boolean;
+  /** v2.3.97：界面动效速度倍率（1 = 正常）。补间总时长 = PIE_ANIM_MS / animSpeed。 */
+  animSpeed: number;
   total: number;
   onEnterDetail: () => void;
-}> = ({ slices, animOn, total, onEnterDetail }) => {
+}> = ({ slices, animOn, animSpeed, total, onEnterDetail }) => {
   const { t } = useI18n();
   // 动画进度 0~1：从 0 顺时针拉到 1
   const [progress, setProgress] = useState(animOn ? 0 : 1);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const rafRef = useRef<number | null>(null);
   const startRef = useRef<number>(0);
+  // v2.3.97：按速度倍率缩放补间总时长。倍率存进 ref 供 effect 读取，
+  // 避免把 animSpeed 直接放进依赖数组导致每次变速都重播一遍饼图。
+  const speedRef = useRef(animSpeed);
+  useEffect(() => {
+    speedRef.current = animSpeed;
+  }, [animSpeed]);
 
   // 数据或动效开关变化时重播动画
   useEffect(() => {
@@ -548,9 +565,11 @@ const PieChart: React.FC<{
     }
     setProgress(0);
     startRef.current = 0;
+    // v2.3.97：总时长按倍率缩放（倍率越大越慢，故是**乘**）。夹上下限防脏数据。
+    const totalMs = Math.min(10000, Math.max(1, PIE_ANIM_MS * speedRef.current));
     const step = (ts: number) => {
       if (!startRef.current) startRef.current = ts;
-      const p = Math.min(1, (ts - startRef.current) / PIE_ANIM_MS);
+      const p = Math.min(1, (ts - startRef.current) / totalMs);
       // easeOutCubic：起步快、收尾稳，避免机械的匀速感
       setProgress(1 - Math.pow(1 - p, 3));
       if (p < 1) rafRef.current = requestAnimationFrame(step);

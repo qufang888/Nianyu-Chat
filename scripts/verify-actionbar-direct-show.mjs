@@ -196,6 +196,9 @@ const RENDER_JS = `
   bar.classList.remove('is-in');
   await sleep(700);
   out.axisStart = parseFloat(getComputedStyle(bar).opacity);
+  // v2.3.97：同时记下**收起态**的 transform，用来锁死位移方向
+  //（必须是 translateY(-6px)，即位于气泡下方一段距离；若被改回 +4px 会失败）
+  out.axisHiddenTransform = getComputedStyle(bar).transform;
   bar.classList.add('is-in');
   // 刚加上 class 的这一帧：过渡刚开始，opacity 还应约等于 0
   //（若是「瞬间跳完」这里就已经是 1 —— 那正是 v2.3.95 被用户否掉的形态）
@@ -338,10 +341,17 @@ check('加 .is-in 的首帧 opacity 仍约 0（**不是**瞬间跳到 1）', pro
 check('半程(250ms) opacity 落在 0 与 1 之间（动画确实在插值）',
   probe.axisMid > 0.05 && probe.axisMid < 0.98, String(probe.axisMid));
 check('半程 transform 不含 scale（动的是位移不是缩放）', !hasScale(probe.axisMidTransform), probe.axisMidTransform);
-check('半程 translateY 介于 0 与 4px 之间（确实在向上归位）', (() => {
+// v2.3.97：位移方向由 +4px 改为 -6px —— 「从消息气泡边缘弹下来」，
+// 即从上方（靠气泡那一侧）向下展开。所以半程的 translateY 应该是**负值**且在 (-6, 0) 之间。
+// 这条断言同时锁死「方向」：若有人改回 +4px（凭空冒出），这里会失败。
+check('半程 translateY 介于 -6 与 0 之间（从气泡边缘向下弹）', (() => {
   const y = translateYOf(probe.axisMidTransform);
-  return y !== null && y > 0.05 && y < 3.95;
+  return y !== null && y < -0.05 && y > -5.95;
 })(), probe.axisMidTransform);
+check('起点 translateY 为负（收起态位于气泡下方一段距离）', (() => {
+  const y = translateYOf(probe.axisHiddenTransform);
+  return y !== null && y <= -5.9;
+})(), probe.axisHiddenTransform);
 check('终点(>850ms) opacity = 1（0.5s 后已播完）', Math.abs(probe.axisEnd - 1) < 0.001, String(probe.axisEnd));
 check('终点 transform 不含 scale', !hasScale(probe.axisEndTransform), probe.axisEndTransform);
 

@@ -169,7 +169,7 @@ const VideoBubble: React.FC = () => {
                     height: '100%',
                     width: `${Math.max(2, Math.min(100, task.percent))}%`,
                     background: 'linear-gradient(90deg,#7c6cf0,#4fc3f7)',
-                    transition: animOn ? 'width .3s ease' : 'none',
+                    transition: animOn ? `width calc(.3s * var(--anim-speed, 1)) ease` : 'none',
                     borderRadius: 3,
                   }}
                 />

@@ -13,7 +13,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { ThemeProvider } from './theme/ThemeContext';
 import CustomCursor from './components/CustomCursor';
-import { applyAnimControl } from './utils/animControl';
+import { applyAnimControl, animMs, readAnimSpeed } from './utils/animControl';
 
 const api = (window as any).api;
 
@@ -23,7 +23,20 @@ const BALL_T = 4;
 const PANEL_W = 320; // 面板窗尺寸（与主进程 PANEL_W/PANEL_H 同步）
 const PANEL_H = 460;
 const PANEL_PAD = 14; // 面板 DOM 相对面板窗内边距（与主进程方向偏移公式同步）
-const MENU_HIDE_ANIM_MS = 180; // 菜单缩入动画播完的等待余量（动画 160ms linear + 20ms 余量，与主进程约定一致）
+/**
+ * 菜单缩入动画播完的等待余量（动画 160ms linear + 20ms 余量，与主进程约定一致）。
+ *
+ * v2.3.97：这里的 CSS 已改成 `calc(.16s * var(--anim-speed, 1))`，所以等待时长**必须同步缩放**
+ * （`base * speed`，注意是**乘**——`--anim-speed` 是时长倍率不是速度倍率），
+ * 否则速度调慢时动画还在播、JS 已把 DOM 摘掉（菜单凭空消失）。
+ * 与 `useRetract.RETRACT_MS` 同理，见 {@link menuHideAnimMs}。
+ */
+const MENU_HIDE_ANIM_MS = 180;
+
+/** 按当前速度倍率缩放菜单延迟卸载时长；倍率从本 document 的 `--anim-speed` 读（各窗独立） */
+function menuHideAnimMs(): number {
+  return Math.round(MENU_HIDE_ANIM_MS * readAnimSpeed(document));
+}
 
 type UnreadItem = {
   key: string;
@@ -61,7 +74,7 @@ function baseCSS(): string {
     border-radius:50%;cursor:grab;
     background:var(--color-primary);
     display:flex;align-items:center;justify-content:center;
-    transition:transform .12s ease;}
+    transition:transform calc(.12s * var(--anim-speed, 1)) ease;}
   .fb-ball:active{cursor:grabbing;transform:scale(.94);}
   .fb-ball svg{width:30px;height:30px;fill:var(--color-primary-text);}
   .fb-ball.dragging{cursor:grabbing;transform:scale(.96);}
@@ -72,7 +85,7 @@ function baseCSS(): string {
   .fb-prog svg{width:100%;height:100%;transform:rotate(-90deg);fill:none;}
   .fb-prog circle{fill:none;stroke-width:4;}
   .fb-prog .bg{stroke:rgba(255,255,255,0.25);}
-  .fb-prog .fg{stroke:#ffffff;stroke-linecap:round;transition:stroke-dashoffset .25s linear;}
+  .fb-prog .fg{stroke:#ffffff;stroke-linecap:round;transition:stroke-dashoffset calc(.25s * var(--anim-speed, 1)) linear;}
   .fb-prog-txt{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
     font-size:15px;font-weight:800;color:#fff;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.45);}
   .fb-prog-txt.show{display:flex;}
@@ -92,7 +105,7 @@ function baseCSS(): string {
     color:var(--color-text);display:flex;flex-direction:column;overflow:hidden;
     opacity:0;transform:translateY(-8px) scale(.98);pointer-events:none;
     /* linear 为硬性要求：弹出/收回（含拖动换向两阶段）动画共用同一缓动 */
-    transition:opacity .16s linear, transform .16s linear;}
+    transition:opacity calc(.16s * var(--anim-speed, 1)) linear, transform calc(.16s * var(--anim-speed, 1)) linear;}
   .fb-panel.show{opacity:1;transform:translateY(0) scale(1);pointer-events:auto;}
   /* ===== 弹出方向镜像（挂在 #root 的 data-h / data-v 上，由主进程边界检测结果驱动）=====
      面板窗本体已按方向定位在球侧（主进程方向公式），窗内仅需水平/垂直镜像面板停靠边；
@@ -108,7 +121,7 @@ function baseCSS(): string {
   .fb-list::-webkit-scrollbar{width:6px;}
   .fb-list::-webkit-scrollbar-thumb{background:var(--color-border);border-radius:3px;}
   .fb-row{display:flex;align-items:center;gap:10px;padding:8px 8px;border-radius:10px;cursor:pointer;
-    transition:background .12s;}
+    transition:background calc(.12s * var(--anim-speed, 1));}
   .fb-row:hover{background:var(--color-hover);}
   .fb-av{flex:0 0 auto;width:38px;height:38px;border-radius:50%;
     background:var(--color-primary);
@@ -137,7 +150,7 @@ function baseCSS(): string {
     border:1px solid var(--color-border);border-radius:var(--radius-sm);
     color:var(--color-text);font-size:13px;padding:4px;
     opacity:0;transform:scale(.92);
-    transition:opacity .16s linear, transform .16s linear;}
+    transition:opacity calc(.16s * var(--anim-speed, 1)) linear, transform calc(.16s * var(--anim-speed, 1)) linear;}
   .fb-ctx.show{opacity:1;transform:scale(1);}
   /* 菜单窗（role=menu）容器：铺满整个菜单窗，菜单固定在窗内 (10,10) 附近 */
   .fb-ctx-menu-host{position:absolute;inset:0;}
@@ -573,7 +586,9 @@ function mountPanel(): void {
     // 到点 remove() 无害）。旧元素独立于后续新菜单 DOM：右键另一条目重入时旧菜单边缩入边被
     // 新菜单替换，互不影响。
     el.classList.remove('show');
-    window.setTimeout(() => el.remove(), 180); // 160ms 动画 + 余量后移除 DOM
+    // v2.3.97：与 CSS 的 .fb-ctx 退场同步缩放（该transition 已改成 calc(.16s * var(--anim-speed,1))）。
+    // 用 animMs(0.16) + 20ms 余量，与 menuHideAnimMs() 同一套换算。
+    window.setTimeout(() => el.remove(), Math.round(animMs(0.16)) + 20);
     // 菜单关闭后按当前悬停状态恢复穿透（悬停在面板上则保持可交互）
     setInteractive(!!(panel && panel.matches(':hover')));
   }
@@ -721,7 +736,7 @@ function mountMenu(): void {
       hideTimer = 0;
       hidePending = false;
       if (api?.menuHideDone) api.menuHideDone();
-    }, MENU_HIDE_ANIM_MS);
+    }, menuHideAnimMs());
   }
 
   // 主进程推送：弹出 / 收回

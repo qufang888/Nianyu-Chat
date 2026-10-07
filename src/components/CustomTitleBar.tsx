@@ -250,7 +250,7 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
                     cursor: 'pointer',
                     border: promptCloseToTray ? '2px solid var(--color-primary)' : '2px solid transparent',
                     background: promptCloseToTray ? 'var(--color-hover)' : 'transparent',
-                    transition: animOn ? 'all 0.15s' : 'none',
+                    transition: animOn ? `all calc(0.15s * var(--anim-speed, 1))` : 'none',
                   }}
                   onClick={() => setPromptCloseToTray(true)}
                 >
@@ -276,7 +276,7 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
                     cursor: 'pointer',
                     border: !promptCloseToTray ? '2px solid var(--color-primary)' : '2px solid transparent',
                     background: !promptCloseToTray ? 'var(--color-hover)' : 'transparent',
-                    transition: animOn ? 'all 0.15s' : 'none',
+                    transition: animOn ? `all calc(0.15s * var(--anim-speed, 1))` : 'none',
                   }}
                   onClick={() => setPromptCloseToTray(false)}
                 >

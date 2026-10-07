@@ -349,7 +349,14 @@ section('L. 空态圆环在 14 套主题下必须「看得见」（最容易被�
     const m = /^--([a-z0-9-]+)\s*:\s*([^;]+);$/.exec(t);
     if (m) cur.vars[m[1]] = m[2].trim();
   }
-  check('解析出 15 个主题块（:root + 14 套主题）', themes.length === 15, `实际 ${themes.length}`);
+  // v2.3.97：原先硬编码 15（:root + 14 套），但新增液态玻璃主题后变 16 → 任何加主题都会误报。
+// 改为与variables.css 里实际的 `[data-theme=` 块数对齐（自洽校验：解析器没漏解析也能对上）。
+// （就地读取：varsCss 在检查函数作用域内不可见，放顶层会 ReferenceError）
+  const varsSrcNow = fs.readFileSync(path.join(ROOT, 'src', 'theme', 'variables.css'), 'utf-8');
+  const themeBlockCount = (varsSrcNow.match(/^\[data-theme=/gm) || []).length;
+// themes 解析器只抓 `[data-theme=...]`，:root 不在其中 → 期望值应为 主题块数 + 1（:root）
+  const expectThemes = themeBlockCount + 1;
+  check(`解析出全部主题块（:root + ${themeBlockCount} 套主题 = ${expectThemes}）`, themes.length === expectThemes, `实际 ${themes.length}`);
 
   // WCAG 相对亮度 / 对比度（与 utils/statsChart.ts 同口径）
   const relLum = ([r, g, b]) => {
@@ -365,6 +372,34 @@ section('L. 空态圆环在 14 套主题下必须「看得见」（最容易被�
   };
   const hex2rgb = (h) => [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
   const HEX6 = /^#[0-9a-f]{6}$/i;
+  // v2.3.97：支持 rgba() —— 半透明主题（glass / liquid）的 --color-panel 是
+  // rgba(...) 而非 hex，原实现只认 hex 会把它们全部判为「变量缺失/非hex」而跳过数值判定。
+  // 这不只是 liquid 的问题：**任何**半透明主题都会撞上，属于解析器系统性缺口。
+  // 修法：解析 rgba 得 [r,g,b,a]，再与该主题的 --color-bg 做 alpha 合成后算对比度
+  //（bg 若是渐变则退化为用 --color-panel 的 rgba 叠加到最坏色标；无法解析则跳过并说明）
+  const parseAny = (v) => {
+    if (!v) return null;
+    const m = /^rgba?\(\s*(\d+)\s*[,\s]\s*(\d+)\s*[,\s]\s*(\d+)\s*(?:[,/]\s*([\d.]+)\s*)?\)/i.exec(v.trim());
+    if (m) return { rgb: [Number(m[1]), Number(m[2]), Number(m[3])], a: m[4] === undefined ? 1 : Number(m[4]) };
+    if (HEX6.test(v.trim())) return { rgb: hex2rgb(v.trim().slice(1)), a: 1 };
+    return null;
+  };
+  const over = (fg, fa, bgRgb) => [0, 1, 2].map((i) => fg[i] * fa + bgRgb[i] * (1 - fa));
+  // v2.3.97：--color-bg 常是渐变（glass / vibrant / liquid 都用 linear-gradient），
+  // 无法当单一色。取渐变里**亮度最浅**的色标作合成基底 —— 这是最保守的做法
+  // （半透明 panel 叠在越亮的底上，合成后越亮，对比度越低）。
+  const bgBase = (bgRaw) => {
+    if (!bgRaw) return null;
+    const direct = parseAny(bgRaw);
+    if (direct) return direct.rgb;
+    const stops = bgRaw.match(/#[0-9a-f]{6}|rgba?\([^)]*\)/gi) || [];
+    const rgbs = stops.map(parseAny).filter(Boolean);
+    if (!rgbs.length) return null;
+    const lumOf = (c) => (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255;
+    let best = rgbs[0].rgb;
+    for (const r of rgbs) if (lumOf(r.rgb) > lumOf(best)) best = r.rgb;
+    return best;
+  };
 
   let worst = Infinity, worstName = '';
   const weak = [];
@@ -372,13 +407,15 @@ section('L. 空态圆环在 14 套主题下必须「看得见」（最容易被�
     const name = th.sel.replace('[data-theme=', '').replace(']', '').replace(/'/g, '');
     const panel = th.vars['color-panel'];
     const muted = th.vars['color-text-muted'];
-    // glass 是半透明主题（rgba），离线无法合成背板 → 不参与数值判定，仅确认变量存在
-    if (name === 'glass') {
-      check('glass 主题定义了 text-muted（半透明值，实机核对）', !!muted, String(muted));
-      continue;
-    }
-    if (!panel || !muted || !HEX6.test(panel) || !HEX6.test(muted)) { weak.push(`${name}(变量缺失/非hex)`); continue; }
-    const ratio = cr(hex2rgb(muted.slice(1)), hex2rgb(panel.slice(1)));
+    const pAny = parseAny(panel);
+    const mAny = parseAny(muted);
+    const bgRgbBase = bgBase(th.vars['color-bg']);
+    if (!pAny || !mAny) { weak.push(`${name}(变量缺失/不可解析)`); continue; }
+    if (!bgRgbBase) { weak.push(`${name}(bg不可解析，仅确认变量存在)`); continue; }
+    // 半透明 panel：先把它合成到该主题 bg 上，再与 muted 比对比度
+    const panelSolid = pAny.a >= 1 ? pAny.rgb : over(pAny.rgb, pAny.a, bgRgbBase);
+    const mutedSolid = mAny.a >= 1 ? mAny.rgb : over(mAny.rgb, mAny.a, panelSolid);
+    const ratio = cr(mutedSolid, panelSolid);
     if (ratio < worst) { worst = ratio; worstName = name; }
     if (ratio < 3) weak.push(`${name}=${ratio.toFixed(2)}:1`);
   }

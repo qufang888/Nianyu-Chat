@@ -4,6 +4,8 @@ import { useI18n } from '../i18n/I18nContext';
 import { useToast } from './Toast';
 import { AvatarImg } from './ChatList';
 import ImageGrid from './ImageGrid';
+// v2.3.97：包裹 `<input type="file">` 的自绘引导弹窗
+import ImagePickGuide from './ImagePickGuide';
 import type { MomentMediaStatusEvent, Role, SelfRole } from '../types';
 
 interface MomentItem {
@@ -61,6 +63,9 @@ const ComposeModal: React.FC<{
   const [scheduledAt, setScheduledAt] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  // v2.3.97：选图先走自绘引导弹窗，最后一步才唤起系统文件框
+  const [imageGuideOpen, setImageGuideOpen] = useState(false);
+  const imageInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const pickImages = async (files: FileList | null) => {
     if (!files) return;
@@ -138,7 +143,24 @@ const ComposeModal: React.FC<{
           </div>
           <div className="compose-row">
             <label>{t('moments.images')}</label>
-            <input type="file" accept="image/*" multiple onChange={(e) => pickImages(e.target.files)} />
+            {/* v2.3.97：按钮改为先弹自绘引导弹窗（ImagePickGuide），
+                由弹窗里的「点击选择文件」再触发下面这个隐藏 input 的 .click()。
+                系统文件框因此只在最后一步闪现，且用户先在软件弹窗里确认了意图。 */}
+            <button type="button" className="btn-ghost" onClick={() => setImageGuideOpen(true)}>
+              {t('imagepick.browse')}
+            </button>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                pickImages(e.target.files);
+                // 允许重复选择同一文件：清空 value，否则第二次选同一张不会触发 change
+                e.target.value = '';
+              }}
+            />
             {images.length > 0 && (
               <div className="compose-imgs">
                 {images.map((p, i) => (
@@ -156,6 +178,13 @@ const ComposeModal: React.FC<{
           <button className="btn-primary" onClick={submit} disabled={submitting}>{t('moments.publish')}</button>
         </div>
       </div>
+      {/* v2.3.97：选图引导弹窗（与本发布弹窗同级，portal 到 body）*/}
+      <ImagePickGuide
+        open={imageGuideOpen}
+        multiple
+        onTriggerInput={() => imageInputRef.current?.click()}
+        onClose={() => setImageGuideOpen(false)}
+      />
     </div>
   );
 };

@@ -8,40 +8,30 @@ interface Props {
   onCancel: () => void;
 }
 
-// 清空当前聊天消息确认弹窗：可选是否连同自动记忆一起删除（手动记忆始终保留）
+/**
+ * 清空当前聊天消息确认弹窗：可选是否连同自动记忆一起删除（手动记忆始终保留）
+ *
+ * v2.3.97：原先整块遮罩 + 面板都是**内联 style**，既拿不到入场动画
+ * （用户要求所有弹窗都有线性弹出动画），也不受动效开关的custom 档管控，
+ * 还不便于统一玻璃主题的加深规则。现改用通用模态三件套
+ * `.modal-mask` + `.modal`（index.css），动画与门禁一次性全部生效。
+ * 仅保留「宽度 360px」这一个必须内联的差异值。
+ */
 export function ClearChatModal({ open, onConfirm, onCancel }: Props) {
   const { t } = useI18n();
   const [withMem, setWithMem] = useState(false);
   if (!open) return null;
 
   return createPortal(
-    <div
-      onClick={onCancel}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 2147483645,
-        background: 'rgba(0,0,0,0.45)', display: 'flex',
-        alignItems: 'center', justifyContent: 'center',
-      }}
-    >
+    <div className="modal-mask" onClick={onCancel}>
       <div
+        className="modal"
         onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 360, maxWidth: '90vw', background: 'var(--color-panel)',
-          color: 'var(--color-text)', borderRadius: 12, padding: 20,
-          border: '1px solid var(--color-border)',
-          boxShadow: '0 12px 40px rgba(0,0,0,0.3)',
-        }}
+        style={{ width: 360 }}
       >
-        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 10 }}>{t('chat.clearMessages')}</div>
-        <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--color-text-secondary)', marginBottom: 14 }}>
-          {t('chat.clearMessagesConfirm')}
-        </div>
-        <label
-          style={{
-            display: 'flex', alignItems: 'center', gap: 8, fontSize: 13,
-            marginBottom: 18, cursor: 'pointer', userSelect: 'none',
-          }}
-        >
+        <div className="modal-title">{t('chat.clearMessages')}</div>
+        <div className="modal-desc">{t('chat.clearMessagesConfirm')}</div>
+        <label className="clear-chat-mem-option">
           <input
             type="checkbox"
             checked={withMem}
@@ -49,19 +39,11 @@ export function ClearChatModal({ open, onConfirm, onCancel }: Props) {
           />
           {t('chat.clearMessagesWithMem')}
         </label>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-          <button
-            className="btn"
-            style={{ padding: '6px 16px', fontSize: 13 }}
-            onClick={onCancel}
-          >
+        <div className="modal-actions">
+          <button className="btn-ghost" onClick={onCancel}>
             {t('common.cancel')}
           </button>
-          <button
-            className="btn-primary"
-            style={{ padding: '6px 16px', fontSize: 13 }}
-            onClick={() => onConfirm(withMem)}
-          >
+          <button className="btn-primary" onClick={() => onConfirm(withMem)}>
             {t('chat.clearMessages')}
           </button>
         </div>

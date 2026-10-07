@@ -19,3 +19,6 @@ ehthumbs.db
 
 # electron-builder 增量产物
 *.blockmap
+
+# Git 凭据（本地私有，勿提交）
+.git/nianyu/

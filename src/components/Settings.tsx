@@ -35,16 +35,31 @@ import {
   PSEUDO_SPEED_MAX,
   PSEUDO_SPEED_DEFAULT,
   clampPseudoSpeed,
+  ANIM_SPEED_PRESETS,
+  ANIM_SPEED_SECONDS_MIN,
+  ANIM_SPEED_SECONDS_MAX,
+  clampAnimSpeed,
+  clampAnimSpeedSeconds,
+  animSpeedFromSeconds,
 } from '../types';
 import { DEFAULT_MEMORY_SUMMARIZE_PROMPT, DEFAULT_MEMORY_INJECT_PROMPT } from '../utils/builtinPrompts';
 import { Hint } from './Hint';
-import { ANIM_GROUPS, ANIM_MODES, getAnimMode, isGroupEnabled, type AnimMode } from '../utils/animControl';
+import {
+  ANIM_GROUPS,
+  ANIM_MODES,
+  getAnimMode,
+  getAnimSpeed,
+  isGroupEnabled,
+  type AnimMode,
+} from '../utils/animControl';
 import { ModelEditor } from './ModelEditor';
 import { MediaApiConfigEditor, resolveMediaConfigs } from './MediaApiConfigEditor';
 import { FontSettings } from './FontSettings';
 import { GuideView } from './GuideView';
 import { SelfRoleSettings } from './SelfRoleSettings';
 import { useToast, ToastView } from './Toast';
+// v2.3.97：包裹 `<input type="file">` 的自绘引导弹窗（导入毛玻璃背景图）
+import ImagePickGuide from './ImagePickGuide';
 import SelectMenu from './SelectMenu';
 import ComboBox from './ComboBox';
 import SearchSuggest from './SearchSuggest';
@@ -74,6 +89,8 @@ export const THEMES: { key: ThemeName; nameKey: string; swatch: string }[] = [
   { key: 'graphite', nameKey: 'theme.graphite', swatch: 'linear-gradient(135deg,#7a869a,#a0abc0)' },
   { key: 'indigo', nameKey: 'theme.indigo', swatch: 'linear-gradient(135deg,#255b9c,#3d78c2)' },
   { key: 'sand', nameKey: 'theme.sand', swatch: 'linear-gradient(135deg,#a16f49,#c89468)' },
+  // v2.3.97：液态玻璃。swatch 用四色相渐变，呼应 variables.css 里的实际配色
+  { key: 'liquid', nameKey: 'theme.liquid', swatch: 'linear-gradient(135deg,#0c2a44,#162c5c,#342260,#58265c)' },
 ];
 
 // 设置分类区块（左侧导航 + 右侧分组），顺序即展示顺序
@@ -103,6 +120,9 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'cat-window', key: 'settings.catWindow', kw: ['窗口', '小窗', '悬浮球', 'window', '迷你'] },
   { id: 'sec-language', key: 'settings.language', kw: ['语言', 'language', '界面语言', '中文', '英文'] },
   { id: 'sec-animations', key: 'settings.animations', kw: ['动画', 'animation', '动效', '全部开启', '全部关闭', '自定义', '分组', 'all on', 'all off', 'custom', 'group'] },
+  // v2.3.97 补：动效分组开关区。**条件渲染**（仅动效「自定义」档存在），
+  // 由 filterStaticByDom() 在条件不满足时自动从候选里剔除，故不会退化成「搜得到点了没反应」。
+  { id: 'sec-anim-control', key: 'animCtl.title', kw: ['动效分组', '动画分组', '分组开关', '自定义档', 'animation group', 'group toggle'] },
   { id: 'sec-update', key: 'settings.updateTitle', kw: ['更新', '升级', '版本', '检查更新', '自动更新', '下载更新', 'github', 'update', 'upgrade', 'version', 'release'] },
   // ===== 模型管理（二级页 sub='models'）=====
   { id: 'sec-globalparams', key: 'settings.globalModelParams', sub: 'models', kw: ['全局参数', '全局模型参数', '默认参数', '温度', 'temperature', 'top p', 'topp', 'top k', 'topk', '采样', '流式', 'stream', '打字机'] },
@@ -124,14 +144,30 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-groupchat', key: 'settings.groupChat', kw: ['群聊', 'group', '多人', '群组', '互聊', '并行'] },
   { id: 'sec-launch', key: 'settings.launchOnBoot', kw: ['开机', '自启', '启动', 'launch', 'boot', 'startup'] },
   { id: 'sec-theme', key: 'settings.theme', kw: ['主题', 'theme', '配色', '皮肤'] },
+  { id: 'sec-models', key: 'settings.modelManage', kw: ['模型管理', '进入模型', '模型设置', 'model management', 'open models'] },
+  { id: 'sec-radius', key: 'settings.radius', kw: ['圆角', 'radius', '边角'] },
   { id: 'sec-radius', key: 'settings.radius', kw: ['圆角', 'radius', '边角'] },
   { id: 'sec-uizoom', key: 'settings.uiZoom', kw: ['缩放', 'zoom', '等比', '基准尺寸', '上下限'] },
+  // v2.3.97 补：外观分类里三个「多配置」区块的入口（旧静态表漏收）。
+  { id: 'sec-ttsplay', key: 'settings.mcfg.ttsPlayTitle', kw: ['自动播报', '朗读行为', '朗读范围', 'tts play', 'auto speak', '播报缓存'] },
+  { id: 'sec-imagegen', key: 'settings.imageGen', kw: ['生图配置', '图像配置', '绘图配置', 'image config', 'image generation'] },
+  { id: 'sec-videogen', key: 'settings.videoGen', kw: ['生视频配置', '视频配置', 'video config', 'video generation'] },
   { id: 'sec-emoevent', key: 'settings.emoEventAdvanced', kw: ['情绪', '事件', 'emotion', 'event', '高级'] },
+  { id: 'sec-proactive-engine', key: 'settings.proactiveEngine', kw: ['主动消息', '机制', '引擎', '触发方式', 'proactive', 'engine', '机制选择'] },
   { id: 'sec-inputappearance', key: 'settings.inputAppearance', kw: ['输入框', 'input', '输入栏', '外观'] },
   { id: 'sec-cursor', key: 'settings.cursor', kw: ['光标', 'cursor', '鼠标指针', '自定义光标'] },
-  { id: 'sec-glassbg', key: 'settings.glassBg', kw: ['毛玻璃', 'glass', '背景', '虚化', '颜色', '字体', '边框', '气泡', '透明', 'frost', 'blur', 'color', 'border', 'bubble', 'font'] },
+  // v2.3.97 移除 `sec-glassbg`（毛玻璃背景）的静态条目。
+  // 根因：该区块**只在 glass / frost 两套主题下渲染**（见下方 theme==='glass'||'frost' 守卫），
+  // 但旧静态表无条件收录它 —— 于是在其余 12 套主题下搜「毛玻璃」能搜到，点下去
+  // document.getElementById 返回 null，表现为「搜到了但点了没反应」，且无任何提示（静默失败）。
+  // 现在改为**完全交给动态索引规则⑤（.section-title[id]）**：条件为真时它自然出现在候选里，
+  // 条件为假时索引里根本没有这条，不会再产生死条目。
   { id: 'sec-debug', key: 'settings.debugMode', kw: ['调试', '测试', 'debug', '快照', '错误报告', '手动触发', '触发'] },
   { id: 'sec-sceneimage', key: 'settings.sceneImage', kw: ['场景图', 'scene', '配图'] },
+  // v2.3.97 补：生成与扩展分类的「语音/生图/生视频已移至模型设置」引导卡。
+  // 该分类在 v2.3.94 搬走四类服务表单后只剩这张卡，用户点进来会觉得「分类空了/失效」，
+  // 故给它一个可被搜到的名字（旧静态表漏收，导致「已移到模型设置」这句话搜不到）。
+  { id: 'sec-mediastub', key: 'settings.genMovedTitle', kw: ['生成', '扩展', '已移至模型设置', '语音配置', '生图配置', '生视频配置', 'generation', 'extension'] },
   { id: 'sec-websearch', key: 'settings.webSearch', kw: ['联网', '搜索', 'web', 'search', '联网搜索'] },
   { id: 'sec-plugins', key: 'settings.plugins', kw: ['插件', 'plugin', '扩展'] },
   { id: 'sec-skills', key: 'skill.title', kw: ['技能', 'skill', '技能包', 'skill.md', '说明书', '注入'] },
@@ -146,6 +182,11 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-backup', key: 'settings.backup', kw: ['备份', 'backup', '恢复'] },
   { id: 'sec-reset', key: 'settings.resetSettings', kw: ['重置', 'reset', '恢复默认', '清空'] },
 ];
+
+/** 静态索引里已登记的锚点 id 集合。动态索引构建时用它做两件事：
+ *  1) 预置 seen，避免同一个标题被静态表和动态规则重复收录（候选列表出现两项同名）；
+ *  2) 合并去重时跳过，避免动态条目覆盖静态条目（静态条目带手写关键词，搜索质量更高）。 */
+const STATIC_ID_SET = new Set<string>(SETTING_SEARCH_INDEX.map((i) => i.id));
 
 const SOUND_ROWS: { type: SoundType; labelKey: string }[] = [
   { type: 'error', labelKey: 'settings.soundError' },
@@ -261,11 +302,9 @@ export const Settings: React.FC<{
   const catRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [activeCat, setActiveCat] = useState(SETTING_CATS[0].id);
   const scrollToCat = (id: string) => {
-    // 「模型与群聊」分类：直接进入模型管理二级页（该区块已不在主页渲染，滚动无目标）
-    if (id === 'cat-models') {
-      setSub('models');
-      return;
-    }
+    // v2.3.97 清理死代码：原先这里有 `if (id === 'cat-models') { setSub('models'); return; }`，
+    // 但模型管理早已独立为二级页（sub='models'），SETTING_CATS 里**没有** cat-models 项，
+    // 该分支永不可达 —— 留着只会让人误以为左侧还有第 9 个分类。
     catRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     setActiveCat(id);
   };
@@ -280,20 +319,13 @@ export const Settings: React.FC<{
     }
     setActiveCat(current);
   };
+  // v2.3.97：包裹 `<input type="file">` 的自绘引导弹窗（导入毛玻璃背景图）
+  const [glassBgGuideOpen, setGlassBgGuideOpen] = useState(false);
+  const glassBgInputRef = useRef<HTMLInputElement | null>(null);
   // 导入图片作为毛玻璃背景（读取为 data URL 存入设置）
-  const importGlassBg = () => {
-    const inp = document.createElement('input');
-    inp.type = 'file';
-    inp.accept = 'image/*';
-    inp.onchange = () => {
-      const f = inp.files?.[0];
-      if (!f) return;
-      const reader = new FileReader();
-      reader.onload = () => patch({ glassBgImage: String(reader.result), glassBgColor: '' });
-      reader.readAsDataURL(f);
-    };
-    inp.click();
-  };
+  // v2.3.97：改为先弹自绘引导弹窗，用户在弹窗里点「点击选择文件」才唤起系统文件框，
+  // 系统框只在最后一步闪现（原先一点按钮就直接弹白底黑字的系统框，与深色主题割裂）。
+  const triggerGlassBgInput = () => glassBgInputRef.current?.click();
   const [draft, setDraft] = useState<AppSettings | null>(settings);
   const [detectingAll, setDetectingAll] = useState(false);
   const [status, setStatus] = useState('');
@@ -590,15 +622,52 @@ export const Settings: React.FC<{
   // 缓存后，主页面搜索能命中二级页条目（带 sub='models'），点击即自动切页并高亮。
   // 条目 id 由标签文本散列而来（见 stableId），跨场景稳定，重复项按 id 去重。
   const dynIndexCache = useRef<Record<string, SettingSearchItem[]>>({});
-  React.useEffect(() => {
-    const root = panelRef.current;
-    if (!root || !draftReady) return;
-    // v2.3.94 需求 7：模型管理二级页（onlyModels）同样要建索引 —— 旧代码 `|| onlyModels`
-    // 直接早退，导致移进去的这些控件一个都搜不到。该场景产出的条目打上 sub='models'。
+  // ===== v2.3.97 索引重建机制（缺口 A）=====
+  // 旧实现的致命问题：依赖数组是 [lang, draftReady, onlyModels]，而 draft 由
+  // useState(settings) 初始化后**永不为 null**（patch 只做 setDraft(d => ({...d, ...p}))），
+  // 于是 draftReady 只会 false→true 一次，之后恒为 true —— 索引再也不会重建。
+  // 而设置页有大量**条件渲染**区块（动效「自定义」档的分组开关、glass/frost 主题的毛玻璃、
+  // 光标跟随、备份目录、错误日志明细……），条件一变 DOM 就变了、索引却不变，
+  // 表现为「切换后搜不到」或「索引里留着已卸载 DOM 的条目 → 搜得到、点了没反应」。
+  //
+  // 为什么用 MutationObserver 而不是补依赖数组：
+  //   1) 条件分散在十几个互不相干的状态上（theme / animCustom / cursor.enabled / backupDir /
+  //      lastBackupTime / dataPathInfo.custom / errorLog.length / detectOptsOpen …），
+  //      人工枚举进依赖数组必然漏，且将来新增条件还会重犯同样的 bug（已复发两次）。
+  //   2) 依赖数组只能「整表重建」，而重建本身有成本；Observer 能精准定位到「DOM 真的变了」。
+  // Observer 只监听 childList（挂载/卸载），**不监听 attributes** —— 见下方 observe 配置的注释。
+  const observerRef = useRef<MutationObserver | null>(null);
+  const rebuildTimerRef = useRef<number | null>(null);
+  // 内容指纹：索引内容没变就**不 setState**。这是终止「重建→重渲染→DOM 变动→再重建」自激循环的
+  // 最可靠一层（React 对新数组引用一定会重渲染，光靠依赖数组比较是拦不住的）。
+  const indexSigRef = useRef<string>('');
+
+  const buildDynamicIndex = React.useCallback((): void => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    // 扫描范围 = 主面板 + **本设置页内已挂载的弹窗**（.modal-mask）。
+    // 为什么加弹窗（缺口 F）：ModelEditor / GuideView / 恢复出厂 / 清空数据 / 错误日志 / 能力检测
+    // 全部渲染在 panelRef **之外**（它们是 panel 的兄弟节点），旧实现只扫 panelRef，这些控件一个都搜不到。
+    // 为什么不用 document.body：那会把设置页背后的聊天列表、顶栏、输入框等无关控件全扫进来，
+    // 污染候选并显著拖慢扫描。用 closest('.main-pane') 把范围精确限定在本设置页自己的弹窗上。
+    const sceneRoot = (panel.closest('.main-pane') as HTMLElement | null) ?? panel;
+    const roots: HTMLElement[] = [panel];
+    if (sceneRoot !== panel) {
+      roots.push(...Array.from(sceneRoot.querySelectorAll<HTMLElement>('.modal-mask')));
+    }
     const sceneSub: SettingSearchItem['sub'] = onlyModels ? 'models' : undefined;
     const dyn: SettingSearchItem[] = [];
     const seen = new Set<string>();
     const clean = (s: string) => s.replace(/\s+/g, ' ').trim();
+    // 预置「已由静态表收录」的标题文本，避免同一个分区标题在候选里出现两次
+    // （例如「语言」既有静态条目 sec-language、又被规则⑤的 SelectMenu 再收录一次）。
+    for (const root of roots) {
+      root.querySelectorAll<HTMLElement>('[id]').forEach((el) => {
+        if (!STATIC_ID_SET.has(el.id)) return;
+        const s = clean(el.textContent || '').toLowerCase();
+        if (s) seen.add(s);
+      });
+    }
     // 稳定 id：按「标签文本」散列，而非遍历序号。
     // 旧实现用 `${prefix}-${seen.size}`，序号会随前面控件的增删整体错位 ——
     // 用户先前搜过一次记下了 id，之后设置项一变动，跳转就落到别的控件上（用户反馈过的 bug）。
@@ -636,8 +705,37 @@ export const Settings: React.FC<{
       }
       return '';
     };
-    const add = (el: HTMLElement, prefix: string) => {
-      const label = nameOf(el);
+    // SelectMenu 专用取名：它渲染的是 <button class="select-menu-trigger">，
+    // 既不在 <label> 里、也不在 .field 内 label 旁（触发器与 label 是兄弟），
+    // 故 nameOf 拿不到名字。这里向上找最近的前序 .section-title / fontSize:13 标题。
+    const nameOfSelect = (el: HTMLElement): string => {
+      const field = el.closest('.field');
+      if (field) {
+        const fl = field.querySelector('label');
+        if (fl) {
+          const t = clean(fl.textContent || '');
+          if (t) return t;
+        }
+      }
+      let node: HTMLElement | null = el;
+      while (node && node !== sceneRoot) {
+        let prev = node.previousElementSibling as HTMLElement | null;
+        while (prev) {
+          if (prev.classList.contains('section-title') || /font-size:\s*13px/i.test(prev.getAttribute('style') || '')) {
+            const t = clean(prev.textContent || '');
+            if (t) return t;
+          }
+          prev = prev.previousElementSibling as HTMLElement | null;
+        }
+        node = node.parentElement;
+      }
+      // 兜底：用触发器当前显示值（如「简体中文」），总比没有名字强
+      const v = el.querySelector('.select-menu-value');
+      const t = clean(v?.textContent || '');
+      return t;
+    };
+    const add = (el: HTMLElement, prefix: string, explicitName?: string) => {
+      const label = explicitName ?? nameOf(el);
       const norm = label.toLowerCase();
       if (!label || seen.has(norm)) return;
       seen.add(norm);
@@ -646,45 +744,67 @@ export const Settings: React.FC<{
       dyn.push({ id, key: label, kw: [], sub: sceneSub });
     };
     // 1) 所有勾选框（兼容 label 包裹与 div 包裹两种写法）
-    root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach((el) => {
-      add((el.closest('label') as HTMLElement) || (el.parentElement as HTMLElement) || el, 'set-chk');
-    });
     // 2) 所有滑块
-    root.querySelectorAll<HTMLInputElement>('input[type="range"]').forEach((el) => {
-      add((el.closest('div') as HTMLElement) || (el.parentElement as HTMLElement) || el, 'set-rng');
-    });
     // 3) 下拉 / 文本框 / 文本域（排除搜索框）
-    root
-      .querySelectorAll<HTMLElement>(
-        'select, input:not([type="checkbox"]):not([type="range"]):not([type="search"]), textarea'
-      )
-      .forEach((el) => {
-        add(
-          (el.closest('.field') as HTMLElement) ||
-            (el.closest('label') as HTMLElement) ||
-            (el.parentElement as HTMLElement) ||
-            el,
-          'set-ctl'
-        );
-      });
     // 4) 分段选项组（btn-primary / btn-ghost 按钮组）：取其上方设置名 div
-    const grpSeen = new Set<HTMLElement>();
-    root
-      .querySelectorAll<HTMLButtonElement>('button.btn-primary, button.btn-ghost')
-      .forEach((btn) => {
-        let block: HTMLElement | null = btn;
-        while (block && block !== root) {
-          const prev = block.previousElementSibling as HTMLElement | null;
-          if (prev && /font-size:\s*13px/i.test(prev.getAttribute?.('style') || '')) {
-            if (!grpSeen.has(prev)) {
-              grpSeen.add(prev);
-              add(prev, 'set-grp');
-            }
-            return;
-          }
-          block = block.parentElement;
-        }
+    // 以上 4 条规则全部改为「遍历所有扫描根」，弹窗内控件同样能被收录。
+    for (const root of roots) {
+      root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach((el) => {
+        add((el.closest('label') as HTMLElement) || (el.parentElement as HTMLElement) || el, 'set-chk');
       });
+      root.querySelectorAll<HTMLInputElement>('input[type="range"]').forEach((el) => {
+        add((el.closest('div') as HTMLElement) || (el.parentElement as HTMLElement) || el, 'set-rng');
+      });
+      root
+        .querySelectorAll<HTMLElement>(
+          'select, input:not([type="checkbox"]):not([type="range"]):not([type="search"]), textarea'
+        )
+        .forEach((el) => {
+          add(
+            (el.closest('.field') as HTMLElement) ||
+              (el.closest('label') as HTMLElement) ||
+              (el.parentElement as HTMLElement) ||
+              el,
+            'set-ctl'
+          );
+        });
+      const grpSeen = new Set<HTMLElement>();
+      root
+        .querySelectorAll<HTMLButtonElement>('button.btn-primary, button.btn-ghost')
+        .forEach((btn) => {
+          let block: HTMLElement | null = btn;
+          while (block && block !== root) {
+            const prev = block.previousElementSibling as HTMLElement | null;
+            if (prev && /font-size:\s*13px/i.test(prev.getAttribute?.('style') || '')) {
+              if (!grpSeen.has(prev)) {
+                grpSeen.add(prev);
+                add(prev, 'set-grp');
+              }
+              return;
+            }
+            block = block.parentElement;
+          }
+        });
+      // 5) 自绘下拉菜单 SelectMenu（缺口 C）
+      // SelectMenu.tsx 渲染的是 <button class="select-menu-trigger">：既不是原生 <select>（规则③扫不到），
+      // 类名也不是 btn-primary / btn-ghost（规则④扫不到）—— 于是语言、群聊调度、世界书、
+      // 翻译方向/朗读、小窗模式等 9 处下拉在搜索里完全消失。前缀 set-sel 便于脚本断言规则数 ≥ 5。
+      root.querySelectorAll<HTMLElement>('.select-menu-trigger').forEach((el) => {
+        add(el, 'set-sel', nameOfSelect(el));
+      });
+      // 6) 所有带 id 的分区标题（缺口 B 的根治点）
+      // 静态表只收「无条件渲染」的锚点；凡是**条件渲染**的分区（毛玻璃背景仅 glass/frost、
+      // 动效分组仅「自定义」档、错误日志明细仅非空……），一律交给本规则 ——
+      // 条件为真时它自然进索引，条件为假时索引里根本没有这条。
+      // 这样「静态表收录了但 DOM 不存在 → 搜得到点了没反应」这类死条目从结构上不再可能产生。
+      root.querySelectorAll<HTMLElement>('.section-title[id]').forEach((el) => {
+        const label = clean(el.textContent || '');
+        const norm = label.toLowerCase();
+        if (!label || seen.has(norm)) return;
+        seen.add(norm);
+        dyn.push({ id: el.id, key: label, kw: [], sub: sceneSub });
+      });
+    }
     // 合并两个场景的缓存条目（按 id 去重，二级页优先 —— 它的条目带 sub，跳转更可靠）
     const scene = onlyModels ? 'models' : 'main';
     dynIndexCache.current[scene] = dyn;
@@ -692,13 +812,62 @@ export const Settings: React.FC<{
     const usedIds = new Set<string>();
     for (const list of [dynIndexCache.current.models || [], dynIndexCache.current.main || []]) {
       for (const item of list) {
-        if (usedIds.has(item.id)) continue;
+        if (usedIds.has(item.id) || STATIC_ID_SET.has(item.id)) continue;
         usedIds.add(item.id);
         merged.push(item);
       }
     }
-    setSearchIndex([...SETTING_SEARCH_INDEX, ...merged]);
-  }, [lang, draftReady, onlyModels]);
+    // 静态条目也要过滤：条件渲染的锚点（如 sec-anim-control 仅「自定义」档存在）在条件不满足时
+    // 必须从候选里消失，否则又会退化成「搜得到、点了没反应」。二级页条目（带 sub）永远保留 ——
+    // 它们的锚点要等切页后才存在，由 goToSetting 的 retry 负责。
+    const staticAlive = SETTING_SEARCH_INDEX.filter(
+      (item) => !!item.sub || document.getElementById(item.id) !== null
+    );
+    const next = [...staticAlive, ...merged];
+    // 指纹比对：内容没变就不 setState，掐断「重建→重渲染→Observer 回调→再重建」的自激循环。
+    const sig = next.map((i) => i.id).join('|');
+    if (sig === indexSigRef.current) return;
+    indexSigRef.current = sig;
+    setSearchIndex(next);
+  }, [onlyModels]);
+
+  // 监听 DOM 变化 → 防抖重建索引（缺口 A 的修复主体）
+  React.useEffect(() => {
+    const root = panelRef.current;
+    if (!root || !draftReady) return;
+    const scheduleRebuild = () => {
+      if (rebuildTimerRef.current !== null) window.clearTimeout(rebuildTimerRef.current);
+      // 防抖 260ms：用户在一个输入框里连打 5 个字会产生 5 批 mutation，
+      // 不防抖就会重建 5 次全量索引（每次都 querySelectorAll 上千个节点），明显卡顿。
+      rebuildTimerRef.current = window.setTimeout(() => {
+        rebuildTimerRef.current = null;
+        buildDynamicIndex();
+      }, 260);
+    };
+    const observer = new MutationObserver(scheduleRebuild);
+    observerRef.current = observer;
+    // **关键：只监听 childList，不监听 attributes。**
+    // 索引构建过程本身会写 el.id（add() 里），若监听 attributes（含 attributeFilter:['id']），
+    // 每次重建都会因为自己的写入再触发回调 → 无限重建循环（页面卡死）。
+    // 条件区块的挂载/卸载一定是 childList 变化，所以只听 childList 既能覆盖全部条件分支，
+    // 又天然排除了自身写 id 引起的回调 —— 这是本条最关键的技术点。
+    // 另外 setSearchIndex 由指纹兜底，即使 childList 因 React 重渲染产生噪声也不会 setState。
+    observer.observe(root, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      observerRef.current = null;
+      if (rebuildTimerRef.current !== null) {
+        window.clearTimeout(rebuildTimerRef.current);
+        rebuildTimerRef.current = null;
+      }
+    };
+  }, [lang, draftReady, onlyModels, buildDynamicIndex]);
+
+  // 语言切换后静态条目的 i18n 文本会变，需立即重建一次（不等 Observer）
+  React.useEffect(() => {
+    if (!draftReady) return;
+    buildDynamicIndex();
+  }, [lang, draftReady, buildDynamicIndex]);
   // 需求 12：设置搜索改走 fuzzySearch（模糊匹配 + 相关度排序），最多 5 个候选。
   // 旧实现是自研的 startsWith/includes 打分，只能做「前缀/包含」匹配，
   // 搜「语音」找不到「朗读与语音」、搜「ms」找不到「Mini」，与全局搜索规范不一致。
@@ -726,7 +895,7 @@ export const Settings: React.FC<{
     );
   };
   const goToSetting = (id: string, sub?: SettingSearchItem['sub']) => {
-    // 滚动 + 高亮闪动。目标可能尚未挂载（刚切二级页），故交由 retry 轮询兜底。
+    // 滚动 + 高亮闪动。目标可能尚未挂载（刚切二级页、或条件区块正在重渲染），故交由 retry 轮询兜底。
     const jump = () => {
       const el = document.getElementById(id);
       if (!el) return false;
@@ -737,23 +906,32 @@ export const Settings: React.FC<{
       window.setTimeout(() => el.classList.remove('setting-flash'), 5000);
       return true;
     };
-    if (id === 'cat-models' || sub) {
+    if (sub) {
       // 目标在二级页（模型管理/字体/角色卡）：先切入，等渲染后再滚动高亮。
       // v2.3.94：旧实现用 setTimeout(jump, 150) 硬猜渲染时机 —— 慢机器/配置多时
-      // 150ms 不足以让新页挂载，表现为「点了没反应」。改为「先试一次，不中就按帧重试」，
-      // 上限 ~600ms；到点仍找不到（分类入口等本就没有该锚点）则安静收手。
-      setSub(sub || 'models');
-      if (!jump()) {
-        let tries = 0;
-        const retry = () => {
-          if (jump()) return;
-          if (++tries >= 30) return; // 约 600ms（20ms/次）后放弃
-          window.setTimeout(retry, 20);
-        };
+      // 150ms 不足以让新页挂载，表现为「点了没反应」。
+      setSub(sub);
+    }
+    // v2.3.97（缺口 D）：retry 从「仅二级页分支」提升为**两个分支共用**。
+    // 旧实现主页面分支直接 jump() 就完事、没有 retry —— 但主页面锚点并非恒定存在：
+    // 目标可能属于刚被条件隐藏/切换掉的区块（如毛玻璃背景随主题、动效分组随动效档位、
+    // 备份目录随 backupDir、错误日志明细随日志非空）。一次不中就静默失败 = 「点了没反应」。
+    if (!jump()) {
+      let tries = 0;
+      const retry = () => {
+        if (jump()) return;
+        // 约 600ms（20ms/次）后放弃。
+        if (++tries >= 30) {
+          // v2.3.97（缺口 B）：到点仍找不到，**必须给可见反馈**，不能静默收手。
+          // 索引本身已做「条件渲染区块按存在性收录」，走到这里说明目标确实不在当前 DOM 里
+          // （多为二级页锚点、或重建索引与渲染之间的极短竞态）。给用户一句可读的提示，
+          // 好过「点了没反应、用户以为搜索坏了」。
+          showToast(t('settings.searchTargetMissing'), { error: true });
+          return;
+        }
         window.setTimeout(retry, 20);
-      }
-    } else {
-      jump();
+      };
+      window.setTimeout(retry, 20);
     }
     setShowSuggest(false);
     setSearchQ('');
@@ -852,6 +1030,29 @@ export const Settings: React.FC<{
       : animMode === 'all-off'
         ? 'animCtl.modeAllOffHint'
         : 'animCtl.modeCustomHint';
+
+  // ===== 界面动效速度（v2.3.97）=====
+  // 与 animMode **正交**：档位管「动不动」，速度管「动不动得快慢」。
+  // 选中态真源是 `draft.animSpeedPreset`（'preset' | 'custom'）而非数值本身 ——
+  // 否则用户选了 1.25× 而数值被 clamp 成 1 时，radio 会跳回 1×，界面与实际值不一致。
+  const animSpeedPreset: 'preset' | 'custom' = draft?.animSpeedPreset === 'custom' ? 'custom' : 'preset';
+  const animSpeedValue = getAnimSpeed(draft); // 归一化后的真实倍率（写入 CSS 变量的就是它）
+  const animSpeedCustomSec = clampAnimSpeedSeconds(draft?.animSpeedSeconds);
+  /** 全关档下速度无意义（什么都不动），故禁用该控件并给出说明 —— 避免用户以为调了有用 */
+  const animSpeedDisabled = animMode === 'all-off';
+
+  /** 选一个预设档：写入倍率本身并清掉 custom 标记（秒数保留，下次切回自定义时用户输入还在） */
+  const setAnimSpeedPreset = (speed: number) => {
+    patch({ animSpeedPreset: 'preset', animSpeed: clampAnimSpeed(speed) });
+  };
+  /** 选自定义档：以输入的秒数为「单个弹窗的标准时长」换算倍率 */
+  const setAnimSpeedCustom = (sec: number) => {
+    patch({
+      animSpeedPreset: 'custom',
+      animSpeedSeconds: clampAnimSpeedSeconds(sec),
+      animSpeed: animSpeedFromSeconds(sec),
+    });
+  };
 
   // ===== 记忆提示词（v2.3.36）：本地草稿 + 失焦落盘 =====
   // textarea 不逐字符即时保存（避免长文本输入时频繁写盘/重载导致卡顿与光标跳动），失焦时一次性 patch。
@@ -1474,6 +1675,101 @@ export const Settings: React.FC<{
           {t('animCtl.streamNote')}
         </div>
 
+        {/* ===== 界面动效速度（v2.3.97）：五档预设 + 自定义秒数 =====
+            与上方三档开关**正交**：三档管「动不动」，这里管「动不动得快慢」。
+            实现方式是往 documentElement 写一个倍率变量 --anim-speed，
+            全项目时长统一写成 calc(<原值> * var(--anim-speed, 1))。
+            「全部关闭」档下什么都不动，速度无意义 → 整块禁用并说明原因（不静默失效）。 */}
+        <div id="sec-anim-speed" className="section-title" style={{ marginTop: 16 }}>
+          {t('animCtl.speedTitle')}
+          <Hint text={t('animCtl.speedDesc')} />
+        </div>
+        <fieldset
+          disabled={animSpeedDisabled}
+          style={{
+            border: 'none',
+            padding: 0,
+            margin: 0,
+            opacity: animSpeedDisabled ? 0.45 : 1,
+          }}
+        >
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+            {ANIM_SPEED_PRESETS.map((s) => {
+              const selected = animSpeedPreset === 'preset' && Math.abs(animSpeedValue - s) < 1e-6;
+              return (
+                <label
+                  key={s}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontSize: 13,
+                    cursor: animSpeedDisabled ? 'default' : 'pointer',
+                    color: selected ? 'var(--color-primary)' : undefined,
+                    fontWeight: selected ? 600 : undefined,
+                  }}
+                >
+                  <input
+                    type="radio"
+                    checked={selected}
+                    onChange={() => setAnimSpeedPreset(s)}
+                  />
+                  {t('animCtl.speedPreset', { v: `${s}×` })}
+                </label>
+              );
+            })}
+            {/* 自定义档：与五个预设互斥，选中后展开秒数输入框 */}
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 13,
+                cursor: animSpeedDisabled ? 'default' : 'pointer',
+                color: animSpeedPreset === 'custom' ? 'var(--color-primary)' : undefined,
+                fontWeight: animSpeedPreset === 'custom' ? 600 : undefined,
+              }}
+            >
+              <input
+                type="radio"
+                checked={animSpeedPreset === 'custom'}
+                onChange={() => patch({ animSpeedPreset: 'custom', animSpeedSeconds: animSpeedCustomSec, animSpeed: animSpeedFromSeconds(animSpeedCustomSec) })}
+              />
+              {t('animCtl.speedCustom')}
+            </label>
+          </div>
+          {/* 自定义输入框：仅选中自定义档时渲染（其余档位下它无意义，展示即干扰） */}
+          {animSpeedPreset === 'custom' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, maxWidth: 420 }}>
+              <input
+                type="number"
+                min={ANIM_SPEED_SECONDS_MIN}
+                max={ANIM_SPEED_SECONDS_MAX}
+                step={0.01}
+                value={animSpeedCustomSec}
+                onChange={(e) => setAnimSpeedCustom(Number(e.target.value))}
+                style={{ width: 96 }}
+              />
+              <span style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
+                {t('animCtl.speedSecondsUnit')}
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                {t('animCtl.speedCustomResult', {
+                  v: `${animSpeedValue.toFixed(2)}×`,
+                })}
+              </span>
+            </div>
+          )}
+          <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--color-text-secondary)', maxWidth: 560, marginTop: 8 }}>
+            {animSpeedDisabled
+              ? t('animCtl.speedDisabledHint')
+              : t('animCtl.speedCustomHint', {
+                  v: `${ANIM_SPEED_SECONDS_MIN}`,
+                  max: `${ANIM_SPEED_SECONDS_MAX}`,
+                })}
+          </div>
+        </fieldset>
+
         {/* ===== 分组开关：仅「自定义」档渲染（全开/全关档下它们本就不起作用，展示即误导）===== */}
         {animCustom && (
           <>
@@ -1566,7 +1862,7 @@ export const Settings: React.FC<{
                   width: `${updateSt.percent ?? 0}%`,
                   height: '100%',
                   background: 'var(--color-primary)',
-                  transition: animOn ? 'width 0.2s linear' : 'none',
+                  transition: animOn ? `width calc(0.2s * var(--anim-speed, 1)) linear` : 'none',
                 }}
               />
             </div>
@@ -1737,31 +2033,26 @@ export const Settings: React.FC<{
             ))}
           </div>
 
-          {/* 调试报告弹窗：结束调试后展示各功能错误分类汇总 */}
+          {/* 调试报告弹窗：结束调试后展示各功能错误分类汇总
+              v2.3.97：原先整块内联 style（无入场动画、不受动效开关 custom 档管控），
+              现改用通用 .modal-mask + .modal，本轮统一补上的 popupLinearIn 线性动画
+              与 theme 组门禁即刻生效。 */}
           {debugReport && (
             <div
-              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              className="modal-mask"
               onClick={() => setDebugReport(null)}
             >
               <div
-                style={{
-                  background: 'var(--color-panel)',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 12,
-                  width: 580,
-                  maxWidth: '92vw',
-                  maxHeight: '70vh',
-                  overflowY: 'auto',
-                  padding: 14,
-                }}
+                className="modal modal-debug-report"
                 onClick={(e) => e.stopPropagation()}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700 }}>{t('settings.debugReportTitle')}<Hint text={t('settings.debugReportNote')} /></div>
+                <div className="modal-head">
+                  <div className="modal-title">{t('settings.debugReportTitle')}<Hint text={t('settings.debugReportNote')} /></div>
                   <button className="btn-ghost" style={{ padding: '2px 10px', fontSize: 12 }} onClick={() => setDebugReport(null)}>
                     {t('common.cancel')}
                   </button>
                 </div>
+                <div className="modal-body">
                 {Object.keys(debugReport).length === 0 && (
                   <div style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>{t('settings.debugReportEmpty')}</div>
                 )}
@@ -1777,6 +2068,7 @@ export const Settings: React.FC<{
                     ))}
                   </div>
                 ))}
+                </div>
               </div>
             </div>
           )}
@@ -2668,7 +2960,7 @@ export const Settings: React.FC<{
         {/* ===== 群聊互聊（流式并行 / 调度 / 自动接话 / 主动续聊） ===== */}
         {/* 模型管理分区已独立为二级菜单页（view=models）：仅 modelsOnly 模式渲染 */}
         {onlyModels && (<>
-        <div id="cat-models" ref={(el) => { catRefs.current['cat-models'] = el; }} className="settings-category">
+        <div id="cat-models" className="settings-category">
 
         {/* ===== 全局模型参数（默认值；模型编辑器内可单独覆盖） ===== */}
         <div id="sec-globalparams" className="section-title">{t('settings.globalModelParams')}<Hint text={t('settings.globalModelParamsDesc')} /></div>
@@ -3976,8 +4268,11 @@ export const Settings: React.FC<{
           )}
         </div>
 
-        {/* ===== 毛玻璃主题背景（仅 glass/frost 主题生效，未开启时隐藏） ===== */}
-        {(theme === 'glass' || theme === 'frost') && (
+        {/* ===== 毛玻璃主题背景（仅 glass/frost/liquid 主题生效，未开启时隐藏） =====
+            v2.3.97：新增 liquid（液态玻璃）。它与 glass/frost 同属「半透明 + 磨砂」
+            家族，同样需要「自定义背景色/图」与聊天区文字色覆盖，故一并开放该面板。
+            面板底部另加「液态流动」开关（liquidFlow），控制背景的缓慢流动动画。 */}
+        {(theme === 'glass' || theme === 'frost' || theme === 'liquid') && (
           <>
             <div id="sec-glassbg" className="section-title" style={{ marginTop: 16 }}>{t('settings.glassBg')}<Hint text={t('settings.glassBgDesc')} /></div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
@@ -3991,9 +4286,25 @@ export const Settings: React.FC<{
                     style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
                   />
                 </label>
-                <button type="button" className="btn-ghost" onClick={importGlassBg}>{t('settings.glassBgImport')}</button>
+                {/* v2.3.97：改为打开自绘引导弹窗，由弹窗里的按钮触发隐藏 input */}
+                <button type="button" className="btn-ghost" onClick={() => setGlassBgGuideOpen(true)}>{t('settings.glassBgImport')}</button>
                 <button type="button" className="btn-ghost" onClick={() => patch({ glassBgColor: '', glassBgImage: '' })}>{t('settings.glassBgReset')}</button>
               </div>
+              {/* v2.3.97：隐藏的真实 file input（由 ImagePickGuide 触发 .click()）*/}
+              <input
+                ref={glassBgInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = '';
+                  if (!f) return;
+                  const reader = new FileReader();
+                  reader.onload = () => patch({ glassBgImage: String(reader.result), glassBgColor: '' });
+                  reader.readAsDataURL(f);
+                }}
+              />
               {/* 预览：实时反映当前毛玻璃背景（颜色或图片） */}
               <div
                 style={{
@@ -4041,6 +4352,29 @@ export const Settings: React.FC<{
                   onClick={() => patch({ glassTokenText: '', glassTokenBorder: '', glassBubbleUserText: '', glassBubbleAiText: '', glassBubbleBorder: '' })}
                 >{t('settings.glassColorReset')}</button>
               </div>
+              {/* v2.3.97：液态玻璃（liquid）专属 —— 「液态流动」开关。
+                  背景的缓慢流动是 @keyframes 动画（见 index.css 的 liquid-flow-drift），
+                  有人会觉得持续动 distracting，故给独立开关。
+                  写入 settings.liquidFlow=false 时由 ThemeContext 挂
+                  `html[data-liquid-flow="off"]`，CSS 侧直接 animation:none（不是把动画
+                  「暂停在首帧」——暂停在首帧等于一张静止的图，用户会以为功能坏了）。
+                  注：该开关与「高级动画控制」三档是**两个独立维度**：动效总开关关掉时
+                  流动也会停（.anim-off * 的 animation:none !important 覆盖一切），
+                  但本开关只管流动、不影响其他动效，故仍需单独存在。 */}
+              {theme === 'liquid' && (
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={draft.liquidFlow !== false}
+                      onChange={(e) => patch({ liquidFlow: e.target.checked })}
+                      style={{ width: 15, height: 15, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
+                    />
+                    <span style={{ fontSize: 13 }}>{t('settings.liquidFlow')}</span>
+                    <Hint text={t('settings.liquidFlowDesc')} />
+                  </label>
+                </div>
+              )}
             </div>
           </>
         )}
@@ -4053,17 +4387,37 @@ export const Settings: React.FC<{
             原先这四类服务的 API 端点表单散落在本分类下，只能填一套；现在它们与文本模型
             一样支持「多条配置 + 标记当前使用项」，故统一搬到模型设置二级页。
             本分类只保留一张跳转卡片（不再重复渲染表单，避免两处都能改、互相覆盖）。*/}
-        <div id="sec-mediastub" className="section-title">{t('settings.catGeneration')}</div>
+        {/* v2.3.97：用户反馈「点『生成与扩展』像坏了」。本分类在 v2.3.94 搬走四类服务表单后
+            只剩这张卡，标题还叫「生成与扩展」，内容与分类名严重不符，容易被当成分类失效。
+            处置（不把功能搬回来，只讲清楚）：
+              ① 标题改为「语音与生图服务」并补一句说明这些设置现在住在哪里；
+              ② 跳转卡加方向箭头 + 高亮边框 + 键盘可达（role/tabIndex/Enter-Space），
+                 原来是裸 div + onClick，键盘用户 tab 不到、WCAG AA 不合格。 */}
+        <div id="sec-mediastub" className="section-title">{t('settings.genMovedTitle')}</div>
+        <div
+          style={{ fontSize: 12.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', maxWidth: 560, marginTop: 4, marginBottom: 10 }}
+        >
+          {t('settings.genMovedLead')}
+        </div>
         <div
           className="theme-card"
-          style={{ cursor: 'pointer', maxWidth: 480 }}
+          role="button"
+          tabIndex={0}
+          aria-label={t('settings.mcfgMovedEnter')}
+          style={{ cursor: 'pointer', maxWidth: 480, borderColor: 'var(--color-primary)' }}
           onClick={() => setSub('models')}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setSub('models');
+            }
+          }}
         >
           <div
             className="theme-swatch"
             style={{ background: 'linear-gradient(135deg,#4a9eff,#39ff99)' }}
           />
-          <div>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 600 }}>
               {t('settings.mcfgMovedTitle')}
               <Hint text={t('settings.mcfgMovedDesc')} />
@@ -4072,6 +4426,8 @@ export const Settings: React.FC<{
               {t('settings.mcfgMovedEnter')}
             </div>
           </div>
+          {/* 方向箭头：明确「这是一张跳转卡，不是设置项本身」，避免用户以为分类点不动 */}
+          <span aria-hidden style={{ color: 'var(--color-primary)', fontSize: 18, lineHeight: 1, flexShrink: 0 }}>→</span>
         </div>
 
         {/* ===== 异步场景生图 ===== */}
@@ -4988,41 +5344,22 @@ export const Settings: React.FC<{
 
       <GuideView open={guideOpen} onClose={() => setGuideOpen(false)} />
 
+      {/* v2.3.97：恢复出厂确认弹窗 —— 去内联化，改用通用 .modal-mask + .modal。
+          这样它与其余 17 个通用弹窗共用同一套 popupLinearIn 线性入场动画与
+          animControl theme 组门禁，不再是「唯独这个弹窗凭空出现」。 */}
       {resetOpen && (
         <div
+          className="modal-mask"
           onClick={() => setResetOpen(false)}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 10000,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'rgba(0,0,0,0.5)',
-          }}
         >
           <div
+            className="modal modal-confirm"
             onClick={(e) => e.stopPropagation()}
-            style={{
-              background: 'var(--color-bg-elevated, #fff)',
-              color: 'var(--color-text, #222)',
-              borderRadius: 14,
-              padding: '24px 28px',
-              maxWidth: 460,
-              width: '90%',
-              boxShadow: '0 12px 48px rgba(0,0,0,0.3)',
-            }}
           >
-            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>
-              ⚠️ {t('settings.resetConfirmTitle')}
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--color-text-secondary, #666)', lineHeight: 1.7, marginBottom: 6 }}>
-              {t('settings.resetKeepDesc')}
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--color-text-secondary, #666)', lineHeight: 1.7, marginBottom: 18 }}>
-              {t('settings.resetWarnData')}
-            </div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <div className="modal-title">{t('settings.resetConfirmTitle')}</div>
+            <div className="modal-desc">{t('settings.resetKeepDesc')}</div>
+            <div className="modal-desc">{t('settings.resetWarnData')}</div>
+            <div className="modal-actions">
               <button
                 className="btn-primary"
                 onClick={() => doReset(true)}
@@ -5030,16 +5367,8 @@ export const Settings: React.FC<{
                 {t('settings.resetKeep')}
               </button>
               <button
+                className="btn-danger"
                 onClick={() => doReset(false)}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #e06c75',
-                  background: '#e06c75',
-                  color: '#fff',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                }}
               >
                 {t('settings.resetFull')}
               </button>
@@ -5051,48 +5380,21 @@ export const Settings: React.FC<{
         </div>
       )}
 
+      {/* v2.3.97：删除全部数据确认弹窗 —— 同上，去内联化。 */}
       {deleteAllOpen && (
         <div
+          className="modal-mask"
           onClick={() => setDeleteAllOpen(false)}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 10000,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'rgba(0,0,0,0.5)',
-          }}
         >
           <div
+            className="modal modal-confirm"
             onClick={(e) => e.stopPropagation()}
-            style={{
-              background: 'var(--color-bg-elevated, #fff)',
-              color: 'var(--color-text, #222)',
-              borderRadius: 14,
-              padding: '24px 28px',
-              maxWidth: 460,
-              width: '90%',
-              boxShadow: '0 12px 48px rgba(0,0,0,0.3)',
-            }}
           >
-            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>
-              ⚠️ {t('settings.deleteAllDataConfirm')}
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--color-text-secondary, #666)', lineHeight: 1.7, marginBottom: 18 }}>
-              {t('settings.deleteAllDataDesc')}
-            </div>
-            <div style={{ display: 'flex', gap: 10 }}>
+            <div className="modal-title">{t('settings.deleteAllDataConfirm')}</div>
+            <div className="modal-desc">{t('settings.deleteAllDataDesc')}</div>
+            <div className="modal-actions">
               <button
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #e06c75',
-                  background: '#e06c75',
-                  color: '#fff',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                }}
+                className="btn-danger"
                 onClick={doDeleteAll}
               >
                 {t('settings.deleteAllData')}
@@ -5105,96 +5407,61 @@ export const Settings: React.FC<{
         </div>
       )}
 
+      {/* v2.3.97 错误日志弹窗 —— 去内联化 + 去硬编码深色。
+          原实现把底色写死为 #1e1e1e / 字色 #f0f0f0 / 按钮 #3a3a3a / 边框 #555 /
+          分隔线 #333 / 次要字 #aaa·#999·#bbb，并在注释里自陈「底色为固定深色」。
+          那套配色是 v2.3.20 为「让 btn-ghost 的主题字色在深底上可读」而临时加的，
+          但代价是：**14 套主题里13 套浅色主题下这是一个黑底白字的反向刺眼块**，
+          与用户「所有弹窗不得调用系统样式，全部适配软件主题和风格」的要求冲突。
+          现全部改走 --color-panel / --color-text / --color-border 等主题变量：
+            · 面板用 .modal（玻璃主题由既有 [data-theme='glass'] .modal 加深规则接管）；
+            · 面板/文字对比度由主题保证（正文 ≥ 4.5:1，WCAG AA）；
+            · 按钮改用 .btn-danger（清空日志）/ .btn-ghost（关闭），随主题变色；
+            · 分类标签底色改用语义令牌，不再是写死的 #d98a00 / #c0392b / #5a6b7b。 */}
       {errorLogOpen && (
         <div
+          className="modal-mask"
           onClick={() => setErrorLogOpen(false)}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 10000,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'rgba(0,0,0,0.5)',
-          }}
         >
           <div
+            className="modal modal-error-log"
             onClick={(e) => e.stopPropagation()}
-            style={{
-              background: '#1e1e1e',
-              color: '#f0f0f0',
-              borderRadius: 14,
-              padding: '22px 24px',
-              maxWidth: 680,
-              width: '92%',
-              maxHeight: '80vh',
-              display: 'flex',
-              flexDirection: 'column',
-              boxShadow: '0 12px 48px rgba(0,0,0,0.4)',
-            }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#f0f0f0' }}>{t('settings.errorLog')}</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                {/* 弹窗底色为固定深色（#1e1e1e），btn-ghost 跟随主题会导致字色≈底色看不清，
-                    这里用显式高对比样式，不随主题变化（v2.3.20 修复） */}
+            <div className="modal-head">
+              <div className="modal-title">{t('settings.errorLog')}</div>
+              <div className="error-log-actions">
                 <button
+                  className="btn-danger error-log-btn"
                   onClick={clearErrorLogAll}
                   disabled={errorLog.length === 0}
-                  style={{
-                    background: '#3a3a3a',
-                    color: '#f0f0f0',
-                    border: '1px solid #555',
-                    borderRadius: 8,
-                    padding: '5px 14px',
-                    fontSize: 13,
-                    cursor: errorLog.length === 0 ? 'not-allowed' : 'pointer',
-                    opacity: errorLog.length === 0 ? 0.55 : 1,
-                  }}
                 >
                   {t('settings.errorLogClear')}
                 </button>
                 <button
+                  className="btn-ghost error-log-btn"
                   onClick={() => setErrorLogOpen(false)}
-                  style={{
-                    background: '#3a3a3a',
-                    color: '#f0f0f0',
-                    border: '1px solid #555',
-                    borderRadius: 8,
-                    padding: '5px 14px',
-                    fontSize: 13,
-                    cursor: 'pointer',
-                  }}
                 >
                   {t('common.close')}
                 </button>
               </div>
             </div>
-            <div style={{ overflowY: 'auto', flex: 1, fontSize: 12.5 }}>
+            <div className="modal-body error-log-body">
               {errorLog.length === 0 ? (
-                <div style={{ color: '#bbb', padding: '16px 4px' }}>
+                <div className="error-log-empty">
                   {t('settings.errorLogEmpty')}
                 </div>
               ) : (
                 [...errorLog].reverse().map((e) => (
-                  <div key={e.id} style={{ borderBottom: '1px solid #333', padding: '10px 4px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                      <span
-                        style={{
-                          fontSize: 11,
-                          padding: '1px 8px',
-                          borderRadius: 10,
-                          color: '#fff',
-                          background: e.category === 'model' ? '#d98a00' : e.category === 'functional' ? '#c0392b' : '#5a6b7b',
-                        }}
-                      >
+                  <div key={e.id} className="error-log-row">
+                    <div className="error-log-row-head">
+                      <span className={`error-log-badge error-log-badge-${e.category}`}>
                         {errorCategoryLabel(e.category)}
                       </span>
-                      <span style={{ color: '#aaa' }}>{new Date(e.time).toLocaleString(loc)}</span>
+                      <span className="error-log-time">{new Date(e.time).toLocaleString(loc)}</span>
                     </div>
-                    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginBottom: e.detail ? 4 : 0, color: '#f0f0f0' }}>{e.message}</div>
+                    <div className="error-log-msg">{e.message}</div>
                     {e.detail && (
-                      <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#999', fontSize: 11.5 }}>
+                      <div className="error-log-detail">
                         {e.detail}
                       </div>
                     )}
@@ -5207,6 +5474,12 @@ export const Settings: React.FC<{
       )}
 
       <ToastView toast={toast} />
+      {/* v2.3.97：导入毛玻璃背景图的自绘引导弹窗（包裹隐藏的 file input）*/}
+      <ImagePickGuide
+        open={glassBgGuideOpen}
+        onTriggerInput={triggerGlassBgInput}
+        onClose={() => setGlassBgGuideOpen(false)}
+      />
       </div>
     </div>
   );

@@ -18,6 +18,7 @@ import type {
   UpdateStatus,
   QueueSnapshot,
   QuickImportResult,
+  QuickImportPreviewResult,
   SceneImageStatusEvent,
   MomentMediaStatusEvent,
   VoiceListResult,
@@ -25,6 +26,41 @@ import type {
 } from './types';
 import type { ImportCharacterResult } from './utils/characterCard';
 export type { ImportCharacterResult };
+
+// ===== v2.3.97 自绘弹窗相关类型 =====
+// 与 electron/preload.ts / electron/dialogBridge.ts 的同名接口同构（三处各自独立声明，
+// 避免把主进程模块卷进 renderer 构建）。
+export interface DirEntryFile {
+  name: string;
+  size: number;
+  /** 修改时间（epoch ms） */
+  mtime: number;
+}
+export interface DirPlace {
+  key: string;
+  /** 英文兜底标签；渲染层用 i18n 字典覆盖显示文案 */
+  label: string;
+  path: string;
+}
+export interface DirListing {
+  dirs: string[];
+  files: DirEntryFile[];
+  cwd: string;
+  parent: string | null;
+  places: DirPlace[];
+  error?: string | null;
+}
+/** `makeDir` 返回值 */
+export interface MakeDirResult {
+  ok: boolean;
+  /** 成功时为新目录的绝对路径 */
+  path?: string;
+  /**
+   * 失败原因码：INVALID_NAME / NAME_TOO_LONG / TRAVERSAL_DENIED / NOT_A_DIR / EXISTS /
+   * PERMISSION / MAKE_FAILED。UI 据此给对应语言的提示，不用笼统的「失败」。
+   */
+  error?: string;
+}
 
 export interface NianyuAPI {
   getRoles: () => Promise<Role[]>;
@@ -299,6 +335,10 @@ export interface NianyuAPI {
   getPathForFile: (file: File) => string;
   // 快速导入（v2.3.51）：拖入窗口的文件路径批量导入
   importDroppedFiles: (paths: string[]) => Promise<QuickImportResult[]>;
+  // 快速导入「预检」（v2.3.97）：**只读**解析拖入的文件，返回类型/摘要/失败原因。
+  // 主进程保证无副作用（不建角色/世界书/规则/插件记录、不写头像文件），
+  // 因此可以安全地在用户确认之前反复调用。
+  previewFiles: (paths: string[]) => Promise<QuickImportPreviewResult>;
 
   pickTextFile: (filters?: { name: string; extensions: string[] }[]) => Promise<{ path: string; content: string } | null>;
   // ===== 自定义音效 =====
@@ -425,6 +465,38 @@ export interface NianyuAPI {
 
   // ===== 确认对话框 =====
   showConfirm?: (message: string, title?: string) => Promise<boolean>;
+
+  // ===== v2.3.97 自绘弹窗回传通道 =====
+  // 主进程把「弹什么」推给渲染层，渲染层弹完把结果回传。
+  // showConfirm / pick* 这类既有 API 的签名**完全没变**（它们仍走 invoke），
+  // 新增的只有这两对「订阅推送 + 回传结果」以及文件选择器的数据源 listDir。
+  /** 订阅确认框请求；返回退订函数 */
+  onConfirmAsk?: (cb: (req: { id: number; message: string; title?: string; danger?: boolean }) => void) => () => void;
+  /** 回传确认框结果 */
+  confirmReply?: (id: number, ok: boolean) => void;
+  /** 订阅文件选择器请求；返回退订函数 */
+  onFilePickAsk?: (
+    cb: (req: {
+      id: number;
+      kind: 'open' | 'save' | 'directory';
+      title?: string;
+      filters?: { name: string; extensions: string[] }[];
+      multiple?: boolean;
+      defaultName?: string;
+      startDir?: string;
+      unique?: boolean;
+    }) => void
+  ) => () => void;
+  /** 回传文件选择结果（取消回传 null） */
+  filePickReply?: (id: number, paths: string[] | null) => void;
+  /** 列出目录内容（自绘文件选择器的数据源；纯只读，主进程拦截 `..` 穿越） */
+  listDir?: (p?: { dir?: string }) => Promise<DirListing>;
+  /**
+   * v2.3.97：新建单层文件夹（补回旧 showOpenDialog 的 createDirectory 能力）。
+   * ⚠️ **写操作**：主进程侧三层校验 —— 父目录必须已存在且为目录 / 目录名必须是
+   * 不含分隔符的单段白名单 / 只建一层（`mkdir` 不带 recursive）；且绝不覆盖同名目录。
+   */
+  makeDir?: (p: { parentDir: string; name: string }) => Promise<MakeDirResult>;
 
   // ===== 后台消息提醒 =====
   notifyCard: (p: { chatType: string; chatId: string; name: string; roleName: string; content: string }) => Promise<void>;
@@ -567,6 +639,7 @@ export const api: NianyuAPI = {
   importCharacterCard: () => raw.importCharacterCard(),
   getPathForFile: (file) => raw.getPathForFile(file),
   importDroppedFiles: (paths) => raw.importDroppedFiles(paths),
+  previewFiles: (paths) => raw.previewFiles(paths),
   resetSettings: (keepKeys) => raw.resetSettings(keepKeys),
   deleteAllData: () => raw.deleteAllData(),
   showConfirm: async (message, title) => {

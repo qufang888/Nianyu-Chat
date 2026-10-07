@@ -32,6 +32,8 @@ import { createRequire } from 'node:module';
 import Module from 'node:module';
 
 const ROOT = resolve(import.meta.dirname, '..');
+/**读 package.json 的当前版本号（就地函数：顶层变量在检查函数作用域内不可见） */
+const pkgVersion = () => JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8')).version;
 const workDir = mkdtempSync(join(tmpdir(), 'builtin-skill-verify-'));
 const STORE_PATH = join(workDir, 'skills.json');
 const req = createRequire(join(workDir, 'harness.cjs'));
@@ -399,8 +401,12 @@ section('G  i18n（10 处）与文档口径一致性');
     'G9 使用说明.md 技能章节载明内置技能与「脚本不执行 / references 未打包」'
   );
   ok(
-    changelog.includes('## v2.3.93') && changelog.includes('最新发版：**v2.3.93**'),
-    'G10 版本更新记录.md 顶部为 v2.3.93 且含该版本条目'
+    // v2.3.97：原先硬编码 'v2.3.93'，但版本号每次发版都会变 → 任何正常迭代都会误报。
+    // 改为从 package.json 动态取当前版本，断言「更新记录里有该版本条目且顶部标注一致」。
+    // （就地读取：脚本顶部的辅助函数在该作用域不可见，放顶层反而会 ReferenceError）
+    pkgVersion(),
+    changelog.includes(`## v${pkgVersion()}`) && changelog.includes(`最新发版：**v${pkgVersion()}`),
+    `G10 版本更新记录.md 含当前版本 v${pkgVersion()} 条目且顶部标注一致`
   );
   ok(
     builtinSrc.includes('MIT') && builtinSrc.includes('shengjidaguai-china/goutoujunshi'),

@@ -67,7 +67,7 @@ export function showErrorDialog(options: ShowErrorOptions) {
     <div style="
       background: var(--color-panel, #fff); border: 1px solid var(--color-border, #d9d9d9); border-radius: 12px; padding: 28px 32px;
       max-width: 520px; width: 90%; box-shadow: var(--shadow-panel, 0 8px 32px rgba(0,0,0,0.2));
-      animation: nianyuErrorFadeIn 0.25s ease;
+      animation: nianyuErrorFadeIn calc(0.25s * var(--anim-speed, 1)) ease;
       color: var(--color-text, #333); pointer-events: auto;
     ">
       <div style="font-size: 20px; font-weight: 600; margin-bottom: 16px;">

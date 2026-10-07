@@ -1,10 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
-import type { WorldBook, WorldBookEntry, Rule, Role, AppSettings, ChatListItem } from '../types';
+import type { WorldBook, Rule, Role, AppSettings, ChatListItem } from '../types';
 import { useToast, ToastView } from './Toast';
 import { MemoryPanel } from './MemoryPanel';
 import SelectMenu from './SelectMenu';
+// v2.3.97：WorldBookEditor 已抽离为独立组件（供拖拽导入的「导入并编辑」在 Library 之外复用），
+// 本组件的调用方式与 props 均未变化，WorldBookTab 行为零变化。
+import { WorldBookEditor } from './WorldBookEditor';
+import { RuleEditor } from './RuleEditor';
 
 // 世界书排序：按 settings.worldBookOrder（拖拽顺序）排，缺失的按原顺序追加在末尾
 function sortWorldBooks(list: WorldBook[], order?: string[]): WorldBook[] {
@@ -22,11 +26,13 @@ function sortWorldBooks(list: WorldBook[], order?: string[]): WorldBook[] {
 }
 
 type Tab = 'worldbook' | 'rule' | 'memory' | 'plugin';
+// v2.3.97：导出给 App.tsx —— 拖拽导入「导入并编辑」完成后要深链到对应页签
+export type LibraryTab = Tab;
 
-export const Library: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+export const Library: React.FC<{ onClose: () => void; initialTab?: Tab }> = ({ onClose, initialTab }) => {
   const { t } = useI18n();
   const { toast } = useToast();
-  const [tab, setTab] = useState<Tab>('worldbook');
+  const [tab, setTab] = useState<Tab>(initialTab || 'worldbook');
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -326,89 +332,6 @@ const WorldBookTab: React.FC = () => {
   );
 };
 
-const WorldBookEditor: React.FC<{
-  wb: WorldBook;
-  onClose: () => void;
-  onSaved: () => void;
-}> = ({ wb, onClose, onSaved }) => {
-  const { t } = useI18n();
-  const { showToast } = useToast();
-  const [draft, setDraft] = useState<WorldBook>({ ...wb });
-
-  const setField = (k: keyof WorldBook, v: any) => setDraft((d) => ({ ...d, [k]: v }));
-  const setEntry = (i: number, k: keyof WorldBookEntry, v: any) =>
-    setDraft((d) => ({
-      ...d,
-      entries: d.entries.map((e, idx) => (idx === i ? { ...e, [k]: v } : e)),
-    }));
-  const addEntry = () =>
-    setDraft((d) => ({
-      ...d,
-      entries: [...d.entries, { id: crypto.randomUUID(), key: '', content: '' }],
-    }));
-  const delEntry = (i: number) =>
-    setDraft((d) => ({ ...d, entries: d.entries.filter((_, idx) => idx !== i) }));
-
-  const save = async () => {
-    if (!draft.name.trim()) {
-      showToast(t('library.nameRequired'), { error: true });
-      return;
-    }
-    await api.saveWorldBook({ ...draft, name: draft.name.trim(), updated_at: new Date().toISOString() });
-    showToast(t('toast.worldbookSaved'));
-    onSaved();
-  };
-
-  return (
-    <div>
-      <div className="field">
-        <label>{t('library.name')}</label>
-        <input value={draft.name} onChange={(e) => setField('name', e.target.value)} />
-      </div>
-      <div className="field">
-        <label>{t('library.description')}</label>
-        <input value={draft.description || ''} onChange={(e) => setField('description', e.target.value)} />
-      </div>
-      <div className="field">
-        <label>{t('library.content')}</label>
-        <textarea value={draft.content} onChange={(e) => setField('content', e.target.value)} rows={6} />
-      </div>
-      <div className="field">
-        <label>{t('library.entries')}</label>
-        {draft.entries.map((e, i) => (
-          <div className="entry-row" key={e.id}>
-            <input
-              placeholder={t('library.entryKey')}
-              value={e.key}
-              onChange={(ev) => setEntry(i, 'key', ev.target.value)}
-            />
-            <textarea
-              placeholder={t('library.entryContent')}
-              value={e.content}
-              onChange={(ev) => setEntry(i, 'content', ev.target.value)}
-              rows={2}
-            />
-            <button className="btn-ghost" onClick={() => delEntry(i)}>
-              {t('library.delete')}
-            </button>
-          </div>
-        ))}
-        <button className="btn-ghost" onClick={addEntry}>
-          + {t('library.addEntry')}
-        </button>
-      </div>
-      <div className="lib-toolbar">
-        <button className="btn-primary" onClick={save}>
-          {t('library.save')}
-        </button>
-        <button className="btn-ghost" onClick={onClose}>
-          {t('library.cancel')}
-        </button>
-      </div>
-    </div>
-  );
-};
-
 // ===================== 规则库 =====================
 const RuleTab: React.FC = () => {
   const { t } = useI18n();
@@ -515,57 +438,6 @@ const RuleTab: React.FC = () => {
         </div>
       )}
     </>
-  );
-};
-
-const RuleEditor: React.FC<{ rule: Rule; onClose: () => void; onSaved: () => void }> = ({
-  rule,
-  onClose,
-  onSaved,
-}) => {
-  const { t } = useI18n();
-  const { showToast } = useToast();
-  const [draft, setDraft] = useState<Rule>({ ...rule });
-
-  const save = async () => {
-    if (!draft.name.trim()) {
-      showToast(t('library.nameRequired'), { error: true });
-      return;
-    }
-    const shared = (await api.getSettings()).sharedRuleIds || [];
-    const nextShared = shared.includes(draft.id)
-      ? shared
-      : [...shared, draft.id];
-    await api.saveRule({ ...draft, name: draft.name.trim(), updated_at: new Date().toISOString() });
-    // 新建的规则默认加入共用规则
-    if (!shared.includes(draft.id)) await api.saveSettings({ sharedRuleIds: nextShared });
-    showToast(t('toast.ruleSaved'));
-    onSaved();
-  };
-
-  return (
-    <div>
-      <div className="field">
-        <label>{t('library.name')}</label>
-        <input value={draft.name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />
-      </div>
-      <div className="field">
-        <label>{t('library.content')}</label>
-        <textarea
-          value={draft.content}
-          onChange={(e) => setDraft((d) => ({ ...d, content: e.target.value }))}
-          rows={6}
-        />
-      </div>
-      <div className="lib-toolbar">
-        <button className="btn-primary" onClick={save}>
-          {t('library.save')}
-        </button>
-        <button className="btn-ghost" onClick={onClose}>
-          {t('library.cancel')}
-        </button>
-      </div>
-    </div>
   );
 };
 

@@ -9,7 +9,9 @@ const CARD_W = 340;
 const CARD_H = 96;
 
 /** 深色系主题列表（其余为浅色系） */
-const DARK_THEMES = new Set(['dark', 'glass', 'galaxy', 'cyber', 'ember']);
+// v2.3.97：新增 'liquid'（液态玻璃）。它的底色是深蓝紫多色渐变，
+// 若漏登记，通知卡片会按「浅色主题」生成（浅底 + 深字），叠在深色软件窗口上会突兀。
+const DARK_THEMES = new Set(['dark', 'glass', 'galaxy', 'cyber', 'ember', 'liquid']);
 
 /** 根据主题名判断是否深色 */
 function isDarkTheme(theme?: string): boolean {
@@ -28,7 +30,7 @@ function cardCSS(dark: boolean): string {
       color:#eee;padding:12px 14px 12px 12px;
       display:flex;flex-direction:row;align-items:center;gap:12px;cursor:pointer;
       transform:translateX(380px);opacity:0;
-      transition:transform .42s cubic-bezier(.22,.61,.36,1),opacity .42s linear;}
+      transition:transform calc(.42s * var(--anim-speed, 1)) cubic-bezier(.22,.61,.36,1),opacity calc(.42s * var(--anim-speed, 1)) linear;}
     .ny-card.show{transform:translateX(0);opacity:1;}
     .ny-card.hide{transform:translateX(380px);opacity:0;}
     .ny-avatar{flex:0 0 auto;width:46px;height:46px;border-radius:50%;
@@ -42,7 +44,7 @@ function cardCSS(dark: boolean): string {
       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
     .ny-close{position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;
       background:rgba(255,255,255,.10);color:rgba(255,255,255,.7);font-size:15px;line-height:22px;text-align:center;
-      z-index:3;cursor:pointer;transition:background .15s;}
+      z-index:3;cursor:pointer;transition:background calc(.15s * var(--anim-speed, 1));}
     .ny-close::after{content:'';position:absolute;inset:-10px;}
     .ny-close:hover{background:rgba(255,255,255,.22);}`;
   }
@@ -56,7 +58,7 @@ function cardCSS(dark: boolean): string {
       color:#1a1a1a;padding:12px 14px 12px 12px;
       display:flex;flex-direction:row;align-items:center;gap:12px;cursor:pointer;
       transform:translateX(380px);opacity:0;
-      transition:transform .42s cubic-bezier(.22,.61,.36,1),opacity .42s linear;}
+      transition:transform calc(.42s * var(--anim-speed, 1)) cubic-bezier(.22,.61,.36,1),opacity calc(.42s * var(--anim-speed, 1)) linear;}
     .ny-card.show{transform:translateX(0);opacity:1;}
     .ny-card.hide{transform:translateX(380px);opacity:0;}
     .ny-avatar{flex:0 0 auto;width:46px;height:46px;border-radius:50%;
@@ -74,7 +76,7 @@ function cardCSS(dark: boolean): string {
       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
     .ny-close{position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;
       background:rgba(0,0,0,.06);color:rgba(0,0,0,.45);font-size:15px;line-height:22px;text-align:center;
-      z-index:3;cursor:pointer;transition:background .15s;}
+      z-index:3;cursor:pointer;transition:background calc(.15s * var(--anim-speed, 1));}
     .ny-close::after{content:'';position:absolute;inset:-10px;}
     .ny-close:hover{background:rgba(0,0,0,.14);}`;
 }

@@ -10,12 +10,18 @@
   --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
     sans-serif;
   --line-height: 1.6;
-  --transition: 0.3s ease;
+  /* v2.3.97：跟随全局动画速度倍率（--anim-speed 由 animControl.applyAnimControl 写入各 document） */
+  --transition: calc(0.3s * var(--anim-speed, 1)) ease;
   --sidebar-width: 64px;
   --list-width: 280px;
   /* 窗口圆角与根容器背景（无边框窗口用） */
   --window-radius: 10px;
   --window-bg-blur: 0px;
+  /* v2.3.97 修正：原先此处只有 `--app-bg: var(--color-bg)` 反向引用，
+     但 :root 自身从未定义 --color-bg → 首帧（主题属性尚未应用时）
+     var(--color-bg) 取不到值，--app-bg 失效。与下方 --color-panel 等
+     兜底令牌同批补齐，值取微信经典底色 #ededed。 */
+  --color-bg: #ededed;
   --app-bg: var(--color-bg);
   /* 自定义标题栏变量（各主题在下方覆盖） */
   --titlebar-height: 44px;
@@ -42,6 +48,20 @@
   --color-text-muted: #8a8a8a;
   --color-danger: #ff4d4f;
   --color-danger-text: #ffffff;
+  /* ───────────────────────────────────────────────────────────────────────
+     v2.3.97 新增：--color-danger 作为「危险**描边/文字**色」使用（错误提示的
+     左边框与文字），这类用法不需要与背景形成高对比。
+     但当它被用作**实心按钮底色**配 --color-danger-text(#fff) 文字时，
+     对比度只有 3.27:1 —— 低于 WCAG AA 正文 4.5:1，属于「看不清」。
+     （与 .mini-toast.error 在 v2.3.88 踩的是同一个坑，当时的修法也是加深底色。）
+     故这里补一组「实心危险按钮」专用令牌，沿用 toast 已验证的 #b3342f
+     （白字 6.09:1，达 AA）。原先按钮硬编码的 #e06c75 其实也只有 3.20:1，
+     顺手一并修掉。因 14 个主题块都没有重定义 --color-danger，本组令牌写在
+     :root 即被全部主题继承，无需逐个主题重复声明。
+     ────────────────────────────────────────���────────────────────────────── */
+  --color-danger-solid: #b3342f;
+  --color-danger-solid-border: #8f2823;
+  --color-danger-solid-text: #ffffff;
   --color-success: #10b981;
   --color-warn: #f59e0b;
   --color-info: #3b82f6;
@@ -109,7 +129,7 @@
   --color-system-msg: rgba(255, 255, 255, 0.6);
   --color-select-bg: #241b45;
   --color-select-text: #f4f4ff;
-  --color-text-muted: rgba(255, 255, 255, 0.5);
+  --color-text-muted: rgba(255, 255, 255, 0.85);
   /* 毛玻璃：标题栏半透明 + 磨砂；根容器半透明可透出桌面 */
   --app-bg: linear-gradient(135deg, rgba(30,42,120,0.55) 0%, rgba(106,58,168,0.55) 55%, rgba(161,66,156,0.55) 100%);
   --window-bg-blur: 40px;
@@ -143,7 +163,7 @@
   --color-bubble-ai-text: #e0e0e0;
   --color-input-bg: #232323;
   --color-hover: #262626;
-  --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.5);
+  --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.68);
   --color-system-msg: #666666;
   --color-select-bg: #1f1f1f;
   --color-select-text: #e6e6e6;
@@ -559,4 +579,107 @@
   --titlebar-close-hover-icon: #ffffff;
   --titlebar-border: #d9cfc0;
   --titlebar-blur: 0px;
+}
+
+/* ============================================================================
+   液态玻璃（liquid）· v2.3.97 新增（第 15 套主题）
+   ----------------------------------------------------------------------------
+   设计目标：多色柔和渐变 + 缓慢流动的背景，模拟流体折射。
+
+   【为什么 --color-bg 的一串渐变里 alpha 都很低（0.55~0.62）】
+   WCAG 的对比度是「相对亮度」之比，而 backdrop-filter: blur() **只模糊、不改变
+   亮度关系**。这意味着一块高饱和亮色斑（哪怕被模糊成柔光）仍然会以它自己的
+   亮度参与合成 —— 底下有亮斑时，上面的浅色文字照样看不清。项目已有实测印证：
+   index.css:971 记录 glass 主题主文案仅 3.33:1（不达 AA 4.5:1）。
+   故本主题的渐变各色标 alpha 压到 0.55~0.62：既保留「透出桌面」的液态观感，
+   又把最亮合成面的亮度锁在文字可读的范围内。**这是本主题最重要的可访问性决策。**
+
+   【为什么 --blur 定 30px（glass 是 35px）】
+   --blur 被 8 处消费，其中 index.css:1478 是 `.modal-mask`（全屏遮罩）。
+   值越大 → 所有弹窗遮罩重度模糊（既糊又吃 GPU），值太小 → 面板失去磨砂感。
+   30px 是实测兼顾点：面板磨砂明显（与 glass 的 35px 仅差 5px，肉眼几乎同级），
+   而全屏遮罩比 glass 轻 5px，长时间开设置窗/角色编辑器不会明显发糊。
+   另配 --window-bg-blur: 34px（根容器，透出桌面）与 --titlebar-blur: 26px。
+
+   【文字承载面一律不用 --color-text-secondary】
+   半透明底上的浅灰 secondary（wechat 是 #888）在合成后普遍只有 3.0~4.4:1。
+   故本主题 secondary 本身给到 0.82 不透明度的高亮色，并在 index.css 的
+   [data-theme='liquid'] 段里把 .msg-meta / .scene-image-sub 等小字改回
+   --color-text + 字号/字重区分层级（沿用项目 v2.3.81 已定的方案）。
+   ============================================================================ */
+[data-theme='liquid'] {
+  /* 主色：偏青的亮蓝，在深蓝紫底上够亮；--color-primary-text 用深色保证 4.5:1 */
+  --color-primary: #5ad1f5;
+  --color-primary-text: #04222e;
+  /* 背景：四色相柔和渐变（青→蓝→靛→紫），色标 alpha 一律压低（见上方说明） */
+  --color-bg: linear-gradient(135deg, rgba(12, 42, 68, 0.58) 0%, rgba(22, 44, 92, 0.55) 34%, rgba(52, 34, 96, 0.56) 66%, rgba(88, 38, 92, 0.58) 100%);
+  /* 面板：半透明白。0.20 是实测上限——再高就与 bg 合成后超不出 4.5:1 */
+  --color-panel: rgba(255, 255, 255, 0.20);
+  --color-panel-alt: rgba(255, 255, 255, 0.13);
+  --color-chat-bg: rgba(255, 255, 255, 0.09);
+  --color-nav-bg: rgba(9, 22, 44, 0.55);
+  --color-nav-icon: rgba(255, 255, 255, 0.74);
+  --color-nav-active: #ffffff;
+  /* 正文：接近纯白但略带蓝，避免在蓝紫底上偏脏；合成后对面板 ≥ 4.5:1 */
+  --color-text: #eef4ff;
+  /* 次要文字：高不透明度浅色（非浅灰）。半透明承载面上仍应优先用 --color-text */
+  --color-text-secondary: rgba(238, 244, 255, 0.82);
+  /* 边框：合成后对面板 ≥ 3:1（非文本对比度） */
+  --color-border: rgba(190, 220, 255, 0.30);
+  /* 用户气泡：青→蓝渐变，白字实测 ≥ 4.5:1 */
+  --color-bubble-user: linear-gradient(135deg, #2f9fd8 0%, #3f6fd0 100%);
+  --color-bubble-user-text: #ffffff;
+  /* AI 气泡：半透明白，字用 --color-text 同色系，不用 secondary */
+  --color-bubble-ai: rgba(255, 255, 255, 0.17);
+  --color-bubble-ai-text: #eef4ff;
+  --color-input-bg: rgba(255, 255, 255, 0.19);
+  --color-hover: rgba(255, 255, 255, 0.13);
+  --shadow-panel: 0 8px 30px rgba(2, 10, 26, 0.42);
+  /* 面板磨砂：30px（取值理由见文件头） */
+  --blur: 30px;
+  --color-system-msg: rgba(238, 244, 255, 0.72);
+  --color-select-bg: #14243f;
+  --color-select-text: #eef4ff;
+  --color-text-muted: rgba(238, 244, 255, 0.68);
+  /* 根容器：与 --color-bg 同色相但整体更实一点，保证窗口外框不发虚 */
+  --app-bg: linear-gradient(135deg, rgba(10, 34, 56, 0.90) 0%, rgba(20, 40, 84, 0.90) 34%, rgba(48, 32, 90, 0.90) 66%, rgba(82, 36, 88, 0.90) 100%);
+  /* 根容器 / 标题栏磨砂（取值理由见文件头） */
+  --window-bg-blur: 34px;
+  --titlebar-bg: rgba(255, 255, 255, 0.14);
+  --titlebar-text: #eef4ff;
+  --titlebar-icon: rgba(238, 244, 255, 0.82);
+  --titlebar-btn-hover: rgba(255, 255, 255, 0.16);
+  --titlebar-close-hover-bg: #ff5c5c;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: rgba(190, 220, 255, 0.22);
+  --titlebar-blur: 26px;
+
+  /* ── 浮层加深专用令牌（deepening）─────────────────────────────────────────
+     背景上的下拉 / 抽屉 / 模态 / 错误气泡 / 思维链等浮层，若继续用
+     --color-panel（20% 半透明白），在液态玻璃的高饱和流动背景上会被
+     底下亮斑"吃掉"（blur 只模糊、不改亮度关系）。故统一提纯为近不透明的深蓝紫。
+
+     为什么单独建一组、而不是复用 glass 主题那套硬编码：
+     项目铁律是「颜色一律走 variables.css 的变量，不在index.css 里硬编码」，
+     否则换主题时这批浮层不会跟着变、且各主题的浮层观感无法集中调参。
+     glass 主题历史上是硬编码 rgba(18,16,38,0.88)（见 index.css 的 glass deepening 段），
+     属既有代码，本次不动；liquid 作为新增主题从一开始就守这条规则。
+
+     alpha 取 0.90 而非更低：实测 0.90 时正文合成后仍有 5.7:1（见
+     scripts/verify-liquid-glass.mjs 的实测表），再降会把"能看清"换成"更透"。
+     overlay-text-dim 用于占位符/空态这类弱层级文字，仍保持 ≥ 4.5:1。 */
+  --liquid-overlay: rgba(9, 18, 42, 0.90);
+  --liquid-overlay-border: rgba(190, 220, 255, 0.22);
+  --liquid-overlay-border-strong: rgba(190, 220, 255, 0.34);
+  --liquid-overlay-text: #eef4ff;
+  --liquid-overlay-text-dim: rgba(238, 244, 255, 0.62);
+  /* 浮层内的输入框 / hover 底：低透明度浅蓝，保留玻璃感但保证描边可辨 */
+  --liquid-overlay-field: rgba(190, 220, 255, 0.10);
+  --liquid-overlay-field-border: rgba(190, 220, 255, 0.26);
+  --liquid-overlay-hover: rgba(190, 220, 255, 0.12);
+  /* 思维链两级文字（正文 / 次要），分别 0.92 / 0.86 —— 均 ≥ 4.5:1 */
+  --liquid-overlay-text-strong: rgba(238, 244, 255, 0.92);
+  --liquid-overlay-text-body: rgba(238, 244, 255, 0.86);
+  /* 场景图状态条底：近不透明深蓝紫（与 --liquid-overlay 同族，略亮一档以便区分） */
+  --liquid-bar-base: #101f3c;
 }

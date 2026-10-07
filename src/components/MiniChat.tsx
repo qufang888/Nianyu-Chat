@@ -857,6 +857,12 @@ export const MiniChat: React.FC = () => {
       // 高级动画控制（v2.3.90）：总控 / 单控互斥。小窗是独立 document，
       // 有自己的 <html>，故必须对自己的 document 调用（主窗口 ThemeContext 只管主窗）。
       applyAnimControl(document, settings, 'main');
+      // v2.3.97：液态玻璃「背景流动」开关（与 ThemeContext 同款逻辑）。
+      // 小窗是独立 document，主窗挂的 data-liquid-flow **不会**传播过来，
+      // 故必须在这里对自己的 documentElement 重挂一次，否则用户在主窗关掉流动后，
+      // 小窗（.mini-shell 同样带 liquid-flow-drift 动画）仍在流动，开关形同虚设。
+      if (settings.liquidFlow === false) root.setAttribute('data-liquid-flow', 'off');
+      else root.removeAttribute('data-liquid-flow');
       // 全局开关统一重派生
       setHideReasoning(settings.hideReasoning !== false);
       // v2.3.44：全局 TTS 开关（主窗/设置页切换后小窗立即同步）

@@ -19,7 +19,7 @@ import { createPortal } from 'react-dom';
 import { useTheme } from '../theme/ThemeContext';
 import type { AppSettings } from '../types';
 import cursorPngUrl from '../assets/cursor/cursor.png';
-import { isGroupEnabled } from '../utils/animControl';
+import { isGroupEnabled, getAnimSpeed } from '../utils/animControl';
 
 // ===== 类型定义 =====
 
@@ -66,6 +66,7 @@ const INTERACTION_CHECK_THROTTLE_MS = 80; // 元素交互检测节流间隔
 const DIRTY_MARGIN = 44;            // 脏区域扩展边距（像素）
 const OFFSCREEN = -9000;            // 初始离屏哨兵值
 // 淡入淡出常量（窗口切换时光标丝滑过渡，避免突然弹出/消失的割裂感）
+// v2.3.97：这两个是**基准**时长（1× 速度下），实际时长 = 基准 / 速度倍率（见下方 speedRef）。
 const FADE_IN_MS = 200;             // 聚焦时淡入时长（毫秒）
 const FADE_OUT_MS = 150;            // 失焦时淡出时长（毫秒）
 
@@ -111,6 +112,23 @@ const CustomCursor: React.FC = () => {
     animOnRef.current = cursorAnimOn;
   }, [cursorAnimOn]);
 
+  // ===== v2.3.97：界面动效速度倍率 =====
+  // Canvas 光标是纯 JS rAF 绘制，CSS 的 calc(...*var(--anim-speed)) 完全管不到它，
+  // 所以必须在这里**显式**把倍率应用到两个语义相反的参数上。
+  // 注意 `--anim-speed` 是**时长倍率**（1.5 = 很慢 = 时长 ×1.5），因此：
+  //   1) 淡入/淡出**时长**（FADE_IN_MS / FADE_OUT_MS）→ **乘**倍率（越慢等越久）；
+  //   2) lerp 跟随**系数**（cfg.lerpSpeed，每帧向目标插值的比例，越大越快）→ **除**倍率
+  //      （越慢每帧走得越少）。
+  // ⚠️ 这两处方向相反，弄反任一个都会得到「调慢反而变快」的诡异手感：
+  //    时长用除 → 慢档下淡入秒完但光标乱抖；lerp 用乘 → 慢档下光标疯狂甩尾。
+  //    验证脚本 D 组对两个方向都有断言。
+  // 用 ref 承载：rAF 回调长期存活，需读到最新值而不必重建整条回调链。
+  const animSpeed = getAnimSpeed(settings);
+  const speedRef = useRef(animSpeed);
+  useEffect(() => {
+    speedRef.current = animSpeed;
+  }, [animSpeed]);
+
   // ===== 对象池（预分配，永不销毁）=====
   const trailPoolRef = useRef<TrailPoint[]>(
     Array.from({ length: MAX_TRAIL_POINTS }, () => ({
@@ -142,7 +160,14 @@ const CustomCursor: React.FC = () => {
     const c = s.customCursor;
     cfgRef.current = {
       enabled: c.enabled,
-      lerpSpeed: Math.max(0.05, Math.min(0.5, c.lerpSpeed ?? 0.25)),
+      // v2.3.97：lerp 系数是**每帧插值比例**（越大越快），语义与「时长」相反，
+      // 所以这里要**除以**时长倍率而不是乘：倍率 1.5（更慢）→ 系数变小 → 每帧走得更少。
+      // 上下限：下限 0.02 保证极慢档下光标仍会跟上（否则会「跟丢」鼠标）；
+      // 上限 0.5 保持不变 —— 系数 ≥1 会插值过冲并引起抖动，任何倍率下都不该越过。
+      lerpSpeed: Math.max(
+        0.02,
+        Math.min(0.5, Math.max(0.05, Math.min(0.5, c.lerpSpeed ?? 0.25)) / speedRef.current)
+      ),
       trailEnabled: c.trailEnabled !== false,
       trailMaxLength: Math.min(MAX_TRAIL_POINTS, c.trailMaxLength ?? 10),
       particlesEnabled: c.particlesEnabled !== false,
@@ -485,14 +510,14 @@ const CustomCursor: React.FC = () => {
       // 这样无需在两处分支里各写一份「瞬时完成」代码，也不会残留半透明帧。
       const fadeElapsed = animOnRef.current ? now - fadeStartRef.current : Number.POSITIVE_INFINITY;
       if (fade === 'in') {
-        // 淡入：透明度 0 → 1
-        const t = Math.min(1, fadeElapsed / FADE_IN_MS);
+        // 淡入：透明度 0 → 1（时长基准 FADE_IN_MS，按速度倍率缩短）
+        const t = Math.min(1, fadeElapsed / (FADE_IN_MS * speedRef.current));
         // ease-out 缓动：先快后慢，更自然
         opacityRef.current = 1 - (1 - t) * (1 - t);
         if (t >= 1) { opacityRef.current = 1; fadeStateRef.current = 'none'; }
       } else {
-        // 淡出：透明度 1 → 0
-        const t = Math.min(1, fadeElapsed / FADE_OUT_MS);
+        // 淡出：透明度 1 → 0（时长基准 FADE_OUT_MS，按速度倍率缩短）
+        const t = Math.min(1, fadeElapsed / (FADE_OUT_MS * speedRef.current));
         // ease-in 缓动：先慢后快
         opacityRef.current = 1 - t * t;
         if (t >= 1) {

@@ -27,6 +27,7 @@
  * 因此同一个 `ANIM_GROUPS` 定义能同时服务 4 个文档而不必复制大段选择器列表。
  */
 import type { AppSettings } from '../types';
+import { clampAnimSpeed, animSpeedFromSeconds, ANIM_SPEED_DEFAULT } from '../types';
 
 /** 文档种类：决定某分组在该文档里用哪套选择器 */
 export type AnimDocKind = 'main' | 'floating' | 'notify';
@@ -213,6 +214,9 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.main-pane',
       // 通用交互元素
       '.btn-primary',
+      // v2.3.97：实心危险按钮（恢复出厂/删除全部数据/清空错误日志）。
+      // 它的 hover/disabled 走 var(--transition) 过渡，与 .btn-primary 同族。
+      '.btn-danger',
       '.role-card',
       '.speaker-item',
       '.select-menu-trigger',
@@ -255,12 +259,59 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       // 的卡片边框过渡与展开表单入场动画
       '.media-cfg-card',
       '.media-cfg-body',
+      // v2.3.97 补齐（审计发现的登记缺口）：以下选择器此前**带动画但从未登记**，
+      // 导致自定义档的分组开关对它们完全失效（只有 all-off 档的 `.anim-off *`
+      // 能杀掉，自定义档管不住）。补登记后 custom 档也能正常关掉。
+      '.settings-suggest',   // 设置搜索候选（v2.3.97 补的 popupLinearIn）
+      '.select-menu-tip',    // 下拉悬停提示（v2.3.97 补的 fadeIn）
+      '.msg-search',         // 消息查找横条（v2.3.97 补的 popupLinearIn）
+      // v2.3.97：通用模态三件套 —— 被 18 个弹窗共用（AboutModal / BondPanel /
+      // ChatWindow×8 / CustomTitleBar 退出确认 / GroupEditor / ImageCropper /
+      // Library×2 / MiniChat×5 / ModelEditor / MomentsView×2 / OnboardingWizard /
+      // RoleEditor / SelfRoleEditor / Settings / TranslateModal / UpdatePopup）。
+      // 改 index.css 这三个类一处即 18 个弹窗同时生效，故必须登记，否则
+      // 「自定义档 → 关掉本组」对这 18 个弹窗的入场动画不起作用。
+      // 语义上属theme 组（通用 UI 外观与交互），与 .hint-tip / .drop-hint 同族。
+      '.modal-mask',
+      '.modal',
+      '.modal-card',
       // 事件弹窗：只列真正带过渡/动画的具体类。**禁用通配 `*`**（否则该弹窗内将来出现的
       // .stream-char/.pseudo-char 会被 theme 组静默关掉，破坏「流式恒开」承诺）。
       '.event-overlay',
       '.event-modal',
       '.event-option',
       '.event-close-top',
+      // v2.3.97（液态玻璃 liquid 主题）：背景「液态流动」动画。
+      // 载体是 .app-root（主窗）与 .mini-shell（小窗）的 background-position 位移，
+      // 36s linear 往返（keyframes liquid-flow-drift）。放theme 组而非新建组，理由：
+      //   ① 它就是「主题外观」的一部分，与 .theme-card / body 同族，语义一致；
+      //   ② 新建分组会给设置页再添一个开关，而本主题另有独立的「液态流动」开关
+      //      （settings.liquidFlow → html[data-liquid-flow="off"]），两者正交：
+      //      本登记负责「三档总开关 / 自定义档」这一维度，独立开关负责「只关流动」。
+      // 关掉后的兜底是安全的：animation:none 会让元素退回基态，而基态
+      // background-position 就是 0% 0%（= keyframes 的 0% 声明值），
+      // 即「静止的完整背景」，不会退回透明/不可见 —— 这是选 background-position
+      // 位移（而非 opacity/transform 显隐类动画）的原因。
+      //
+      // ⚠️ 这里**只能登记裸类名**，不能写成 `[data-theme="liquid"] .app-root`：
+      // buildGateCss 生成的规则是 `html[data-anim-off~="theme"] <登记的选择器>`，
+      // 中间是**后代组合器**。而 data-theme 是设在 documentElement（即 <html>）上的，
+      // 若登记成 `[data-theme="liquid"] .app-root`，拼出来就是
+      // `html[...] [data-theme="liquid"] .app-root` —— 要求 html 的**后代**里有个
+      // 带 data-theme 的元素，而 data-theme 就在 html 自己身上，永远匹配不上，
+      // 结果是「自定义档关掉 theme 组，流动动画照样播」（静默失效）。
+      // 裸类名即可：只有 liquid 主题给这两个元素加了 animation，
+      // 其余主题下它们没有 animation/transition，被 kill 也不影响任何东西。
+      '.app-root',
+      '.mini-shell',
+      // v2.3.97：拖拽导入「预检确认弹窗」的文件列表行。
+      // 这一条是**功能性必需**，与 .msg-action-bar 同理：.qip-item 的基态是
+      // `opacity:0`（靠 transition 插值到 .is-in 的 opacity:1），
+      // 若不登记，`transition:none !important` 不会「跳到终态」而是把元素
+      // 永久卡在 opacity:0 —— 整个文件列表会看不见。
+      // 双重保险：index.css 里另有 `.anim-off .qip-item { opacity:1 !important }`。
+      '.qip-item',
+      '.qip-item.is-in',
     ],
   },
   {
@@ -274,7 +325,14 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
     labelKey: 'animCtl.groupTutorial',
     // v2.3.92 新建组：新手引导高亮环是**无限循环**动画，且新用户首启即默认显示，
     // 用户感知最强，值得独立成组单独关掉。
-    selectors: ['.tutorial-ring', '.tutorial-card', '.tutorial-card-center'],
+    selectors: [
+      '.tutorial-ring',
+      '.tutorial-card',
+      '.tutorial-card-center',
+      // v2.3.97 补登记：引导遮罩此前带 maskFadeIn 动画却未登记，自定义档关不掉。
+      // .tutorial-mask-full 只是尺寸修饰（inset:0），不带独立动画，无需登记。
+      '.tutorial-mask',
+    ],
   },
   {
     // v2.3.94 需求 11（统计页三大板块）：饼图「从圆心顺时针拉开」的 rAF 补间与扇区悬停外扩
@@ -299,6 +357,14 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.stats-fav-signature textarea',
       // v2.3.95：编辑界面的性别单选按钮组（选中态/hover 过渡）
       '.stats-fav-gender-pick button',
+      // v2.3.97 补登记（审计发现的登记缺口）：这两类此前**已有popupLinearIn 动画
+      // 却从未登记进任何分组** —— 自定义档的 stats 开关对它们完全无效。
+      //   .stats-role-pick      「我最喜欢的人物」选人弹窗本体
+      //   .stats-role-pick-mask该弹窗的遮罩层
+      '.stats-role-pick',
+      '.stats-role-pick-mask',
+      // v2.3.97 新补：饼图扇区的悬浮 tooltip（fadeIn 0.12s linear）
+      '.stats-pie-tip',
     ],
   },
 ];
@@ -317,7 +383,88 @@ export const DEFAULT_ANIM_GROUPS: Record<string, boolean> = ANIM_GROUPS.reduce(
 
 /** 只需要「动效相关字段」的部分设置（避免与 AppSettings 形成运行时循环依赖） */
 export type AnimSettingsLike = Pick<AppSettings, 'enableAnimations'> &
-  Partial<Pick<AppSettings, 'animMode' | 'animControlMode' | 'animGroups'>>;
+  Partial<
+    Pick<AppSettings, 'animMode' | 'animControlMode' | 'animGroups' | 'animSpeed' | 'animSpeedSeconds' | 'animSpeedPreset'>
+  >;
+
+/**
+ * 当前界面动效速度倍率 —— **速度的唯一读入口**（v2.3.97）。
+ *
+ * 返回值语义：`1` = 原始速度，`1.5` = 慢一倍半，`0.5` = 快一倍。
+ * CSS 侧写成 `calc(<原值> * var(--anim-speed))`；JS 侧（饼图 rAF 补间、useRetract 延迟卸载、
+ * 悬浮球菜单延迟卸载、光标淡入淡出）写成 `base / speed`。
+ *
+ * 与 `getAnimMode()` 的关系：**正交**。档位管「动不动」，速度管「动不动得快慢」——
+ * 所以即使 `animMode === 'all-off'`（什么都不动），本函数仍照常返回倍率（只是没人消费它）；
+ * 反过来全开档下速度也照常生效。
+ *
+ * 「自定义」档的换算：`animSpeedPreset === 'custom'` 时，以 `animSpeedSeconds`
+ * 作为「单个弹窗的标准时长（秒）」，倍率 = `ANIM_SPEED_REF_SECONDS / 秒数`。
+ * 两者都不合法（老 settings / 脏数据）时一律回落到 `ANIM_SPEED_DEFAULT`（=1，不改变观感）。
+ */
+export function getAnimSpeed(settings: AnimSettingsLike | null | undefined): number {
+  if (!settings) return ANIM_SPEED_DEFAULT;
+  if (settings.animSpeedPreset === 'custom') return animSpeedFromSeconds(settings.animSpeedSeconds);
+  return clampAnimSpeed(settings.animSpeed);
+}
+
+/**
+ * 把「CSS 里的基准秒数」换算成「JS 该等的毫秒数」—— **CSS 与 JS 时长配对的唯一入口**。
+ *
+ * ## 为什么需要它
+ * 凡是「JS 用 setTimeout 等某个 CSS 动画播完再卸载 DOM」的地方，两侧时长必须**严格 1:1**。
+ * CSS 侧在 v2.3.97 起已被统一改成 `calc(<原值> * var(--anim-speed, 1))`，所以这些
+ * JS 定时器也必须跟着缩放，否则会出现两类用户可见故障：
+ *   - 速度调**快**：动画早播完，元素傻等（拖沓感）；
+ *   - 速度调**慢**：动画没播完 DOM 就被摘掉（元素凭空消失 / 菜单「点了不消失」）。
+ *
+ * ## 用法
+ * ```ts
+ * // CSS: animation: nodeBannerIn calc(0.2s * var(--anim-speed, 1)) linear both;
+ * const IN_MS = animMs(0.2);   // ← 这行就是 CSS 那行的「孪生兄弟」
+ * ```
+ * 之所以做成函数而不是模块级常量：模块级常量**只求值一次**，用户在设置里改了速度后
+ * 不会重算，长时间运行后会与 `--anim-speed` 脱节。函数在**调用时**现算，天然同步。
+ *
+ * ## 与「停留时长」的区分（重要）
+ * 只有**与动画时长配对**的等待才该调用本函数。以下两类**不**该缩放：
+ *   - 停留/可读时长（如 NodeBanner 的 `HOLD_MS` 3.5s、Toast 的 `duration` 1.5~3s）：
+ *     那是给人读完文字的时间，缩放它会导致快档下一闪而过、慢档下久到以为卡死；
+ *   - 轮询/节流间隔、冷却时间（如 `EVENT_COOLDOWN_MS`、节流 80ms）：与动画无关。
+ *
+ * @param cssSeconds CSS 里写的**基准**秒数（不含倍率，即 `calc()` 括号里那个数）
+ * @param doc 目标文档，缺省 `document`
+ * @returns 应等待的毫秒数；夹在 [16, 10000] 防脏数据与极端倍率
+ */
+export function animMs(cssSeconds: number, doc?: Document | null): number {
+  const base = Number(cssSeconds);
+  const safeBase = Number.isFinite(base) && base > 0 ? base : 0.2;
+  return Math.min(10000, Math.max(16, Math.round(safeBase * 1000 * readAnimSpeed(doc))));
+}
+
+/**
+ * 从某个 document 根元素上读回 `--anim-speed` —— **给拿不到 settings 的纯 hook 用**。
+ *
+ * 存在的理由：`useRetract` 是一个纯 React Hook，按契约不能改签名（16 处调用点零改动是它的卖点），
+ * 却必须知道「缩入动画被放慢了多少倍」—— 否则速度调慢时 CSS 动画（例如 popupLinearOut 0.15s）
+ * 还在播，JS 却已按固定 160ms 把 DOM 卸载了，表现为**菜单动画播到一半凭空消失**。
+ *
+ * 为什么读 CSS 变量而不是 React 上下文：`applyAnimControl` 已经把倍率写进了**每个 document
+ * 自己的** `documentElement`（主窗 / 悬浮球 / 通知窗三者互不相同），这正是各自动画的唯一真源，
+ * 且是同步写入、无需等 React 重渲染 —— 定时器里读到的必然是当前值。
+ *
+ * @param doc 目标文档，缺省为当前 `document`
+ * @returns 倍率；变量缺失 / 非法 / document 不存在时返回 `ANIM_SPEED_DEFAULT`（=1，即原始速度）
+ */
+export function readAnimSpeed(doc?: Document | null): number {
+  const target = doc ?? (typeof document !== 'undefined' ? document : null);
+  if (!target || !target.documentElement) return ANIM_SPEED_DEFAULT;
+  const raw = target.documentElement.style.getPropertyValue('--anim-speed');
+  if (!raw) return ANIM_SPEED_DEFAULT;
+  const n = Number(raw);
+  // 只接受「有限且 > 0」的值：脏数据（如空串/NaN/0）会让除法得到 Infinity 或除零
+  return Number.isFinite(n) && n > 0 ? n : ANIM_SPEED_DEFAULT;
+}
 
 /** 值是否为合法的档位（用于挡住脏数据） */
 function isAnimMode(v: unknown): v is AnimMode {
@@ -448,6 +595,14 @@ export function applyAnimControl(
   if (off.length > 0) root.setAttribute('data-anim-off', off.join(' '));
   else root.removeAttribute('data-anim-off');
 
-  // 3) 分组门禁规则（幂等）
+  // 3) 速度倍率变量（v2.3.97）：CSS 侧全部时长都写成 `calc(<原值> * var(--anim-speed))`，
+  //    这里只写一个无单位数字。**必须写到各自的 documentElement 上** —— 主窗口 / 悬浮球 /
+  //    通知窗是三个独立 BrowserWindow，CSS 变量不跨文档共享。
+  //    与档位正交：即便 animMode==='all-off'（动画全关）也照写，因为该变量同时被
+  //    useRetract / readAnimSpeed 消费（决定延迟卸载要等多久），且将来若某分组在
+  //    all-off 档被豁免，无需再改这里。
+  root.style.setProperty('--anim-speed', String(getAnimSpeed(settings)));
+
+  // 4) 分组门禁规则（幂等）
   ensureGateStyle(doc, kind);
 }

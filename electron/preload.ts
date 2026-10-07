@@ -17,12 +17,52 @@ import type {
   ProbeOptions,
   QueueSnapshot,
   QuickImportResult,
+  QuickImportPreviewResult,
   SceneImageStatusEvent,
   MomentMediaStatusEvent,
   VoiceListResult,
   ListVoicesOptions,
 } from '../src/types';
 import type { ImportCharacterResult } from '../src/utils/characterCard';
+
+/**
+ * 目录列表项（v2.3.97 自绘文件选择器的数据源）。
+ * 与 `electron/dialogBridge.ts` 的同名接口同构 —— 两边各自独立声明，
+ * 避免主进程侧模块被 renderer 的构建配置卷进来。
+ */
+export interface DirEntryFile {
+  name: string;
+  size: number;
+  /** 修改时间（epoch ms） */
+  mtime: number;
+}
+
+/** 左侧「位置」栏的快捷入口 */
+export interface DirPlace {
+  key: string;
+  label: string;
+  path: string;
+}
+
+/** `listDir` 返回值 */
+export interface DirListing {
+  dirs: string[];
+  files: DirEntryFile[];
+  cwd: string;
+  /** 上级目录；已在根目录时为 null */
+  parent: string | null;
+  places: DirPlace[];
+  error?: string | null;
+}
+
+/** `makeDir` 返回值 */
+export interface MakeDirResult {
+  ok: boolean;
+  /** 成功时为新目录的绝对路径 */
+  path?: string;
+  /** 失败原因码（可读，见 dialogBridge.makeDirectory 注释） */
+  error?: string;
+}
 
 // 悬浮球未读条目（与主进程 UnreadItem 结构一致）
 type BallUnreadItem = {
@@ -306,6 +346,9 @@ export interface NianyuAPI {
   getPathForFile: (file: File) => string;
   // 快速导入（v2.3.51）：拖入窗口的文件路径批量导入
   importDroppedFiles: (paths: string[]) => Promise<QuickImportResult[]>;
+  // 快速导入「预检」（v2.3.97）：**只读**解析拖入的文件，返回类型/摘要/失败原因，不落库。
+  // 渲染层拿到结果弹确认弹窗后，才调 importDroppedFiles 真正导入。
+  previewFiles: (paths: string[]) => Promise<QuickImportPreviewResult>;
 
   pickTextFile: (filters?: { name: string; extensions: string[] }[]) => Promise<{ path: string; content: string } | null>;
   // ===== 自定义音效 =====
@@ -488,6 +531,36 @@ export interface NianyuAPI {
 
   // ===== 确认对话框 =====
   showConfirm: (message: string, title?: string) => Promise<boolean>;
+  // v2.3.97：自绘弹窗回传通道（主进程请求 → 渲染层弹 → 回传）。
+  // 注意 `showConfirm` 的 channel 名与签名**保持不变**（仍是 invoke('app:confirm')），
+  // 所以 17 处调用点零改动；渲染层只是额外订阅这两个「推送 + 回传」通道。
+  /** 订阅主进程推送的确认框请求；返回退订函数 */
+  onConfirmAsk: (cb: (req: { id: number; message: string; title?: string; danger?: boolean }) => void) => () => void;
+  /** 回传确认框结果 */
+  confirmReply: (id: number, ok: boolean) => void;
+  /** 订阅主进程推送的文件选择器请求；返回退订函数 */
+  onFilePickAsk: (
+    cb: (req: {
+      id: number;
+      kind: 'open' | 'save' | 'directory';
+      title?: string;
+      filters?: { name: string; extensions: string[] }[];
+      multiple?: boolean;
+      defaultName?: string;
+      startDir?: string;
+      unique?: boolean;
+    }) => void
+  ) => () => void;
+  /** 回传文件选择结果（取消回传 null） */
+  filePickReply: (id: number, paths: string[] | null) => void;
+  /** 列出目录内容（自绘文件选择器的数据源；纯只读） */
+  listDir: (p?: { dir?: string }) => Promise<DirListing>;
+  /**
+   * v2.3.97：新建单层文件夹（补回旧 showOpenDialog 的 createDirectory 能力）。
+   * ⚠️ 这是**写操作**，主进程侧有三层校验（父目录存在且为目录 / 名称单段白名单 / 只建一层），
+   * 且**绝不覆盖**已存在的同名目录。见 electron/dialogBridge.ts 的 makeDirectory。
+   */
+  makeDir: (p: { parentDir: string; name: string }) => Promise<MakeDirResult>;
 
   // ===== 后台消息提醒卡片 =====
   notifyCard: (p: { chatType: string; chatId: string; name: string; roleName: string; content: string }) => Promise<void>;
@@ -822,6 +895,9 @@ const api: NianyuAPI = {
     }
   },
   importDroppedFiles: (paths) => ipcRenderer.invoke('import:dropFiles', paths),
+  // v2.3.97：拖入文件的「预检」——只读解析，返回类型/摘要/失败原因，不落库。
+  // 渲染层拿到结果弹确认弹窗后，才调 importDroppedFiles 真正导入。
+  previewFiles: (paths) => ipcRenderer.invoke('import:previewFiles', paths),
 
   pickTextFile: (filters) => ipcRenderer.invoke('file:pickText', filters),
   pickAudioFile: () => ipcRenderer.invoke('sound:pick'),
@@ -1024,7 +1100,27 @@ const api: NianyuAPI = {
     return () => ipcRenderer.removeListener('update:status', listener);
   },
 
+  // ===== 确认对话框（v2.3.97）=====
+  // ⚠️ channel 名与签名保持不变：主进程侧已从 dialog.showMessageBox（原生系统框）
+  // 改为「推送请求给渲染层弹自绘框」。因为仍是 invoke('app:confirm')，
+  // 17 处 api.showConfirm(...) 调用点一行都不用改。
   showConfirm: (message, title) => ipcRenderer.invoke('app:confirm', message, title),
+  onConfirmAsk: (cb) => {
+    const listener = (_e: any, data: { id: number; message: string; title?: string; danger?: boolean }) => cb(data);
+    ipcRenderer.on('app:confirm:show', listener);
+    return () => ipcRenderer.removeListener('app:confirm:show', listener);
+  },
+  confirmReply: (id, ok) => ipcRenderer.send('app:confirm:reply', { id, ok }),
+  onFilePickAsk: (cb) => {
+    const listener = (_e: any, data: any) => cb(data);
+    ipcRenderer.on('app:filepick:show', listener);
+    return () => ipcRenderer.removeListener('app:filepick:show', listener);
+  },
+  filePickReply: (id, paths) => ipcRenderer.send('app:filepick:reply', { id, paths }),
+  // 列目录（纯只读；路径穿越由主进程 normalizeDirInput 拦截）
+  listDir: (p) => ipcRenderer.invoke('fs:listDir', p),
+  // 新建单层文件夹（写操作；主进程侧三层校验 + 绝不覆盖）
+  makeDir: (p) => ipcRenderer.invoke('fs:makeDir', p),
 
   // ===== 后台消息提醒卡片 =====
   notifyCard: (p) => ipcRenderer.invoke('notify:card', p),

@@ -712,44 +712,13 @@ export function GuideView({ open, onClose }: { open: boolean; onClose: () => voi
   if (!open) return null;
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,.45)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000,
-      }}
-      onClick={onClose}
-    >
+    <div className="modal-mask" onClick={onClose}>
       <div
+        className="modal modal-guide"
         onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 'min(760px, 92vw)',
-          height: 'min(82vh, 760px)',
-          display: 'flex',
-          flexDirection: 'column',
-          background: 'var(--color-panel, #fff)',
-          color: 'var(--color-text, #1a1d24)',
-          borderRadius: 16,
-          boxShadow: '0 20px 60px rgba(0,0,0,.4)',
-          backdropFilter: 'blur(20px)',
-          WebkitBackdropFilter: 'blur(20px)',
-          overflow: 'hidden',
-        }}
       >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '14px 18px',
-            borderBottom: '1px solid var(--color-border, rgba(128,128,128,.2))',
-          }}
-        >
-          <div style={{ fontSize: 16, fontWeight: 700 }}>念语使用指南</div>
+        <div className="modal-head">
+          <div className="modal-guide-title">念语使用指南</div>
           <button type="button" className="btn-ghost" style={{ padding: '4px 12px' }} onClick={onClose}>
             关闭
           </button>
