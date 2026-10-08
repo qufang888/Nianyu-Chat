@@ -43,9 +43,9 @@ const IconClose = () => (
 const Logo = () => (
   <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden>
     <rect x="0" y="0" width="18" height="18" rx="5" fill="var(--color-primary)" />
-    <circle cx="5.5" cy="9" r="1.4" fill="#fff" />
-    <circle cx="9" cy="9" r="1.4" fill="#fff" />
-    <circle cx="12.5" cy="9" r="1.4" fill="#fff" />
+    <circle cx="5.5" cy="9" r="1.4" fill="var(--color-primary-text)" />
+    <circle cx="9" cy="9" r="1.4" fill="var(--color-primary-text)" />
+    <circle cx="12.5" cy="9" r="1.4" fill="var(--color-primary-text)" />
   </svg>
 );
 
@@ -178,7 +178,7 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
               <button
                 className="ctb-btn"
                 title={pinned ? t('mini.unpin') : t('mini.pin')}
-                style={pinned ? { color: 'var(--color-primary)' } : undefined}
+                style={pinned ? { color: 'var(--color-primary-ink)' } : undefined}
                 onClick={onTogglePin}
               >
                 📌

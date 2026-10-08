@@ -364,7 +364,7 @@ export const ModelEditor: React.FC<{
         </div>
         <div className="modal-body">
           {msg && (
-            <div style={{ marginBottom: 12, color: 'var(--color-primary)', fontSize: 13 }}>{msg}</div>
+            <div style={{ marginBottom: 12, color: 'var(--color-primary-ink)', fontSize: 13 }}>{msg}</div>
           )}
           <div className="form-grid">
             <Field label={t('model.name')} full>
@@ -852,7 +852,7 @@ export const ModelEditor: React.FC<{
               <span
                 style={{
                   fontSize: 13,
-                  color: testState.ok ? 'var(--color-primary)' : 'var(--color-danger)',
+                  color: testState.ok ? 'var(--color-primary-ink)' : 'var(--color-danger)',
                 }}
               >
                 {testState.ok

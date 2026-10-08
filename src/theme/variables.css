@@ -1,6 +1,44 @@
 /* ===== 主题变量系统 ===== */
 /* 所有 UI 组件只引用以下变量，不出现硬编码颜色 */
 
+/* v2.3.101：把主色/主色文字注册为可动画的 <color>，使运行时通过 JS 改这两个变量
+   （ChatWindow 依据聊天背景主体色染色）或切换主题时能平滑渐变，而非生硬跳变。
+   initial-value 取液态玻璃主色，保证任何主题尚未设置时也有合理兜底。 */
+@property --color-primary {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #5ad1f5;
+}
+@property --color-primary-text {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #04222e;
+}
+/* v2.3.101 无障碍修复：**仅用于文字**的主色派生值。
+   背景染色时 --color-primary 会被内联改写为「背景主体色」，该色作为**文字色**
+   压在面板/气泡上时对比度可能跌到 ≈1.1:1（需求要求「不论什么颜色字体都要清楚」）。
+   --color-primary-ink 由 JS 依据「实际面板表面色」派生（保持色相/饱和度，只调明度），
+   保证作为文字时对比度 ≥4.5:1；未染色时它恒等于 --color-primary，渲染完全不变。 */
+@property --color-primary-ink {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #5ad1f5;
+}
+/* v2.3.101 无障碍修复：把聊天磨砂遮罩**注册为 <color>**。
+   原因：`--color-chat-scrim` 的默认值是 `color-mix(in srgb, var(--color-bg) 70%, transparent)`。
+   未注册时 `getComputedStyle().getPropertyValue('--color-chat-scrim')` 返回的是**未求值的 token 流**
+   （即字面 `color-mix(...)` 文本），`parseCssColorWithAlpha` 解析不了 → 返回 null →
+   `computeSecondarySurfaces` 返回 undefined → 于是「以磨砂面为次要目标求解」这一维度对
+   12/15 个主题**静默空转**（形同虚设）。注册为 <color> 后浏览器会把计算值求值成实际颜色，
+   解析即可成功，该维度才真正生效。
+   安全性：仅 bg 为渐变的三套主题会引用 `var(--color-bg)`（color-mix 遇渐变为非法值），
+   而这三套（glass / vibrant / liquid）都已在各自主题块内显式覆盖为 rgba，故永不触发非法求值。 */
+@property --color-chat-scrim {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: rgba(127, 127, 127, 0.7);
+}
+
 :root {
   --radius: 10px;
   --radius-sm: 6px;
@@ -12,6 +50,21 @@
   --line-height: 1.6;
   /* v2.3.97：跟随全局动画速度倍率（--anim-speed 由 animControl.applyAnimControl 写入各 document） */
   --transition: calc(0.3s * var(--anim-speed, 1)) ease;
+  /* 主色/主色文字平滑过渡（配合上方 @property）；--anim-speed 缩放已内含；
+     挂在 :root 即被「主题」动画组总控覆盖（.anim-off / 门禁会关掉）。 */
+  transition: --color-primary calc(0.4s * var(--anim-speed, 1)) ease,
+    --color-primary-text calc(0.4s * var(--anim-speed, 1)) ease,
+    --color-primary-ink calc(0.4s * var(--anim-speed, 1)) ease;
+  /* v2.3.101：文字用主色默认 = 主色本身（未染色时渲染与旧版逐像素一致）。
+     一旦 ChatWindow/MiniChat 依据背景主体色染色，会内联覆盖本变量为对比达标值；
+     移除内联覆盖后自动回落到 var(--color-primary)，与 @property initial-value 一同兜底。 */
+  --color-primary-ink: var(--color-primary);
+  /* v2.3.101：聊天背景磨砂遮罩色。压在背景图上的文字必须 ≥4.5:1，而 --color-chat-bg
+     自身 alpha 极低（如 0.09~0.10）几乎无遮罩作用，故单独引入本 scrim 令牌。
+     默认取「主题背景色 70% 不透明度」——浅色主题给浅遮罩（衬深字）、深色主题给深遮罩
+     （衬浅字），随 --color-bg 自动适配，无需逐主题声明。bg 为渐变的三套主题
+     （glass / vibrant / liquid）在各自主题块内显式覆盖本令牌（见下）。 */
+  --color-chat-scrim: color-mix(in srgb, var(--color-bg) 70%, transparent);
   --sidebar-width: 64px;
   --list-width: 280px;
   /* 窗口圆角与根容器背景（无边框窗口用） */
@@ -112,6 +165,9 @@
   --color-panel: rgba(255, 255, 255, 0.22);
   --color-panel-alt: rgba(255, 255, 255, 0.15);
   --color-chat-bg: rgba(255, 255, 255, 0.10);
+  /* 毛玻璃主题文字为浅色，--color-bg 是深蓝紫渐变（无法用作 scrim），
+     故显式给深色遮罩，保证浅字压在聊天背景图上仍 ≥4.5:1。 */
+  --color-chat-scrim: rgba(14, 20, 40, 0.72);
   --color-nav-bg: rgba(20, 20, 40, 0.45);
   --color-nav-icon: rgba(255, 255, 255, 0.7);
   --color-nav-active: #ffffff;
@@ -188,6 +244,9 @@
   --color-panel: #ffffff;
   --color-panel-alt: #fff4fa;
   --color-chat-bg: #fff8fc;
+  /* 活力多彩文字为深色，--color-bg 是粉蓝渐变（无法用作 scrim），
+     故显式给浅色遮罩，衬深字。 */
+  --color-chat-scrim: rgba(255, 248, 252, 0.72);
   --color-nav-bg: linear-gradient(160deg, #ff8fb1, #ffb86c);
   --color-nav-icon: rgba(255, 255, 255, 0.85);
   --color-nav-active: #ffffff;
@@ -617,6 +676,9 @@
   --color-panel: rgba(255, 255, 255, 0.20);
   --color-panel-alt: rgba(255, 255, 255, 0.13);
   --color-chat-bg: rgba(255, 255, 255, 0.09);
+  /* 液态玻璃文字为浅色，--color-bg 是四色渐变（无法用作 scrim），
+     故显式给深蓝紫遮罩（比 glass 略实，抗高饱和流动底），保证浅字 ≥4.5:1。 */
+  --color-chat-scrim: rgba(14, 26, 50, 0.74);
   --color-nav-bg: rgba(9, 22, 44, 0.55);
   --color-nav-icon: rgba(255, 255, 255, 0.74);
   --color-nav-active: #ffffff;

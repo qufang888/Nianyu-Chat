@@ -665,6 +665,12 @@ export interface AppSettings {
   // 不存具体倍率而存档位，是为了让 UI 的「选中哪个 radio」有唯一真源 —— 否则用户选了 1.25×
   // 但数值被 clamp 成 1 时，radio 会跳回 1×，造成界面与实际值不一致。
   animSpeedPreset?: 'preset' | 'custom';
+  // 分组独立速度（自定义模式下每个动画分组可单独调速）：
+  //   animGroupSpeedPresets: groupId -> 倍率；animGroupSpeedSecs: groupId -> 自定义秒数；
+  //   animGroupSpeedCustom:  groupId -> 是否使用自定义秒数。缺失的分组回落到全局 animSpeed。
+  animGroupSpeedPresets?: Record<string, number>;
+  animGroupSpeedSecs?: Record<string, number>;
+  animGroupSpeedCustom?: Record<string, boolean>;
   // ===== 软件更新（v2.3.45）=====
   autoCheckUpdate?: boolean; // 启动时自动检查更新（默认 true）；关闭后仅手动检查
   autoDownloadUpdate?: boolean; // 发现新版本后自动从 GitHub 下载安装包（默认 false）
@@ -702,6 +708,13 @@ export interface AppSettings {
   favoriteGender?: 'male' | 'female'; // 最喜爱人物性别（用户自选）；空=留空
   favoriteSignature?: string; // 最喜爱人物个性签名（用户自写）；空=留空
   favoriteSetAt?: number; // 设置时间戳（毫秒）
+  // 最喜爱人物扩展信息（职业/性格/爱好/国籍/学历/最喜欢的菜）；均可留空
+  favoriteOccupation?: string;
+  favoritePersonality?: string;
+  favoriteHobby?: string;
+  favoriteNationality?: string;
+  favoriteEducation?: string;
+  favoriteFood?: string;
   sharedRuleIds: string[]; // 共用规则（所有对话/模型遵守）
   enableAutoMemory: boolean; // AI 自动提炼记忆（默认关）
   memorySummarizePrompt?: string; // 总结记忆提示词（AI 自动提炼与手动「AI 总结记忆」共用；出厂默认见 src/utils/builtinPrompts.ts，清空保存时自动填回默认）
@@ -709,6 +722,7 @@ export interface AppSettings {
   longMemory: Record<string, boolean>; // 长记忆独立开关：key="single:roleId"/"group:groupId"，每聊天独立；开启后该聊天启用「手动让 AI 总结记忆」按钮（仅长记忆开时可用）
   readWatermark: Record<string, number>; // 已读水位线：key="single:roleId"/"group:groupId"，value=该聊天最后已读消息 id；消息 id 大于该值视为未读（未加入该 key=全部未读）
   autoMemRoundCount: Record<string, number>; // 长记忆自动提炼轮数计数器：key="single:roleId"/"group:groupId"，value=累计用户消息轮数；满 10 触发一次 10 轮自动提炼并归零
+  lastSummarizedMsgId?: Record<string, number>; // 消息总结游标：key="single:roleId"/"group:groupId"，value=已总结到的最新消息 id；用于「无新消息则不再重复总结」
   hideReasoning: boolean; // 隐藏思维链（默认开=折叠显示，点击箭头展开）
   deepThinkLevel: DeepThinkLevel; // 深度思考等级（off/low/medium/high）；仅对支持深度思考的模型生效，软件自动探测模型能力
   // ===== 输入框外观（自定义文字色 / 内部背景色，防止文字与背景相近看不清）=====
@@ -717,6 +731,7 @@ export interface AppSettings {
   // ===== 毛玻璃主题背景（仅 glass/frost 主题生效；设置毛玻璃专属，未开启毛玻璃主题时隐藏）=====
   glassBgColor?: string; // 毛玻璃主题自定义背景色（CSS 颜色），空=跟随主题默认渐变
   glassBgImage?: string; // 毛玻璃主题自定义背景图（data URL），空=无；设置后毛玻璃磨砂效果仍保留
+  dyeFromBackground?: boolean; // 有聊天背景时：用背景主体色染色界面主题色（默认 true）；无背景=不染色
   glassTokenText?: string; // 毛玻璃主题：Token 栏字体色（空=跟随主题主色）
   glassTokenBorder?: string; // 毛玻璃主题：Token 栏边框色/椭圆（空=跟随主题主色）
   glassBubbleUserText?: string; // 毛玻璃主题：用户气泡文字色（空=跟随主题）
@@ -1117,13 +1132,19 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   // ===== 需求 14：不常用聊天文件夹 =====
   inactiveChatDays: 30, // 默认 30 天没聊天算不常用
-  inactiveChats: {}, // 手动移入标记；移出即删 key
+  inactiveChats: {}, // 手动移入(true) / 手动豁免(false) 标记，key="chatType:chatId"；移出写 false 而非删 key（防立刻弹回）
   // ===== 需求 11：统计与最喜爱人物 =====
   companionMs: {}, // 累计陪伴时长（毫秒），key="chatType:chatId"
   favoriteRoleId: undefined, // 最喜爱人物（空=未设置，统计页显示加号）
   favoriteGender: undefined,
   favoriteSignature: '',
   favoriteSetAt: undefined,
+  favoriteOccupation: '',
+  favoritePersonality: '',
+  favoriteHobby: '',
+  favoriteNationality: '',
+  favoriteEducation: '',
+  favoriteFood: '',
   // ===== 需求 4：主动消息「等待你回复」触发阈值 =====
   idleAwaitingTriggerCount: 9999, // 默认 9999=不启用等待（等价旧的「1 条未回复就等待」需用户自行下调）
   // ===== 需求 6：记忆可见性 =====
@@ -1168,11 +1189,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
     theme: true,
     scrollbar: true,
     tutorial: true,
+    stats: true,
   },
   // ===== 界面动效速度（v2.3.97）：默认「正常」= 倍率 1，不改变任何既有观感 =====
   animSpeed: ANIM_SPEED_DEFAULT,
   animSpeedSeconds: ANIM_SPEED_SECONDS_DEFAULT,
   animSpeedPreset: 'preset',
+  animGroupSpeedPresets: {},
+  animGroupSpeedSecs: {},
+  animGroupSpeedCustom: {},
   autoCheckUpdate: true,
   autoDownloadUpdate: false,
   modelTagMode: 'api',
@@ -1192,12 +1217,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
   longMemory: {},
   readWatermark: {},
   autoMemRoundCount: {},
+  lastSummarizedMsgId: {},
   hideReasoning: true,
   deepThinkLevel: 'off',
   inputTextColor: '',
   inputBgColor: '',
   glassBgColor: '',
   glassBgImage: '',
+  dyeFromBackground: true,
   glassTokenText: '',
   glassTokenBorder: '',
   glassBubbleUserText: '',

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState, Fragment } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, Fragment } from 'react';
 
 import { createPortal } from 'react-dom';
 
@@ -54,6 +54,8 @@ import { useRetract } from '../hooks/useRetract';
 
 import { previewSound, playSoundSync } from '../utils/sound';
 
+import { animMs } from '../utils/animControl';
+
 import { useVoiceInput } from '../hooks/useVoiceInput';
 
 import { EVENT_COOLDOWN_MS, EVENT_TRIGGER_THRESHOLD } from '../eventThemes';
@@ -66,6 +68,16 @@ import { setIdleActivity } from '../utils/idleTimerStore';
 import { startCompanionTimer } from '../utils/companionTimer';
 
 import { resolveWantStream, resolveStreamInfo, persistStreamToggle, type StreamPref } from '../utils/chatStream';
+
+// v2.3.101：主题色取自聊天背景主体色（无背景/关开关时回退主题默认）
+import { useTheme } from '../theme/ThemeContext';
+import {
+  extractDominantColor,
+  deriveAccent,
+  deriveInkForSurfaces,
+  computePrimarySurfaces,
+  computeSecondarySurfaces,
+} from '../utils/dominantColor';
 
 import { usePseudoReveal, markPseudoPending, isPseudoPending, clearPseudoPending } from '../utils/pseudoStream';
 
@@ -433,6 +445,51 @@ export const ChatWindow: React.FC<{
 
   const chatKey = `${chatType}:${chatId}`;
 
+  // ===== v2.3.101 消息气泡入场动画 =====
+  // 目标：新追加的消息行 → 头像先渐显，气泡再从头像一侧向中间弹出（CSS 见 index.css 的 .msg-row.anim-enter）。
+  // 判定「新追加」：仅在**同一聊天**内、末尾消息相对上一次变化时触发；切聊天（chatKey 变化）只重建基线、
+  // 绝不播放入场，避免打开聊天时历史消息重放。
+  // 用「末尾消息是否属于本聊天（chat_id 归属）」判断，专门避开「切聊天后消息异步加载被误判为新追加」的坑。
+  const [enteringId, setEnteringId] = useState<number | null>(null);
+  const enterRef = useRef<{ chat: string; id: number | null; valid: boolean }>({
+    chat: '',
+    id: null,
+    valid: false,
+  });
+  // v2.3.101：真实流式收尾时落库的消息 id —— 其正文已在占位气泡里实时显示过，
+  // 完成瞬间不应再重播「气泡从透明弹出」的入场动画（否则会闪一下）。
+  const suppressEnterIdRef = useRef<number | null>(null);
+
+  // 用 useLayoutEffect（而非 useEffect）在**绘制前**打上 anim-enter：
+  // 否则新行会先整帧可见、随后才从 opacity:0 重播动画，出现「闪一下」。
+  useLayoutEffect(() => {
+    const last = messages.length ? messages[messages.length - 1] : null;
+    const belongs = !!last && last.chat_id === chatId;
+    const lastId = last ? (last.id as number) : null;
+    const prev = enterRef.current;
+    enterRef.current = { chat: chatKey, id: belongs ? lastId : null, valid: belongs };
+
+    // 切聊天：只重建基线，不播放（历史消息不重放）
+    if (prev.chat !== chatKey) {
+      setEnteringId(null);
+      return;
+    }
+    // 末尾消息不属于本聊天（仍显示上一个聊天的内容），或上一帧基线无效 → 不播放
+    if (!belongs || lastId === null || !prev.valid) return;
+    if (lastId === prev.id) return;
+    // v2.3.101：真实流式收尾的消息（正文已实时显示过）→ 跳过入场动画，避免「闪一下再淡入」。
+    if (suppressEnterIdRef.current !== null && lastId === suppressEnterIdRef.current) {
+      suppressEnterIdRef.current = null;
+      return;
+    }
+
+    setEnteringId(lastId);
+    // 清空时机与 CSS 动画时长同步缩放（气泡 0.10s 延迟 + 0.42s ≈ 0.6s 基准），
+    // 避免「慢速档」下动画尚未播完就摘掉 anim-enter 导致动画被截断。
+    const timer = window.setTimeout(() => setEnteringId((cur) => (cur === lastId ? null : cur)), animMs(0.6));
+    return () => window.clearTimeout(timer);
+  }, [messages, chatKey, chatId]);
+
   const [eventState, setEventState] = useState<RandomEventData | null>(() => {
 
     const saved = getEventStore(chatKey);
@@ -534,6 +591,77 @@ export const ChatWindow: React.FC<{
 // 随机事件快捷主题见 ../eventThemes（主窗/小窗共用）
 
   const [chatBg, setChatBg] = useState<string | null>(null);
+
+  // v2.3.101：主题色取自聊天背景主体色。dyeSeqRef 保护异步取色竞态；dyeActive 控制滚动区玻璃类
+  const { settings: themeSettings } = useTheme();
+  const dyeSeqRef = useRef(0);
+  const dyeActive = themeSettings?.dyeFromBackground !== false && !!chatBg;
+
+  // 有背景且未关染色 → 提取主体色作为内联主题主色（渐变过渡由 variables.css 的 @property/transition 完成）。
+  // 无背景 / 关闭开关 → 清除内联覆盖，回退主题默认色（即口径上的「无背景主体色为白」）。
+  // 切主题（settings.theme 变化）也在此重算/清除，避免内联旧色盖住新主题主色。
+  useEffect(() => {
+    const root = document.documentElement;
+    const seq = ++dyeSeqRef.current;
+    const clear = () => {
+      root.style.removeProperty('--color-primary');
+      root.style.removeProperty('--color-primary-text');
+      root.style.removeProperty('--color-primary-ink');
+    };
+    if (themeSettings?.dyeFromBackground === false || !chatBg) {
+      clear();
+      return;
+    }
+    extractDominantColor(chatBg).then((hex) => {
+      if (seq !== dyeSeqRef.current) return; // 切聊天/切主题后旧结果作废
+      if (!hex) {
+        clear();
+        return;
+      }
+      const { primary, primaryText } = deriveAccent(hex);
+      root.style.setProperty('--color-primary', primary);
+      root.style.setProperty('--color-primary-text', primaryText);
+      // v2.3.101 无障碍：--color-primary-ink 作为**文字色**，实际压在「面板」（设置页/弹窗/
+      // 编辑器）与「聊天磨砂面」上。glass/liquid 的 --color-bg 是渐变、面板是半透明，故不能只取
+      // 单一表面色（否则退化为纯白 → 推出深色 ink → 压在半透明面板叠亮渐变上对比度崩塌）。
+      // 这里按「面板合成到每个渐变色标」构造主要承载面集合，再以磨砂遮罩面为次要目标一并求解。
+      const cs = getComputedStyle(root);
+      const primarySurfaces = computePrimarySurfaces(
+        cs.getPropertyValue('--color-panel').trim(),
+        cs.getPropertyValue('--color-bg').trim(),
+        cs.getPropertyValue('--color-hover').trim()
+      );
+      const secondarySurfaces = computeSecondarySurfaces(
+        cs.getPropertyValue('--color-chat-scrim').trim(),
+        cs.getPropertyValue('--color-bg').trim()
+      );
+      root.style.setProperty(
+        '--color-primary-ink',
+        deriveInkForSurfaces(primary, primarySurfaces, secondarySurfaces)
+      );
+      // ⚠️ 已知可达上限（**非本功能回归，请勿按「bug」去修**）：
+      // glass 主题下 6 个承载面（3 色标 × {panel, hover}）从 #505996 跨到 #b66cb2，
+      // 任何**单一** ink 的可达上界仅 3.64:1 —— 已穷举 32³ RGB 网格 + 精确黑白复核，
+      // 确认无更优解（纯黑反而只有 2.58，因最亮面偏亮）。
+      // 根因：--color-panel = rgba(255,255,255,0.22) 这层**白色叠加**把深蓝紫渐变
+      // 抬进中紫区间，而黑白两端都够不到 4.5。若面板透明，白字可达 5.56~12.67。
+      // 这是 glass 主题**自身**的既有性质，与染色无关：其 --color-text(#f4f4ff) 压在
+      // 同一最亮面上也只有 3.33:1，比本 ink 更差。染色反而把该位从染色前的 ~1.3:1
+      // 提升到 3.64:1。要根治需重做 glass 的面板/底色（会改变该主题全部观感），
+      // 不在本批次范围内。
+    });
+  }, [chatBg, themeSettings?.theme, themeSettings?.dyeFromBackground]);
+
+  // 卸载时清除内联覆盖，避免残留染色影响后续主题
+  useEffect(
+    () => () => {
+      const root = document.documentElement;
+      root.style.removeProperty('--color-primary');
+      root.style.removeProperty('--color-primary-text');
+      root.style.removeProperty('--color-primary-ink');
+    },
+    []
+  );
 
   const [showScrollBtn, setShowScrollBtn] = useState(false);
 
@@ -2001,6 +2129,11 @@ export const ChatWindow: React.FC<{
 
           markPseudoPending(`${data.message.chat_id}:${data.message.id}`);
 
+        }
+
+        // v2.3.101：真实流式（正文已实时输出）收尾落库 → 记录该消息 id，令入场检测跳过动画（避免闪一下）。
+        if (streamOnRef.current && data.message.id != null) {
+          suppressEnterIdRef.current = data.message.id;
         }
 
         setMessages((prev) => {
@@ -5289,7 +5422,7 @@ export const ChatWindow: React.FC<{
 
                   border: '1px solid var(--color-border)', borderRadius: 8,
 
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.18)', padding: 6, minWidth: 200,
+                  boxShadow: 'var(--shadow-panel, 0 8px 24px rgba(0,0,0,0.18))', padding: 6, minWidth: 200,
 
                 }}
 
@@ -5611,7 +5744,7 @@ export const ChatWindow: React.FC<{
 
 
 
-      <CustomScrollArea className="messages" scrollRef={scrollRef} style={chatBg ? { backgroundImage: `url(${chatBg})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}>
+      <CustomScrollArea className={dyeActive ? 'messages has-chat-bg' : 'messages'} scrollRef={scrollRef} style={chatBg ? { backgroundImage: `url(${chatBg})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}>
 
         {/* v2.3.81：异步场景生图「正在生图中…」状态条（仅当前会话进行中时出现，完成/失败即消失）*/}
         <SceneImageStatusBar
@@ -5747,6 +5880,8 @@ export const ChatWindow: React.FC<{
                 key={m.id}
 
                 msg={m}
+
+                animEnter={m.id === enteringId}
 
                 onImage={setPreview}
 
@@ -5960,11 +6095,11 @@ export const ChatWindow: React.FC<{
 
                 fontSize: 12,
 
-                color: '#e06c75',
+                color: 'var(--color-danger, #e06c75)',
 
                 background: 'var(--color-panel)',
 
-                border: '1px solid #e06c75',
+                border: '1px solid var(--color-danger, #e06c75)',
 
                 borderRadius: 'var(--radius-sm)',
 
@@ -5980,7 +6115,7 @@ export const ChatWindow: React.FC<{
 
                 className="btn-ghost"
 
-                style={{ padding: '2px 10px', fontSize: 12, color: 'var(--color-primary)' }}
+                style={{ padding: '2px 10px', fontSize: 12, color: 'var(--color-primary-ink)' }}
 
                 disabled={sending}
 
@@ -7252,13 +7387,16 @@ const MessageRow: React.FC<{
 
   pseudoKey?: string; // 本条消息的待放出标记 key（chat_id:msg.id）
 
+  // v2.3.101：本条消息为「新追加」→ 播放「头像渐显 + 气泡弹出」入场动画
+  animEnter?: boolean;
+
 }> = ({
 
   msg, onImage, prevTimestamp, avatarPath, userAvatarPath, showTts, ttsState, typing, streaming, hideReasoning, onSpeak, onReplayTts, onRegenerateTts, onReasoningCopied,
 
   onQuickMemory, onSaveImageMemory, onViewPrompt, onForward, onEdit, onRollback, onCopy, onTranslate, onMarkNode, onForkFromHere, onSelectCopy, onDeleteMsg, onAiAction, showAiActions, aiActionBusy, onToggleCollapse, allCollapsed, roleMood, searchResults, onOpenSearch,
 
-  pseudoOn, pseudoSpeed, pseudoKey,
+  pseudoOn, pseudoSpeed, pseudoKey, animEnter,
 
 }) => {
 
@@ -7581,7 +7719,7 @@ const MessageRow: React.FC<{
 
   return (
 
-    <div className={`msg-row ${isUser ? 'user' : 'ai'}`} data-mid={msg.id} style={{ position: 'relative' }} onContextMenu={handleContextMenu}>
+    <div className={`msg-row ${isUser ? 'user' : 'ai'}${animEnter ? ' anim-enter' : ''}`} data-mid={msg.id} style={{ position: 'relative' }} onContextMenu={handleContextMenu}>
 
       {timeAbove && <div className="msg-time-above">{timeAbove}</div>}
 
@@ -7711,7 +7849,7 @@ const MessageRow: React.FC<{
 
             {failed && !hasText && imgs.length === 0 && (
 
-              <span style={{ color: '#e74c3c' }}>{t('msg.resendTip')}</span>
+              <span style={{ color: 'var(--color-danger, #e74c3c)' }}>{t('msg.resendTip')}</span>
 
             )}
 
@@ -7723,7 +7861,7 @@ const MessageRow: React.FC<{
 
           {failed && (
 
-            <a onClick={handleEdit} style={{ cursor: 'pointer', color: '#e74c3c', marginLeft: 8 }}>
+            <a onClick={handleEdit} style={{ cursor: 'pointer', color: 'var(--color-danger, #e74c3c)', marginLeft: 8 }}>
 
               {t('msg.resend')}
 

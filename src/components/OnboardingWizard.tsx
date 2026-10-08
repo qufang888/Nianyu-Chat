@@ -310,7 +310,7 @@ export const OnboardingWizard: React.FC<{ onDone: () => void }> = ({ onDone }) =
                 {t('onboarding.cardsImport')}
               </button>
               {importedCount > 0 && (
-                <div style={{ marginTop: 10, fontSize: 13, color: 'var(--color-primary)' }}>
+                <div style={{ marginTop: 10, fontSize: 13, color: 'var(--color-primary-ink)' }}>
                   {t('onboarding.cardsImported', { n: importedCount })}
                 </div>
               )}
@@ -368,7 +368,7 @@ export const OnboardingWizard: React.FC<{ onDone: () => void }> = ({ onDone }) =
                         style={{
                           padding: '3px 10px',
                           fontSize: 12,
-                          color: currentSelfRoleId === r.id ? 'var(--color-text-secondary)' : 'var(--color-primary)',
+                          color: currentSelfRoleId === r.id ? 'var(--color-text-secondary)' : 'var(--color-primary-ink)',
                         }}
                         onClick={() => setCurrentSelfRoleId(currentSelfRoleId === r.id ? '' : r.id)}
                       >

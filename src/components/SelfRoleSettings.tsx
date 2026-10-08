@@ -130,7 +130,7 @@ export const SelfRoleSettings: React.FC<{
                   style={{
                     padding: '3px 10px',
                     fontSize: 12,
-                    color: isDefault ? 'var(--color-text-secondary)' : 'var(--color-primary)',
+                    color: isDefault ? 'var(--color-text-secondary)' : 'var(--color-primary-ink)',
                   }}
                   onClick={() => setDefault(r.id)}
                 >

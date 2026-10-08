@@ -11,8 +11,10 @@
  *      置顶本身已经是用户「我还在用」的信号，再自动藏起来属于违背用户意图。
  *   2. **手动移入**：`settings.inactiveChats[key] === true`（key = `chatType:chatId`）。
  *      手动优先于自动，且移入时会连带取消置顶（见 `moveChatToInactive`）。
- *   3. **移出**：删掉 `inactiveChats` 的 key 即移出；**不恢复置顶**
+ *   3. **移出**：写入 `inactiveChats[key] = false`（手动豁免标记，防止被自动判定
+ *      立刻弹回，见 `moveChatOutOfInactive`）；**不恢复置顶**
  *      （全局不记录「曾置顶」，所以移出后不会出现幽灵置顶）。
+ *      该豁免是与「手动移入」对称的手动覆盖：恒生效，直到用户主动改回。
  *   4. `last_time` 缺失/非法时**判为常用**（不藏）—— 宁可多显示一条，
  *      也不能把用户刚建、还没产生消息的聊天误判成「不常用」。
  */
@@ -79,14 +81,17 @@ export function isInactiveChat(
   const key = chatKeyOf(chat);
   // 手动移入优先：手动移入即生效（此时置顶已在移入时被取消）
   if (isManuallyInactive(key, manual)) return true;
+  // 手动豁免（用户点过「移出」）：与「手动移入」对称的手动覆盖 —— 用户既已明确把该聊天
+  // 留在常用区，就不再受自动判定管辖。否则一个本就超期的聊天会在下一次 refresh
+  // （ChatList 每 1.5s 一次）立刻弹回文件夹，用户点「移出」形同无效
+  // （v2.3.94 需求原文：「移出后不立刻弹回」）。
+  // 与 isManuallyInactive 同层：恒优先于置顶判断与自动阈值。
+  if (isInactivityExempt(key, manual)) return false;
   // 置顶聊天不自动移入
   if ((pinned || []).includes(key)) return false;
   const d = inactiveDays(chat, now);
   if (d < 0) return false; // 最近有消息 → 新鲜，不收
-  const inactive = d >= clampInactiveDays(days);
-  // 手动豁免：仅当「尚未到不常用阈值」时生效；一旦超期，豁免自然失效、自动收回
-  if (isInactivityExempt(key, manual) && !inactive) return false;
-  return inactive;
+  return d >= clampInactiveDays(days);
 }
 
 /** 分组结果：常用聊天 + 不常用聊天（各自保持传入顺序，即已有的排序结果） */
@@ -134,7 +139,9 @@ export function moveChatToInactive(
  * 若这里只删标记，一个「本来就超期」的聊天会在下一次 refresh（ChatList 每 1.5s 一次）
  * 立刻又弹回文件夹里 —— 用户点「移出」却看起来毫无效果。
  * 写 `false` 表示「用户明确把它留在常用区」，被 `isInactiveChat` 的豁免分支尊重。
- * 该聊天一旦重新产生消息（`last_time` 变新），豁免自然失效、也不需要清理。
+ * 该标记是**手动覆盖**，与 `moveChatToInactive` 写入的 `true` 对称：恒生效、
+ * 不随 `last_time` 自动失效（否则「移出」会在超期聊天上立刻被撤销）。
+ * 只有用户再次主动操作（重新移入 / 移出）才会改写它。
  *
  * 只动 inactiveChats：**不恢复 pinnedChats**（移入时已删过 key，
  * 这里若再加回就等于「恢复置顶」，违反需求）。

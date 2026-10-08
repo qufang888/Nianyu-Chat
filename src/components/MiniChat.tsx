@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState, Fragment } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
@@ -43,7 +43,7 @@ import { setIdleActivity } from '../utils/idleTimerStore';
 // v2.3.94 需求 11：陪伴时长计时（小窗与主窗共用同一套模块级逻辑；
 // 两边只上报增量、由主进程累加，故同key 同时计时是相加而非互相覆盖）
 import { startCompanionTimer } from '../utils/companionTimer';
-import { applyAnimControl } from '../utils/animControl';
+import { applyAnimControl, animMs } from '../utils/animControl';
 import { resolveWantStream, resolveStreamInfo, persistStreamToggle, type StreamPref } from '../utils/chatStream';
 import { usePseudoReveal, markPseudoPending, isPseudoPending, clearPseudoPending } from '../utils/pseudoStream';
 import { clampPseudoSpeed, PSEUDO_QUEUE } from '../types';
@@ -52,6 +52,14 @@ import { ClearChatModal } from './ClearChatModal';
 import { MessageSearch } from './MessageSearch';
 import { BondPanel } from './BondPanel';
 import { TranslateModal } from './TranslateModal';
+// v2.3.101：主题色取自聊天背景主体色（小窗跟随其聊天背景）
+import {
+  extractDominantColor,
+  deriveAccent,
+  deriveInkForSurfaces,
+  computePrimarySurfaces,
+  computeSecondarySurfaces,
+} from '../utils/dominantColor';
 
 // 快捷聊天小窗（独立无边框窗口，#mini 路由渲染）
 // 交互逻辑与 ChatWindow 主界面保持一致：图片发送/预览、语音输入、TTS、回到底部、重发、@提及、群聊转单聊提示等。
@@ -283,6 +291,37 @@ export const MiniChat: React.FC = () => {
   };
   // 随机事件（与主界面一致，按 chatKey 隔离）
   const chatKey = current ? `${current.chat_type}:${current.chat_id}` : '';
+
+  // ===== v2.3.101 消息气泡入场动画（与主窗对称）=====
+  // 仅让「新追加的消息」播放（头像渐显 → 气泡从头像一侧向中间弹出）；切聊天只重建基线、不重放。
+  // 用「末尾消息是否属于当前聊天（chat_id 归属）」判断，避开切聊天后消息异步加载被误判为追加。
+  const [enteringId, setEnteringId] = useState<number | null>(null);
+  const enterRef = useRef<{ chat: string; id: number | null; valid: boolean }>({ chat: '', id: null, valid: false });
+  // v2.3.101：真实流式收尾落库的消息 id —— 正文已实时显示过，跳过入场动画（避免闪一下）。
+  const suppressEnterIdRef = useRef<number | null>(null);
+  // 用 useLayoutEffect（而非 useEffect）在**绘制前**打上 anim-enter：
+  // 否则新行会先整帧可见、随后才从 opacity:0 重播动画，出现「闪一下」。
+  useLayoutEffect(() => {
+    const last = messages.length ? messages[messages.length - 1] : null;
+    const belongs = !!last && !!current && last.chat_id === current.chat_id;
+    const lastId = last ? (last.id as number) : null;
+    const prev = enterRef.current;
+    enterRef.current = { chat: chatKey, id: belongs ? lastId : null, valid: belongs };
+    // 切聊天：只重建基线，不播放（历史消息不重放）
+    if (prev.chat !== chatKey) { setEnteringId(null); return; }
+    if (!belongs || lastId === null || !prev.valid) return;
+    if (lastId === prev.id) return;
+    // v2.3.101：真实流式收尾的消息（正文已实时显示过）→ 跳过入场动画。
+    if (suppressEnterIdRef.current !== null && lastId === suppressEnterIdRef.current) {
+      suppressEnterIdRef.current = null;
+      return;
+    }
+    setEnteringId(lastId);
+    // 清空时机与 CSS 动画时长同步缩放（气泡 0.10s 延迟 + 0.42s ≈ 0.6s 基准），
+    // 避免「慢速档」下动画尚未播完就摘掉 anim-enter 导致动画被截断。
+    const timer = window.setTimeout(() => setEnteringId((cur) => (cur === lastId ? null : cur)), animMs(0.6));
+    return () => window.clearTimeout(timer);
+  }, [messages, chatKey, current]);
   const [eventState, setEventState] = useState<RandomEventData | null>(() => (chatKey ? getEventStore(chatKey).event : null));
   const [eventLoading, setEventLoading] = useState(() => (chatKey ? getEventStore(chatKey).loading : false));
   const eventStateRef = useRef(eventState);
@@ -369,6 +408,68 @@ export const MiniChat: React.FC = () => {
   // 观察者私密小窗标记：以 obs:<groupId>:<roleId> 打开时为 true，强制显示思维链
   const [observerPrivate, setObserverPrivate] = useState(false);
   const [chatBg, setChatBg] = useState<string | null>(null);
+  // v2.3.101：主题色取自聊天背景主体色（小窗跟随其当前聊天）。dyeSeqRef 保护异步取色竞态
+  const dyeSeqRef = useRef(0);
+  const dyeActive = settings?.dyeFromBackground !== false && !!chatBg;
+
+  // 有背景且未关染色 → 提取主体色作为内联主题主色（小窗是独立 document，须挂到自己的 documentElement）。
+  // 无背景 / 关闭开关 / 切主题 → 清除内联覆盖，回退主题默认色。
+  useEffect(() => {
+    const root = document.documentElement;
+    const seq = ++dyeSeqRef.current;
+    const clear = () => {
+      root.style.removeProperty('--color-primary');
+      root.style.removeProperty('--color-primary-text');
+      root.style.removeProperty('--color-primary-ink');
+    };
+    if (settings?.dyeFromBackground === false || !chatBg) {
+      clear();
+      return;
+    }
+    extractDominantColor(chatBg).then((hex) => {
+      if (seq !== dyeSeqRef.current) return; // 切聊天/切主题后旧结果作废
+      if (!hex) {
+        clear();
+        return;
+      }
+      const { primary, primaryText } = deriveAccent(hex);
+      root.style.setProperty('--color-primary', primary);
+      root.style.setProperty('--color-primary-text', primaryText);
+      // v2.3.101 无障碍：与主窗对称。--color-primary-ink 作为**文字色**压在「面板」与「聊天
+      // 磨砂面」上，glass/liquid 的 --color-bg 是渐变、面板半透明，故按多重承载面求解。
+      // 小窗是独立 document，读/写均针对自身 documentElement。
+      const cs = getComputedStyle(root);
+      const primarySurfaces = computePrimarySurfaces(
+        cs.getPropertyValue('--color-panel').trim(),
+        cs.getPropertyValue('--color-bg').trim(),
+        cs.getPropertyValue('--color-hover').trim()
+      );
+      const secondarySurfaces = computeSecondarySurfaces(
+        cs.getPropertyValue('--color-chat-scrim').trim(),
+        cs.getPropertyValue('--color-bg').trim()
+      );
+      root.style.setProperty(
+        '--color-primary-ink',
+        deriveInkForSurfaces(primary, primarySurfaces, secondarySurfaces)
+      );
+      // ⚠️ 已知可达上限（与主窗同源，**非 bug**）：glass 主题 6 个承载面跨度 #505996~#b66cb2，
+      // 任何单一 ink 上界仅 3.64:1（已穷举复核）。根因是 --color-panel 的白色叠加把
+      // 深蓝紫渐变抬进中紫区间；该主题自身的 --color-text(#f4f4ff) 在最亮面更差（3.33:1）。
+      // 详见 ChatWindow.tsx 同名注释。
+    });
+  }, [chatBg, settings?.theme, settings?.dyeFromBackground]);
+
+  // 卸载时清除内联覆盖，避免残留染色影响后续主题
+  useEffect(
+    () => () => {
+      const root = document.documentElement;
+      root.style.removeProperty('--color-primary');
+      root.style.removeProperty('--color-primary-text');
+      root.style.removeProperty('--color-primary-ink');
+    },
+    []
+  );
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // v2.3.44：卸载 / 切换聊天时停止播报并清空状态（避免音频跨聊天继续播放）
   useEffect(() => () => { audioRef.current?.pause(); }, []);
@@ -760,6 +861,10 @@ export const MiniChat: React.FC = () => {
         // 气泡挂载即从首字开始渐显。真实流式（streamOnRef=true）不打标，正文已实时输出。
         if (pseudoRef.current.on && !streamOnRef.current && data.message.sender_type === 'ai' && data.message.content) {
           markPseudoPending(`${data.message.chat_id}:${data.message.id}`);
+        }
+        // v2.3.101：真实流式（正文已实时输出）收尾落库 → 跳过入场动画（避免「闪一下」）。
+        if (streamOnRef.current && data.message.id != null) {
+          suppressEnterIdRef.current = data.message.id;
         }
         setMessages((prev) => {
           if (prev.find((m) => m.id === data.message.id)) return prev;
@@ -2285,7 +2390,7 @@ export const MiniChat: React.FC = () => {
       )}
 
       {/* 消息列表（最近 10 条） */}
-      <CustomScrollArea className="mini-messages" scrollRef={scrollRef} style={chatBg ? {
+      <CustomScrollArea className={dyeActive ? 'mini-messages has-chat-bg' : 'mini-messages'} scrollRef={scrollRef} style={chatBg ? {
         flex: 1,
         backgroundImage: `url(${chatBg})`,
         backgroundSize: 'cover',
@@ -2315,6 +2420,7 @@ export const MiniChat: React.FC = () => {
               <MiniMessageRow
                 key={m.id}
                 msg={m}
+                animEnter={m.id === enteringId}
                 onImage={setPreview}
                 fmtTime={fmtTime}
                 avatarPath={m.sender_type === 'ai' ? avatarMap[m.sender_name] : undefined}
@@ -2414,9 +2520,9 @@ export const MiniChat: React.FC = () => {
                 alignItems: 'center',
                 gap: 8,
                 fontSize: 12,
-                color: '#e06c75',
+                color: 'var(--color-danger, #e06c75)',
                 background: 'var(--color-panel)',
-                border: '1px solid #e06c75',
+                border: '1px solid var(--color-danger, #e06c75)',
                 borderRadius: 'var(--radius-sm)',
                 padding: '6px 10px',
               }}
@@ -2424,7 +2530,7 @@ export const MiniChat: React.FC = () => {
               <span title={failed.error}>⚠ {t('chat.sendFailedShort')}</span>
               <button
                 className="btn-ghost"
-                style={{ padding: '2px 10px', fontSize: 12, color: 'var(--color-primary)' }}
+                style={{ padding: '2px 10px', fontSize: 12, color: 'var(--color-primary-ink)' }}
                 disabled={sending}
                 onClick={resend}
               >
@@ -3054,10 +3160,12 @@ const MiniMessageRow: React.FC<{
   pseudoOn?: boolean;
   pseudoSpeed?: number; // 动画速度（秒/字 = 单字渐显时长）
   pseudoKey?: string;
+  // v2.3.101：本条消息为「新追加」→ 播放「头像渐显 + 气泡弹出」入场动画
+  animEnter?: boolean;
 }> = ({
   msg, onImage, fmtTime, avatarPath, userAvatarPath, showTts, ttsState, onAiAction, showAiActions, aiActionBusy, hideReasoning, onSpeak, onReplayTts, onRegenerateTts, onReasoningCopied,
   onQuickMemory, onSaveImageMemory, onRollback, onDeleteMsg, onCopy, onTranslate, onMarkNode, onViewPrompt, onForkFromHere, onSelectCopy, failed, searchResults, onOpenSearch,
-  pseudoOn, pseudoSpeed, pseudoKey,
+  pseudoOn, pseudoSpeed, pseudoKey, animEnter,
 }) => {
   const { t } = useI18n();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -3182,7 +3290,7 @@ const MiniMessageRow: React.FC<{
     : undefined;
   const citeOnMiss = citeCitations && onOpenSearch ? onOpenSearch : undefined;
   return (
-    <div className={`msg-row ${isUser ? 'user' : 'ai'}`} data-mid={msg.id} onContextMenu={handleContextMenu}>
+    <div className={`msg-row ${isUser ? 'user' : 'ai'}${animEnter ? ' anim-enter' : ''}`} data-mid={msg.id} onContextMenu={handleContextMenu}>
       {!isUser ? (
         <div className="avatar" style={{ marginRight: 6, fontSize: 16 }}>
           {avatarPath ? <AvatarImg path={avatarPath} /> : '🤖'}

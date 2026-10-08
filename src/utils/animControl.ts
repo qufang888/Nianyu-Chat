@@ -104,6 +104,9 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.mini-drawer-mask',
       // v2.3.94 需求 12：通用搜索候选面板（SearchSuggest.tsx，portal 到 body）
       '.search-suggest',
+      // v2.3.98 审计补登记：候选面板内的**行**自带 hover 过渡（background/color var(--transition)），
+      // 其过渡挂在行元素上，仅登记面板（.search-suggest）无法 kill 它，故按同组（ctxmenu）补登。
+      '.search-suggest-item',
     ],
   },
   {
@@ -122,6 +125,13 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.error-bubble',
       '.msg-collapse-bar',
       '.reasoning-arrow',
+      // v2.3.98：消息行入场动画（index.css 里 `.msg-row.anim-enter .avatar` 渐显、
+      // `.msg-row.anim-enter .bubble` 弹出）。登记「后代」形式（不含 .anim-enter），
+      // 使该动画同时受本组开关与分组速度控制：
+      //   - 门禁：`html[data-anim-off~="bubble"] .msg-row .avatar` 覆盖到该元素；
+      //   - 速度：`--anim-speed` 直接写在 .avatar / .bubble 元素上，被入场动画读取。
+      '.msg-row .avatar',
+      '.msg-row .bubble',
     ],
   },
   {
@@ -203,7 +213,13 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
     selectors: [
       // 全局 var(--transition) 的背景/颜色过渡（index.css 里所有用到它的规则）
       'body',
-      'input, textarea, select',
+      // 注意：这里必须拆成三个**独立**选择器字符串（原先写成 'input, textarea, select'）。
+      // 因为 buildGateCss / buildSpeedCss 生成的规则是「前缀 + 选择器」，如
+      // `html[data-anim-off~="theme"] <选择器>`；若选择器里自带逗号，前缀只会作用于
+      // 第一段（input），textarea/select 会退化成**全局选择器**（既有的隐藏失配）。
+      'input',
+      'textarea',
+      'select',
       '.sidebar',
       '.sidebar .nav-item',
       '.sidebar-restore',
@@ -312,6 +328,22 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       // 双重保险：index.css 里另有 `.anim-off .qip-item { opacity:1 !important }`。
       '.qip-item',
       '.qip-item.is-in',
+      // ===== v2.3.98 审计补登记（游离动画纳入 theme 组）=====
+      // 以下选择器在 index.css 里带 transition/animation，但此前未登记进任何分组，
+      // 导致「自定义档 → 关掉 theme 组」对它们无效（只有 all-off 的全局 kill 能杀）。
+      //   .idle-awaiting-skip          空闲等待态跳过的交互元素（transition: var(--transition)）
+      //   .confirm-confirm-btn         自绘确认弹窗「确认」按钮（background-color calc(...) 过渡）
+      //   .filepicker-*                自绘文件选择器各交互件（placeholder/上一级/行/新建目录/输入框）
+      // 注：.confirm-* / .filepicker-* 属「用自绘弹窗替换系统原生弹窗」批次（与 .modal 三件套同族），
+      // 故归 theme 组。
+      '.idle-awaiting-skip',
+      '.confirm-confirm-btn',
+      '.filepicker-place',
+      '.filepicker-up',
+      '.filepicker-row',
+      '.filepicker-namefield input',
+      '.filepicker-newdir',
+      '.filepicker-mkdir input',
     ],
   },
   {
@@ -365,6 +397,16 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.stats-role-pick-mask',
       // v2.3.97 新补：饼图扇区的悬浮 tooltip（fadeIn 0.12s linear）
       '.stats-pie-tip',
+      // ===== v2.3.98 审计补登记（游离动画纳入 stats 组）=====
+      // 以下统计页元素带 hover/交互过渡却未登记，自定义档关不掉本组时会对它们失效：
+      //   .stats-back-btn        返回按钮
+      //   .stats-rank-switch button  榜单切换按钮
+      //   .stats-fav-plus        「新增人物」加号按钮（含 transform 过渡）
+      //   .stats-fav-field input 编辑界面字段输入框的边框过渡
+      '.stats-back-btn',
+      '.stats-rank-switch button',
+      '.stats-fav-plus',
+      '.stats-fav-field input',
     ],
   },
 ];
@@ -384,7 +426,18 @@ export const DEFAULT_ANIM_GROUPS: Record<string, boolean> = ANIM_GROUPS.reduce(
 /** 只需要「动效相关字段」的部分设置（避免与 AppSettings 形成运行时循环依赖） */
 export type AnimSettingsLike = Pick<AppSettings, 'enableAnimations'> &
   Partial<
-    Pick<AppSettings, 'animMode' | 'animControlMode' | 'animGroups' | 'animSpeed' | 'animSpeedSeconds' | 'animSpeedPreset'>
+    Pick<
+      AppSettings,
+      | 'animMode'
+      | 'animControlMode'
+      | 'animGroups'
+      | 'animSpeed'
+      | 'animSpeedSeconds'
+      | 'animSpeedPreset'
+      | 'animGroupSpeedPresets'
+      | 'animGroupSpeedSecs'
+      | 'animGroupSpeedCustom'
+    >
   >;
 
 /**
@@ -406,6 +459,36 @@ export function getAnimSpeed(settings: AnimSettingsLike | null | undefined): num
   if (!settings) return ANIM_SPEED_DEFAULT;
   if (settings.animSpeedPreset === 'custom') return animSpeedFromSeconds(settings.animSpeedSeconds);
   return clampAnimSpeed(settings.animSpeed);
+}
+
+/**
+ * 某分组当前生效的速度倍率 —— **分组独立调速的唯一读入口**（v2.3.98）。
+ *
+ * 规则（与 `getAnimSpeed` 的关系）：
+ *   - **非自定义档**（all-on / all-off）：直接返回全局 `getAnimSpeed`，分组覆盖字段一律忽略
+ *     （那两档下分组速度控件本就不渲染，写回的值也不该生效）。
+ *   - **自定义档**：
+ *       1. `animGroupSpeedCustom[groupId] === true` → 用 `animGroupSpeedSecs[groupId]`
+ *          按「单个弹窗标准时长」换算倍率（复用 `animSpeedFromSeconds`，与全局自定义档同一公式）；
+ *       2. 否则读 `animGroupSpeedPresets[groupId]`（预设倍率）；
+ *       3. 两者都缺省（用户选了「跟随全局」）→ 回落全局 `getAnimSpeed`。
+ *
+ * 该函数的返回值被 `applyAnimControl` 写成 `--anim-speed-<groupId>`，再由
+ * `buildSpeedCss` 生成的分组规则喂给各分组作用域内的 `--anim-speed`。
+ */
+export function getGroupAnimSpeed(
+  settings: AnimSettingsLike | null | undefined,
+  groupId: string
+): number {
+  const globalSpeed = getAnimSpeed(settings);
+  if (getAnimMode(settings) !== 'custom') return globalSpeed;
+  if (settings?.animGroupSpeedCustom?.[groupId] === true) {
+    return animSpeedFromSeconds(settings.animGroupSpeedSecs?.[groupId]);
+  }
+  const preset = settings?.animGroupSpeedPresets?.[groupId];
+  return typeof preset === 'number' && Number.isFinite(preset) && preset > 0
+    ? clampAnimSpeed(preset)
+    : globalSpeed;
 }
 
 /**
@@ -519,10 +602,38 @@ export function selectorsForGroup(group: AnimGroupDef, kind: AnimDocKind): strin
   return kind === 'main' ? group.selectors : [];
 }
 
-/** 生成某个 document 的全部分组门禁规则（每个 document 只生成一次） */
+/**
+ * 生成某个 document 的「分组速度下发」规则（v2.3.98）。
+ *
+ * 仅当 `documentElement` 处于自定义档（`html[data-anim-pergroup="1"]`）时才生效 ——
+ * 非自定义档下该标记不存在，整段规则天然失配、不会污染全局速度。
+ *
+ * 每条规则把该分组作用域内的 `--anim-speed` 覆盖为**该组自己的变量**
+ * `--anim-speed-<id>`（由 applyAnimControl 写入 documentElement）；
+ * 若该组变量缺失，则回落到当前继承来的 `--anim-speed`（即全局速度），
+ * 因此「跟随全局」的分组无需任何额外处理。
+ *
+ * ⚠️ 关于 theme 组含 `body`：它是兜底组，规则会命中 body 并把组速度沿继承链扩散。
+ * 这是刻意接受的 —— 更具体分组（如 `.msg-row .bubble`）的规则特异性更高，会在
+ * 目标元素上覆盖 body 继承而来的值，故各分组的独立速度仍然精确生效。
+ */
+function buildSpeedCss(kind: AnimDocKind): string {
+  const chunks: string[] = [];
+  for (const group of ANIM_GROUPS) {
+    const sels = selectorsForGroup(group, kind);
+    if (sels.length === 0) continue;
+    const rule = sels.map((sel) => `html[data-anim-pergroup="1"] ${sel}`).join(',\n');
+    chunks.push(
+      `${rule} {\n  --anim-speed: var(--anim-speed-${group.id}, var(--anim-speed, 1));\n}`
+    );
+  }
+  return chunks.join('\n');
+}
+
+/** 生成某个 document 的全部分组门禁 + 分组速度规则（每个 document 只生成一次） */
 function buildGateCss(kind: AnimDocKind): string {
   const chunks: string[] = [
-    '/* 高级动画控制 · 自定义档分组门禁（自动生成，勿手改；见 src/utils/animControl.ts） */',
+    '/* 高级动画控制 · 自定义档分组门禁 / 分组速度（自动生成，勿手改；见 src/utils/animControl.ts） */',
   ];
   for (const group of ANIM_GROUPS) {
     const sels = selectorsForGroup(group, kind);
@@ -532,6 +643,9 @@ function buildGateCss(kind: AnimDocKind): string {
       .join(',\n');
     chunks.push(`${rule} {\n  animation: none !important;\n  transition: none !important;\n}`);
   }
+  // 分组速度下发（仅自定义档生效，见 buildSpeedCss）
+  const speedCss = buildSpeedCss(kind);
+  if (speedCss) chunks.push(speedCss);
   return chunks.join('\n');
 }
 
@@ -603,6 +717,17 @@ export function applyAnimControl(
   //    all-off 档被豁免，无需再改这里。
   root.style.setProperty('--anim-speed', String(getAnimSpeed(settings)));
 
-  // 4) 分组门禁规则（幂等）
+  // 3b) 分组速度变量（v2.3.98）：每个分组一个 `--anim-speed-<groupId>`。无论哪一档都照写
+  //     （非自定义档下无规则消费它们，写入无害），这样切到自定义档时零延迟生效。
+  for (const group of ANIM_GROUPS) {
+    root.style.setProperty(`--anim-speed-${group.id}`, String(getGroupAnimSpeed(settings, group.id)));
+  }
+
+  // 3c) 自定义档标记：仅 custom 档挂上 `data-anim-pergroup`，供 buildSpeedCss 生成的分组
+  //     速度下发规则（`html[data-anim-pergroup="1"] …`）生效；其余档移除，避免残留。
+  if (mode === 'custom') root.setAttribute('data-anim-pergroup', '1');
+  else root.removeAttribute('data-anim-pergroup');
+
+  // 4) 分组门禁 + 分组速度规则（幂等）
   ensureGateStyle(doc, kind);
 }

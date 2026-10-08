@@ -5036,6 +5036,13 @@ async function doExtractMemories(chatType: string, chatId: string): Promise<numb
     if (obs.observerMode && !obs.publicWriteMemory) return 0;
   }
   const history = dm.getMessages(chatType, chatId);
+  // v2.3.101：消息总结游标 —— 记录本聊天已总结到的最新消息 id。若无新消息（最新消息 id 未超过游标），
+  // 直接返回 -1、不再重复调用 AI，避免每次手动/自动总结都对同一批消息重新提炼。
+  // 放在最前：「无新消息」优先于模型/角色/权限判定（即便未配模型，无新消息也应如实回「没有新的可总结内容」）。
+  const chatKey = chatKeyOf(chatType, chatId);
+  const lastMsgId = history.length > 0 ? history[history.length - 1].id : undefined;
+  const cursor = settings.lastSummarizedMsgId?.[chatKey] ?? 0;
+  if (lastMsgId !== undefined && lastMsgId <= cursor) return -1;
   if (history.length < 2) return 0;
   let roleId: string | undefined;
   if (chatType === 'single') {
@@ -5044,7 +5051,7 @@ async function doExtractMemories(chatType: string, chatId: string): Promise<numb
     const lastAi = [...history].reverse().find((m) => m.sender_type === 'ai');
     roleId = lastAi ? dm.getRoleByName(lastAi.sender_name)?.id : undefined;
   }
-  if (!roleId) return 0;
+  if (!roleId) return -3;
   const role = dm.getRole(roleId);
   const iso = role?.memoryIsolation ?? true;
   // 记忆隔离：仅与该聊天/角色级共享记忆去重，避免不同聊天的记忆互相抑制
@@ -5062,7 +5069,7 @@ async function doExtractMemories(chatType: string, chatId: string): Promise<numb
   // 注意 role 在上面已判过 `if (!roleId) return 0`，但 role 本身可能查不到，
   // 故此处只在 role 存在时才追加角色模型兜底，避免把 undefined 传进 resolveRoleModel。
   const cfg = getDefaultModelConfig(settings) || (role ? resolveRoleModel(role, settings) : undefined);
-  if (!cfg) return 0;
+  if (!cfg) return -3; // 无可用模型 → 归为「无法总结」，与「无新消息(-1)」区分，避免误导
   // v2.3.36：总结记忆提示词可配置（settings.memorySummarizePrompt，AI 自动提炼与手动总结两条路径共用此函数）。
   // 支持 {existing_memories} / {recent_dialogue} 占位符；两者都未写时，把输入数据（已有记忆 + 最近对话）固定追加到提示词末尾。
   const tpl = (settings.memorySummarizePrompt || '').trim() || DEFAULT_MEMORY_SUMMARIZE_PROMPT;
@@ -5078,6 +5085,7 @@ async function doExtractMemories(chatType: string, chatId: string): Promise<numb
   } else {
     prompt = `${tpl}\n\n## 输入数据\n【已存在的记忆（其中的要点不要重复输出）】\n${existingBlock}\n\n【最近对话】\n${convo}`;
   }
+  // 消息总结游标已在函数上方（history 之后）判定；此处直接进入提炼。
   try {
     await enqueueAndWait(cfg.id, cfg.qps, '记忆提炼');
     const res = await queryAI(cfg, [{ role: 'system', content: prompt }], 1500);
@@ -5088,7 +5096,6 @@ async function doExtractMemories(chatType: string, chatId: string): Promise<numb
       .filter((l) => !existing.includes(l))
       .slice(0, 6);
     let n = 0;
-    const lastMsgId = history.length > 0 ? history[history.length - 1].id : undefined;
     // 关联「触发本轮对话的用户消息」+「AI 回复」，任一被撤回/删除时都会联动清理该记忆
     const lastUserMsg = [...history].reverse().find((m) => m.sender_type === 'user');
     const userMsgId = lastUserMsg ? lastUserMsg.id : undefined;
@@ -5097,10 +5104,16 @@ async function doExtractMemories(chatType: string, chatId: string): Promise<numb
       dm.addMemory({ roleId, chatId: iso ? chatId : undefined, content: l, source: 'auto', sourceMsgIds } as any);
       n += 1;
     }
+    // 成功总结到最新消息后推进游标（即使本次无新增记忆——确有新消息但被去重/无要点——也推进，
+    // 以免下次重复对同一批消息调用 AI）。用与 autoMemRoundCount 相同的浅合并落盘方式。
+    if (lastMsgId !== undefined) {
+      const cursors = { ...(settings.lastSummarizedMsgId || {}), [chatKey]: lastMsgId };
+      dm.saveSettings({ lastSummarizedMsgId: cursors });
+    }
     return n;
   } catch (e) {
     console.error('记忆提炼失败', e);
-    return 0;
+    return -2;
   }
 }
 
@@ -6158,6 +6171,16 @@ function registerIPC(): void {
         return { ok: false, count: 0, message: '该聊天未开启长记忆（请在聊天「其他操作」中打开长记忆开关）' };
       }
       const count = await doExtractMemories(chatType, chatId);
+      // 四态分派：-1=无新消息（也不曾调用 AI）；-2=调用/异常失败；-3=无法总结（未配模型/角色缺失）；>=0=本次新增记忆条数
+      if (count === -1) {
+        return { ok: true, count: 0, message: '没有新的可总结内容' };
+      }
+      if (count === -2) {
+        return { ok: false, count: 0, message: '总结失败，请稍后重试' };
+      }
+      if (count === -3) {
+        return { ok: false, count: 0, message: '无法总结：请检查该聊天的角色与模型配置' };
+      }
       return { ok: true, count, message: count > 0 ? `已总结 ${count} 条记忆` : '没有新的可总结内容' };
     } catch (e: any) {
       dm.logError('model', `手动总结记忆异常：${e?.message || String(e)}`, e?.stack);

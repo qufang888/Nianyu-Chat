@@ -18,8 +18,40 @@ function isDarkTheme(theme?: string): boolean {
   return !!theme && DARK_THEMES.has(theme);
 }
 
-/** 生成主题适配的卡片 CSS */
-function cardCSS(dark: boolean): string {
+/** 生成主题适配的卡片 CSS（liquid 走独立分支，其余按深/浅二值） */
+function cardCSS(theme?: string): string {
+  // 液态玻璃（v2.3.101）：独立透明窗口不加载 variables.css，故此处硬编码与主界面一致的
+  // 深蓝紫磨砂卡；结构（尺寸/起手位移/过渡/子元素）与深/浅分支严格一致，仅换色，
+  // 保证通知卡观感与主界面（含小窗）统一。
+  if (theme === 'liquid') {
+    return `
+    .ny-card{position:absolute;right:0;bottom:0;width:${CARD_W}px;height:${CARD_H}px;box-sizing:border-box;
+      background:linear-gradient(135deg,rgba(12,42,68,.94),rgba(52,34,96,.94));
+      backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+      border:1px solid rgba(190,220,255,.22);border-radius:14px;
+      box-shadow:0 8px 32px rgba(2,10,26,.42),0 2px 8px rgba(2,10,26,.28);
+      color:#eef4ff;padding:12px 14px 12px 12px;
+      display:flex;flex-direction:row;align-items:center;gap:12px;cursor:pointer;
+      transform:translateX(380px);opacity:0;
+      transition:transform calc(.42s * var(--anim-speed, 1)) cubic-bezier(.22,.61,.36,1),opacity calc(.42s * var(--anim-speed, 1)) linear;}
+    .ny-card.show{transform:translateX(0);opacity:1;}
+    .ny-card.hide{transform:translateX(380px);opacity:0;}
+    .ny-avatar{flex:0 0 auto;width:46px;height:46px;border-radius:50%;
+      background:linear-gradient(135deg,#5ad1f5,#3f6fd0);display:flex;align-items:center;justify-content:center;
+      font-size:20px;font-weight:700;color:#04222e;box-shadow:0 2px 8px rgba(2,10,26,.28);}
+    .ny-body{position:relative;flex:1 1 auto;min-width:0;display:flex;flex-direction:column;
+      justify-content:center;gap:3px;}
+    .ny-label{font-size:10px;letter-spacing:.8px;color:#5ad1f5;text-transform:uppercase;}
+    .ny-name{font-size:14px;font-weight:600;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#eef4ff;}
+    .ny-content{font-size:12.5px;color:rgba(238,244,255,.82);line-height:1.35;overflow:hidden;
+      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
+    .ny-close{position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;
+      background:rgba(255,255,255,.10);color:rgba(238,244,255,.75);font-size:15px;line-height:22px;text-align:center;
+      z-index:3;cursor:pointer;transition:background calc(.15s * var(--anim-speed, 1));}
+    .ny-close::after{content:'';position:absolute;inset:-10px;}
+    .ny-close:hover{background:rgba(255,255,255,.22);}`;
+  }
+  const dark = isDarkTheme(theme);
   if (dark) {
     return `
     .ny-card{position:absolute;right:0;bottom:0;width:${CARD_W}px;height:${CARD_H}px;box-sizing:border-box;
@@ -129,7 +161,6 @@ function mount(): void {
   /** 根据当前主题刷新卡片样式 */
   function applyTheme(theme?: string): void {
     currentTheme = theme;
-    const dark = isDarkTheme(theme);
     styleEl.textContent = `
       html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden;
         font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;}
@@ -138,7 +169,7 @@ function mount(): void {
       .anim-off, .anim-off *, .anim-off *::before, .anim-off *::after {
         animation: none !important; transition: none !important;
       }
-      ${cardCSS(dark)}
+      ${cardCSS(theme)}
     `;
   }
   // 初始默认浅色（主进程首条消息会携带真实主题）

@@ -160,10 +160,11 @@ export const ModelCompare: React.FC = () => {
     display: 'flex',
     flexDirection: 'column',
     minHeight: 320,
-    background: 'var(--color-bg-card, #26262e)',
+    background: 'var(--color-panel-alt)',
   };
 
-  // 输出框：浅灰底 + 深字，保证任意主题下都清晰可读（不受深色卡片背景影响）
+  // 输出框：底色/文字随主题变量（v2.3.101），保证深色/液态玻璃等主题下都清晰可读，
+  // 内部所有"文字底色"类硬编码色已同步改为语义主题变量。
   const outputStyle: React.CSSProperties = {
     flex: 1,
     overflow: 'auto',
@@ -173,8 +174,8 @@ export const ModelCompare: React.FC = () => {
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
     minHeight: 120,
-    background: '#f2f3f5',
-    color: '#1f2329',
+    background: 'var(--color-panel)',
+    color: 'var(--color-text)',
     borderRadius: 8,
     padding: '10px 12px',
   };
@@ -217,9 +218,9 @@ export const ModelCompare: React.FC = () => {
             margin: '0 14px',
             padding: '8px 12px',
             borderRadius: 8,
-            background: 'rgba(33,150,243,0.12)',
-            border: '1px solid rgba(33,150,243,0.4)',
-            color: '#1565c0',
+            background: 'color-mix(in srgb, var(--color-info) 12%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--color-info) 40%, transparent)',
+            color: 'var(--color-info, #1565c0)',
             fontSize: 13,
             display: 'flex',
             alignItems: 'center',
@@ -270,7 +271,7 @@ export const ModelCompare: React.FC = () => {
                 </select>
                 {showTimer && (
                   <span
-                    style={{ fontSize: 11, whiteSpace: 'nowrap', color: done ? '#2e7d32' : '#9aa0a6' }}
+                    style={{ fontSize: 11, whiteSpace: 'nowrap', color: done ? 'var(--color-success)' : 'var(--color-text-secondary)' }}
                     title={t('compare.elapsedTip')}
                   >
                     ⏱ {(elapsedMs / 1000).toFixed(1)}s
@@ -280,7 +281,7 @@ export const ModelCompare: React.FC = () => {
 
               <div style={outputStyle}>
                 {running && !res ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#5a5f66' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--color-text-secondary)' }}>
                     <span className="typing" aria-label={t('chat.replying')}>
                       <span className="typing-bar" />
                     </span>
@@ -288,17 +289,17 @@ export const ModelCompare: React.FC = () => {
                   </div>
                 ) : res ? (
                   res.error ? (
-                    <span style={{ color: '#d32f2f' }}>{t('compare.failed', { msg: res.error })}</span>
+                    <span style={{ color: 'var(--color-danger)' }}>{t('compare.failed', { msg: res.error })}</span>
                   ) : (
                     res.content || '( )'
                   )
                 ) : (
-                  <span style={{ color: '#9aa0a6' }}>{t('compare.waiting')}</span>
+                  <span style={{ color: 'var(--color-text-secondary)' }}>{t('compare.waiting')}</span>
                 )}
               </div>
 
               {done && res && !res.error && (
-                <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px dashed #d0d3d8', fontSize: 11, color: '#5a5f66' }}>
+                <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px dashed var(--color-border)', fontSize: 11, color: 'var(--color-text-secondary)' }}>
                   <div>
                     {t('compare.tokens', { n: res.completionTokens + res.promptTokens })}
                     <span style={{ marginLeft: 8 }}>{t('compare.chars', { n: res.content.length })}</span>
@@ -308,7 +309,7 @@ export const ModelCompare: React.FC = () => {
                       <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 4 }}>{t('compare.qualityTitle')}</div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ fontSize: 14 }}>{judge.score >= 85 ? '🟢' : judge.score >= 60 ? '🟡' : '🔴'}</span>
-                        <span style={{ fontWeight: 600, color: judge.score >= 85 ? '#2e7d32' : judge.score >= 60 ? '#b26a00' : '#d32f2f' }}>
+                        <span style={{ fontWeight: 600, color: judge.score >= 85 ? 'var(--color-success)' : judge.score >= 60 ? 'var(--color-warn)' : 'var(--color-danger)' }}>
                           {judge.score}
                         </span>
                         <span>{judge.comment}</span>
@@ -316,7 +317,7 @@ export const ModelCompare: React.FC = () => {
                     </div>
                   ) : judgeModel ? (
                     // 评判已执行（judgeModel 已设置）但该模型无有效评分：明确提示，而非留白让用户以为「没跑评判」
-                    <div style={{ marginTop: 8, fontSize: 11, color: '#b26a00' }}>{t('compare.noScore')}</div>
+                    <div style={{ marginTop: 8, fontSize: 11, color: 'var(--color-warn)' }}>{t('compare.noScore')}</div>
                   ) : null}
                 </div>
               )}
@@ -326,7 +327,7 @@ export const ModelCompare: React.FC = () => {
       </div>
 
       {judgeError && (
-        <div style={{ padding: '8px 16px', borderTop: '1px solid rgba(217,83,79,.4)', fontSize: 12, color: '#d9534f' }}>
+        <div style={{ padding: '8px 16px', borderTop: '1px solid color-mix(in srgb, var(--color-danger) 40%, transparent)', fontSize: 12, color: 'var(--color-danger)' }}>
           ⚠️ {t('compare.judgeFailed', { msg: judgeError })}
         </div>
       )}

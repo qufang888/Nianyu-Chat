@@ -85,9 +85,9 @@ function baseCSS(): string {
   .fb-prog svg{width:100%;height:100%;transform:rotate(-90deg);fill:none;}
   .fb-prog circle{fill:none;stroke-width:4;}
   .fb-prog .bg{stroke:rgba(255,255,255,0.25);}
-  .fb-prog .fg{stroke:#ffffff;stroke-linecap:round;transition:stroke-dashoffset calc(.25s * var(--anim-speed, 1)) linear;}
+  .fb-prog .fg{stroke:var(--color-primary-text);stroke-linecap:round;transition:stroke-dashoffset calc(.25s * var(--anim-speed, 1)) linear;}
   .fb-prog-txt{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
-    font-size:15px;font-weight:800;color:#fff;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.45);}
+    font-size:15px;font-weight:800;color:var(--color-primary-text);pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.45);}
   .fb-prog-txt.show{display:flex;}
   /* 进度显示时隐藏球内图标，让中心百分比数字清晰可读 */
   .fb-ball.gen > svg{visibility:hidden;}
@@ -115,7 +115,7 @@ function baseCSS(): string {
   #root[data-v='up'] .fb-panel.show{transform:translateY(0) scale(1);}
   .fb-panel-h{display:flex;align-items:center;justify-content:space-between;
     padding:12px 14px 8px;font-size:13px;font-weight:700;letter-spacing:.5px;}
-  .fb-panel-h .cnt{font-size:11px;font-weight:600;color:var(--color-primary);
+  .fb-panel-h .cnt{font-size:11px;font-weight:600;color:var(--color-primary-ink);
     background:var(--color-hover);padding:2px 8px;border-radius:10px;}
   .fb-list{overflow-y:auto;padding:2px 8px 6px;display:flex;flex-direction:column;gap:2px;}
   .fb-list::-webkit-scrollbar{width:6px;}
@@ -140,6 +140,7 @@ function baseCSS(): string {
   .fb-row.fb-dragging{opacity:.45;}
   .fb-row.fb-drag-over{box-shadow:inset 0 2px 0 var(--color-primary);}
   [data-theme='glass'] .fb-row.fb-pinned{background:rgba(255,255,255,0.10);}
+  [data-theme='liquid'] .fb-row.fb-pinned{background:var(--liquid-overlay-hover);}
   .fb-empty{padding:22px 12px;text-align:center;font-size:12.5px;color:var(--color-text-secondary);}
   .fb-foot{padding:8px 14px 10px;font-size:11px;color:var(--color-text-secondary);text-align:center;border-top:1px solid var(--color-border);}
 
@@ -159,6 +160,7 @@ function baseCSS(): string {
   .fb-ctx-aot-row{justify-content:flex-start;}
   .fb-ctx-aot-row input{accent-color:var(--color-primary);cursor:pointer;width:15px;height:15px;margin:0;}
   [data-theme='glass'] .fb-ctx{ background:rgba(18,16,38,0.88); border-color:rgba(255,255,255,0.28); }
+  [data-theme='liquid'] .fb-ctx{ background:var(--liquid-overlay); border-color:var(--liquid-overlay-border-strong); }
 
   /* 毛玻璃主题：原面板背景为浅白低不透明（rgba(255,255,255,0.22)）+白字，
      在亮桌面下对比不足、字被吃掉。改用深暗半透明磨砂底，保证浅色文字始终可读。
@@ -169,6 +171,16 @@ function baseCSS(): string {
   }
   [data-theme='glass'] .fb-row:hover{ background:rgba(255,255,255,0.10); }
   [data-theme='glass'] .fb-panel-h .cnt{ color:#cfd2ff; background:rgba(124,131,255,0.32); }
+
+  /* 液态玻璃主题：与上面 glass 分支同款处理，但改用 variables.css 的 --liquid-* 令牌
+     （本文件第 10 行已 import ./theme/variables.css，其 [data-theme='liquid'] 块提供这些变量），
+     加深半透明浮层底以压住高饱和流动背景透出的亮斑，保证文字可读。 */
+  [data-theme='liquid'] .fb-panel{
+    background:var(--liquid-overlay);
+    border-color:var(--liquid-overlay-border);
+  }
+  [data-theme='liquid'] .fb-row:hover{ background:var(--liquid-overlay-hover); }
+  [data-theme='liquid'] .fb-panel-h .cnt{ color:var(--liquid-overlay-text); background:var(--liquid-overlay-field); }
 
   /* 动效开关（animMode='all-off' 时根元素挂 .anim-off）：全局禁用所有 CSS 动画/过渡，
      与主界面 index.css 的 .anim-off 规则同语义（覆盖 .fb-panel/.fb-ctx/.fb-ball 等全部动画）。

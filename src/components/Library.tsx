@@ -245,7 +245,7 @@ const WorldBookTab: React.FC = () => {
                     <span className="badge primary">{t('library.default')}</span>
                   )}
                   {applied > 0 && (
-                    <span className="badge" style={{ background: 'var(--color-hover)', color: 'var(--color-primary)' }}>
+                    <span className="badge" style={{ background: 'var(--color-hover)', color: 'var(--color-primary-ink)' }}>
                       {t('library.appliedCount', { n: applied })}
                     </span>
                   )}

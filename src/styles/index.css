@@ -144,6 +144,8 @@ input[type='range']::-moz-range-thumb {
   border-radius: var(--window-radius);
   /* 强制创建独立合成层，让子元素滚动条被窗口圆角正确裁剪 */
   transform: translateZ(0);
+  /* v2.3.101：换主题时根底色/文字/边框平滑渐变，不再生硬跳变 */
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
 }
 .app-shell {
   display: flex;
@@ -402,7 +404,7 @@ input[type='range']::-moz-range-thumb {
 }
 .affinity-tag {
   font-size: calc(11px * var(--font-scale));
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
 }
 .list-more {
   position: absolute;
@@ -474,7 +476,7 @@ input[type='range']::-moz-range-thumb {
 
 .model-tag {
   font-size: calc(11px * var(--font-scale));
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
   background: var(--color-hover);
   border: 1px solid var(--color-border);
   border-radius: 10px;
@@ -497,7 +499,7 @@ input[type='range']::-moz-range-thumb {
 /* 颜色全部走主题变量，明暗/毛玻璃等主题自动适配 */
 .proactive-tag {
   font-size: calc(10px * var(--font-scale));
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
   background: var(--color-hover);
   border: 1px solid var(--color-border);
   border-radius: 10px;
@@ -696,6 +698,39 @@ input[type='range']::-moz-range-thumb {
   opacity: 0.92;
 }
 
+/* ===== 消息入场动画（v2.3.101）=====
+   需求：新追加的消息行——先「头像渐显」，再「气泡从头像一侧向中间弹出」。
+   关键约束（见本文件 5198-5206 的血泪教训）：
+     · 元素**基态必须保持可见**——绝不能把 opacity:0 写在 .msg-row/.avatar/.bubble 的基态上；
+       否则一旦被「动效总开关」的 `animation:none !important`（.anim-off *）抹掉动画，
+       元素会永久不可见。
+     · 这里只在带 `anim-enter` 时才挂关键帧，关键帧 from 为 opacity:0、配 animation-fill-mode:both；
+       animation 被抹掉后元素退回**可见基态**，开/关两档表现一致（不存在「关了动画就消失」）。
+     · 时长统一 `calc(<原值> * var(--anim-speed, 1))`，由「动画速度」总控统一缩放。
+   方向：AI 头像在左 → 气泡从左侧（-8px）弹向中间；用户头像在右 → 气泡从右侧（+8px）弹向中间。
+   落点：主窗 / 小窗的 .avatar / .bubble / .msg-body 类名同构，故本套规则两窗天然同时生效。 */
+@keyframes msgAvatarIn {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: none; }
+}
+/* 终值 opacity 与 .bubble 基态（opacity: var(--bubble-opacity,1)）一致，避免动画结束瞬间跳色 */
+@keyframes msgBubbleIn {
+  from { opacity: 0; transform: translateX(var(--msg-enter-dx, 8px)) scale(0.98); }
+  to   { opacity: var(--bubble-opacity, 1); transform: none; }
+}
+/* 头像先渐显（无延迟） */
+.msg-row.anim-enter .avatar {
+  animation: msgAvatarIn calc(0.34s * var(--anim-speed, 1)) linear both;
+}
+/* 气泡随后弹出（延迟 0.10s，配合 both 的回填：延迟期间停在 from 态 = 隐藏） */
+.msg-row.anim-enter .bubble {
+  animation: msgBubbleIn calc(0.42s * var(--anim-speed, 1)) linear both;
+  animation-delay: calc(0.10s * var(--anim-speed, 1));
+}
+/* 方向变量：AI 头像在左 → 从左弹出；用户头像在右 → 从右弹出 */
+.msg-row.ai.anim-enter { --msg-enter-dx: -8px; }
+.msg-row.user.anim-enter { --msg-enter-dx: 8px; }
+
 /* ===== 流式逐字渐显（v2.3.19） =====
    每个新输出的字固定 0.3s 渐显，速度不随模型输出快慢变化；
    模型输出停滞（超过一个动画周期无新字）时，仅最后一个字切换为
@@ -751,7 +786,7 @@ input[type='range']::-moz-range-thumb {
 .hint-icon:hover,
 .hint-icon:focus {
   border-color: var(--color-primary);
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
   outline: none;
 }
 /* TTS 提供商列表的能力徽章（v2.3.34） */
@@ -769,7 +804,7 @@ input[type='range']::-moz-range-thumb {
   white-space: nowrap;
 }
 .tts-prov-badge.on {
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
   border-color: var(--color-primary);
 }
 .hint-tip {
@@ -1068,7 +1103,7 @@ input[type='range']::-moz-range-thumb {
   margin-bottom: 6px;
   border-radius: 20px;
   background: var(--color-panel);
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
   border: 1px solid var(--color-primary);
   box-shadow: var(--shadow-panel);
   font-size: calc(12px * var(--font-scale));
@@ -1857,7 +1892,7 @@ input[type='range']::-moz-range-thumb {
 /* AI 回复正文内联引用徽标：可点击跳转对应网页 */
 .cite-badge {
   display: inline;
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
   font-weight: 700;
   cursor: pointer;
   padding: 0 1px;
@@ -1886,7 +1921,7 @@ input[type='range']::-moz-range-thumb {
 .srb-item-title {
   font-weight: 600;
   font-size: 13px;
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
   margin-bottom: 3px;
 }
 .srb-item-snippet {
@@ -2061,11 +2096,11 @@ input[type='range']::-moz-range-thumb {
 }
 .moment-act:hover {
   border-color: var(--color-primary);
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
 }
 .moment-act.on {
   border-color: var(--color-primary);
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
   background: color-mix(in srgb, var(--color-primary) 12%, transparent);
 }
 .compose-row {
@@ -2321,7 +2356,7 @@ body.cursor-hidden * {
 }
 .about .about-author {
   margin-top: 16px;
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
   font-weight: 600;
   font-size: calc(14px * var(--font-scale));
 }
@@ -2392,7 +2427,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   top: -18px;
   right: 8px;
   font-size: calc(12px * var(--font-scale));
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
   /* v2.3.97：原为 floatUp 0.6s ease（0.6s 偏长且非线性）→ 改用项目统一的
      popupLinearIn 0.16s linear。keyframes floatUp 现已零引用，保留在下方以备复用。 */
   animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
@@ -2535,7 +2570,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 }
 .event-modal .event-role {
   font-size: calc(12px * var(--font-scale));
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
 }
 .event-modal .event-desc {
   font-size: calc(14px * var(--font-scale));
@@ -2619,7 +2654,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   margin-left: 8px;
   font-size: calc(12px * var(--font-scale));
   font-weight: 500;
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
   background: var(--color-primary-soft, rgba(127, 127, 255, 0.1));
   border: 1px solid var(--color-primary-soft, rgba(127, 127, 255, 0.25));
   border-radius: 12px;
@@ -2718,6 +2753,8 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   /* 强制创建独立合成层，让子元素被窗口圆角正确裁剪，
      否则底部 .mini-composer 方角会穿透圆角，在左下/右下角形成双层边框伪影 */
   transform: translateZ(0);
+  /* v2.3.101：小窗换主题时根底色/文字/边框平滑渐变，不再生硬跳变 */
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
 }
 .mini-titlebar {
   display: flex;
@@ -3309,7 +3346,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   color: var(--color-text-secondary);
 }
 .reasoning-copy:hover {
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
 }
 .reasoning-body {
   padding: 6px 10px 8px;
@@ -3431,7 +3468,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 }
 .obs-panel-mood {
   font-size: calc(12px * var(--font-scale));
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
 }
 .obs-panel-aff {
   font-size: calc(12px * var(--font-scale));
@@ -4912,7 +4949,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   justify-content: center;
   font-size: calc(14px * var(--font-scale));
   font-weight: 600;
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
   background: color-mix(in srgb, var(--color-panel) 86%, transparent);
   border: 2px dashed var(--color-primary);
   border-radius: 10px;
@@ -5072,7 +5109,7 @@ body.ny-drop-chat .quick-import-overlay {
   border-radius: 999px;
   border: 1px solid var(--color-border);
   background: var(--color-hover);
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
   font-size: calc(11px * var(--font-scale));
   white-space: nowrap;
 }
@@ -5941,7 +5978,7 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
   border-radius: var(--radius);
   border: 2px dashed var(--color-primary);
   background: var(--color-panel-alt);
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
   font-size: 40px;
   line-height: 1;
   cursor: pointer;
@@ -6391,7 +6428,7 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
    因为按钮同时有 aria-pressed 与文字标签，色弱用户也能区分）。 */
 .tr-btn[aria-pressed='true'] {
   border-color: var(--color-primary);
-  color: var(--color-primary);
+  color: var(--color-primary-ink);
   background: var(--color-panel);
 }
 
@@ -6855,7 +6892,7 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
    液态玻璃主题（liquid）· v2.3.97 新增
    ----------------------------------------------------------------------------
    本段为本任务的**独占新增段落**，追加在文件末尾，不修改任何他人段落。
-   配套：src/theme/variables.css 的 [data-theme='liquid'] 块（28 个变量）。
+   配套：src/theme/variables.css 的 [data-theme='liquid'] 块（32 个核心变量 + 11 个浮层令牌）。
 
    ── 1. 背景「流动」动画 ────────────────────────────────────────────────
    载体选择：`.app-root`（主窗）与 `.mini-shell`（小窗）的背景层。
@@ -7013,4 +7050,81 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
 [data-theme='liquid'] .psyche {
   color: var(--color-text);
   font-weight: 500;
+}
+
+/* ---------- v2.3.101：「最喜爱的人物」6 个资料字段（职业/性格/爱好/国籍/学历/菜） ---------- */
+/* 编辑界面：单行输入框（视觉对齐既有的 .stats-fav-signature textarea） */
+.stats-fav-field input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-input-bg, var(--color-panel-alt));
+  color: var(--color-text);
+  font-size: 13px;
+  font-family: inherit;
+  transition: border-color var(--transition);
+}
+.stats-fav-field input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+/* 主页面卡片：资料项列表（仅在有值时渲染，未填不占位） */
+.stats-fav-info-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+.stats-fav-info-item {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.stats-fav-info-item .k {
+  color: var(--color-text-secondary);
+  flex: 0 0 auto;
+}
+.stats-fav-info-item .v {
+  color: var(--color-text);
+  word-break: break-word;
+}
+
+/* ===== 有聊天背景时的液态玻璃磨砂层（v2.3.101）=====
+   类名 has-chat-bg 由 ChatWindow 在「背景取色染色激活」时挂到滚动区外层容器
+   （.messages / .mini-messages 即 CustomScrollArea 的外层，内联已有 position:relative;overflow:hidden，
+   聊天背景图以内联 backgroundImage 打在该外层上；内层 .custom-scroll-content 负责滚动）。
+   故 ::before 覆盖整个可视区、不随内容滚动；backdrop-filter 模糊其后的背景图形成磨砂玻璃质感，
+   内容 .scroll-content 抬到 z-index:1 保证文字清晰。 */
+.messages.has-chat-bg,
+.mini-messages.has-chat-bg {
+  position: relative;
+}
+/* v2.3.101 无障碍修复：原遮罩用 color-mix(--color-chat-bg 22%, transparent)，
+   而 --color-chat-bg 自身 alpha 极低（0.09~0.10），叠加后实际 alpha≈0.02 ≈ 无遮罩，
+   主题文字色直接压在背景图上的对比度最低仅 ≈1.05:1（win 不到 4.5:1）。
+   改为：① 提高模糊半径 6px→14px（更均匀打散背景图高频细节，磨砂质感更强，仍可见图像轮廓）；
+   ② 叠加 --color-chat-scrim（主题背景色 ~70% 不透明度的实色遮罩），把「文字承载面」拉回
+      接近主题背景色，使主题文字色（--color-text）无论背景图是纯白还是纯黑都 ≥4.5:1。
+   实测估算（α=0.70）：
+     · 浅色主题 wechat（浅底 / 深字）：最坏纯黑背景图 → 合成中灰，对比 ≈7.1:1；
+     · 深色主题 dark（深底 / 浅字）：最坏纯白背景图 → 合成中深灰，对比 ≈5.9:1。
+   70% 遮罩保留 30% 背景图 + 14px 模糊，背景图仍可感知，不糊成纯色。 */
+.messages.has-chat-bg::before,
+.mini-messages.has-chat-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  background: var(--color-chat-scrim);
+}
+.messages.has-chat-bg .scroll-content,
+.mini-messages.has-chat-bg .scroll-content {
+  position: relative;
+  z-index: 1;
 }

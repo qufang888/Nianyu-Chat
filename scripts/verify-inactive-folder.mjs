@@ -81,6 +81,9 @@ section('F. 移出后不恢复置顶 + 不立刻弹回（用户明确要求）')
   check('不影响其他聊天的标记', !('single:q' in out), JSON.stringify(out));
   const c = chat('p', 99);
   check('豁免期间不会被自动判定移回', M.isInactiveChat(c, out, 30, [], NOW) === false);
+  // 豁免 = 与「手动移入」对称的手动覆盖：恒生效，不随超期自动失效。
+  // （v2.3.100 曾改为「仅仍新鲜时豁免」，使该分支恒不生效 → 移出后立刻弹回；此断言即为回归门禁）
+  check('豁免是手动覆盖：即便 9999 天未聊也不被自动收回', M.isInactiveChat(chat('p', 9999), out, 30, [], NOW) === false);
   check('豁免标记下手动判定也为 false', M.isManuallyInactive('single:p', out) === false);
   check('isInactivityExempt 识别正确', M.isInactivityExempt('single:p', out) === true);
   // 移出接口不接收也不返回 pinnedChats → 结构上就不可能「恢复置顶」

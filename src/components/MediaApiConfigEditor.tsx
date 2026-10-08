@@ -297,7 +297,7 @@ export const MediaApiConfigEditor: React.FC<MediaApiConfigEditorProps> = ({
                     cursor: 'pointer',
                     fontSize: 12,
                     fontWeight: isCurrent ? 600 : 400,
-                    color: isCurrent ? 'var(--color-primary)' : 'var(--color-text)',
+                    color: isCurrent ? 'var(--color-primary-ink)' : 'var(--color-text)',
                     flex: '0 0 auto',
                   }}
                   title={t('settings.mcfg.setActive')}

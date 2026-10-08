@@ -654,6 +654,74 @@ const GUIDE: GuideSection[] = [
       </>
     ),
   },
+  {
+    id: 'guide-v23101',
+    title: 'v2.3.101：八项体验增强',
+    kw: ['职业','性格','爱好','国籍','学历','菜','气泡','入场动画','动画开关','自定义','液态玻璃','背景取色','主题色','主体色','消息总结','不常用','移出','对比度','毛玻璃','glass','可读性','验证脚本','i18n','v23101'],
+    body: (
+      <>
+        <p style={{ fontWeight: 600 }}>「最喜爱的人物」新增 6 个资料字段</p>
+        <ul>
+          <li>编辑界面新增 <b>职业 / 性格 / 爱好 / 国籍 / 学历 / 最喜欢吃的菜</b>，保存后在板块内展示；留空的字段不显示（不占位）。</li>
+          <li>单个字段最多 60 字；切换人物会一并清空这六个字段（连同性别/签名）。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>消息气泡入场动画</p>
+        <ul>
+          <li>新消息入场：<b>头像先渐显，气泡再从头像方向向中间弹出</b>（线性）。AI 的气泡从左侧、你的从右侧。</li>
+          <li>主界面与小窗一致，随全局动效速度缩放；关掉动画后消息仍正常可见。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>动画开关与独立调速</p>
+        <ul>
+          <li>除「伪流式输出」（逐字打字，按设计恒开）外，所有动画都受「主题与外观 → 动效档位」三档（全部开启 / 全部关闭 / 自定义）控制。</li>
+          <li>「自定义」档下，每个动画分组都能<b>单独开关</b>，还可<b>单独选速度</b>（跟随全局 / 5 档预设 / 自定义秒数）。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>液态玻璃主题全局补齐</p>
+        <ul>
+          <li>悬浮球、通知卡片、标题栏 Logo、模型对比输出框等此前未适配液态玻璃的位置已全部补齐。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>聊天背景 → 主题色随背景而变</p>
+        <ul>
+          <li>聊天设了背景时：主题色变成<b>该背景的主体色</b>，背景带<b>液态玻璃</b>磨砂质感；<b>小窗同样适配</b>，切换聊天即换色；换色为<b>渐变过渡</b>，不生硬跳变。</li>
+          <li>没有背景时不做染色，回到主题自带配色。</li>
+          <li>无论配色怎么变，都会保证<b>文字与背景对比度达标（WCAG AA）</b>，字永远看得清。
+            <ul>
+              <li>做法：文字色不是简单取「比主色深/浅」，而是先把 <code>--color-panel</code>、<code>--color-hover</code> 分别<b>合成到每个底色渐变节点</b>上，得到文字可能压到的<b>全部承载面</b>，再解出一个对所有面都够清楚、且<b>保留背景主体色色相</b>（实测偏差 ≤1°）的文字色。</li>
+              <li>非毛玻璃主题下，全部 16 主题 × 10 种典型背景主色的实测最小对比度为 <b>5.07:1</b>（高于 AA 要求的 4.5:1）；聊天磨砂面上的实测最小为 <b>5.29:1</b>。</li>
+            </ul>
+          </li>
+          <li><b>一个诚实的例外：「毛玻璃（glass）」主题</b>。该主题面板是 22% 白色半透明，叠在深蓝紫渐变上会把底色抬进「中紫」区间——在这个区间里白色字最高只有 <b>3.64:1</b>、黑色字更低（2.58:1），<b>数学上不存在</b>能同时满足全部 6 个承载面的文字色（已用穷举法复核）。这是毛玻璃主题<b>本身</b>的固有性质（该主题自带正文色在同一面上只有 3.33:1），<b>不是</b>本版染色引入的；本版反而把它从染色前约 1.3:1 提升到了 3.64:1。彻底解决需重做该主题的面板与底色（会改变整主题观感），本版未做。</li>
+          <li>不想要该效果，可在 设置 → 主题与外观 关闭「<b>背景取色染色</b>」开关。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>消息总结：没有新消息就不再重复总结</p>
+        <ul>
+          <li>没有新消息可总结时<b>如实提示「没有新的可总结内容」</b>，不再重复总结已总结过的消息。</li>
+          <li>失败提示「总结失败，请稍后重试」；该聊天缺少可用模型/角色时提示「无法总结：请检查该聊天的角色与模型配置」（与「没有新消息」区分）。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>回归修复：不常用文件夹「移出」不再立刻弹回</p>
+        <ul>
+          <li>v2.3.100 的一处改动使「移出」后的豁免失效，移出后会立刻弹回。本版已恢复为<b>与「手动移入」对称的手动覆盖</b>：主动移出的聊天会稳定留在常用区，直到你自己改回去。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>i18n 修正</p>
+        <ul>
+          <li>韩语「发现新版本」横幅此前显示错位的 <code>{'{v]}'}</code> 而非版本号，日语「温度」缺了数值占位符，均已修正。</li>
+          <li>Gemini 端点说明里，中文/繁体把接口路径示例写成 <code>{'{模型名}'}</code>，与其余 8 种语言的 <code>{'{model}'}</code> 不一致（该文案是字面示例、不做插值，且真实路径就是 <code>models/{'{model}'}:generateContent</code>），现 10 处语言统一为 <code>{'{model}'}</code>。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>本版新增的验证脚本</p>
+        <ul>
+          <li><code>verify-bubble-anim.mjs</code>（气泡入场动画 33）· <code>verify-memory-cursor.mjs</code>（总结游标 16）· <code>verify-fav-fields.mjs</code>（6 字段 + i18n 41）· <code>verify-dye-contrast.mjs</code>（染色文字对比度 9）。</li>
+          <li>其中 <code>verify-dye-contrast.mjs</code> 是<b>真 oracle</b>：直接加载真实源码（而非另抄一份公式），自动扫描全部 16 个主题 × 10 种典型背景主色 = <b>160 格</b>逐格验算；并支持注入故障自证有效：<code>NY_DYE_DROP_HOVER=1</code> / <code>NY_DYE_FORCE_BLACK=1</code> 均应使其失败（实测最小对比度会塌到 4.379）。</li>
+        </ul>
+      </>
+    ),
+  },
 ];
 
 export function GuideView({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -763,7 +831,7 @@ export function GuideView({ open, onClose }: { open: boolean; onClose: () => voi
         <div style={{ flex: 1, overflowY: 'auto', padding: '12px 22px 28px' }}>
           {GUIDE.map((s) => (
             <section key={s.id} id={s.id} className="guide-section" style={{ marginBottom: 22, scrollMarginTop: 12 }}>
-              <h3 style={{ fontSize: 15, margin: '0 0 8px', color: 'var(--color-primary, #3a8fd0)' }}>{s.title}</h3>
+              <h3 style={{ fontSize: 15, margin: '0 0 8px', color: 'var(--color-primary-ink, #3a8fd0)' }}>{s.title}</h3>
               <div style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text, #1a1d24)' }}>{s.body}</div>
             </section>
           ))}

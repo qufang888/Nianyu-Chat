@@ -77,7 +77,7 @@ export const SelfRoleEditor: React.FC<{
         </div>
         <div className="modal-body">
           {msg && (
-            <div style={{ marginBottom: 12, color: 'var(--color-primary)', fontSize: 13 }}>{msg}</div>
+            <div style={{ marginBottom: 12, color: 'var(--color-primary-ink)', fontSize: 13 }}>{msg}</div>
           )}
           <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginBottom: 12 }}>
             <div

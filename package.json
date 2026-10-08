@@ -1,6 +1,6 @@
 {
   "name": "nianyu-client",
-  "version": "2.3.100",
+  "version": "2.3.101",
   "description": "念语 - AI 数字人聊天客户端 (Electron + React + TypeScript)",
   "main": "dist-electron/electron/main.js",
   "author": "前方",
@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "npm run typecheck && npm run build:main && npm run build:renderer",
     "start": "electron .",
+    "verify:dye-contrast": "node scripts/verify-dye-contrast.mjs",
     "dist": "electron-builder --win"
   },
   "dependencies": {

@@ -260,9 +260,9 @@ function CursorHotspotPreview({
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}
       >
-        <div style={{ position: 'absolute', width: 14, height: 1, background: '#ff3b30' }} />
-        <div style={{ position: 'absolute', width: 1, height: 14, background: '#ff3b30' }} />
-        <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'rgba(255,59,48,0.18)', border: '1px solid rgba(255,59,48,0.6)' }} />
+        <div style={{ position: 'absolute', width: 14, height: 1, background: 'var(--color-danger)' }} />
+        <div style={{ position: 'absolute', width: 1, height: 14, background: 'var(--color-danger)' }} />
+        <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'color-mix(in srgb, var(--color-danger) 18%, transparent)', border: '1px solid color-mix(in srgb, var(--color-danger) 60%, transparent)' }} />
       </div>
       {/* 左上角 0,0 基准提示 */}
       <div style={{ position: 'absolute', left: 0, top: 0, width: 4, height: 4, background: 'var(--color-primary)' }} />
@@ -1023,6 +1023,46 @@ export const Settings: React.FC<{
       animGroups: { ...(draft?.animGroups || {}), [groupId]: !cur },
     });
   };
+
+  // ===== 分组独立速度（v2.3.98）：仅在自定义档的分组列表里使用 =====
+  // 与全局速度同构，但按分组：缺省（未写任何覆盖）=「跟随全局」；预设档 = 固定倍率；
+  // 自定义档 = 以秒数换算倍率（复用 animSpeedFromSeconds 同一公式）。
+  // 三态真源：animGroupSpeedCustom[id]（是否用自定义秒数）/ animGroupSpeedPresets[id]（倍率）。
+  type GroupSpeedState =
+    | { kind: 'follow' }
+    | { kind: 'preset'; speed: number }
+    | { kind: 'custom'; secs: number };
+  const groupSpeedState = (groupId: string): GroupSpeedState => {
+    if (draft?.animGroupSpeedCustom?.[groupId] === true) {
+      return { kind: 'custom', secs: clampAnimSpeedSeconds(draft?.animGroupSpeedSecs?.[groupId]) };
+    }
+    const preset = draft?.animGroupSpeedPresets?.[groupId];
+    if (typeof preset === 'number' && Number.isFinite(preset)) {
+      return { kind: 'preset', speed: clampAnimSpeed(preset) };
+    }
+    return { kind: 'follow' };
+  };
+  // 保存方式与 toggleAnimGroup 一致：整对象覆盖 + patch（保持三个 map 字段彼此同步）
+  const setGroupSpeed = (
+    groupId: string,
+    opt: { preset?: number; customSecs?: number; reset?: true }
+  ) => {
+    const presets = { ...(draft?.animGroupSpeedPresets || {}) };
+    const customs = { ...(draft?.animGroupSpeedCustom || {}) };
+    const secs = { ...(draft?.animGroupSpeedSecs || {}) };
+    if (opt.reset) {
+      delete presets[groupId];
+      delete customs[groupId];
+      delete secs[groupId];
+    } else if (opt.customSecs != null) {
+      customs[groupId] = true;
+      secs[groupId] = clampAnimSpeedSeconds(opt.customSecs);
+    } else if (opt.preset != null) {
+      customs[groupId] = false;
+      presets[groupId] = clampAnimSpeed(opt.preset);
+    }
+    patch({ animGroupSpeedPresets: presets, animGroupSpeedCustom: customs, animGroupSpeedSecs: secs });
+  };
   // 供三档选择器下方的说明文字使用（纯展示，不参与门控）
   const animModeHintKey: 'animCtl.modeAllOnHint' | 'animCtl.modeAllOffHint' | 'animCtl.modeCustomHint' =
     animMode === 'all-on'
@@ -1621,7 +1661,7 @@ export const Settings: React.FC<{
         ) : (
         <>
         {status && (
-          <div style={{ marginBottom: 14, color: 'var(--color-primary)', fontSize: 13 }}>
+          <div style={{ marginBottom: 14, color: 'var(--color-primary-ink)', fontSize: 13 }}>
             {status}
           </div>
         )}
@@ -1653,7 +1693,7 @@ export const Settings: React.FC<{
                 gap: 6,
                 fontSize: 13,
                 cursor: 'pointer',
-                color: animMode === m ? 'var(--color-primary)' : undefined,
+                color: animMode === m ? 'var(--color-primary-ink)' : undefined,
                 fontWeight: animMode === m ? 600 : undefined,
               }}
             >
@@ -1705,7 +1745,7 @@ export const Settings: React.FC<{
                     gap: 6,
                     fontSize: 13,
                     cursor: animSpeedDisabled ? 'default' : 'pointer',
-                    color: selected ? 'var(--color-primary)' : undefined,
+                    color: selected ? 'var(--color-primary-ink)' : undefined,
                     fontWeight: selected ? 600 : undefined,
                   }}
                 >
@@ -1726,7 +1766,7 @@ export const Settings: React.FC<{
                 gap: 6,
                 fontSize: 13,
                 cursor: animSpeedDisabled ? 'default' : 'pointer',
-                color: animSpeedPreset === 'custom' ? 'var(--color-primary)' : undefined,
+                color: animSpeedPreset === 'custom' ? 'var(--color-primary-ink)' : undefined,
                 fontWeight: animSpeedPreset === 'custom' ? 600 : undefined,
               }}
             >
@@ -1776,32 +1816,76 @@ export const Settings: React.FC<{
             <div id="sec-anim-control" className="section-title" style={{ marginTop: 16 }}>
               {t('animCtl.title')}
             </div>
+            <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--color-text-secondary)', maxWidth: 560, marginTop: 6 }}>
+              {t('animCtl.groupSpeedDesc')}
+            </div>
             <div
               style={{
                 marginTop: 12,
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
+                // 每行含「开关 + 速度下拉」，故最小宽度较原 190px 放大，避免控件被挤到换行
+                gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
                 gap: '8px 16px',
               }}
             >
-              {ANIM_GROUPS.map((g) => (
-                <label
-                  key={g.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    cursor: 'pointer',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={draft.animGroups?.[g.id] !== false}
-                    onChange={() => toggleAnimGroup(g.id)}
-                  />
-                  <span>{t(g.labelKey)}</span>
-                </label>
-              ))}
+              {ANIM_GROUPS.map((g) => {
+                const gs = groupSpeedState(g.id);
+                const groupOff = draft.animGroups?.[g.id] === false;
+                const selValue =
+                  gs.kind === 'follow' ? 'follow' : gs.kind === 'custom' ? 'custom' : `preset:${gs.speed}`;
+                return (
+                  <div
+                    key={g.id}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
+                  >
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={!groupOff}
+                        onChange={() => toggleAnimGroup(g.id)}
+                      />
+                      <span>{t(g.labelKey)}</span>
+                    </label>
+                    {/* 分组独立速度：跟随全局 / 预设档 / 自定义秒数（分组关掉时无意义，禁用） */}
+                    <select
+                      value={selValue}
+                      disabled={groupOff}
+                      title={t('animCtl.groupSpeedTitle')}
+                      aria-label={`${t(g.labelKey)} - ${t('animCtl.groupSpeedTitle')}`}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === 'follow') setGroupSpeed(g.id, { reset: true });
+                        else if (v === 'custom')
+                          setGroupSpeed(g.id, {
+                            customSecs: clampAnimSpeedSeconds(draft?.animGroupSpeedSecs?.[g.id]),
+                          });
+                        else setGroupSpeed(g.id, { preset: Number(v.slice(7)) });
+                      }}
+                      style={{ fontSize: 12, maxWidth: 150 }}
+                    >
+                      <option value="follow">{t('animCtl.groupSpeedFollow')}</option>
+                      {ANIM_SPEED_PRESETS.map((s) => (
+                        <option key={s} value={`preset:${s}`}>
+                          {t('animCtl.speedPreset', { v: `${s}×` })}
+                        </option>
+                      ))}
+                      <option value="custom">{t('animCtl.groupSpeedCustom')}</option>
+                    </select>
+                    {gs.kind === 'custom' && (
+                      <input
+                        type="number"
+                        min={ANIM_SPEED_SECONDS_MIN}
+                        max={ANIM_SPEED_SECONDS_MAX}
+                        step={0.01}
+                        value={gs.secs}
+                        disabled={groupOff}
+                        onChange={(e) => setGroupSpeed(g.id, { customSecs: Number(e.target.value) })}
+                        style={{ width: 72, fontSize: 12 }}
+                      />
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </>
         )}
@@ -1842,7 +1926,7 @@ export const Settings: React.FC<{
 
         {updateSt?.state === 'available' && (
           <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, color: 'var(--color-primary)' }}>
+            <span style={{ fontSize: 13, color: 'var(--color-primary-ink)' }}>
               {t('settings.updateAvailable', { v: updateSt.latestVersion || '' })}
             </span>
             <button className="btn-primary" onClick={async () => { setUpdateBusy(true); try { setUpdateSt(await api.downloadUpdate()); } finally { setUpdateBusy(false); } }}>
@@ -2909,7 +2993,7 @@ export const Settings: React.FC<{
           <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
             {t('settings.momentsVideoDesc')}
             {!(draft.videoGen && draft.videoGen.enabled && draft.videoGen.baseUrl && draft.videoGen.apiKey) && (
-              <span style={{ color: '#e6a23c' }}> {t('settings.momentsVideoNoModel')}</span>
+              <span style={{ color: 'var(--color-warn, #e6a23c)' }}> {t('settings.momentsVideoNoModel')}</span>
             )}
           </div>
 
@@ -3255,7 +3339,7 @@ export const Settings: React.FC<{
                         style={{
                           fontSize: 10,
                           fontWeight: 600,
-                          color: '#fff',
+                          color: 'var(--color-primary-text)',
                           background: 'var(--color-primary)',
                           borderRadius: 8,
                           padding: '1px 7px',
@@ -3269,7 +3353,7 @@ export const Settings: React.FC<{
                         style={{
                           fontSize: 10,
                           fontWeight: 600,
-                          color: 'var(--color-primary)',
+                          color: 'var(--color-primary-ink)',
                           border: '1px solid var(--color-primary)',
                           borderRadius: 8,
                           padding: '1px 7px',
@@ -3282,7 +3366,7 @@ export const Settings: React.FC<{
                   <span
                     style={{
                       fontSize: 11,
-                      color: m.enabled ? 'var(--color-primary)' : 'var(--color-text-secondary)',
+                      color: m.enabled ? 'var(--color-primary-ink)' : 'var(--color-text-secondary)',
                     }}
                   >
                     {m.enabled ? t('settings.enabled') : t('settings.disabled')}
@@ -3332,7 +3416,7 @@ export const Settings: React.FC<{
                     style={{
                       padding: '3px 10px',
                       fontSize: 12,
-                      color: isDefault ? 'var(--color-text-secondary)' : 'var(--color-primary)',
+                      color: isDefault ? 'var(--color-text-secondary)' : 'var(--color-primary-ink)',
                     }}
                     onClick={() => toggleDefault(m.id)}
                   >
@@ -3357,7 +3441,7 @@ export const Settings: React.FC<{
                   </button>
                   <button
                     className="btn-ghost"
-                    style={{ padding: '3px 10px', fontSize: 12, color: '#e06c75' }}
+                    style={{ padding: '3px 10px', fontSize: 12, color: 'var(--color-danger, #e06c75)' }}
                     onClick={() => onModelDelete(m.id)}
                   >
                     {t('common.delete')}
@@ -3412,7 +3496,7 @@ export const Settings: React.FC<{
                 <button
                   type="button"
                   className="btn-ghost"
-                  style={{ padding: '2px 8px', fontSize: 12, color: '#e06c75' }}
+                  style={{ padding: '2px 8px', fontSize: 12, color: 'var(--color-danger, #e06c75)' }}
                   onClick={() => deleteGroup(g.id)}
                 >
                   {t('settings.groupDelete')}
@@ -3547,7 +3631,7 @@ export const Settings: React.FC<{
                   <span
                     style={{
                       width: 9, height: 9, borderRadius: '50%', flex: '0 0 auto',
-                      background: !sv.enabled ? '#8a8f9c' : sv.status === 'connected' ? '#4caf72' : '#e06c75',
+                      background: !sv.enabled ? 'var(--color-text-secondary)' : sv.status === 'connected' ? 'var(--color-success)' : 'var(--color-danger)',
                     }}
                     title={sv.error || sv.status}
                   />
@@ -3569,7 +3653,7 @@ export const Settings: React.FC<{
                   />
                   <button
                     className="btn-ghost"
-                    style={{ padding: '2px 8px', fontSize: 12, color: '#e06c75' }}
+                    style={{ padding: '2px 8px', fontSize: 12, color: 'var(--color-danger, #e06c75)' }}
                     onClick={async () => {
                       await api.mcpRemove(sv.key);
                       void refreshMcpStatus();
@@ -3578,7 +3662,7 @@ export const Settings: React.FC<{
                     {t('common.delete')}
                   </button>
                 </div>
-                {sv.error && <div style={{ fontSize: 12, color: '#e06c75', marginTop: 4 }}>{sv.error}</div>}
+                {sv.error && <div style={{ fontSize: 12, color: 'var(--color-danger, #e06c75)', marginTop: 4 }}>{sv.error}</div>}
                 {sv.enabled && sv.tools.length > 0 && (
                   <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
                     {sv.tools.map((tl: { name: string }) => tl.name).join(' · ')}
@@ -3946,6 +4030,24 @@ export const Settings: React.FC<{
             </div>
           ))}
         </div>
+
+        {/* ===== v2.3.101：背景取色染色开关（dyeFromBackground）=====
+            聊天设了背景时，界面主题色取自背景主体色（实现见 ChatWindow.tsx / MiniChat.tsx）。
+            关闭后始终使用主题自带主色。默认开启（settings.dyeFromBackground 缺省 true）。
+            与同分类「液态流动」开关使用相同的写法与样式，保证观感一致。
+            本开关是原生 <input type="checkbox">，会被设置搜索索引规则①自动收录（无需静态登记）。 */}
+        <label
+          style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, cursor: 'pointer', maxWidth: 420 }}
+        >
+          <input
+            type="checkbox"
+            checked={draft.dyeFromBackground !== false}
+            onChange={(e) => patch({ dyeFromBackground: e.target.checked })}
+            style={{ width: 15, height: 15, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
+          />
+          <span style={{ fontSize: 13 }}>{t('settings.dyeFromBackground')}</span>
+          <Hint text={t('settings.dyeFromBackgroundDesc')} />
+        </label>
 
         {/* ===== UI 圆角 ===== */}
         <div id="sec-radius" className="section-title">{t('settings.radius')}<Hint text={t('settings.radiusDesc')} /></div>
@@ -4427,7 +4529,7 @@ export const Settings: React.FC<{
             </div>
           </div>
           {/* 方向箭头：明确「这是一张跳转卡，不是设置项本身」，避免用户以为分类点不动 */}
-          <span aria-hidden style={{ color: 'var(--color-primary)', fontSize: 18, lineHeight: 1, flexShrink: 0 }}>→</span>
+          <span aria-hidden style={{ color: 'var(--color-primary-ink)', fontSize: 18, lineHeight: 1, flexShrink: 0 }}>→</span>
         </div>
 
         {/* ===== 异步场景生图 ===== */}
@@ -4626,7 +4728,7 @@ export const Settings: React.FC<{
               style={{ marginTop: 2 }}
             />
             <div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#ff8a8a' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-danger)' }}>
                 {t('settings.pluginAllowJs')}<Hint text={t('settings.pluginAllowJsDesc')} />
               </div>
             </div>
@@ -4868,7 +4970,7 @@ export const Settings: React.FC<{
                     <button
                       type="button"
                       className="btn-ghost"
-                      style={{ padding: '3px 10px', fontSize: 12, color: '#e06c75' }}
+                      style={{ padding: '3px 10px', fontSize: 12, color: 'var(--color-danger, #e06c75)' }}
                       onClick={async () => {
                         // 用应用内原生确认框（与项目其他破坏性操作一致），不用浏览器 window.confirm
                         const confirmed = await api.showConfirm!(
@@ -4901,7 +5003,7 @@ export const Settings: React.FC<{
                   {/* v2.3.93：内置有新版但用户改过正文 → 保留用户版本 + 可一键恢复内置版 */}
                   {s.builtinUpdateAvailable && (
                     <div
-                      style={{ fontSize: 11, color: '#e0a83c', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
+                      style={{ fontSize: 11, color: 'var(--color-warn, #e0a83c)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
                     >
                       <span>{t('skill.builtinUpdate')}</span>
                       <button
@@ -4915,11 +5017,11 @@ export const Settings: React.FC<{
                     </div>
                   )}
                   {s.scriptBlocked && (
-                    <div style={{ fontSize: 11, color: '#e0a83c' }}>
+                    <div style={{ fontSize: 11, color: 'var(--color-warn, #e0a83c)' }}>
                       {t('skill.scriptBlocked', { fields: s.scriptFields || '' })}
                     </div>
                   )}
-                  {s.truncated && <div style={{ fontSize: 11, color: '#e0a83c' }}>{t('skill.truncated')}</div>}
+                  {s.truncated && <div style={{ fontSize: 11, color: 'var(--color-warn, #e0a83c)' }}>{t('skill.truncated')}</div>}
                 </div>
               ))}
             </div>
@@ -5228,7 +5330,7 @@ export const Settings: React.FC<{
         <button className="btn-ghost" onClick={openErrorLog}>
           {t('settings.errorLogBtn')}
           {errorLog.length > 0 && (
-            <span style={{ marginLeft: 6, color: '#e06c75' }}>({errorLog.length})</span>
+            <span style={{ marginLeft: 6, color: 'var(--color-danger, #e06c75)' }}>({errorLog.length})</span>
           )}
         </button>
 
@@ -5260,7 +5362,7 @@ export const Settings: React.FC<{
               {t('settings.exportBtn')}
             </button>
           )}
-          <button className="btn-ghost" onClick={restore} disabled={busy} style={{ color: '#e06c75' }}>
+          <button className="btn-ghost" onClick={restore} disabled={busy} style={{ color: 'var(--color-danger, #e06c75)' }}>
             {t('settings.restoreBtn')}
           </button>
         </div>
@@ -5285,7 +5387,7 @@ export const Settings: React.FC<{
           </button>
           <button
             className="btn-ghost"
-            style={{ marginLeft: 8, border: '1px solid #e06c75', color: '#e06c75' }}
+            style={{ marginLeft: 8, border: '1px solid var(--color-danger, #e06c75)', color: 'var(--color-danger, #e06c75)' }}
             onClick={() => setDeleteAllOpen(true)}
           >
             {t('settings.deleteAllData')}

@@ -70,13 +70,36 @@ interface FavDraft {
   gender: 'male' | 'female' | undefined;
   /** 个性签名原文（保存时才做 trim） */
   signature: string;
+  /** v2.3.101：6 个可填资料字段（保存时才做 trim），空串 = 留空 */
+  occupation: string;
+  personality: string;
+  hobby: string;
+  nationality: string;
+  education: string;
+  food: string;
 }
 
 /** 空草稿（未选人物时的初始值） */
-const EMPTY_FAV_DRAFT: FavDraft = { roleId: '', gender: undefined, signature: '' };
+const EMPTY_FAV_DRAFT: FavDraft = {
+  roleId: '',
+  gender: undefined,
+  signature: '',
+  occupation: '',
+  personality: '',
+  hobby: '',
+  nationality: '',
+  education: '',
+  food: '',
+};
 
 /** 个性签名最大长度（多行文本，比旧版单行 input 的 60 放宽） */
 const FAV_SIGNATURE_MAXLEN = 120;
+
+/** v2.3.101：资料字段（职业/性格/爱好/国籍/学历/菜）单行输入的最大长度 */
+const FAV_FIELD_MAXLEN = 60;
+
+/** v2.3.101：6 个资料字段的键名（用于编辑界面的通用回调） */
+type FavFieldKey = 'occupation' | 'personality' | 'hobby' | 'nationality' | 'education' | 'food';
 
 /** 把陪伴毫秒渲染成带 i18n 单位的串（只显示最大的两个单位，保持紧凑） */
 function useCompanionText(): (ms: number) => string {
@@ -214,6 +237,12 @@ export const StatsView: React.FC = () => {
       favoriteSetAt: Date.now(),
       favoriteGender: undefined,
       favoriteSignature: '',
+      favoriteOccupation: '',
+      favoritePersonality: '',
+      favoriteHobby: '',
+      favoriteNationality: '',
+      favoriteEducation: '',
+      favoriteFood: '',
     }),
     []
   );
@@ -237,6 +266,12 @@ export const StatsView: React.FC = () => {
       favoriteRoleId: undefined,
       favoriteGender: undefined,
       favoriteSignature: '',
+      favoriteOccupation: '',
+      favoritePersonality: '',
+      favoriteHobby: '',
+      favoriteNationality: '',
+      favoriteEducation: '',
+      favoriteFood: '',
       favoriteSetAt: undefined,
     });
   }, [saveFavorite]);
@@ -247,9 +282,25 @@ export const StatsView: React.FC = () => {
       roleId: favId || '',
       gender: settings?.favoriteGender,
       signature: settings?.favoriteSignature || '',
+      occupation: settings?.favoriteOccupation || '',
+      personality: settings?.favoritePersonality || '',
+      hobby: settings?.favoriteHobby || '',
+      nationality: settings?.favoriteNationality || '',
+      education: settings?.favoriteEducation || '',
+      food: settings?.favoriteFood || '',
     });
     setPage('favEdit');
-  }, [favId, settings?.favoriteGender, settings?.favoriteSignature]);
+  }, [
+    favId,
+    settings?.favoriteGender,
+    settings?.favoriteSignature,
+    settings?.favoriteOccupation,
+    settings?.favoritePersonality,
+    settings?.favoriteHobby,
+    settings?.favoriteNationality,
+    settings?.favoriteEducation,
+    settings?.favoriteFood,
+  ]);
 
   /**
    * 编辑界面里换人物 → **立即清空草稿里的性别与签名**，
@@ -260,7 +311,17 @@ export const StatsView: React.FC = () => {
     setFavDraft((prev) =>
       prev.roleId === roleId
         ? prev
-        : { roleId, gender: undefined, signature: '' }
+        : {
+            roleId,
+            gender: undefined,
+            signature: '',
+            occupation: '',
+            personality: '',
+            hobby: '',
+            nationality: '',
+            education: '',
+            food: '',
+          }
     );
   }, []);
 
@@ -274,6 +335,12 @@ export const StatsView: React.FC = () => {
       favoriteRoleId: roleId,
       favoriteGender: favDraft.gender,
       favoriteSignature: favDraft.signature.trim(),
+      favoriteOccupation: favDraft.occupation.trim(),
+      favoritePersonality: favDraft.personality.trim(),
+      favoriteHobby: favDraft.hobby.trim(),
+      favoriteNationality: favDraft.nationality.trim(),
+      favoriteEducation: favDraft.education.trim(),
+      favoriteFood: favDraft.food.trim(),
       // 换人时刷新设置时间；同一人只改性别/签名不算「重新设置」
       favoriteSetAt: changed ? Date.now() : settings?.favoriteSetAt ?? Date.now(),
     });
@@ -319,6 +386,7 @@ export const StatsView: React.FC = () => {
               onOpenPicker={() => setEditorPickerOpen(true)}
               onGenderChange={(g) => setFavDraft((prev) => ({ ...prev, gender: g }))}
               onSignatureChange={(v) => setFavDraft((prev) => ({ ...prev, signature: v }))}
+              onFieldChange={(k, v) => setFavDraft((prev) => ({ ...prev, [k]: v }))}
               onSave={saveFavoriteDraft}
               onCancel={cancelFavoriteEdit}
               onClear={clearFavoriteInEditor}
@@ -400,6 +468,12 @@ export const StatsView: React.FC = () => {
             favRow={favRow}
             gender={settings?.favoriteGender}
             signature={settings?.favoriteSignature || ''}
+            occupation={settings?.favoriteOccupation || ''}
+            personality={settings?.favoritePersonality || ''}
+            hobby={settings?.favoriteHobby || ''}
+            nationality={settings?.favoriteNationality || ''}
+            education={settings?.favoriteEducation || ''}
+            food={settings?.favoriteFood || ''}
             onOpenEditor={openFavoriteEditor}
             onOpenPicker={() => setPickerOpen(true)}
             animOn={animOn}
@@ -939,6 +1013,13 @@ const FavoriteSection: React.FC<{
   favRow: RankRow | null;
   gender: 'male' | 'female' | undefined;
   signature: string;
+  /** v2.3.101：6 个可选资料字段（空串 = 未填，不展示） */
+  occupation: string;
+  personality: string;
+  hobby: string;
+  nationality: string;
+  education: string;
+  food: string;
   /** 进入独立编辑界面（favEdit 子页） */
   onOpenEditor: () => void;
   /** 未设置时点大号加号 → 打开人物选择弹层 */
@@ -948,12 +1029,27 @@ const FavoriteSection: React.FC<{
   favRow,
   gender,
   signature,
+  occupation,
+  personality,
+  hobby,
+  nationality,
+  education,
+  food,
   onOpenEditor,
   onOpenPicker,
   // animOn 已由外层门控进 stats 分组；此处保留入参以便将来给卡片加入场动画
 }) => {
   const { t } = useI18n();
   const companionText = useCompanionText();
+  // 只展示**有值**的资料项（未填不占位）
+  const infoItems = [
+    { label: t('stats.favOccupationLabel'), value: occupation },
+    { label: t('stats.favPersonalityLabel'), value: personality },
+    { label: t('stats.favHobbyLabel'), value: hobby },
+    { label: t('stats.favNationalityLabel'), value: nationality },
+    { label: t('stats.favEducationLabel'), value: education },
+    { label: t('stats.favFoodLabel'), value: food },
+  ].filter((it) => it.value.trim());
   return (
     <div className={`stats-fav-card${favRow ? ' is-set' : ''}`}>
       <div className="stats-fav-head">
@@ -1016,6 +1112,19 @@ const FavoriteSection: React.FC<{
           {signature.trim() && (
             <div className="stats-fav-signature-view">{signature}</div>
           )}
+
+          {/* v2.3.101：6 个资料字段（职业/性格/爱好/国籍/学历/菜）。
+              只展示**有值**的项；一项都没有时整块不渲染（不占位）。 */}
+          {infoItems.length > 0 && (
+            <div className="stats-fav-info-list">
+              {infoItems.map((it) => (
+                <div className="stats-fav-info-item" key={it.label}>
+                  <span className="k">{it.label}：</span>
+                  <span className="v">{it.value}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>
@@ -1050,6 +1159,8 @@ const FavoriteEditor: React.FC<{
   onOpenPicker: () => void;
   onGenderChange: (g: 'male' | 'female' | undefined) => void;
   onSignatureChange: (v: string) => void;
+  /** v2.3.101：6 个资料字段的统一变更回调 */
+  onFieldChange: (key: FavFieldKey, value: string) => void;
   onSave: () => void;
   onCancel: () => void;
   onClear: () => void;
@@ -1061,6 +1172,7 @@ const FavoriteEditor: React.FC<{
   onOpenPicker,
   onGenderChange,
   onSignatureChange,
+  onFieldChange,
   onSave,
   onCancel,
   onClear,
@@ -1069,6 +1181,15 @@ const FavoriteEditor: React.FC<{
   const hasRole = !!draft.roleId;
   // 「清除设置」只在**确实已保存过**一位人物时才显示（否则点了无事发生，是骗人的 UI）
   const canClear = !!savedRoleId;
+  // v2.3.101：6 个资料字段的展示定义（标签 / 占位提示走 i18n）
+  const fieldDefs: { key: FavFieldKey; label: string; ph: string }[] = [
+    { key: 'occupation', label: t('stats.favOccupationLabel'), ph: t('stats.favOccupationPh') },
+    { key: 'personality', label: t('stats.favPersonalityLabel'), ph: t('stats.favPersonalityPh') },
+    { key: 'hobby', label: t('stats.favHobbyLabel'), ph: t('stats.favHobbyPh') },
+    { key: 'nationality', label: t('stats.favNationalityLabel'), ph: t('stats.favNationalityPh') },
+    { key: 'education', label: t('stats.favEducationLabel'), ph: t('stats.favEducationPh') },
+    { key: 'food', label: t('stats.favFoodLabel'), ph: t('stats.favFoodPh') },
+  ];
 
   return (
     <div className="stats-fav-editor">
@@ -1158,7 +1279,23 @@ const FavoriteEditor: React.FC<{
         )}
       </div>
 
-      {/* ---- 4. 保存 / 取消 / 清除设置 ---- */}
+      {/* ---- 4. 资料字段（职业 / 性格 / 爱好 / 国籍 / 学历 / 最喜欢吃的菜；单行、可留空） ---- */}
+      {fieldDefs.map((f) => (
+        <div className="stats-fav-editor-block" key={f.key}>
+          <div className="stats-fav-editor-label">{f.label}</div>
+          <div className="stats-fav-field">
+            <input
+              type="text"
+              value={draft[f.key]}
+              placeholder={f.ph}
+              maxLength={FAV_FIELD_MAXLEN}
+              onChange={(e) => onFieldChange(f.key, e.target.value)}
+            />
+          </div>
+        </div>
+      ))}
+
+      {/* ---- 5. 保存 / 取消 / 清除设置 ---- */}
       <div className="stats-fav-editor-actions">
         {/* disabled 的原生 button 在部分浏览器里不派发鼠标事件，title 提示会失效，
             故把「先选人物」的提示做成**常驻可见**的一行字（且仅在未选时出现）。 */}
