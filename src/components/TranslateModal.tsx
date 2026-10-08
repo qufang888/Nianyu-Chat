@@ -81,6 +81,8 @@ export const TranslateModal: React.FC<Props> = ({ source, roleId, onClose }) => 
   const [speaking, setSpeaking] = useState<SpeakSlot | null>(null);
   const [synthesizing, setSynthesizing] = useState<SpeakSlot | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // 挂载标记：await 期间弹窗可能被关闭，落定后用它判断是否还要继续播放
+  const mountedRef = useRef(true);
   // 单调自增序号：await 期间用户可能又点了另一条，返回时序号不一致就丢弃本次结果（防重叠/防错位）
   const seqRef = useRef(0);
   // 已生成过的音频缓存（key = slot + 文本 + 是否强制重生成），点「朗读」时命中则直接重播，不再调 API
@@ -103,7 +105,12 @@ export const TranslateModal: React.FC<Props> = ({ source, roleId, onClose }) => 
   }, []);
 
   // 关闭弹窗 / 卸载时必须停声，否则弹窗关了还在念
-  useEffect(() => stopAudio, [stopAudio]);
+  useEffect(() => {
+    return () => {
+      stopAudio();
+      mountedRef.current = false;
+    };
+  }, [stopAudio]);
 
   const segments = allSegments.filter((s) => !deletedIds.includes(s.id));
   const remainingText = segments.map((s) => s.text).join('\n');
@@ -163,6 +170,7 @@ export const TranslateModal: React.FC<Props> = ({ source, roleId, onClose }) => 
       const cached = force ? undefined : cacheRef.current[cacheKey];
       if (cached) {
         // 命中本页缓存：直接播，不合成、不闪 loading
+        if (!mountedRef.current) return;
         const audio = new Audio(cached);
         audioRef.current = audio;
         audio.onended = () => {
@@ -183,6 +191,8 @@ export const TranslateModal: React.FC<Props> = ({ source, roleId, onClose }) => 
       try {
         // roleId 传下去 → 主进程解析该人物绑定的音色（configId / voice / speed / pitch）
         const src = await api.textToSpeech(body, roleId, force);
+        // 卸载后不再播放：避免弹窗已关、promise 落定仍 play() 导致音频继续响
+        if (!mountedRef.current) return;
         // 期间可能又点了别的（守卫只挡生成中，但播放中可点另一条）→ 序号不符则丢弃本次结果
         if (seq !== seqRef.current) return;
         setSynthesizing(null);

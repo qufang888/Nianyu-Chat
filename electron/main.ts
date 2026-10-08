@@ -1621,8 +1621,8 @@ async function allowAutoGeneration(kind: 'image' | 'video', scene: string): Prom
 
 // 朗读缓存键：双哈希（djb2 + FNV-1a）拼接，避免引入 crypto 依赖；碰撞概率可忽略
 // v2.3.34 起把语速/音调纳入键，避免「同一文本调了语速却命中旧缓存」导致听起来没生效。
-function ttsCacheKey(baseUrl: string, model: string, voice: string, text: string, speed = 1, pitch = 0): string {
-  const s = `${baseUrl}|${model}|${voice}|${speed}|${pitch}|${text}`;
+function ttsCacheKey(baseUrl: string, model: string, voice: string, text: string, speed = 1, pitch = 0, apiKey = '', configId = ''): string {
+  const s = `${baseUrl}|${model}|${voice}|${apiKey}|${configId}|${speed}|${pitch}|${text}`;
   let h1 = 5381;
   let h2 = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
@@ -6557,7 +6557,7 @@ function registerIPC(): void {
     const pitch = rvCfg.pitch ?? v.ttsPitch ?? 0;
     const cacheDir = path.join(dm.dataDirectory, 'tts-cache');
     try { fs.mkdirSync(cacheDir, { recursive: true }); } catch { /* 目录已存在等，忽略 */ }
-    const cacheKey = ttsCacheKey(baseUrl, model, voiceName, text, speed, pitch);
+    const cacheKey = ttsCacheKey(baseUrl, model, voiceName, text, speed, pitch, apiKey, rvCfg?.configId || activeCfg?.id || '');
     // 缓存按实际容器分扩展名（Gemini 协议为 WAV，其余为 MP3），读取时按扩展名还原 MIME
     const candidates: { file: string; mime: string }[] = [
       { file: path.join(cacheDir, `${cacheKey}.mp3`), mime: 'audio/mpeg' },

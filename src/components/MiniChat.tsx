@@ -104,6 +104,33 @@ export const MiniChat: React.FC = () => {
   const seenSeqRef = useRef<Record<string, number>>({});
   // F1：群聊选人回复 —— 可见性 / 记忆开关 + 选人浮层状态
   const [needSpeaker, setNeedSpeaker] = useState<{ chatId: string; members: { id: string; name: string; avatar?: string }[] } | null>(null);
+  // v2.3.94 P2-3：选取文字复制（镜像主窗 openSelectCopy / doCopySelected）
+  const [selectCopyText, setSelectCopyText] = useState<string | null>(null);
+  const selectCopyRef = useRef<HTMLTextAreaElement | null>(null);
+  const [selectCopied, setSelectCopied] = useState(false);
+  const openSelectCopy = (m: ChatMessage) => {
+    setSelectCopyText(m.content || '');
+    setSelectCopied(false);
+  };
+  const closeSelectCopy = () => {
+    setSelectCopyText(null);
+    setSelectCopied(false);
+  };
+  const doCopySelected = async () => {
+    const ta = selectCopyRef.current;
+    if (!ta) return;
+    // 优先取用户手动选中的部分；没选则视为「全选」
+    const picked = ta.value.substring(ta.selectionStart ?? 0, ta.selectionEnd ?? 0).trim();
+    const text = picked || ta.value;
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setSelectCopied(true);
+      showToast(t('toast.copied'));
+    } catch (e: any) {
+      showToast(t('toast.copyFailed', { msg: e?.message || String(e) }), { error: true });
+    }
+  };
   const [replyVisible, setReplyVisible] = useState(true);
   const [replyToMemory, setReplyToMemory] = useState(true);
   // 角色/成员删除后的提示
@@ -226,6 +253,29 @@ export const MiniChat: React.FC = () => {
       setForking(false);
     }
   };
+  // v2.3.94 P2-3：从此处开启新对话（fork）——镜像主窗 forkFromMessage
+  const forkFromMessage = async (m: ChatMessage) => {
+    if (forking || !current) return;
+    // 流式占位气泡是负数 id，尚未落库，无法作为分叉点 —— 直接忽略并提示
+    if ((m.id as number) < 0) {
+      showToast(t('msg.forkFailStreaming'), { error: true });
+      return;
+    }
+    setForking(true);
+    try {
+      const chat = await api.forkChatFromMessage(current.chat_type, current.chat_id, m.id);
+      showToast(t('chat.forkOk', { name: chat.name }));
+      // 刷新会话列表并切换到新聊天（原聊天保持不变）
+      const list = await api.getChatList();
+      setChats(list);
+      const hit = list.find((c) => c.chat_type === chat.chat_type && c.chat_id === chat.chat_id);
+      setCurrent(hit || ({ chat_type: chat.chat_type, chat_id: chat.chat_id, name: chat.name } as ChatListItem));
+    } catch (e: any) {
+      showToast(t('chat.forkFail', { msg: e?.message || String(e) }), { error: true });
+    } finally {
+      setForking(false);
+    }
+  };
   const removeNode = async (id: number) => {
     if (!current) return;
     await api.removeStoryNode(id);
@@ -283,6 +333,8 @@ export const MiniChat: React.FC = () => {
   // v2.3.93：主动消息「等你回复」状态（真源在主进程，本地仅用于提示 + 「我不回复」按钮）
   const [awaitingReply, setAwaitingReply] = useState(false);
   const awaitingReplyRef = useRef(false);
+  // v2.3.94 P2-5：阈值累计期（reason:'counting'）的「已发 n/m 条」提示状态
+  const [awaitingCount, setAwaitingCount] = useState<{ count: number; threshold: number } | null>(null);
   const [skippingAwaiting, setSkippingAwaiting] = useState(false); // 「我不回复」请求进行中（防连点）
   const lastActivityRef = useRef(Date.now()); // 最近一次用户操作时间
   const idleReplyOnRef = useRef(true);
@@ -789,6 +841,13 @@ export const MiniChat: React.FC = () => {
       if (!data || !current) return;
       const curKey = `${current.chat_type}:${current.chat_id}`;
       if (data.chatKey !== curKey) return;
+      // v2.3.94 P2-5：阈值累计期广播 reason:'counting'，记录「已发 n/m 条」，此时尚未进入等待态
+      if (data.reason === 'counting') {
+        const d = data as typeof data & { count?: number; threshold?: number };
+        setAwaitingCount({ count: d.count ?? 0, threshold: d.threshold ?? 0 });
+        return;
+      }
+      setAwaitingCount(null);
       const on = data.awaiting === true;
       awaitingReplyRef.current = on;
       setAwaitingReply(on);
@@ -1345,6 +1404,7 @@ export const MiniChat: React.FC = () => {
       if (cancelled) return;
       awaitingReplyRef.current = on;
       setAwaitingReply(on);
+      setAwaitingCount(null);
     })();
     return () => {
       cancelled = true;
@@ -1608,7 +1668,9 @@ export const MiniChat: React.FC = () => {
   };
 
   // 末条消息是否为 AI 消息 —— 决定是否在其下方显示三图标（与主窗同规则）
-  const lastMsgId = messages.length > 0 ? messages[messages.length - 1].id : -1;
+  // v2.3.94 P2-4a：取最后一条 AI 消息 id；无 AI 消息则退回最后一条消息 id
+  const lastAiMsg = [...messages].reverse().find((m) => m.sender_type === 'ai');
+  const lastMsgId = lastAiMsg ? lastAiMsg.id : (messages.length > 0 ? messages[messages.length - 1].id : -1);
 
   // 清空当前聊天消息（可选是否连同自动记忆一起删除）
   const handleClearChat = async (withMemories: boolean) => {
@@ -2158,6 +2220,12 @@ export const MiniChat: React.FC = () => {
                   </button>
                 </span>
               )}
+              {/* v2.3.94 P2-5：阈值累计期轻提示（尚未进入等待态，仅告知进度） */}
+              {awaitingCount && !awaitingReply && (
+                <span className="idle-awaiting" title={t('chat.idleAwaitingTip')}>
+                  <span className="idle-awaiting-text">已发 {awaitingCount.count}/{awaitingCount.threshold} 条，之后开始等待你回复</span>
+                </span>
+              )}
             </div>
           </div>
         )}
@@ -2277,6 +2345,8 @@ export const MiniChat: React.FC = () => {
                 onTranslate={handleTranslate}
                 onMarkNode={storyOn ? markNode : undefined}
                 onViewPrompt={setPromptView}
+                onForkFromHere={forkFromMessage}
+                onSelectCopy={openSelectCopy}
                 failed={failed}
                 searchResults={sr}
                 // 伪流式仅在流式输出（生效值：模型覆盖优先）关闭时生效；流式开启 → 正文实时显示
@@ -2807,6 +2877,45 @@ export const MiniChat: React.FC = () => {
           </div>
         </div>
       )}
+      {/* v2.3.94 P2-3：选取文字复制弹窗（镜像主窗 selectCopy 模态） */}
+      {selectCopyText !== null && (
+        <div className="modal-mask" onClick={closeSelectCopy}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520, width: '90%' }}>
+            <div className="modal-title">{t('msg.selectCopyTitle')}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 6 }}>
+              {t('msg.selectCopyHint')}
+            </div>
+            <textarea
+              ref={selectCopyRef}
+              defaultValue={selectCopyText}
+              readOnly
+              autoFocus
+              spellCheck={false}
+              onSelect={() => setSelectCopied(false)}
+              style={{
+                width: '100%',
+                minHeight: 160,
+                maxHeight: 320,
+                padding: 8,
+                fontSize: 13,
+                lineHeight: 1.5,
+                fontFamily: 'inherit',
+                color: 'var(--color-text)',
+                background: 'var(--color-panel-alt)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 8,
+                resize: 'vertical',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+              <button className="btn-secondary" onClick={closeSelectCopy}>{t('common.cancel')}</button>
+              <button className="btn-primary" onClick={() => { void doCopySelected(); }}>
+                {selectCopied ? t('msg.copied') : t('msg.copySelected')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <ToastView toast={toast} />
       <CustomCursor />
       <ErrorBubble />
@@ -2934,6 +3043,9 @@ const MiniMessageRow: React.FC<{
   onTranslate?: (text: string, senderName?: string) => void;
   onMarkNode?: (msg: ChatMessage) => void;
   onViewPrompt?: (prompt: string) => void; // 右键「查看提示词」：由父组件打开弹窗
+  // v2.3.94 P2-3：右键菜单新增「从此处开启新对话(fork)」与「选取文字复制」，与主窗对齐
+  onForkFromHere?: (msg: ChatMessage) => void;
+  onSelectCopy?: (msg: ChatMessage) => void;
   failed?: { content: string; imagePaths: string[]; phase: 'full' | 'ai'; error: string } | null;
   searchResults?: SearchResultItem[];
   // 点击越界引用编号时展开本条回复下方的联网搜索结果列表
@@ -2944,7 +3056,7 @@ const MiniMessageRow: React.FC<{
   pseudoKey?: string;
 }> = ({
   msg, onImage, fmtTime, avatarPath, userAvatarPath, showTts, ttsState, onAiAction, showAiActions, aiActionBusy, hideReasoning, onSpeak, onReplayTts, onRegenerateTts, onReasoningCopied,
-  onQuickMemory, onSaveImageMemory, onRollback, onDeleteMsg, onCopy, onTranslate, onMarkNode, onViewPrompt, failed, searchResults, onOpenSearch,
+  onQuickMemory, onSaveImageMemory, onRollback, onDeleteMsg, onCopy, onTranslate, onMarkNode, onViewPrompt, onForkFromHere, onSelectCopy, failed, searchResults, onOpenSearch,
   pseudoOn, pseudoSpeed, pseudoKey,
 }) => {
   const { t } = useI18n();
@@ -3144,7 +3256,7 @@ const MiniMessageRow: React.FC<{
 
           {/* v2.3.78：操作栏移至「消耗 N tokens」同一行右侧（与主窗同构）。
               语音组 🔊 ⟳：每条 AI 消息都有；AI 操作组 ✍ ⟲ 💬：仅最后一条 AI 消息显示。*/}
-          {((showTts && streamed) || (showAiActions && onAiAction && msg.sender_type !== 'user')) && (
+          {((showTts && msg.sender_type !== 'user') || (showAiActions && onAiAction && msg.sender_type !== 'user')) && (
           <div className={`msg-action-bar ${actionBarVisible ? 'is-in' : ''}`}>
             {/* 语音（位置从气泡内右侧移到气泡下方）*/}
             {showTts && (
@@ -3180,13 +3292,13 @@ const MiniMessageRow: React.FC<{
             {/* v2.3.65：分组隔断——左侧语音组（听这条消息），右侧 AI 操作组（让 AI 再干活）。
                 两者用途不同，用竖线分开避免误点：顺时针 ⟳ 是语音重播、逆时针 ⟲ 是 AI 重写，
                 方向相反极易混淆，隔断同时起到视觉分组作用。*/}
-            {showTts && onAiAction && msg.sender_type !== 'user' && <span className="msg-action-divider" aria-hidden="true" />}
+            {showTts && onAiAction && !isUser && <span className="msg-action-divider" aria-hidden="true" />}
             {/* v2.3.94 需求 2 连带修复（与主窗同步）：AI 操作组显式带上 showAiActions 门。
                 语义依据（见上方 v2.3.78 注释）：语音组每条 AI 消息都有；AI 操作组仅最后一条显示。
                 小窗此前靠外层 branch2 兜底，行为恰好正确，但这是隐式依赖 ——
                 一旦有人调整容器门控（如主窗那样把语音组独立成门），✍ ⟲ 💬 就会到处冒。
                 显式门控让意图不再依赖外层，两端语义也才对齐。 */}
-            {showAiActions && onAiAction && msg.sender_type !== 'user' && (<>
+            {showAiActions && onAiAction && !isUser && (<>
 
 
               <button
@@ -3254,6 +3366,18 @@ const MiniMessageRow: React.FC<{
             </>
           )}
           {onMarkNode && <button className="ctx-menu-item" onClick={() => { onMarkNode(msg); closeMenu(); }}>{t('chat.markNode')}</button>}
+          {/* v2.3.94 P2-3：从此处开启新对话（镜像主窗 onForkFromHere） */}
+          {onForkFromHere && (
+            <button className="ctx-menu-item" onClick={() => { onForkFromHere(msg); closeMenu(); }}>
+              {t('msg.forkFromHere')}
+            </button>
+          )}
+          {/* v2.3.94 P2-3：选取文字复制（区别于上面的「复制」——后者直接复制整条） */}
+          {onSelectCopy && hasText && (
+            <button className="ctx-menu-item" onClick={() => { onSelectCopy(msg); closeMenu(); }}>
+              {t('msg.selectCopy')}
+            </button>
+          )}
           {onSaveImageMemory && (msg.images?.length || msg.image_path) && (
             <button className="ctx-menu-item" onClick={() => { onSaveImageMemory(msg); closeMenu(); }}>{t('chat.drawMemory')}</button>
           )}

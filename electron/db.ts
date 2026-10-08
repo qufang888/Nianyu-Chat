@@ -262,7 +262,7 @@ export function syncActiveMediaConfigs(settings: AppSettings): void {
     v.ttsBaseUrl = tts.baseUrl;
     v.ttsApiKey = tts.apiKey;
     v.ttsModel = tts.model;
-    if (tts.voice) v.ttsVoice = tts.voice;
+    v.ttsVoice = tts.voice ?? '';
     if (!v.activeTtsId && Array.isArray(v.ttsConfigs) && v.ttsConfigs.length) {
       v.activeTtsId = v.ttsConfigs[0].id;
     }
@@ -294,7 +294,7 @@ export function syncActiveMediaConfigs(settings: AppSettings): void {
       ig.baseUrl = img.baseUrl;
       ig.apiKey = img.apiKey;
       ig.model = img.model;
-      if (img.size) ig.size = img.size;
+      ig.size = img.size ?? '';
       if (!ig.activeImageId && Array.isArray(ig.imageConfigs) && ig.imageConfigs.length) {
         ig.activeImageId = ig.imageConfigs[0].id;
       }
@@ -314,8 +314,8 @@ export function syncActiveMediaConfigs(settings: AppSettings): void {
       vg.baseUrl = vid.baseUrl;
       vg.apiKey = vid.apiKey;
       vg.model = vid.model;
-      if (vid.size) vg.size = vid.size;
-      if (vid.duration) vg.duration = String(vid.duration);
+      vg.size = vid.size ?? '';
+      vg.duration = String(vid.duration ?? '');
       if (!vg.activeVideoId && Array.isArray(vg.videoConfigs) && vg.videoConfigs.length) {
         vg.activeVideoId = vg.videoConfigs[0].id;
       }
@@ -1155,6 +1155,11 @@ class DataManager {
           miniWindow: { ...DEFAULT_SETTINGS.miniWindow, ...(raw.miniWindow || {}) },
           imageGen: { ...DEFAULT_SETTINGS.imageGen, ...(raw.imageGen || {}) },
         };
+        // v2.3.100 迁移：旧字段 idleCooldownUntilReply → idleAwaitingTriggerCount
+        // 修复 ≤2.3.93 升级用户「等你回复」被静默关闭的回归
+        if (typeof (raw as any).idleCooldownUntilReply === 'boolean' && (raw as any).idleAwaitingTriggerCount === undefined) {
+          (merged as any).idleAwaitingTriggerCount = (raw as any).idleCooldownUntilReply ? 1 : 9999;
+        }
         // 清理遗留的默认 GPT-4o mini 种子模型
         merged.models = merged.models.filter(
           (m) => !(m.id === 'default' && m.model === 'gpt-4o-mini')

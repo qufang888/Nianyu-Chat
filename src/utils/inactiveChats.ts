@@ -77,15 +77,16 @@ export function isInactiveChat(
   now: number = Date.now()
 ): boolean {
   const key = chatKeyOf(chat);
-  // 手动移入优先：手动移入即生效（此时置顶已在移入时被取消，这里不再看 pinned）
+  // 手动移入优先：手动移入即生效（此时置顶已在移入时被取消）
   if (isManuallyInactive(key, manual)) return true;
-  // 手动豁免：用户主动把它挪回来了，不再受自动判定管辖
-  if (isInactivityExempt(key, manual)) return false;
   // 置顶聊天不自动移入
   if ((pinned || []).includes(key)) return false;
   const d = inactiveDays(chat, now);
-  if (d < 0) return false;
-  return d >= clampInactiveDays(days);
+  if (d < 0) return false; // 最近有消息 → 新鲜，不收
+  const inactive = d >= clampInactiveDays(days);
+  // 手动豁免：仅当「尚未到不常用阈值」时生效；一旦超期，豁免自然失效、自动收回
+  if (isInactivityExempt(key, manual) && !inactive) return false;
+  return inactive;
 }
 
 /** 分组结果：常用聊天 + 不常用聊天（各自保持传入顺序，即已有的排序结果） */

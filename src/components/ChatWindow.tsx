@@ -523,6 +523,8 @@ export const ChatWindow: React.FC<{
   // 本地这份仅用于顶部提示 + 「我不回复」按钮的显示；开关关闭时主进程恒返回 false。
   const [awaitingReply, setAwaitingReply] = useState(false);
   const awaitingReplyRef = useRef(false);
+  // v2.3.94 P2-5：阈值累计期（reason:'counting'）的「已发 n/m 条」提示状态
+  const [awaitingCount, setAwaitingCount] = useState<{ count: number; threshold: number } | null>(null);
   const [skippingAwaiting, setSkippingAwaiting] = useState(false); // 「我不回复」请求进行中（防连点）
 
   const idleSwitchActionRef = useRef<'pause' | 'reset' | 'continue'>('continue'); // 切换聊天时的计时模式
@@ -1017,6 +1019,7 @@ export const ChatWindow: React.FC<{
       awaitingReplyRef.current = on;
 
       setAwaitingReply(on);
+      setAwaitingCount(null);
 
     })();
 
@@ -2235,6 +2238,15 @@ export const ChatWindow: React.FC<{
 
       if (!data || data.chatKey !== chatKey) return;
 
+      // v2.3.94 P2-5：阈值累计期广播 reason:'counting'，记录「已发 n/m 条」，此时尚未进入等待态
+      if (data.reason === 'counting') {
+        const d = data as typeof data & { count?: number; threshold?: number };
+        setAwaitingCount({ count: d.count ?? 0, threshold: d.threshold ?? 0 });
+        return;
+      }
+
+      setAwaitingCount(null);
+
       const on = data.awaiting === true;
 
       awaitingReplyRef.current = on;
@@ -3188,7 +3200,11 @@ export const ChatWindow: React.FC<{
 
   // 末条消息是否为 AI 消息 —— 决定是否在其下方显示三图标
 
-  const lastMsgId = messages.length > 0 ? messages[messages.length - 1].id : -1;
+  // v2.3.94 P2-4a：最后一条 AI 消息 id（而非「最后一条消息」）。
+  // 这样用户刚发完消息、AI 还没回时，仍能在最后那条 AI 消息上显示操作栏。
+  // 没有任何 AI 消息时退回最后一条消息 id（兜底，保持旧行为）。
+  const lastAiMsg = [...messages].reverse().find((m) => m.sender_type === 'ai');
+  const lastMsgId = lastAiMsg ? lastAiMsg.id : (messages.length > 0 ? messages[messages.length - 1].id : -1);
 
   // v2.3.63：消息折叠——折叠后每条只显示一行摘要，点任一条展开
 
@@ -4876,6 +4892,13 @@ export const ChatWindow: React.FC<{
 
             </span>
 
+          )}
+
+          {/* v2.3.94 P2-5：阈值累计期轻提示（尚未进入等待态，仅告知进度） */}
+          {awaitingCount && !awaitingReply && (
+            <span className="idle-awaiting" title={t('chat.idleAwaitingTip')}>
+              <span className="idle-awaiting-text">已发 {awaitingCount.count}/{awaitingCount.threshold} 条，之后开始等待你回复</span>
+            </span>
           )}
 
           {chatType === 'single' && (

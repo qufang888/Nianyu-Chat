@@ -270,6 +270,12 @@ export function highlightParts(text: string, query: string): Array<{ text: strin
     const parts = highlightByNeedle(original, needle);
     if (parts.some((p) => p.hit)) return parts;
   }
+  // 字符级兜底：rankCandidates 已命中（如反向子序列 / 无序子集，见 134-144 行），
+  // 但连续子串高亮兜不住。这里按字符做「子集覆盖」近似，保证「能搜到就高亮」。
+  // 对中文而言，命中查询里的字符即视为该字命中——即「明小」命中「王小明」时，
+  // 「明」「小」两字均被高亮。
+  const byChars = highlightByChars(original, q);
+  if (byChars.some((p) => p.hit)) return byChars;
   return [{ text: original, hit: false }];
 }
 
@@ -287,4 +293,32 @@ function highlightByNeedle(text: string, needle: string): Array<{ text: string; 
     i = idx + needle.length;
   }
   return found ? out.filter((p) => p.text.length > 0) : [];
+}
+
+/**
+ * 字符级兜底高亮：当连续子串（`highlightByNeedle`）无法覆盖时，
+ * 按字符判断「是否命中归一化查询中的某个字符」，用于兜住
+ * rankCandidates 能命中但高亮兜不住的反向子序列 / 无序子集场景。
+ *
+ * 规则：对 original 每个字符位置 i，若 normalizeText(original[i]) 出现在归一化查询 q 中，
+ * 则该位置标记为命中。空归一化结果（如纯空白字符）视为不命中，避免误高亮空格。
+ * 连续同 hit 状态的位置合并成片段返回。
+ */
+function highlightByChars(text: string, query: string): Array<{ text: string; hit: boolean }> {
+  const q = normalizeText(query);
+  if (!q) return [{ text: text, hit: false }];
+  const out: Array<{ text: string; hit: boolean }> = [];
+  let anyHit = false;
+  for (let i = 0; i < text.length; i++) {
+    const nc = normalizeText(text[i]);
+    const hit = nc.length > 0 && q.includes(nc);
+    if (hit) anyHit = true;
+    if (out.length === 0 || out[out.length - 1].hit !== hit) {
+      out.push({ text: text[i], hit });
+    } else {
+      out[out.length - 1].text += text[i];
+    }
+  }
+  if (!anyHit) return [{ text: text, hit: false }];
+  return out.filter((p) => p.text.length > 0);
 }
