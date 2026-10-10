@@ -941,7 +941,7 @@
  "settings.bubbleOpacity": "말풍선 투명도",
  "settings.bubbleOpacityDesc": "채팅 말풍선의 전체 투명도(50%~100%). 값이 작을수록 더 투명해져 배경이 더 보입니다.",
  "settings.bubbleRadius": "말풍선 둥근 모서리: {n} px",
- "settings.catAppearance": "테마 및 외관",
+ "settings.catAppearance": "외관 및 애니메이션",
  "settings.catChat": "채팅 및 그룹 채팅",
  "settings.catGeneral": "일반 및 AI 동작",
  "settings.catGeneration": "생성 및 확장",
@@ -949,7 +949,7 @@
  "settings.catProactive": "주동 메시지",
  "settings.catSocial": "기억 및 소셜",
  "settings.catTranslation": "번역 및 사운드",
- "settings.catWindow": "창 및 데이터",
+ "settings.catWindow": "창 및 시스템",
  "settings.clickSwitch": "클릭하여 전환",
  "settings.closeBehavior": "메인 창 닫기 동작",
  "settings.closeBehaviorDesc": "닫기 버튼 클릭 시 메인 창이 어떻게 반응할지 선택합니다. 설정은 즉시 적용됩니다.",
@@ -1742,5 +1742,12 @@
  "quickimport.preview.tools": "도구",
  "quickimport.preview.segments": "프롬프트 조각",
  "quickimport.preview.editHint": "‘저장’을 눌러야 실제로 가져옵니다. ‘취소’를 누르면 이 항목은 전혀 가져오지 않습니다.",
- "quickimport.preview.edited": "가져오기 완료. 자료실에서 계속 편집할 수 있습니다."
+ "quickimport.preview.edited": "가져오기 완료. 자료실에서 계속 편집할 수 있습니다.",
+ "chat.resendInterrupted": "다시 보내기",
+ "chat.resendInterruptedTip": "완료되지 않은 답장을 삭제하고 다시 생성합니다",
+ "chat.resendInterruptedDone": "다시 보냄: 메시지 {n}개, 기억 {m}개, 모먼트 {k}개, 스토리 노드 {d}개 삭제됨",
+ "chat.resendInterruptedFail": "다시 보내기 실패: {msg}",
+ "settings.advanced": "고급 설정",
+ "settings.advancedTip": "고급 설정을 펼치거나 접습니다",
+ "settings.catExtensions": "확장 및 도구"
 }

@@ -118,6 +118,17 @@
   --color-success: #10b981;
   --color-warn: #f59e0b;
   --color-info: #3b82f6;
+  /* v2.3.102 需求 4：跳转 / 模型卡高亮闪动取色令牌。
+     写在 :root 即被全部主题继承，无需逐主题声明；hex 兜底只允许出现在本文件
+     （index.css 禁硬编码色，且其色值检查不剥离注释）。 */
+  --color-flash-bg: var(--color-primary);
+  /* v2.3.102 QA 复核修正：`--color-primary-shadow` 在**全仓从未被定义**（已 grep 确认），
+     故原先 `var(--color-primary-shadow, rgba(58, 143, 208, 0.4))` 恒取那个**硬编码蓝色**回退值，
+     导致 ring 在所有主题下都是同一抹蓝，违背需求 4「闪动颜色随主题适配」。
+     改为与 --color-flash-bg 同源、从当前主题主色派生（40% 透明度）。
+     注：--color-flash-ring 只在 @keyframes flashPulse 的 box-shadow 里被纯 CSS 消费，
+     不像 --color-chat-scrim 会被 JS 用 getComputedStyle 读回，故无需 @property 注册。 */
+  --color-flash-ring: color-mix(in srgb, var(--color-primary) 40%, transparent);
 }
 
 /* 经典微信风格 */
@@ -670,6 +681,10 @@
   /* 主色：偏青的亮蓝，在深蓝紫底上够亮；--color-primary-text 用深色保证 4.5:1 */
   --color-primary: #5ad1f5;
   --color-primary-text: #04222e;
+  /* 液态玻璃（v2.3.103 需求 3）：圆角加大且统一（模拟「凝固液态、无尖锐直角」），
+     覆盖 :root 默认的 10/6px。所有用到 --radius / --radius-sm 的面板/卡片/输入/按钮同步变圆。 */
+  --radius: 22px;
+  --radius-sm: 14px;
   /* 背景：四色相柔和渐变（青→蓝→靛→紫），色标 alpha 一律压低（见上方说明） */
   --color-bg: linear-gradient(135deg, rgba(12, 42, 68, 0.58) 0%, rgba(22, 44, 92, 0.55) 34%, rgba(52, 34, 96, 0.56) 66%, rgba(88, 38, 92, 0.58) 100%);
   /* 面板：半透明白。0.20 是实测上限——再高就与 bg 合成后超不出 4.5:1 */
@@ -744,4 +759,19 @@
   --liquid-overlay-text-body: rgba(238, 244, 255, 0.86);
   /* 场景图状态条底：近不透明深蓝紫（与 --liquid-overlay 同族，略亮一档以便区分） */
   --liquid-bar-base: #101f3c;
+  /* ── v2.3.103 需求 3：液态玻璃观感增强令牌 ────────────────────────────────────
+     全部色值走 variables.css（项目铁律：index.css 不写死色值，其色值检查不剥离注释）。
+     以下均为纯视觉修饰，不改变 --color-text / --color-panel / --color-chat-bg 等承载面令牌，
+     故 WCAG AA 对比度与既有基线完全一致（verify-dye-contrast / verify-liquid-glass / verify-chat-ui-contrast 均无回归）。 */
+  /* 细淡玻璃描边（1px 半透明白蓝，模拟折射；略高于 --color-border 的 0.30 以便更可见的玻璃边） */
+  --liquid-edge: rgba(190, 220, 255, 0.40);
+  /* 顶部柔和漫反射高光（inset，非刺眼金属亮光） */
+  --liquid-highlight: inset 0 1px 1px rgba(255, 255, 255, 0.42);
+  /* 弥散式浅淡柔和阴影（大 blur、低 opacity，营造悬浮层次；比 v2.3.98 移除的 --shadow-panel 更柔，
+     不形成方形硬边，故与半透明通透感不冲突） */
+  --liquid-shadow: 0 16px 48px rgba(2, 8, 22, 0.30);
+  /* 按钮按下时的内陷阴影（果冻凹陷感） */
+  --liquid-press: inset 0 2px 6px rgba(2, 8, 22, 0.30);
+  /* 按钮 hover 高光光斑（浅色斜向带，沿表面缓慢扫过；基态透明，anim-off 下只是没有流动） */
+  --liquid-btn-sheen: linear-gradient(105deg, transparent 32%, rgba(255, 255, 255, 0.55) 50%, transparent 68%);
 }

@@ -941,7 +941,7 @@
  "settings.bubbleOpacity": "Прозрачность пузырька",
  "settings.bubbleOpacityDesc": "Общая прозрачность чат‑пузырьков (50%~100%). Чем меньше значение, тем более прозрачным становится пузырёк, а фон становится более заметным",
  "settings.bubbleRadius": "Закругление пузырька: {n} px",
- "settings.catAppearance": "Тема и внешний вид",
+ "settings.catAppearance": "Внешний вид и анимация",
  "settings.catChat": "Чат и группы",
  "settings.catGeneral": "Общее и ИИ",
  "settings.catGeneration": "Генерация и дополнения",
@@ -949,7 +949,7 @@
  "settings.catProactive": "Проактивные сообщения",
  "settings.catSocial": "Память и социальные",
  "settings.catTranslation": "Перевод и звук",
- "settings.catWindow": "Окно и данные",
+ "settings.catWindow": "Окно и система",
  "settings.clickSwitch": "Нажмите, чтобы переключить",
  "settings.closeBehavior": "Поведение при закрытии главного окна",
  "settings.closeBehaviorDesc": "Выберите, как главное окно реагирует на нажатие кнопки закрытия; вступает в силу немедленно.",
@@ -1742,5 +1742,12 @@
  "quickimport.preview.tools": "Инструменты",
  "quickimport.preview.segments": "Сегменты промпта",
  "quickimport.preview.editHint": "Нажмите «Сохранить», чтобы импортировать; «Отмена» — этот элемент вообще не будет импортирован.",
- "quickimport.preview.edited": "Импорт завершён; продолжать редактирование можно в библиотеке."
+ "quickimport.preview.edited": "Импорт завершён; продолжать редактирование можно в библиотеке.",
+ "chat.resendInterrupted": "Отправить снова",
+ "chat.resendInterruptedTip": "Удалить незавершённый ответ и сгенерировать заново",
+ "chat.resendInterruptedDone": "Отправлено снова: удалено {n} сообщений, {m} воспоминаний, {k} моментов, {d} сюжетных узлов",
+ "chat.resendInterruptedFail": "Не удалось отправить снова: {msg}",
+ "settings.advanced": "Дополнительные настройки",
+ "settings.advancedTip": "Развернуть или свернуть дополнительные настройки",
+ "settings.catExtensions": "Расширения и инструменты"
 }

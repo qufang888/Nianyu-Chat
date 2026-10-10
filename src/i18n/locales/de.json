@@ -941,7 +941,7 @@
  "settings.bubbleOpacity": "Blasen­Opacity",
  "settings.bubbleOpacityDesc": "Gesamtransparenz der Chat‑Blasen (50 %~100 %). Niedrigere Werte machen den Hintergrund stärker sichtbar",
  "settings.bubbleRadius": "Blasenradius: {n} px",
- "settings.catAppearance": "Thema & Erscheinung",
+ "settings.catAppearance": "Erscheinung & Animation",
  "settings.catChat": "Chat & Gruppen",
  "settings.catGeneral": "Allgemein & KI-Verhalten",
  "settings.catGeneration": "Generierung & Erweiterungen",
@@ -949,7 +949,7 @@
  "settings.catProactive": "Proaktive Nachrichten",
  "settings.catSocial": "Gedächtnis & Soziales",
  "settings.catTranslation": "Übersetzung & Sound",
- "settings.catWindow": "Fenster & Daten",
+ "settings.catWindow": "Fenster & System",
  "settings.clickSwitch": "Klicken zum Wechseln",
  "settings.closeBehavior": "Verhalten beim Schließen des Hauptfensters",
  "settings.closeBehaviorDesc": "Wählen Sie, wie das Hauptfenster auf Klicken auf Schließen reagiert; tritt sofort in Kraft.",
@@ -1742,5 +1742,12 @@
  "quickimport.preview.tools": "Werkzeuge",
  "quickimport.preview.segments": "Prompt-Segmente",
  "quickimport.preview.editHint": "Klicke auf „Speichern“, um wirklich zu importieren; „Abbrechen“ heißt, dieser Eintrag wird gar nicht importiert.",
- "quickimport.preview.edited": "Import abgeschlossen; du kannst in der Bibliothek weiter bearbeiten."
+ "quickimport.preview.edited": "Import abgeschlossen; du kannst in der Bibliothek weiter bearbeiten.",
+ "chat.resendInterrupted": "Erneut senden",
+ "chat.resendInterruptedTip": "Lösche die unvollständige Antwort und generiere sie neu",
+ "chat.resendInterruptedDone": "Erneut gesendet: {n} Nachrichten, {m} Erinnerungen, {k} Momente und {d} Story-Knoten entfernt",
+ "chat.resendInterruptedFail": "Erneut senden fehlgeschlagen: {msg}",
+ "settings.advanced": "Erweiterte Einstellungen",
+ "settings.advancedTip": "Erweiterte Einstellungen ein- oder ausblenden",
+ "settings.catExtensions": "Erweiterungen & Werkzeuge"
 }

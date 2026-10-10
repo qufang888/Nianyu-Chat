@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, Fragment } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Fragment } from 'react';
 
 import { createPortal } from 'react-dom';
 
@@ -97,6 +97,24 @@ import { TranslateModal } from './TranslateModal';
 
 
 // 拖拽添加接受的图片扩展名（v2.3.51）：与主进程 dialog:pickImage 的过滤器保持一致
+
+// v2.3.102 需求 1：计算「打断后重发」按钮应挂在哪条用户消息下（主窗定义，小窗 import 复用同一份逻辑）。
+// 语义：取最后一条用户消息；若它之后存在被标记 interrupted 的非用户消息 → 返回该用户消息 id，否则 null。
+// 覆盖两种用户场景：
+//   a) AI 已输出一部分后被用户打断（末尾存在 interrupted=true 的 AI 消息）；
+//   b) AI 一个字都没输出就被打断（主进程在打断分支仍会落一条带 interrupted=true 的占位消息）。
+// 两种情况都能命中同一条判定分支。interrupted 仅由主进程在打断落库时写入，正常完成不写。
+export function computeInterruptedAnchorId(msgs: ChatMessage[]): number | null {
+  // 1) 定位最后一条用户消息
+  let ui = -1;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].sender_type === 'user') { ui = i; break; }
+  }
+  if (ui < 0) return null;
+  // 2) 若其后存在被标记「打断」的非用户消息 → 该用户消息即锚点；否则不显示按钮
+  const tail = msgs.slice(ui + 1);
+  return tail.some((m) => m.sender_type !== 'user' && m.interrupted) ? msgs[ui].id : null;
+}
 
 const IMAGE_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp)$/i;
 
@@ -3237,6 +3255,48 @@ export const ChatWindow: React.FC<{
 
 
 
+  // v2.3.102 需求 1：打断后重发 —— 复用同文件「回滚 / 修改重发」的调用链（打断兜底 → rollback(keepAnchor) → 重生成）。
+  // 主进程侧先中止该聊天在飞的流 → rollbackMessages(..., keepAnchor=true)（保留锚点用户消息 m，
+  // 删其后全部 AI 回复 + 级联记忆/朋友圈/剧情节点）→ 广播刷新 → 以 m 的 content/images 走 handleStream 正常重生成。
+  // 按钮的消失无需手动处理：新一轮 AI 正常完成、不带 interrupted 标记 → computeInterruptedAnchorId 自动返回 null。
+  const handleResendInterrupted = async (m: ChatMessage) => {
+    if (aiActionBusy) return; // 防连点（复用本组件已有的消息操作忙碌态）
+    setAiActionBusy(true);
+    try {
+      // 1) 若仍有流在飞（本组件「打断生成」用的流式占位状态）→ 先打断并等 stream:done 广播清理占位
+      if (Object.keys(streamingMsgs).length > 0) {
+        await api.interruptStream(chatId);
+        await new Promise((r) => setTimeout(r, 400));
+        setStreamingMsgs({});
+      }
+      // 2) 主进程删除 + 重生成
+      const res = await api.regenerateReply({ chatType, chatId, fromUserMsgId: m.id });
+      if (!res.ok) {
+        showToast(t('chat.resendInterruptedFail', { msg: res.error ?? '' }));
+        return;
+      }
+      // 3) 刷新消息 / 剧情节点，并广播回滚（与 handleRollback 同口径）
+      reload();
+      setStoryNodes(await api.listStoryNodes(chatType, chatId));
+      setEditingNodeId(null);
+      api.syncMessages({ chatType, chatId, action: 'rolledBack' });
+      showToast(t('chat.resendInterruptedDone', {
+        n: res.deletedMsgs,
+        m: res.deletedMems,
+        k: res.deletedMoments,
+        d: res.deletedNodes,
+      }));
+    } catch (e: any) {
+      // ⚠️ 失败时数据可能**已经被删**（主进程先 rollback 再 handleStream，而 handleStream 会抛），
+      //    所以这里必须同时做两件事：① 如实告知；② 重新拉取，让界面反映「已删」的真实状态。
+      showToast(t('chat.resendInterruptedFail', { msg: e?.message || String(e) }), { error: true });
+      reload();
+      try { setStoryNodes(await api.listStoryNodes(chatType, chatId)); } catch { /* 拉取失败不掩盖原错误 */ }
+    } finally {
+      setAiActionBusy(false);
+    }
+  };
+
   // v2.3.63：删除消息（顶替旧「撤回」位置）——只删这一条消息，
 
   // **不动**记忆 / 朋友圈动态 / 剧情节点（与旧「撤回」语义相反，故 IPC 换成 messages:deleteOnly）
@@ -4753,6 +4813,13 @@ export const ChatWindow: React.FC<{
 
   const allMessagesUnique = Array.from(uniqueMessages.values());
 
+  // v2.3.102 需求 1：唯一入口判定 —— 需要挂「打断后重发」按钮的那条用户消息 id（无则 null）。
+  // 向下传给 MessageRow：showResendInterrupted = isUser && msg.id === interruptedAnchorId。
+  const interruptedAnchorId = useMemo(
+    () => computeInterruptedAnchorId(allMessagesUnique),
+    [allMessagesUnique],
+  );
+
 
 
   return (
@@ -5974,6 +6041,11 @@ export const ChatWindow: React.FC<{
                 onForkFromHere={forkFromMessage}
 
                 onSelectCopy={openSelectCopy}
+
+                // v2.3.102 需求 1：仅当本条用户消息是「打断后重发」锚点时渲染重发按钮
+                interruptedAnchorId={interruptedAnchorId}
+
+                onResendInterrupted={handleResendInterrupted}
 
               />
 
@@ -7390,13 +7462,18 @@ const MessageRow: React.FC<{
   // v2.3.101：本条消息为「新追加」→ 播放「头像渐显 + 气泡弹出」入场动画
   animEnter?: boolean;
 
+  // v2.3.102 需求 1：若本条用户消息的 id 等于唯一锚点 id，则在其 .msg-body 内渲染「重发」按钮
+  interruptedAnchorId?: number | null;
+
+  onResendInterrupted?: (m: ChatMessage) => void;
+
 }> = ({
 
   msg, onImage, prevTimestamp, avatarPath, userAvatarPath, showTts, ttsState, typing, streaming, hideReasoning, onSpeak, onReplayTts, onRegenerateTts, onReasoningCopied,
 
   onQuickMemory, onSaveImageMemory, onViewPrompt, onForward, onEdit, onRollback, onCopy, onTranslate, onMarkNode, onForkFromHere, onSelectCopy, onDeleteMsg, onAiAction, showAiActions, aiActionBusy, onToggleCollapse, allCollapsed, roleMood, searchResults, onOpenSearch,
 
-  pseudoOn, pseudoSpeed, pseudoKey, animEnter,
+  pseudoOn, pseudoSpeed, pseudoKey, animEnter, interruptedAnchorId, onResendInterrupted,
 
 }) => {
 
@@ -7485,7 +7562,11 @@ const MessageRow: React.FC<{
 
   }, [actionBarGate]);
 
-  // 发送时间（气泡上方）：同一分钟仅顶部消息显示；1 分钟内显示「刚刚」，否则精确到分钟
+  // 发送时间（气泡上方）：同一分钟仅顶部消息显示；否则显示 HH:MM（24 小时制）。
+  // v2.3.102 需求 2（QA 复核修正）：**不再**显示本地化的「刚刚」文案。
+  // 原因：时间标签恒在 44px 的头像列内（.msg-avatar-col，flex:0 0 44px），而 msg.justNow 的译文本宽度
+  // 在 10 个 locale 里有 5 个超过 44px（西语「Hace un momento」≈82px 最甚），溢出会左右对称串出、压到旁边的气泡上。
+  // HH:MM 由 getHours()/getMinutes() 生成、与 locale 无关、恒为 ~28px，故统一采用。
 
   const timeAbove = (() => {
 
@@ -7500,8 +7581,6 @@ const MessageRow: React.FC<{
       if (!isNaN(pd) && Math.floor(d / 60000) === Math.floor(pd / 60000)) return null;
 
     }
-
-    if (Date.now() - d < 60000) return t('msg.justNow');
 
     const dt = new Date(d);
 
@@ -7721,15 +7800,23 @@ const MessageRow: React.FC<{
 
     <div className={`msg-row ${isUser ? 'user' : 'ai'}${animEnter ? ' anim-enter' : ''}`} data-mid={msg.id} style={{ position: 'relative' }} onContextMenu={handleContextMenu}>
 
-      {timeAbove && <div className="msg-time-above">{timeAbove}</div>}
+      {/* v2.3.102 需求 2：头像 + 时间合成一个固定 44px 的竖列（.msg-avatar-col），
+          时间恒在头像正下方；.msg-row.user 的 row-reverse 只翻转行方向，列内是 column，
+          故 user/ai 两向时间都恒在头像下方，且不再作为 .msg-row 直接子项参与横向占宽。
+          timeAbove「同一分钟仅顶部显示」的判定逻辑保持不变，仅改渲染位置。 */}
+      <div className="msg-avatar-col">
 
-      <div className="avatar">
+        <div className="avatar">
 
-        {isUser
+          {isUser
 
-          ? (userAvatarPath ? <AvatarImg path={userAvatarPath} /> : '🙂')
+            ? (userAvatarPath ? <AvatarImg path={userAvatarPath} /> : '🙂')
 
-          : avatarPath ? <AvatarImg path={avatarPath} /> : '🤖'}
+            : avatarPath ? <AvatarImg path={avatarPath} /> : '🤖'}
+
+        </div>
+
+        {timeAbove && <div className="msg-time-above">{timeAbove}</div>}
 
       </div>
 
@@ -7955,7 +8042,15 @@ const MessageRow: React.FC<{
             {/* v2.3.65：分组隔断——左侧语音组（听这条消息），右侧 AI 操作组（让 AI 再干活）。
                 两者用途不同，用竖线分开避免误点：顺时针 ⟳ 是语音重播、逆时针 ⟲ 是 AI 重写，
                 方向相反极易混淆，隔断同时起到视觉分组作用。*/}
-            {showTts && onAiAction && !isUser && <span className="msg-action-divider" aria-hidden="true" />}
+            {/* v2.3.103：隔断线常驻 DOM，用 .is-shown 切换显隐并带过渡动画。
+                规则：仅「朗读(🔊)」存在而无其他按钮时（is-shown=false）隔断收起（宽 0、透明），
+                一旦出现 代写/重写/续写 等其它按钮（is-shown=true）才展开 —— 避免「只有朗读时右边挂一条悬空竖线」。*/}
+            {showTts && (
+              <span
+                className={`msg-action-divider ${showAiActions && onAiAction && !isUser ? 'is-shown' : ''}`}
+                aria-hidden="true"
+              />
+            )}
 
             {/* v2.3.94 需求 2 连带修复：容器门控拆开后，AI 操作组必须自己带上 showAiActions 门。
                 此前这三颗按钮完全依赖外层 `(showAiActions && onAiAction && !isUser)` 兜底才不出现在
@@ -8025,6 +8120,24 @@ const MessageRow: React.FC<{
 
 
         </div>
+
+        {/* v2.3.103：重发按钮改为「横向按钮行」形态（与 AI 代写/重写/续写/朗读 同一行式样），
+            复用 .msg-action-bar 的 0.5s 弹出动画。常驻 DOM、用 .is-in 切换显隐，
+            这样从「无 → 有」时才会触发过渡（与 AI 操作栏同机制），而非挂载即终态。
+            按钮本身仍是 block 级独占一格、左对齐（msg-resend-bar 覆盖对齐）。*/}
+        {onResendInterrupted && (
+          <div className={`msg-action-bar msg-resend-bar ${interruptedAnchorId === msg.id ? 'is-in' : ''}`}>
+            <button
+              type="button"
+              className="msg-resend-btn"
+              disabled={aiActionBusy}
+              title={t('chat.resendInterruptedTip')}
+              onClick={() => onResendInterrupted(msg)}
+            >
+              {t('chat.resendInterrupted')}
+            </button>
+          </div>
+        )}
 
       </div>
 

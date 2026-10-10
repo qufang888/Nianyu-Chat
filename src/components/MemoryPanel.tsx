@@ -5,6 +5,7 @@ import { useTheme } from '../theme/ThemeContext';
 import type { MemoryEntry, ChatListItem } from '../types';
 import { useToast, ToastView } from './Toast';
 import { rankCandidates } from '../utils/fuzzySearch';
+import { flashElement } from '../utils/flash';
 
 // 记忆面板：展示并手动编辑某角色的记忆（AI 自动提炼的记忆也会出现在列表中，可手动修改/删除）
 export const MemoryPanel: React.FC<{ roleId: string }> = ({ roleId }) => {
@@ -107,9 +108,9 @@ export const MemoryPanel: React.FC<{ roleId: string }> = ({ roleId }) => {
     const el = document.getElementById('mem-' + m.id);
     if (el) {
       el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      el.classList.remove('setting-flash');
-      void el.offsetWidth;
-      el.classList.add('setting-flash');
+      // v2.3.102 需求 4：统一走 flashElement —— 旧实现在此只 add 类、且完全没有移除定时器，
+      // 导致类永久残留，第二次跳到同一项不会再闪。flashElement 内含去抖 + 5000ms 后清类。
+      flashElement(el);
     }
     edit(m);
   };

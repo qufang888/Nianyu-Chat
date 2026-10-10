@@ -4,6 +4,7 @@
 // 指南内搜索逻辑与「设置页搜索框」一致：百度建议式候选、最多 5 条按关联度排序、
 // 命中高亮、点击跳转后闪动 5 秒。
 import React, { useMemo, useState } from 'react';
+import { flashElement } from '../utils/flash';
 
 type GuideSection = {
   id: string;
@@ -722,6 +723,111 @@ const GUIDE: GuideSection[] = [
       </>
     ),
   },
+  {
+    id: 'guide-v23102',
+    title: 'v2.3.102：打断重发 + 时间位置 + 设置分类 + 闪动统一',
+    kw: ['重发','重新生成','打断','打断重发','中断','半截','时间','时间戳','头像下方','头像下面','24小时','HH:MM','设置分类','分类','高级设置','折叠','展开','线性动画','搜索','闪动','高亮','闪现','5次','1秒','5000','主题适配','v23102','v2.3.102'],
+    body: (
+      <>
+        <p style={{ fontWeight: 600 }}>打断后一键重发</p>
+        <ul>
+          <li>发出消息后打断 AI（对方还没输出完），这条<b>你发出的消息气泡下方</b>会出现「<b>重发</b>」按钮，点一下即可重新生成。</li>
+          <li>AI 已吐出的半截回复会被<b>直接删除</b>后重新生成；若 AI 一个字都没输出，则直接开始输出，不会留下空消息。</li>
+          <li>主窗与<b>小窗都支持</b>；重发期间按钮<b>置灰</b>防连点；失败会弹提示并自动刷新消息列表。</li>
+          <li>按钮配色跟随主题（正文色压面板色），<b>15 个主题下文字都清晰可读</b>。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>消息时间移到头像下方</p>
+        <ul>
+          <li>收发时间从「头像左边」挪到头像<b>正下方</b>（居中、固定 44px 宽），不再把头像顶出去。</li>
+          <li>时间统一为 <b>24 小时制 <code>HH:MM</code></b>，与界面语言无关 → <b>任何语言都不会溢出</b>。
+            <ul>
+              <li>原因：原先「刚刚 / Just now / Hace un momento」在不同语言长度差异极大，德语/西班牙语/法语/葡萄牙语里连算术下界都超过 44px，任何字体都溢出。</li>
+            </ul>
+          </li>
+          <li>同一分钟内的连续消息仍会省略重复时间。</li>
+          <li>小窗同样改到下方；<b>没设头像</b>时不再空出 50px 空白竖条。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>设置界面：分类整理 + 高级设置折叠</p>
+        <ul>
+          <li>左侧导航重划为 <b>7 个类别</b>：通用 / 主题与外观 / 聊天 / 主动消息 / 社交 / 扩展 / 窗口，且与右侧面板<b>顺序严格一致</b>。</li>
+          <li>较冷门/进阶的选项收进所属类别的「<b>高级设置</b>」折叠区，默认收起，展开收起为<b>线性动画</b>并随全局动效速度缩放（关掉动画则瞬间展开，不卡半开）。</li>
+          <li><b>搜索仍能搜到折叠里的设置项</b>：点候选项会自动<b>展开它所在的高级设置</b>、滚动到位并让该项<b>闪动高亮</b>；高级设置区块本身也纳入索引，不会「搜得到点不动」。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>闪动高亮全软件统一</p>
+        <ul>
+          <li>所有高亮闪动统一为 <b>闪 5 次 × 每次 1 秒</b>（合计 5000ms），共用一处常量与实现（此前有 3200ms、5000ms 各写各的）。</li>
+          <li>闪动颜色由各主题主色<b>实时派生</b>，不再使用写死的蓝色，<b>随主题自动适配</b>。</li>
+          <li>覆盖：设置搜索索引、设置分类跳转、模型列表、记忆面板、聊天列表、使用指南等。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>本版修掉的问题</p>
+        <ul>
+          <li><b>重发按钮对比度不达标</b>（液态玻璃下仅 1.44:1、默认微信主题 2.04:1，15 个主题里 6 个低于 4.5）→ 换用已验证达标的配色组合并去掉半透明，非玻璃主题最小 <b>4.67:1</b>，微信主题 2.04 → <b>17.40</b>。</li>
+          <li><b>闪动光环在全部 15 个主题里都是写死的蓝色</b> → 改为从主题主色实时派生。</li>
+          <li><b>记忆面板高亮第二次点击没反应</b>（只加类、没有移除计时器）→ 统一走带自动摘除的实现。</li>
+          <li>「重发」按钮上一处无效的对齐声明、模型高亮被写死的圆角、高级设置箭头动画关不掉，均已修正。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>如实说明（本版未修，非本次引入）</p>
+        <ul>
+          <li><b>时间戳灰字偏淡</b>：微信 / 毛玻璃 / 暗色 / 缤纷 / 霜白 / 液态玻璃 6 个主题下低于 AA 4.5。经与上一版逐行比对确认为<b>既有性质</b>（本版只挪了位置，用色与承载背景都没变），已加「不许变差」锁定，留待下一版。</li>
+          <li><b>毛玻璃主题的对比度天花板</b>：该主题面板为 22% 白色半透明，任何单一文字色在它上面的数学上限仅 <b>2.89:1</b>（其自带正文色也只有 3.33:1），属该主题固有性质，强行改色会破坏观感，故如实标注、未处理。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>本版新增的验证脚本</p>
+        <ul>
+          <li><code>verify-resend-interrupted.mjs</code>（重发链路 27）· <code>verify-flash-unify.mjs</code>（闪动统一 7）· <code>verify-chat-ui-contrast.mjs</code>（聊天面新增 UI 对比度 13）· <code>verify-time-label-width.mjs</code>（时间标签宽度 11）· <code>verify-settings-cats.mjs</code>（设置分类 15）· <code>verify-resend-anchor.mjs</code>（重发锚点 19）· <code>verify-flash-timing.mjs</code>（闪动时序 26）。</li>
+          <li>全量 <b>31 个验证脚本 31/0 通过</b>；新增脚本均经<b>可证伪性实测</b>（<code>NY_RESEND_NO_KEEP=1</code> / <code>NY_RESEND_NO_SKIP=1</code> / <code>NY_FLASH_UNIFY_BREAK=1</code> 注入缺陷后确实失败退出），证明不是空转检查。</li>
+          <li>主题覆盖 <b>15 套</b>（含液态玻璃），由脚本自动解析主题文件，<b>以后新增主题会自动纳入检查</b>。</li>
+        </ul>
+      </>
+    ),
+  },
+  {
+    id: 'guide-v23103',
+    title: 'v2.3.103：重发按钮动效 + 分隔线动画 + 液态玻璃重做',
+    kw: ['重发','重发按钮','打断重发','横向按钮','同一行','操作栏','分隔线','竖线','智能显隐','动画','液态玻璃','Liquid Glass','玻璃','果冻','水感','高光','漫反射','细款滚动条','弹性回弹','弹出','搜索','搜索复核','v23103','v2.3.103'],
+    body: (
+      <>
+        <p style={{ fontWeight: 600 }}>重发按钮：横向按钮行 + 弹出动画</p>
+        <ul>
+          <li>打断后出现的「重发」按钮，从独占一行的块改为**横向按钮行**（和 AI 代写/重写/续写/朗读 同一行式样）。</li>
+          <li>复用操作栏的 <b>0.5 秒弹出动画</b>（淡入 + 从气泡边缘弹下），不是凭空出现；关掉动效档仍正常可见。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>操作栏分隔竖线：智能显隐 + 动画</p>
+        <ul>
+          <li><b>只有「朗读」一个按钮</b>时（无其它按钮），竖线<b>收起</b>，不挂悬空竖线。</li>
+          <li>一旦出现 代写/重写/续写 等其它按钮，竖线才<b>展开</b>；出现与消失都带过渡动画。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>液态玻璃（Liquid Glass）主题重做</p>
+        <ul>
+          <li>面板/卡片/输入框/按钮：统一加大圆角（无尖锐直角）、<b>细淡玻璃描边</b>（模拟折射）、顶部<b>柔和漫反射高光</b>、<b>弥散浅淡柔和阴影</b>（悬浮层次）；底色低饱和半透明。</li>
+          <li>按钮<b>果冻质感</b>：点击轻微凹陷（scale 0.96 + 内陷阴影）；悬浮时浅色高光光斑沿表面<b>缓缓流过</b>。</li>
+          <li><b>半透明细款滚动条</b>（7px，hover 略增亮）。</li>
+          <li>弹窗/下拉/右键菜单/tooltip 的弹出与收起改用<b>果冻弹性回弹</b>（轻微过冲缓动），无生硬切换。</li>
+          <li>背景渐变<b>极缓漂移</b>的水感动效（可被动效开关关闭）。</li>
+          <li>⚠️ 窗口拖拽时的柔和形变属<b>主进程</b>能力（窗口 setBounds/IPC），<b>本次未做</b>，需主进程配合另行排期。</li>
+          <li>对比度闸门 <code>verify-liquid-glass.mjs</code> 扩至 <b>147 断言</b> 全部通过，15 主题全覆盖，文字仍达 WCAG AA。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>设置内搜索复核</p>
+        <ul>
+          <li>本版未改动设置搜索代码；<code>verify-search-suggest.mjs</code> <b>27/0 通过</b>。</li>
+          <li>命中折叠区设置项仍会<b>自动展开 → 滚动到位 → 闪动高亮</b>，与原来一致、无回归。</li>
+        </ul>
+
+        <p style={{ marginTop: 10, fontWeight: 600 }}>验证</p>
+        <ul>
+          <li>类型检查 + 打包构建通过；<b>31 个验证脚本 31/0 通过</b>；i18n 10 处键集合一致（各 1751 键）。</li>
+        </ul>
+      </>
+    ),
+  },
 ];
 
 export function GuideView({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -768,10 +874,8 @@ export function GuideView({ open, onClose }: { open: boolean; onClose: () => voi
     const el = document.getElementById(id);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      el.classList.remove('setting-flash');
-      void el.offsetWidth;
-      el.classList.add('setting-flash');
-      window.setTimeout(() => el.classList.remove('setting-flash'), 5000);
+      // v2.3.102 需求 4：统一走 flashElement，去掉此处写死的 5000ms 手写 timer
+      flashElement(el);
     }
     setShowSuggest(false);
     setQ('');

@@ -941,7 +941,7 @@
  "settings.bubbleOpacity": "吹き出しの不透明度",
  "settings.bubbleOpacityDesc": "チャット吹き出しの全体の不透明度（50%~100%）。値が小さいほど透明になり、背景が見えやすくなります",
  "settings.bubbleRadius": "吹き出しの角丸：{n} px",
- "settings.catAppearance": "テーマおよび外観",
+ "settings.catAppearance": "外観およびアニメーション",
  "settings.catChat": "チャットおよびグループチャット",
  "settings.catGeneral": "一般およびAI",
  "settings.catGeneration": "生成および拡張",
@@ -949,7 +949,7 @@
  "settings.catProactive": "プロアクティブメッセージ",
  "settings.catSocial": "記憶およびソーシャル",
  "settings.catTranslation": "翻訳およびサウンド",
- "settings.catWindow": "ウィンドウおよびデータ",
+ "settings.catWindow": "ウィンドウおよびシステム",
  "settings.clickSwitch": "クリックで切替",
  "settings.closeBehavior": "メインウィンドウを閉じる動作",
  "settings.closeBehaviorDesc": "閉じるボタンをクリックしたときのメインウィンドウの動作を選択します。設定は即時反映されます。",
@@ -1742,5 +1742,12 @@
  "quickimport.preview.tools": "ツール",
  "quickimport.preview.segments": "プロンプト断片",
  "quickimport.preview.editHint": "「保存」を押すと実際にインポートされます。「キャンセル」ならこの項目はまったくインポートされません。",
- "quickimport.preview.edited": "インポート完了。資料庫で引き続き編集できます。"
+ "quickimport.preview.edited": "インポート完了。資料庫で引き続き編集できます。",
+ "chat.resendInterrupted": "再送信",
+ "chat.resendInterruptedTip": "未完成の返信を削除して再生成します",
+ "chat.resendInterruptedDone": "再送信しました：メッセージ {n} 件、記憶 {m} 件、モーメント {k} 件、ストーリーノード {d} 件を削除しました",
+ "chat.resendInterruptedFail": "再送信に失敗しました：{msg}",
+ "settings.advanced": "詳細設定",
+ "settings.advancedTip": "詳細設定を展開または折りたたみます",
+ "settings.catExtensions": "拡張およびツール"
 }

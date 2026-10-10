@@ -941,7 +941,7 @@
  "settings.bubbleOpacity": "氣泡透明度",
  "settings.bubbleOpacityDesc": "聊天氣泡的整體透明度（50%~100%）。值越小越透明，背景更明顯",
  "settings.bubbleRadius": "氣泡圓角：{n} px",
- "settings.catAppearance": "主題與外觀",
+ "settings.catAppearance": "外觀與動效",
  "settings.catChat": "聊天與群聊",
  "settings.catGeneral": "通用與 AI 行為",
  "settings.catGeneration": "生成與擴展",
@@ -949,7 +949,7 @@
  "settings.catProactive": "主動消息",
  "settings.catSocial": "記憶與社交",
  "settings.catTranslation": "翻譯與音效",
- "settings.catWindow": "視窗與資料",
+ "settings.catWindow": "視窗與系統",
  "settings.clickSwitch": "點擊切換",
  "settings.closeBehavior": "關閉主視窗行為",
  "settings.closeBehaviorDesc": "選擇點擊關閉按鈕時主視窗如何回應，設定後即時生效。",
@@ -1742,5 +1742,12 @@
  "quickimport.preview.tools": "工具",
  "quickimport.preview.segments": "提示詞片段",
  "quickimport.preview.editHint": "點「儲存」才會真正匯入；點「取消」表示這一項完全不會匯入。",
- "quickimport.preview.edited": "匯入完成，可在資料庫中繼續編輯。"
+ "quickimport.preview.edited": "匯入完成，可在資料庫中繼續編輯。",
+ "chat.resendInterrupted": "重發",
+ "chat.resendInterruptedTip": "刪除未完成的回覆並重新生成",
+ "chat.resendInterruptedDone": "已重發：刪除 {n} 條訊息、{m} 條記憶、{k} 條朋友圈動態、{d} 個劇情節點",
+ "chat.resendInterruptedFail": "重發失敗：{msg}",
+ "settings.advanced": "高級設定",
+ "settings.advancedTip": "展開或收合高級設定",
+ "settings.catExtensions": "擴充與工具"
 }

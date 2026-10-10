@@ -6,6 +6,7 @@ import type { ModelConfig } from '../types';
 import { PROVIDER_DEFAULTS } from '../types';
 // v2.3.90：面板缩入（关闭）动画
 import { useRetract } from '../hooks/useRetract';
+import { flashElement } from '../utils/flash';
 
 // 聊天模型切换（v2.3.41，仅单聊）：
 // 人物编辑中绑定的模型 = 该人物聊天的默认模型；其他操作菜单可勾选「跟随人物（或默认）模型」——
@@ -108,17 +109,15 @@ export const ChatModelPicker: React.FC<{ chatType: string; chatId: string }> = (
       .map((x) => x.m);
   })();
 
-  // 与设置内搜索一致：点击搜索结果 → 关闭搜索、列表滚动到对应模型并高亮闪动约 3 秒
+  // 与设置内搜索一致：点击搜索结果 → 关闭搜索、列表滚动到对应模型并高亮闪动（需求 4：统一 1s×5=5s）
   const jumpTo = (id: string) => {
     setQ('');
     requestAnimationFrame(() => {
       const el = document.getElementById(`chat-model-item-${id}`);
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        el.classList.remove('model-flash');
-        void el.offsetWidth; // 触发重排以重启动画
-        el.classList.add('model-flash');
-        window.setTimeout(() => el.classList.remove('model-flash'), 3200);
+        // v2.3.102 需求 4：统一走 flashElement('model-flash')；时长由 3200ms 回归到 5000ms（1s×5）
+        flashElement(el, 'model-flash');
       }
     });
   };

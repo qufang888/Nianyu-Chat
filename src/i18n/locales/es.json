@@ -941,7 +941,7 @@
  "settings.bubbleOpacity": "Opacidad del globo",
  "settings.bubbleOpacityDesc": "Opacidad general de los globos de chat (50%~100%). Valores más bajos hacen que el fondo sea más visible",
  "settings.bubbleRadius": "Radio del globo: {n} px",
- "settings.catAppearance": "Tema y apariencia",
+ "settings.catAppearance": "Apariencia y animación",
  "settings.catChat": "Chat y grupos",
  "settings.catGeneral": "General y comportamiento de IA",
  "settings.catGeneration": "Generación y extensiones",
@@ -949,7 +949,7 @@
  "settings.catProactive": "Mensajes proactivos",
  "settings.catSocial": "Memoria y social",
  "settings.catTranslation": "Traducción y sonido",
- "settings.catWindow": "Ventana y datos",
+ "settings.catWindow": "Ventana y sistema",
  "settings.clickSwitch": "Haz clic para cambiar",
  "settings.closeBehavior": "Comportamiento al cerrar la ventana principal",
  "settings.closeBehaviorDesc": "Elige cómo responde la ventana principal al hacer clic en cerrar; tiene efecto inmediato.",
@@ -1742,5 +1742,12 @@
  "quickimport.preview.tools": "Herramientas",
  "quickimport.preview.segments": "Segmentos de prompt",
  "quickimport.preview.editHint": "Pulsa «Guardar» para importarlo de verdad; «Cancelar» hace que este elemento no se importe en absoluto.",
- "quickimport.preview.edited": "Importación completada; puedes seguir editando en la biblioteca."
+ "quickimport.preview.edited": "Importación completada; puedes seguir editando en la biblioteca.",
+ "chat.resendInterrupted": "Reenviar",
+ "chat.resendInterruptedTip": "Elimina la respuesta inacabada y vuelve a generarla",
+ "chat.resendInterruptedDone": "Reenviado: se eliminaron {n} mensajes, {m} recuerdos, {k} momentos y {d} nodos de historia",
+ "chat.resendInterruptedFail": "Error al reenviar: {msg}",
+ "settings.advanced": "Ajustes avanzados",
+ "settings.advancedTip": "Mostrar u ocultar los ajustes avanzados",
+ "settings.catExtensions": "Extensiones y herramientas"
 }

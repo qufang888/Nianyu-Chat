@@ -941,7 +941,7 @@
  "settings.bubbleOpacity": "Opacidade do balão",
  "settings.bubbleOpacityDesc": "Opacidade geral dos balões de chat (50%~100%). Valores menores tornam o balão mais transparente, deixando o fundo mais visível",
  "settings.bubbleRadius": "Raio do balão: {n} px",
- "settings.catAppearance": "Tema & Aparência",
+ "settings.catAppearance": "Aparência & Animação",
  "settings.catChat": "Chat & Grupos",
  "settings.catGeneral": "Geral & IA",
  "settings.catGeneration": "Geração & Extensão",
@@ -949,7 +949,7 @@
  "settings.catProactive": "Mensagens proativas",
  "settings.catSocial": "Memória & Social",
  "settings.catTranslation": "Tradução & Som",
- "settings.catWindow": "Janela & Dados",
+ "settings.catWindow": "Janela & Sistema",
  "settings.clickSwitch": "Clique para alternar",
  "settings.closeBehavior": "Comportamento ao fechar a janela principal",
  "settings.closeBehaviorDesc": "Escolha como a janela principal responde ao clicar em fechar; tem efeito imediato.",
@@ -1742,5 +1742,12 @@
  "quickimport.preview.tools": "Ferramentas",
  "quickimport.preview.segments": "Segmentos de prompt",
  "quickimport.preview.editHint": "Clique em «Guardar» para importar de facto; «Cancelar» significa que este item não é importado.",
- "quickimport.preview.edited": "Importação concluída; podes continuar a editar na biblioteca."
+ "quickimport.preview.edited": "Importação concluída; podes continuar a editar na biblioteca.",
+ "chat.resendInterrupted": "Reenviar",
+ "chat.resendInterruptedTip": "Elimina a resposta inacabada e volta a gerá-la",
+ "chat.resendInterruptedDone": "Reenviado: {n} mensagens, {m} memórias, {k} momentos e {d} nós de história removidos",
+ "chat.resendInterruptedFail": "Falha ao reenviar: {msg}",
+ "settings.advanced": "Configurações avançadas",
+ "settings.advancedTip": "Expandir ou recolher as configurações avançadas",
+ "settings.catExtensions": "Extensões & Ferramentas"
 }

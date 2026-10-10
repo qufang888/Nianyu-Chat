@@ -941,7 +941,7 @@
  "settings.bubbleOpacity": "Opacité de la bulle",
  "settings.bubbleOpacityDesc": "Opacité globale des bulles de chat (50%~100%). Des valeurs plus faibles rendent l'arrière-plan plus visible",
  "settings.bubbleRadius": "Rayon de la bulle : {n} px",
- "settings.catAppearance": "Thème & apparence",
+ "settings.catAppearance": "Apparence & animation",
  "settings.catChat": "Chat & groupes",
  "settings.catGeneral": "Général & IA",
  "settings.catGeneration": "Génération & extensions",
@@ -949,7 +949,7 @@
  "settings.catProactive": "Messages proactifs",
  "settings.catSocial": "Mémoire & social",
  "settings.catTranslation": "Traduction & son",
- "settings.catWindow": "Fenêtre & données",
+ "settings.catWindow": "Fenêtre & système",
  "settings.clickSwitch": "Cliquez pour basculer",
  "settings.closeBehavior": "Comportement lors de la fermeture de la fenêtre principale",
  "settings.closeBehaviorDesc": "Choisissez comment la fenêtre principale réagit lorsque vous cliquez sur le bouton de fermeture ; prend effet immédiatement.",
@@ -1742,5 +1742,12 @@
  "quickimport.preview.tools": "Outils",
  "quickimport.preview.segments": "Segments de prompt",
  "quickimport.preview.editHint": "Cliquez sur « Enregistrer » pour importer réellement ; « Annuler » signifie que cet élément n’est pas importé du tout.",
- "quickimport.preview.edited": "Import terminé ; vous pouvez continuer à modifier dans la bibliothèque."
+ "quickimport.preview.edited": "Import terminé ; vous pouvez continuer à modifier dans la bibliothèque.",
+ "chat.resendInterrupted": "Renvoyer",
+ "chat.resendInterruptedTip": "Supprimer la réponse inachevée et la régénérer",
+ "chat.resendInterruptedDone": "Renvoyé : {n} messages, {m} souvenirs, {k} moments et {d} nœuds d’histoire supprimés",
+ "chat.resendInterruptedFail": "Échec du renvoi : {msg}",
+ "settings.advanced": "Paramètres avancés",
+ "settings.advancedTip": "Développer ou réduire les paramètres avancés",
+ "settings.catExtensions": "Extensions & outils"
 }

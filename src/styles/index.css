@@ -652,6 +652,17 @@ input[type='range']::-moz-range-thumb {
   min-width: 0;
   flex: 1;
 }
+/* v2.3.102 需求 2：头像 + 时间合为一个固定宽度的列，时间恒在头像正下方（主窗 / 小窗共用）。
+   列宽恒为 44px 与 .avatar 对齐，时间不参与 .msg-row 的横向占宽 —— 满足「头像左右位置前后不变」。
+   注意：不得改动上方 .msg-row{flex-wrap:nowrap} 与 .msg-body{min-width:0;flex:1}，
+   否则会复现「长消息把头像顶出去」的历史 bug。 */
+.msg-avatar-col {
+  flex: 0 0 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
 /* 已读未读：聊天气泡「● 未读」徽章 / 未读分隔线 / 侧栏未读角标已按用户要求移除（v2.3.11），
    水位线仅在主进程后台记录，界面不再渲染任何未读视觉标记。 */
 .bubble {
@@ -827,13 +838,57 @@ input[type='range']::-moz-range-thumb {
   pointer-events: none;
   animation: fadeIn calc(0.12s * var(--anim-speed, 1)) linear;
 }
-/* 气泡上方发送时间：同一分钟仅顶部显示 */
+/* 气泡发送时间（v2.3.102 需求 2）：改挂在 .msg-avatar-col 内、恒在头像正下方。
+   宽度约束在 44px 内并居中，不参与 .msg-row 横向占宽（「同一分钟仅顶部显示」逻辑保持不变）。 */
 .msg-time-above {
+  width: 44px;
+  white-space: nowrap;
   text-align: center;
   font-size: calc(11px * var(--font-scale));
   color: var(--color-text-muted);
-  margin: 6px 0 2px;
   user-select: none;
+}
+/* 打断后「重发」按钮（v2.3.102 需求 1）：置于用户气泡 .msg-body 内、.msg-meta 之后。
+   仅当末尾 AI 回复被标记为 interrupted 且锚定该条用户消息时渲染。
+   .msg-body 是块级容器（非 flex 列），故用 display:block + margin-right:auto 让按钮独占一行并左对齐
+   —— align-self 在其中不生效（死声明）。
+
+   ⚠️ 配色说明（v2.3.102 QA 复核修正）：初版用 `color: var(--color-primary-ink)` + 透明底，
+   实测压在**裸聊天面**上严重不达标（默认 wechat 仅 2.04:1，glass 1.44:1，15 套主题里 6 套 <4.5）。
+   根因：--color-primary-ink 只在「背景染色」时才是派生的高对比文字色，**未染色时恒等于
+   --color-primary** —— 那是给填充用的强调色，从未做过「作为文字压在聊天面」的校验。
+   故改用「主题正文色 + 面板底」这组已被校验的配对，同时把承载面从裸聊天底换成 --color-panel，
+   使 hover 也能落在同一族已校验面上（原 hover 用的 --color-panel-alt 不在 dye 校验面集合内）。 */
+/* v2.3.103：重发按钮改横向按钮行形态。复用 .msg-action-bar 的弹出动画，这里只覆盖对齐/间距，
+   使其左对齐（保持原「独占一行、左对齐」的视觉位置），并与上方消息留 4px 间距。*/
+.msg-resend-bar {
+  justify-content: flex-start;
+  margin-left: 0;
+  margin-top: 4px;
+}
+.msg-resend-btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: calc(12px * var(--font-scale));
+  color: var(--color-text);
+  background: var(--color-panel);
+  border: none;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background calc(0.15s * var(--anim-speed)) linear;
+}
+/* 用 :not(:disabled) 限定，禁用态不响应 hover（否则「禁用中仍变色」看起来像可点） */
+.msg-resend-btn:not(:disabled):hover {
+  background: var(--color-hover);
+}
+/* ⚠️ 禁用态**禁止**用 opacity 弱化：opacity 会把前景与底色**一起**向聊天底做 alpha 混合，
+   两者对比度随 alpha 一起塌陷（实测 opacity:.55 时 15/15 主题全部 <4.5，最差 1.19:1）。
+   这里只改鼠标指针、配色与启用态保持一致 —— 可读性由启用态的配对保证，
+   「禁用」语义由 disabled 属性 + 无 hover 反馈共同表达。 */
+.msg-resend-btn:disabled {
+  cursor: default;
 }
 /* 打断生成按钮：外圈内方（DeepSeek 风格） */
 .interrupt-icon {
@@ -4385,24 +4440,59 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   border-radius: 4px;
   padding: 0 2px;
 }
-/* 跳转后命中项闪动 5 秒 */
-.setting-flash {
-  animation: settingFlash 5s ease-out;
-  border-radius: 8px;
+/* v2.3.102 需求 3：折叠区与上一个设置项拉开距离。缺这条时 .advanced-toggle 会紧贴
+   上一个设置项，用户无法辨认这是一个新分区的标题还是上一项的一部分。
+   （本身无动画 —— 动画在 .advanced-body / .advanced-caret 上，已登记 panel 组。） */
+.advanced-section {
+  margin-top: 18px;
 }
-@keyframes settingFlash {
-  0% { background: var(--color-primary, #3a8fd0); box-shadow: 0 0 0 4px var(--color-primary-shadow, rgba(58, 143, 208, 0.4)); }
-  100% { background: transparent; box-shadow: 0 0 0 0 transparent; }
+/* v2.3.102 需求 3：高级设置折叠区（始终挂载，收起仅视觉隐藏）。
+   用 grid-template-rows 0fr→1fr 做线性高度动画（禁 ease）；收起时内层 overflow:hidden + min-height:0。
+   必须始终挂载：设置搜索靠 DOM 扫描建索引，一旦 unmount 高级项就会从索引消失（历史顽疾「搜到点不到」）。 */
+.advanced-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows calc(0.28s * var(--anim-speed)) linear;
+}
+.advanced-section[data-open='true'] .advanced-body {
+  grid-template-rows: 1fr;
+}
+.advanced-body-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+.advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  background: none;
+  border: none;
+  color: var(--color-text);
+}
+.advanced-caret {
+  transition: transform calc(0.28s * var(--anim-speed)) linear;
+}
+.advanced-section[data-open='true'] .advanced-caret {
+  transform: rotate(90deg);
 }
 
-/* 模型管理页：点击搜索结果后目标模型卡片高亮闪动 3 秒（3 次 1s 脉冲） */
+/* v2.3.102 需求 4：跳转 / 模型卡高亮闪动统一为「1s × 5 次 = 5s」。
+   两者共用同一个 keyframe flashPulse，颜色一律走主题变量（14 套主题经 :root 继承自动适配）。 */
+.setting-flash,
 .model-flash {
-  animation: modelFlash 1s ease-out 3;
+  animation: flashPulse 1s linear 5;
   border-radius: var(--radius-sm, 8px);
 }
-@keyframes modelFlash {
-  0% { background: var(--color-primary, #3a8fd0); box-shadow: 0 0 0 4px var(--color-primary-shadow, rgba(58, 143, 208, 0.4)); }
-  100% { background: var(--color-panel-alt); box-shadow: 0 0 0 0 transparent; }
+@keyframes flashPulse {
+  0% {
+    background: var(--color-flash-bg);
+    box-shadow: 0 0 0 4px var(--color-flash-ring);
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 /* ===== 聊天模型选择器（v2.3.43）：主窗「其他操作」与小窗抽屉共用，所有主题统一走主题变量 =====
@@ -5297,15 +5387,30 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
    故加视觉分组。v2.3.66 实测后改用 --color-text-secondary（--color-border 实测仅 1.2~1.5:1 当线条等于看不见）。 */
 .msg-action-divider {
   display: inline-block;
-  width: 1px;
+  /* v2.3.103：默认收起态（宽 0 + 透明 + 无边距），由 .is-shown 展开。
+     常驻 DOM、用类切换而非条件挂载，是为了让「出现/消失」走 transition 而非瞬切 ——
+     满足用户要求「竖线弹出、消失也带动画」。 */
+  width: 0;
   height: 14px;
-  margin: 0 4px;
+  margin: 0;
+  opacity: 0;
   /* v2.3.65：改用 --color-text-secondary —— --color-border 是为边框设计的淡色（实测仅 1.2~1.5:1），
      当隔断线会几乎看不见。secondary 实测 13/14 主题 3.54~6.59:1（≥3:1 非文本判据）。
      glass 主题是半透明白底 + 半透明白字（secondary 实测仅 1.00:1），故单列深色覆盖。*/
   background: var(--color-text-secondary);
   flex: none;
   vertical-align: middle;
+  /* ⚠️ 必须 transition（非 @keyframes）：关掉动效档时 `transition:none` 把元素直接拉到终值，
+     隔断线照常可见（仅不再有过渡），不会像 keyframes 那样退回基态导致消失。随 --anim-speed 缩放。*/
+  transition: width calc(0.18s * var(--anim-speed, 1)) ease,
+              margin calc(0.18s * var(--anim-speed, 1)) ease,
+              opacity calc(0.18s * var(--anim-speed, 1)) ease;
+}
+/* 展开态：仅当「朗读之外还有其它按钮」时由 JSX 加 .is-shown —— 与「只有朗读则不挂悬空竖线」对齐。*/
+.msg-action-divider.is-shown {
+  width: 1px;
+  margin: 0 4px;
+  opacity: 1;
 }
 
 /* 旧容器名保留为别名，避免遗漏引用导致样式丢失 */
@@ -7050,6 +7155,137 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
 [data-theme='liquid'] .psyche {
   color: var(--color-text);
   font-weight: 500;
+}
+
+/* ── 4. v2.3.103 需求 3：液态玻璃观感增强 ───────────────────────────────────────
+   全部色值走 variables.css 的 --liquid-* 变量（项目铁律：index.css 不写死色值、注释也不含 #hex）。
+   仅作用于 [data-theme='liquid']，其余 14 套主题零回归；不改变任何承载面令牌，对比度与既有基线一致。 ── */
+
+/* 4a. 面板/卡片/输入框/按钮：细淡玻璃描边 + 顶部柔和漫反射高光 + 弥散浅淡柔和阴影（悬浮层次感） */
+[data-theme='liquid'] .modal,
+[data-theme='liquid'] .modal-card,
+[data-theme='liquid'] .role-card,
+[data-theme='liquid'] .theme-card,
+[data-theme='liquid'] .sidebar,
+[data-theme='liquid'] .list-pane,
+[data-theme='liquid'] .main-pane,
+[data-theme='liquid'] .panel,
+[data-theme='liquid'] .more-dropdown,
+[data-theme='liquid'] .mention-pop,
+[data-theme='liquid'] .mini-drawer,
+[data-theme='liquid'] .chat-model-picker,
+[data-theme='liquid'] .queue-dock-panel,
+[data-theme='liquid'] .api-params-panel,
+[data-theme='liquid'] .update-banner,
+[data-theme='liquid'] .fb-ctx {
+  border: 1px solid var(--liquid-edge);
+  box-shadow: var(--liquid-shadow), var(--liquid-highlight);
+}
+
+/* 4b. 输入框：同样玻璃描边 + 顶部高光；聚焦时叠加主色描边光环 */
+[data-theme='liquid'] input,
+[data-theme='liquid'] textarea,
+[data-theme='liquid'] select {
+  border: 1px solid var(--liquid-edge);
+  box-shadow: var(--liquid-highlight);
+  transition: border-color var(--transition), box-shadow calc(0.2s * var(--anim-speed)) ease;
+}
+[data-theme='liquid'] input:focus,
+[data-theme='liquid'] textarea:focus,
+[data-theme='liquid'] select:focus {
+  box-shadow: var(--liquid-highlight), 0 0 0 3px var(--color-primary);
+}
+
+/* 4c. 按钮果冻液态质感：:active 轻微 scale(0.96) + 内陷阴影（点击凹陷）；
+   hover 时浅色高光光斑沿表面缓慢流动（transition 驱动的单向扫光，anim-off 下只是没有流动、控件仍可见）。 */
+[data-theme='liquid'] .btn-primary,
+[data-theme='liquid'] .btn-ghost,
+[data-theme='liquid'] .btn-danger,
+[data-theme='liquid'] .ctb-btn,
+[data-theme='liquid'] .tool-btn,
+[data-theme='liquid'] .mini-btn {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--liquid-edge);
+  box-shadow: var(--liquid-highlight);
+  transition: transform calc(0.12s * var(--anim-speed)) cubic-bezier(.34, 1.56, .64, 1),
+              box-shadow calc(0.2s * var(--anim-speed)) ease,
+              background var(--transition),
+              opacity var(--transition);
+}
+[data-theme='liquid'] .btn-primary:active,
+[data-theme='liquid'] .btn-ghost:active,
+[data-theme='liquid'] .btn-danger:active,
+[data-theme='liquid'] .ctb-btn:active,
+[data-theme='liquid'] .tool-btn:active,
+[data-theme='liquid'] .mini-btn:active {
+  transform: scale(0.96);
+  box-shadow: var(--liquid-press);
+}
+[data-theme='liquid'] .btn-primary::before,
+[data-theme='liquid'] .btn-ghost::before,
+[data-theme='liquid'] .btn-danger::before,
+[data-theme='liquid'] .ctb-btn::before,
+[data-theme='liquid'] .tool-btn::before,
+[data-theme='liquid'] .mini-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--liquid-btn-sheen);
+  background-size: 250% 100%;
+  background-position: 150% 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: background-position calc(1.4s * var(--anim-speed)) linear,
+              opacity calc(0.25s * var(--anim-speed)) ease;
+}
+[data-theme='liquid'] .btn-primary:hover::before,
+[data-theme='liquid'] .btn-ghost:hover::before,
+[data-theme='liquid'] .btn-danger:hover::before,
+[data-theme='liquid'] .ctb-btn:hover::before,
+[data-theme='liquid'] .tool-btn:hover::before,
+[data-theme='liquid'] .mini-btn:hover::before {
+  background-position: -120% 0;
+  opacity: 1;
+}
+
+/* 4d. 半透明细款滚动条（宽 7px、浅蓝半透明，hover 略增亮） */
+[data-theme='liquid'] ::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+[data-theme='liquid'] ::-webkit-scrollbar-thumb {
+  background: var(--liquid-edge);
+  border-radius: 4px;
+}
+[data-theme='liquid'] ::-webkit-scrollbar-thumb:hover {
+  background: var(--color-hover);
+}
+[data-theme='liquid'] * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--liquid-edge) transparent;
+}
+
+/* 4e. 弹窗/下拉/右键菜单：果冻弹性回弹（springy bezier 替代生硬 linear）。
+   仅覆盖 timing-function，基态（动画结束/未触发）仍是正常可见的静态样式；
+   anim-off 下 animation 被门禁置 none，元素照常可见，只是没有弹性。 */
+[data-theme='liquid'] .modal,
+[data-theme='liquid'] .modal-card,
+[data-theme='liquid'] .more-dropdown,
+[data-theme='liquid'] .mention-pop,
+[data-theme='liquid'] .mini-drawer,
+[data-theme='liquid'] .chat-model-picker,
+[data-theme='liquid'] .ctx-menu,
+[data-theme='liquid'] .obs-menu,
+[data-theme='liquid'] .select-menu-panel,
+[data-theme='liquid'] .list-menu,
+[data-theme='liquid'] .sel-popup,
+[data-theme='liquid'] .more-dropdown.leaving,
+[data-theme='liquid'] .mini-drawer.leaving,
+[data-theme='liquid'] .chat-model-picker.leaving,
+[data-theme='liquid'] .list-menu.leaving,
+[data-theme='liquid'] .sel-popup.leaving {
+  animation-timing-function: cubic-bezier(.34, 1.56, .64, 1);
 }
 
 /* ---------- v2.3.101：「最喜爱的人物」6 个资料字段（职业/性格/爱好/国籍/学历/菜） ---------- */

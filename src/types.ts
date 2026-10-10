@@ -226,6 +226,9 @@ export interface ChatMessage {
   genPrompt?: string; // 软件内生图时使用的提示词：仅 AI 生成的图片消息带此字段；手动发送的图片为空，用于右键「查看提示词」
   visibleToGroup?: boolean; // 群聊消息是否全群可见（默认 true）；false=仅用户与指定 AI 可见的私密备注
   toMemory?: boolean; // 群聊消息是否可被自动记忆提炼收录（仅当 visibleToGroup 为 true 时生效；默认 true）
+  // v2.3.102：该条 AI 回复被用户主动打断、未正常完成。
+  // 仅主进程在「打断落库」时置 true；正常完成一律不写该字段（缺省 falsy），避免前端残留脏的「重发」按钮。
+  interrupted?: boolean;
 }
 
 export interface Group {
@@ -651,6 +654,8 @@ export interface AppSettings {
   // animControlMode：'master'=全开/'single'=自定义；'master' 另可对应全关（配合 enableAnimations=false）
   animControlMode?: 'master' | 'single';
   animGroups?: Record<string, boolean>; // 分组 id → 是否开启动效（缺 key 视为开）；分组表见 src/utils/animControl.ts
+  // v2.3.102：高级设置折叠态（sectionId → 是否展开）。跨重启持久化；缺 key 视为收起。
+  advSections?: Record<string, boolean>;
   // ===== 界面动效速度（v2.3.97）=====
   // 与上面的 animMode/animGroups 正交：**档位决定「动不动」，速度决定「动不动得快慢」**。
   // 内部统一存**倍率**（1 = 原始速度），CSS 侧写成 `calc(<原值> * var(--anim-speed))`，
@@ -1198,6 +1203,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   animGroupSpeedPresets: {},
   animGroupSpeedSecs: {},
   animGroupSpeedCustom: {},
+  // v2.3.102：高级设置折叠态默认全部收起（sectionId → 是否展开）
+  advSections: {},
   autoCheckUpdate: true,
   autoDownloadUpdate: false,
   modelTagMode: 'api',

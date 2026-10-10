@@ -149,6 +149,30 @@ const cats = parseSettingCats(code);
 const domAnchors = collectDomAnchors(code);
 const catRefs = collectCatRefs(code);
 
+// v2.3.102 需求 3：7 类 nav 的**精确 id 集合**（顺序无关）。
+// 为什么不能只断言 length===7：数个数抓不到「id 被整体改错」这类漂移 ——
+// 例如把 cat-appearance 整体改名成 cat-look、其余 6 项不动，7 项 nav↔ref↔dom 对应关系全对 → 照样绿。
+// 这条门是「搜到点不到」历史顽疾的唯一防线，必须锁死集合本身。
+// 用 .sort() 让断言只锁**集合**、与**顺序**解耦（呈现顺序由设置页 JSX 与 SETTING_CATS 另行保证）。
+const EXPECT_CATS = [
+  'cat-general',
+  'cat-appearance',
+  'cat-chat',
+  'cat-proactive',
+  'cat-social',
+  'cat-extensions',
+  'cat-window',
+];
+function checkCatSet() {
+  const actualIds = cats.map((c) => c.id).slice().sort().join(',');
+  const expectIds = EXPECT_CATS.slice().sort().join(',');
+  check(
+    `SETTING_CATS id 集合精确匹配（实际 ${actualIds}）`,
+    actualIds === expectIds,
+    `期望 ${expectIds}\n        实际 ${actualIds}`
+  );
+}
+
 console.log('设置搜索索引验证 (v2.3.97)');
 console.log(`  解析到：静态索引 ${staticIndex.length} 条 / 分类 ${cats.length} 项 / DOM 锚点 ${domAnchors.size} 个`);
 
@@ -158,7 +182,10 @@ section('A0. 解析器自检（防止脚本本身失效而「假通过」）');
 // 这里先确认解析器确实抓到了东西，再往下做。
 {
   check(`静态索引解析到条目（${staticIndex.length} 条，应 > 40）`, staticIndex.length > 40);
-  check(`SETTING_CATS 解析到分类（${cats.length} 项，应为 8）`, cats.length === 8);
+  // v2.3.102 需求 3：分类由 8 类重分类为 7 类（cat-generation + cat-translation 合并为 cat-extensions）。
+  // 先确认解析到 7 项（解析器自检），再锁死精确 id 集合（防「整体改名」漂移）。
+  check(`SETTING_CATS 解析到分类（${cats.length} 项，应为 7）`, cats.length === 7);
+  checkCatSet();
   check(`DOM 锚点解析成功（${domAnchors.size} 个，应 > 50）`, domAnchors.size > 50);
   check('去注释后仍能取到赋值号后的数组（解析器未被注释破坏）', extractArrayLiteral(code, 'SETTING_SEARCH_INDEX') !== null);
 }
@@ -312,7 +339,8 @@ section('F. 弹窗内控件可被索引（缺口 F 取舍）');
 section('G. 分类跳转：SETTING_CATS 逐条对应 ref 注册 + DOM 锚点（回归门）');
 // 这是防止「将来把功能搬到别处又漏配导航」的那道门。
 {
-  check(`SETTING_CATS 共 8 项（实际 ${cats.length} 项）`, cats.length === 8, `实际 ${cats.length}`);
+  // v2.3.102 需求 3：锁死精确 id 集合（不只数个数），防「id 整体改错但全站一致改错」的漂移。
+  checkCatSet();
   let allOk = true;
   const report = [];
   for (const c of cats) {
@@ -325,7 +353,7 @@ section('G. 分类跳转：SETTING_CATS 逐条对应 ref 注册 + DOM 锚点（�
     );
   }
   console.log('        ' + report.join('\n        '));
-  check('8 个分类的 ref 注册与 DOM 锚点逐条对应（无失效、无漏配）', allOk);
+  check('7 个分类的 ref 注册与 DOM 锚点逐条对应（无失效、无漏配）', allOk);
 
   // 反向：catRefs 里不该有不在 SETTING_CATS 的项（旧的多余 cat-models 注册）
   const extraRefs = [...catRefs].filter((r) => !cats.some((c) => c.id === r));

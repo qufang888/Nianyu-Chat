@@ -176,6 +176,17 @@ export interface NianyuAPI {
   deleteMessageOnly: (msgId: number) => Promise<{ ok: boolean }>;
   rollbackMessages: (p: { chatType: string; chatId: string; fromMsgId: number }) => Promise<{ deletedMsgs: number; deletedMems: number; deletedMoments: number; deletedNodes: number }>;
   rollbackForEdit: (p: { chatType: string; chatId: string; fromMsgId: number }) => Promise<{ deletedMsgs: number; deletedMems: number; deletedMoments: number; deletedNodes: number }>;
+  // v2.3.102 需求 1：打断后重发 —— 保留锚点用户消息、删其后全部 AI 回复及级联，并按正常路径重生成。
+  regenerateReply: (p: { chatType: string; chatId: string; fromUserMsgId: number }) => Promise<{
+    ok: boolean;
+    error?: string;
+    deletedMsgs: number;
+    deletedMems: number;
+    deletedMoments: number;
+    deletedNodes: number;
+    userMessage?: any;
+    members?: { streamId: string; roleId: string; roleName: string }[];
+  }>;
   // 续写 / 重写 / AI 代写回复（replyForUser 只回填输入框，不落库）
   aiAction: (p: { chatType: string; chatId: string; action: 'continue' | 'rewrite' | 'replyForUser' }) => Promise<{ ok: boolean; content?: string; error?: string; message?: any }>;
   // 快捷记忆（选中文本一键存入）
@@ -630,6 +641,7 @@ export const api: NianyuAPI = {
   deleteMessageOnly: (msgId) => raw.deleteMessageOnly(msgId),
   rollbackMessages: (p) => raw.rollbackMessages(p),
   rollbackForEdit: (p) => raw.rollbackForEdit(p),
+  regenerateReply: (p) => raw.regenerateReply(p),
   aiAction: (p) => raw.aiAction(p),
   addQuickMemory: (p) => raw.addQuickMemory(p),
   pickTextFile: (filters) => raw.pickTextFile(filters),

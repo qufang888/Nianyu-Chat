@@ -869,14 +869,20 @@ class DataManager {
 
   // 回滚：删除 id >= msgId 的所有消息、其关联记忆（无论手动/自动/人工修改过），
   // 以及「该时间点之后」该聊天角色的全部记忆（含纯手写未关联的）与朋友圈动态（不论点赞收藏）
+  // v2.3.102：新增 keepAnchor —— false=现有语义（**含锚点删**，普通回滚 / 修改重发走这里，
+  // 行为逐字节不变）；true=**保留锚点消息本体**，只删其后内容，供「打断后重发」用。
   rollbackMessages(
     chatType: string,
     chatId: string,
     fromMsgId: number,
-    withStoryNodes = false
+    withStoryNodes = false,
+    keepAnchor = false
   ): { deletedMsgs: number; deletedMems: number; deletedMoments: number; deletedNodes: number } {
     const target = this.store.messages.filter(
-      (m) => m.chat_type === chatType && m.chat_id === chatId && m.id >= fromMsgId
+      (m) =>
+        m.chat_type === chatType &&
+        m.chat_id === chatId &&
+        (keepAnchor ? m.id > fromMsgId : m.id >= fromMsgId)
     );
     const ids = new Set(target.map((m) => m.id));
     // 时间锚点：被回滚消息中最早的时间戳（即回滚起点消息的时刻）

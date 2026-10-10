@@ -85,6 +85,14 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.msg-action-bar',
       '.scroll-to-bottom',
       '.mini-scroll-to-bottom',
+      // v2.3.102 需求 3：高级设置折叠区（grid-template-rows 0fr↔1fr 的 transition）。
+      // 语义为「面板展开 / 折叠」，故登记进 panel 组；不登记的话「自定义档」关不掉折叠动画，
+      // 违反项目硬约束（新增动画必须可被动画三档开关控制）。
+      '.advanced-body',
+      // v2.3.102 复核补登：折叠箭头在 .advanced-toggle 内、**不在 .advanced-body 内**，
+      // 父级那条 `.advanced-body{transition:none !important}` 管不到它 —— 必须单独登记，
+      // 否则自定义档关掉 panel 组时箭头旋转照样播放。
+      '.advanced-caret',
     ],
   },
   {
@@ -269,6 +277,9 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.hint-tip',
       '.setting-flash',
       '.model-flash',
+      // v2.3.102 复核补登：新增交互元素（打断后「重发」按钮）的 hover 背景过渡，
+      // 语义属「通用 UI 外观与交互」，与 .setting-flash / .hint-tip 同族。
+      '.msg-resend-btn',
       '.drop-hint',
       '.quick-import-overlay',
       // v2.3.94 需求 7：多媒体 API 配置编辑器（TTS/ASR/生图/生视频共用）

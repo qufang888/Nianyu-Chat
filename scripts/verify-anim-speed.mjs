@@ -85,9 +85,13 @@ const EXEMPT_RULES = [
   },
   {
     id: 'flash',
-    test: /\b(settingFlash|modelFlash)\b/,
-    why: '跳转高亮反馈：功能性提示，配套 setTimeout 在 Settings.tsx 里写死毫秒数',
-    minCount: 2,
+    // v2.3.102：闪动已统一为**单一**共享 keyframe `flashPulse`（原 settingFlash 5s 单次 +
+    // modelFlash 1s×3 两套实现合并为 `flashPulse 1s linear 5` = 5s）。故：
+    //   ① 豁免规则同步纳入新 keyframe 名 flashPulse（保留旧名以兼容历史书写）；
+    //   ② 合并后 `.setting-flash, .model-flash` 是**一条**声明，规则命中数下限由 2 调整为 1。
+    test: /\b(flashPulse|settingFlash|modelFlash)\b/,
+    why: '跳转高亮反馈：功能性提示，配套 flashElement 的 FLASH_MS(5000) 定时移除类',
+    minCount: 1,
   },
 ];
 
@@ -484,8 +488,10 @@ if (probe.__probeError) {
   check('speed=2 时 .stream-char 仍是 0.3s', near(probe.streamT2, 0.3), probe.streamT2);
   check('speed=2 时 .pseudo-char 仍是其 fallback 0.8s', near(probe.pseudoT2, 0.8), probe.pseudoT2);
 
-  // H5：跳转高亮反馈不缩放（功能性反馈，配套 setTimeout 写死毫秒数）
-  check('speed=2 时 .setting-flash 仍是 5s', near(probe.flashT2, 5, 0.05), probe.flashT2);
+  // H5：跳转高亮反馈不缩放（功能性反馈，配套 flashElement 的 FLASH_MS=5000 定时移除类）。
+  // v2.3.102 起统一为 `flashPulse 1s linear 5`：单次 animation-duration = 1s（总 5s 由 5 次迭代达成），
+  // 且不随 --anim-speed 缩放 —— 故此处断言「单次时长恒为 1s」而非旧的「单次 5s」。
+  check('speed=2 时 .setting-flash 单次时长仍是 1s（不缩放）', near(probe.flashT2, 1, 0.05), probe.flashT2);
 
   // H6：动画受控仍照旧工作（本次改动的头号红线）
   check('all-off 档：.modal-mask 动画被 kill（时长 0s）', SEC(probe.maskOff) === 0, probe.maskOff);

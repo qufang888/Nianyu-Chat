@@ -47,11 +47,14 @@ import { Hint } from './Hint';
 import {
   ANIM_GROUPS,
   ANIM_MODES,
+  animMs,
   getAnimMode,
   getAnimSpeed,
   isGroupEnabled,
   type AnimMode,
 } from '../utils/animControl';
+// v2.3.102 需求 4：统一的跳转高亮闪动（1s×5，5000ms 后自动移除类，含去抖）。
+import { flashElement } from '../utils/flash';
 import { ModelEditor } from './ModelEditor';
 import { MediaApiConfigEditor, resolveMediaConfigs } from './MediaApiConfigEditor';
 import { FontSettings } from './FontSettings';
@@ -95,16 +98,96 @@ export const THEMES: { key: ThemeName; nameKey: string; swatch: string }[] = [
 
 // 设置分类区块（左侧导航 + 右侧分组），顺序即展示顺序
 // 注：模型管理已独立为二级页（sub='models'），不再出现在左侧分类导航中
+// v2.3.102 需求 3（重新划分类别）：原 8 类 → 7 类。
+//   · 原 `cat-generation`（生成与扩展）+ `cat-translation`（翻译）合并为 `cat-extensions`（扩展与工具）；
+//   · 各分类内新增「高级设置」折叠区（见 AdvancedSection / ADVANCED_ANCHORS）；
+//   · 锚点 id（`cat-*` / `sec-*`）一律不改名，以保住搜索索引 / 快捷跳转 / 历史书签。
+//   顺序 = 设计 §7.1 的顺序，且必须与右侧区块的渲染顺序**逐条一致**：
+//   SETTING_CATS 是左侧 nav 的渲染源，面板按 JSX 顺序渲染；两者不一致会导致
+//   「点 nav 第 2 项滚到第 5 个区块」以及 onPanelScroll 高亮错位。
 const SETTING_CATS: { id: string; labelKey: string }[] = [
   { id: 'cat-general', labelKey: 'settings.catGeneral' },
+  { id: 'cat-appearance', labelKey: 'settings.catAppearance' },
   { id: 'cat-chat', labelKey: 'settings.catChat' },
   { id: 'cat-proactive', labelKey: 'settings.catProactive' },
   { id: 'cat-social', labelKey: 'settings.catSocial' },
-  { id: 'cat-appearance', labelKey: 'settings.catAppearance' },
-  { id: 'cat-generation', labelKey: 'settings.catGeneration' },
-  { id: 'cat-translation', labelKey: 'settings.catTranslation' },
+  { id: 'cat-extensions', labelKey: 'settings.catExtensions' },
   { id: 'cat-window', labelKey: 'settings.catWindow' },
 ];
+
+// v2.3.102 需求 3：锚点 id → 所在「高级设置」折叠区 id 的静态映射。
+// 用途：设置搜索命中折叠区内的锚点时，「先自动展开所在折叠区」再定位（见 goToSetting）。
+// 说明：折叠区**始终挂载**，故也可用 `el.closest('.advanced-section')` 做 DOM 就近查找兜底
+// （动态索引生成的无静态条目 id 不在本表里，只能靠 DOM 就近查找）；本表覆盖静态登记项，
+// 保证即使锚点因切二级页短暂不在 DOM 里，展开动作也不会漏。
+const ADVANCED_ANCHORS: Record<string, string> = {
+  // 通用
+  'sec-update': 'adv-general',
+  'sec-closebehavior': 'adv-general',
+  // 聊天
+  'sec-emoevent': 'adv-chat',
+  'sec-inactive-chat': 'adv-chat',
+  // （主动互动 / 记忆与社交 的折叠区内为动态索引项，统一由 goToSetting 的 DOM 就近查找兜底）
+  // 外观与动效
+  'sec-anim-speed': 'adv-appearance',
+  'sec-anim-control': 'adv-appearance',
+  'sec-inputappearance': 'adv-appearance',
+  'sec-cursor': 'adv-appearance',
+  'sec-glassbg': 'adv-appearance',
+  // 扩展与工具
+  'sec-translation': 'adv-extensions',
+  'sec-sound': 'adv-extensions',
+  // 窗口与系统
+  'sec-debug': 'adv-window',
+  'sec-datapath': 'adv-window',
+  'sec-errorlog': 'adv-window',
+  'sec-backup': 'adv-window',
+  'sec-reset': 'adv-window',
+};
+
+/**
+ * v2.3.102 需求 3：「高级设置」折叠区组件（内联于 Settings.tsx，复用其 i18n）。
+ *
+ * 硬约束（务必保持）：
+ *   1. `.advanced-body` **必须始终挂载**，收起时仅靠 CSS `grid-template-rows: 0fr` 视觉隐藏 ——
+ *      设置搜索的索引靠 DOM 扫描建立，一旦 unmount，折叠区内的高级项就会从索引消失，
+ *      重现本项目历史顽疾「搜到点不到 / 搜不到」。
+ *   2. `data-open` 必须是字符串 `'true'` / `'false'`：CSS 选择器是 `.advanced-section[data-open='true']`，
+ *      直接传布尔会被 React 把 `false` 整个属性删掉，导致展开态样式永远匹配 `data-open='false'` 的语义错乱。
+ *   3. DOM 结构固定为 `.advanced-section > .advanced-toggle + .advanced-body > .advanced-body-inner > 内容`。
+ */
+function AdvancedSection({
+  sectionId,
+  open,
+  onToggle,
+  children,
+}: {
+  sectionId: string;
+  open: boolean;
+  onToggle: (id: string) => void;
+  children: React.ReactNode;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="advanced-section" data-open={open ? 'true' : 'false'} data-section-id={sectionId}>
+      <button
+        type="button"
+        className="advanced-toggle"
+        aria-expanded={open}
+        aria-controls={`adv-${sectionId}-body`}
+        title={t('settings.advancedTip')}
+        onClick={() => onToggle(sectionId)}
+      >
+        <span className="advanced-caret" aria-hidden="true">▶</span>
+        {t('settings.advanced')}
+      </button>
+      {/* 始终挂载：收起仅由 CSS 视觉隐藏（绝不能写成 {open && ...}） */}
+      <div className="advanced-body" id={`adv-${sectionId}-body`}>
+        <div className="advanced-body-inner">{children}</div>
+      </div>
+    </div>
+  );
+}
 
 // 设置搜索索引：每项含锚点 id、i18n 键、中英文关键词；可选 sub=目标二级页（'models'|'font'|'self'）。
 // 带 sub 的条目：点击/回车后先切入对应二级页，再滚动到锚点并高亮（二级页内锚点此时才存在于 DOM）。
@@ -114,10 +197,10 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'cat-chat', key: 'settings.catChat', kw: ['聊天', '群聊', '群组', '互聊', '情绪', '思维链', 'chat', 'group'] },
   { id: 'cat-proactive', key: 'settings.catProactive', kw: ['主动消息', '空闲', '定时', '勿扰', 'nhpp', '回访', 'proactive'] },
   { id: 'cat-social', key: 'settings.catSocial', kw: ['记忆', '世界书', '朋友圈', '社交', 'memory', 'moments'] },
-  { id: 'cat-appearance', key: 'settings.catAppearance', kw: ['外观', '主题', '界面', 'appearance', 'theme'] },
-  { id: 'cat-generation', key: 'settings.catGeneration', kw: ['生成', '生图', '生视频', 'generation', 'image', 'video'] },
-  { id: 'cat-translation', key: 'settings.catTranslation', kw: ['翻译', 'translation'] },
-  { id: 'cat-window', key: 'settings.catWindow', kw: ['窗口', '小窗', '悬浮球', 'window', '迷你'] },
+  { id: 'cat-appearance', key: 'settings.catAppearance', kw: ['外观', '主题', '界面', '动效', 'appearance', 'theme'] },
+  // v2.3.102 需求 3：原 cat-generation + cat-translation 合并为 cat-extensions（扩展与工具）。
+  { id: 'cat-extensions', key: 'settings.catExtensions', kw: ['扩展', '工具', '生成', '生图', '生视频', '翻译', '音效', '插件', '技能', '联网', 'extension', 'tools', 'generation', 'translation', 'sound'] },
+  { id: 'cat-window', key: 'settings.catWindow', kw: ['窗口', '小窗', '悬浮球', '系统', 'window', '迷你'] },
   { id: 'sec-language', key: 'settings.language', kw: ['语言', 'language', '界面语言', '中文', '英文'] },
   { id: 'sec-animations', key: 'settings.animations', kw: ['动画', 'animation', '动效', '全部开启', '全部关闭', '自定义', '分组', 'all on', 'all off', 'custom', 'group'] },
   // v2.3.97 补：动效分组开关区。**条件渲染**（仅动效「自定义」档存在），
@@ -894,38 +977,55 @@ export const Settings: React.FC<{
       )
     );
   };
+  // v2.3.102 需求 3：设置某个「高级设置」折叠区的展开态（写入 draft.advSections 并持久化）。
+  // 折态随 settings 跨重启持久化；缺 key 视为收起。沿用与全页一致的落盘口径（乐观更新 draft + api.saveSettings）。
+  const setAdvOpen = (sectionId: string, open: boolean) => {
+    setDraft((d) => (d ? { ...d, advSections: { ...(d.advSections || {}), [sectionId]: open } } : d));
+    api.saveSettings({ advSections: { ...(draft?.advSections || {}), [sectionId]: open } });
+  };
+  const toggleAdv = (sectionId: string) => setAdvOpen(sectionId, draft?.advSections?.[sectionId] !== true);
+
   const goToSetting = (id: string, sub?: SettingSearchItem['sub']) => {
     // 滚动 + 高亮闪动。目标可能尚未挂载（刚切二级页、或条件区块正在重渲染），故交由 retry 轮询兜底。
     const jump = () => {
       const el = document.getElementById(id);
       if (!el) return false;
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.classList.remove('setting-flash');
-      void el.offsetWidth; // 触发重排以重启动画
-      el.classList.add('setting-flash');
-      window.setTimeout(() => el.classList.remove('setting-flash'), 5000);
+      // v2.3.102 需求 3：目标若位于某个「高级设置」折叠区内，**先自动展开**它，等展开动画播完再定位。
+      // 折叠区**始终挂载**，故 el.closest('.advanced-section') 必命中 —— 动态索引生成的无静态条目 id
+      // （如各滑块）也能被这层 DOM 就近查找覆盖，不会漏展开。
+      const secEl = el.closest('.advanced-section') as HTMLElement | null;
+      const sectionId = secEl?.getAttribute('data-section-id') || ADVANCED_ANCHORS[id] || '';
+      const collapsed = secEl
+        ? secEl.getAttribute('data-open') !== 'true'
+        : !!sectionId && draft?.advSections?.[sectionId] !== true;
+      const reveal = () => {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // v2.3.102 需求 4：统一走 flashElement（1s×5，5000ms 后自动移除类，含去抖）。
+        flashElement(el);
+      };
+      if (collapsed && sectionId) {
+        setAdvOpen(sectionId, true);
+        // 展开是线性高度动画；必须等它播完再定位，否则（收起态高度为 0）scrollIntoView 会落到错误位置。
+        // animMs(0.28) 与 CSS `.advanced-body { transition: grid-template-rows calc(0.28s * var(--anim-speed)) linear }` 严格配对。
+        window.setTimeout(reveal, animMs(0.28) + 20);
+      } else {
+        reveal();
+      }
       return true;
     };
     if (sub) {
       // 目标在二级页（模型管理/字体/角色卡）：先切入，等渲染后再滚动高亮。
-      // v2.3.94：旧实现用 setTimeout(jump, 150) 硬猜渲染时机 —— 慢机器/配置多时
-      // 150ms 不足以让新页挂载，表现为「点了没反应」。
       setSub(sub);
     }
-    // v2.3.97（缺口 D）：retry 从「仅二级页分支」提升为**两个分支共用**。
-    // 旧实现主页面分支直接 jump() 就完事、没有 retry —— 但主页面锚点并非恒定存在：
-    // 目标可能属于刚被条件隐藏/切换掉的区块（如毛玻璃背景随主题、动效分组随动效档位、
-    // 备份目录随 backupDir、错误日志明细随日志非空）。一次不中就静默失败 = 「点了没反应」。
+    // v2.3.97（缺口 D）：retry 两个分支共用。主页面锚点并非恒定存在（条件渲染区块会随状态挂载/卸载），
+    // 一次不中就静默失败 = 「点了没反应」。
     if (!jump()) {
       let tries = 0;
       const retry = () => {
         if (jump()) return;
         // 约 600ms（20ms/次）后放弃。
         if (++tries >= 30) {
-          // v2.3.97（缺口 B）：到点仍找不到，**必须给可见反馈**，不能静默收手。
-          // 索引本身已做「条件渲染区块按存在性收录」，走到这里说明目标确实不在当前 DOM 里
-          // （多为二级页锚点、或重建索引与渲染之间的极短竞态）。给用户一句可读的提示，
-          // 好过「点了没反应、用户以为搜索坏了」。
+          // 到点仍找不到：**必须给可见反馈**，不能静默收手（多为二级页锚点或重建索引的极短竞态）。
           showToast(t('settings.searchTargetMissing'), { error: true });
           return;
         }
@@ -982,16 +1082,15 @@ export const Settings: React.FC<{
       ].filter(Boolean),
     }), MAX_SUGGESTIONS);
   })();
-  // 点击搜索结果：滚动到对应模型卡片并高亮闪动约 3 秒（3 次 1s 脉冲动画）
+  // 点击搜索结果：滚动到对应模型卡片并高亮闪动。
+  // v2.3.102 需求 4：统一走 flashElement（1s×5 = 5000ms，与 .model-flash 的 flashPulse 严格配对）；
+  // 旧实现写死 3200ms，与 CSS 动画时长不一致，会导致类残留 / 提前移除。
   const goToModel = (id: string) => {
     setModelSearchQ('');
     const el = document.getElementById(`model-card-${id}`);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.classList.remove('model-flash');
-      void el.offsetWidth; // 触发重排以重启动画
-      el.classList.add('model-flash');
-      window.setTimeout(() => el.classList.remove('model-flash'), 3200);
+      flashElement(el, 'model-flash');
     }
   };
 
@@ -1679,6 +1778,390 @@ export const Settings: React.FC<{
           />
         </div>
 
+          {/* ===== 我的角色卡（自我身份） ===== */}
+          <div id="sec-self" className="section-title" style={{ marginTop: 16 }}>{t('self.title')}</div>
+          <div
+            className="theme-card"
+            style={{ cursor: 'pointer', maxWidth: 420 }}
+            onClick={() => setSub('self')}
+          >
+            <div
+              className="theme-swatch"
+              style={{ background: 'linear-gradient(135deg,#ff8fb1,#42b4e8)' }}
+            />
+            <div>
+              <div style={{ fontWeight: 600 }}>{t('self.manage')}<Hint text={t('self.enter')} /></div>
+            </div>
+          </div>
+
+          {/* ===== 模型管理（子页面入口，类似字体 / 角色卡） ===== */}
+          <div id="sec-models" className="section-title" style={{ marginTop: 16 }}>{t('settings.modelManage')}</div>
+          <div
+            className="theme-card"
+            style={{ cursor: 'pointer', maxWidth: 420 }}
+            onClick={() => setSub('models')}
+          >
+            <div
+              className="theme-swatch"
+              style={{ background: 'linear-gradient(135deg,#6a3aa8,#a1429c)' }}
+            />
+            <div>
+              <div style={{ fontWeight: 600 }}>{t('settings.modelManage')}<Hint text={t('settings.modelManageEnter')} /></div>
+            </div>
+          </div>
+
+          {/* ===== 开机自启动 ===== */}
+          <div id="sec-launch" className="section-title" style={{ marginTop: 16 }}>{t('settings.launchOnBoot')}</div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={!!draft.launchOnBoot}
+              onChange={(e) => patch({ launchOnBoot: e.target.checked })}
+            />
+            <span>{t('settings.launchOnBoot')}<Hint text={t('settings.launchOnBootDesc')} /></span>
+          </label>
+
+        {/* 高级设置折叠区（v2.3.102 需求 3）：软件更新 / 关闭行为 / 重跑引导 —— 低频项收进此处。 */}
+        <AdvancedSection
+          sectionId="adv-general"
+          open={draft?.advSections?.['adv-general'] === true}
+          onToggle={toggleAdv}
+        >
+        {/* ===== 软件更新（v2.3.45）：检查 GitHub Releases → 提醒 → 下载安装包 ===== */}
+        <div id="sec-update" className="section-title" style={{ marginTop: 16 }}>{t('settings.updateTitle')}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <button
+            className="btn-ghost"
+            disabled={updateBusy || updateSt?.state === 'checking'}
+            onClick={async () => {
+              setUpdateBusy(true);
+              try {
+                const st = await api.checkUpdate(true);
+                setUpdateSt(st);
+                if (st.state === 'latest') showToast(t('settings.updateIsLatest', { v: st.currentVersion }));
+                else if (st.state === 'available') showToast(t('settings.updateFound', { v: st.latestVersion || '' }));
+                else if (st.state === 'error') showToast(st.message || t('settings.updateCheckFailed'), { error: true });
+              } catch (e: any) {
+                showToast(e?.message || t('settings.updateCheckFailed'), { error: true });
+              } finally {
+                setUpdateBusy(false);
+              }
+            }}
+          >
+            {updateSt?.state === 'checking' || updateBusy ? t('settings.updateChecking') : t('settings.updateCheck')}
+          </button>
+          <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
+            {t('settings.updateCurrent', { v: updateSt?.currentVersion || '' })}
+          </span>
+          {updateSt?.state === 'latest' && (
+            <span style={{ fontSize: 13, color: 'var(--color-success)' }}>{t('settings.updateIsLatestShort')}</span>
+          )}
+          {updateSt?.state === 'error' && updateSt.message && (
+            <span style={{ fontSize: 13, color: 'var(--color-danger)' }}>{updateSt.message}</span>
+          )}
+        </div>
+
+        {updateSt?.state === 'available' && (
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, color: 'var(--color-primary-ink)' }}>
+              {t('settings.updateAvailable', { v: updateSt.latestVersion || '' })}
+            </span>
+            <button className="btn-primary" onClick={async () => { setUpdateBusy(true); try { setUpdateSt(await api.downloadUpdate()); } finally { setUpdateBusy(false); } }}>
+              {t('settings.updateDownload')}
+            </button>
+            <button className="btn-ghost" onClick={() => { void api.openReleasePage(); }}>
+              {t('settings.updateOpenRelease')}
+            </button>
+          </div>
+        )}
+
+        {updateSt?.state === 'downloading' || updateSt?.state === 'verifying' ? (
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'var(--color-hover)', overflow: 'hidden' }}>
+              <div
+                style={{
+                  width: `${updateSt.percent ?? 0}%`,
+                  height: '100%',
+                  background: 'var(--color-primary)',
+                  transition: animOn ? `width calc(0.2s * var(--anim-speed, 1)) linear` : 'none',
+                }}
+              />
+            </div>
+            <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+              {t('settings.updateDownloading', {
+                p: String(updateSt.percent ?? 0),
+                mb: ((updateSt.received || 0) / 1048576).toFixed(1),
+              })}
+            </span>
+          </div>
+        ) : null}
+
+        {updateSt?.state === 'downloaded' && (
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, color: 'var(--color-success)' }}>{t('settings.updateDownloaded')}</span>
+            <button className="btn-ghost" onClick={() => { void api.openUpdateFolder(); }}>
+              {t('settings.updateOpenFolder')}
+            </button>
+            <button className="btn-primary" onClick={() => { void api.installUpdate(); }}>
+              {t('settings.updateInstall')}
+            </button>
+          </div>
+        )}
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 10 }}>
+          <input
+            type="checkbox"
+            checked={draft.autoCheckUpdate !== false}
+            onChange={(e) => patch({ autoCheckUpdate: e.target.checked })}
+          />
+          <span>{t('settings.updateAutoCheck')}<Hint text={t('settings.updateAutoCheckDesc')} /></span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 6 }}>
+          <input
+            type="checkbox"
+            checked={draft.autoDownloadUpdate === true}
+            onChange={(e) => patch({ autoDownloadUpdate: e.target.checked })}
+          />
+          <span>{t('settings.updateAutoDownload')}<Hint text={t('settings.updateAutoDownloadDesc')} /></span>
+        </label>
+        {/* v2.3.48：永久关闭更新提醒（弹窗 + 聊天界面提示条都不再出现；手动检查不受影响） */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 6 }}>
+          <input
+            type="checkbox"
+            checked={draft.disableUpdateReminder === true}
+            onChange={(e) => patch({ disableUpdateReminder: e.target.checked })}
+          />
+          <span>{t('settings.updateDisableReminder')}<Hint text={t('settings.updateDisableReminderDesc')} /></span>
+        </label>
+        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 6, lineHeight: 1.6 }}>
+          {t('settings.updateNotesHint', { v: updateSt?.currentVersion || '' })}
+        </div>
+
+
+        {/* ===== 关闭主界面行为 ===== */}
+        <div id="sec-closebehavior" className="section-title" style={{ marginTop: 24 }}>{t('settings.closeBehavior')}</div>
+        <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 10 }}>
+          {t('settings.closeBehaviorDesc')}
+        </div>
+        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="radio"
+              checked={draft.closeToTray !== false}
+              onChange={() => patch({ closeToTray: true })}
+            />
+            {t('settings.closeToTray')}
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="radio"
+              checked={draft.closeToTray === false}
+              onChange={() => patch({ closeToTray: false })}
+            />
+            {t('settings.closeExit')}
+          </label>
+        </div>
+
+        <div className="row-actions">
+          {onRerunWizard && (
+            <button
+              className="btn-ghost"
+              style={{ marginLeft: 12 }}
+              onClick={async () => {
+                await api.saveSettings({ firstRunDone: false });
+                onRerunWizard();
+              }}
+            >
+              {t('settings.rerunWizard')}
+            </button>
+          )}
+          {/* v2.3.90：重新运行新手引导。
+              注意：新手引导只在「一张人物卡都没有」时自动出现，因此对已有卡的用户点这个按钮
+              只是把 tutorialDone 写回 false，界面上不会立刻弹出——它主要在刚做完初始设置、
+              还没建卡时才有意义。 */}
+          <button
+            className="btn-ghost"
+            style={{ marginLeft: 8 }}
+            onClick={async () => {
+              await api.saveSettings({ tutorialDone: false });
+              showToast(t('tutorial.rerunDone'));
+            }}
+          >
+            {t('tutorial.rerun')}
+          </button>
+        </div>
+        </AdvancedSection>
+          </div>{/* end cat-general */}
+        {!onlyModels && (<>
+        <div id="cat-appearance" ref={(el) => { catRefs.current['cat-appearance'] = el; }} className="settings-category">
+        {/* ===== 字体（子页面入口） ===== */}
+        <div id="sec-font" className="section-title" style={{ marginTop: 16 }}>{t('settings.font')}</div>
+        <div
+          className="theme-card"
+          style={{ cursor: 'pointer', maxWidth: 420 }}
+          onClick={() => setSub('font')}
+        >
+          <div
+            className="theme-swatch"
+            style={{ background: 'linear-gradient(135deg,#7a869a,#a0abc0)' }}
+          />
+          <div>
+            <div style={{ fontWeight: 600 }}>{t('settings.font')}<Hint text={t('settings.fontEnter')} /></div>
+            </div>
+          </div>
+        <div id="sec-theme" className="section-title">{t('settings.theme')}</div>
+        <div className="theme-options">
+          {THEMES.map((titem) => (
+            <div
+              key={titem.key}
+              className={`theme-card ${theme === titem.key ? 'active' : ''}`}
+              onClick={() => {
+                setTheme(titem.key);
+                patch({ theme: titem.key });
+              }}
+            >
+              <div className="theme-swatch" style={{ background: titem.swatch }} />
+              <div>
+                <div style={{ fontWeight: 600 }}>{t(titem.nameKey)}</div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                  {theme === titem.key ? t('settings.current') : t('settings.clickSwitch')}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* ===== v2.3.101：背景取色染色开关（dyeFromBackground）=====
+            聊天设了背景时，界面主题色取自背景主体色（实现见 ChatWindow.tsx / MiniChat.tsx）。
+            关闭后始终使用主题自带主色。默认开启（settings.dyeFromBackground 缺省 true）。
+            与同分类「液态流动」开关使用相同的写法与样式，保证观感一致。
+            本开关是原生 <input type="checkbox">，会被设置搜索索引规则①自动收录（无需静态登记）。 */}
+        <label
+          style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, cursor: 'pointer', maxWidth: 420 }}
+        >
+          <input
+            type="checkbox"
+            checked={draft.dyeFromBackground !== false}
+            onChange={(e) => patch({ dyeFromBackground: e.target.checked })}
+            style={{ width: 15, height: 15, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
+          />
+          <span style={{ fontSize: 13 }}>{t('settings.dyeFromBackground')}</span>
+          <Hint text={t('settings.dyeFromBackgroundDesc')} />
+        </label>
+
+        {/* ===== UI 圆角 ===== */}
+        <div id="sec-radius" className="section-title">{t('settings.radius')}<Hint text={t('settings.radiusDesc')} /></div>
+        <div style={{ maxWidth: 420 }}>
+          <div style={{ fontSize: 13, marginBottom: 4 }}>
+            {t('settings.uiRadius', { n: draft.uiRadius ?? 10 })}
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={28}
+            step={1}
+            value={draft.uiRadius ?? 10}
+            style={{ width: '100%' }}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              patch({ uiRadius: v });
+              // 实时预览
+              document.documentElement.style.setProperty('--radius', `${v}px`);
+              document.documentElement.style.setProperty(
+                '--radius-sm',
+                `${Math.max(2, Math.round(v * 0.6))}px`
+              );
+            }}
+          />
+          <div style={{ fontSize: 13, margin: '10px 0 4px' }}>
+            {t('settings.bubbleRadius', { n: draft.bubbleRadius ?? 10 })}
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={28}
+            step={1}
+            value={draft.bubbleRadius ?? 10}
+            style={{ width: '100%' }}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              patch({ bubbleRadius: v });
+              document.documentElement.style.setProperty('--bubble-radius', `${v}px`);
+            }}
+          />
+          <div style={{ fontSize: 13, margin: '10px 0 4px' }}>
+            {t('settings.bubbleOpacity')}<Hint text={t('settings.bubbleOpacityDesc')} />
+          </div>
+          <input
+            type="range"
+            min={50}
+            max={100}
+            step={5}
+            value={draft.bubbleOpacity ?? 100}
+            style={{ width: '100%' }}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              patch({ bubbleOpacity: v });
+              document.documentElement.style.setProperty('--bubble-opacity', String(v / 100));
+            }}
+          />
+        </div>
+
+        {/* ===== 窗口整体等比缩放：基准尺寸 + 上下限（主窗/小窗分别配置） ===== */}
+        <div id="sec-uizoom" className="section-title" style={{ marginTop: 16 }}>
+          {t('settings.uiZoom')}<Hint text={t('settings.uiZoomDesc')} />
+        </div>
+        <div style={{ maxWidth: 480 }}>
+          {(() => {
+            const z = draft.uiZoom || DEFAULT_SETTINGS.uiZoom!;
+            const setZoom = (p: Partial<NonNullable<AppSettings['uiZoom']>>) => {
+              const next = { ...z, ...p };
+              patch({ uiZoom: next });
+              api.saveSettings({ uiZoom: next }).then(reloadSettings);
+            };
+            const field = (
+              label: string,
+              val: number,
+              mn: number,
+              mx: number,
+              st: number,
+              keyName: keyof NonNullable<AppSettings['uiZoom']>
+            ) => (
+              <label className="zoom-field" key={keyName}>
+                <span>{label}</span>
+                <input
+                  type="number"
+                  min={mn}
+                  max={mx}
+                  step={st}
+                  value={val}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (!Number.isNaN(v)) setZoom({ [keyName]: v } as Partial<NonNullable<AppSettings['uiZoom']>>);
+                  }}
+                />
+              </label>
+            );
+            return (
+              <>
+                <div className="zoom-group">{t('settings.uiZoomMain')}</div>
+                <div className="zoom-grid">
+                  {field(t('settings.zoomBaseW'), z.mainBaseW, 200, 4000, 10, 'mainBaseW')}
+                  {field(t('settings.zoomBaseH'), z.mainBaseH, 200, 4000, 10, 'mainBaseH')}
+                  {field(t('settings.zoomMin'), z.mainMin, 0.5, 3, 0.05, 'mainMin')}
+                  {field(t('settings.zoomMax'), z.mainMax, 0.5, 3, 0.05, 'mainMax')}
+                </div>
+                <div className="zoom-group">{t('settings.uiZoomMini')}</div>
+                <div className="zoom-grid">
+                  {field(t('settings.zoomBaseW'), z.miniBaseW, 100, 2000, 10, 'miniBaseW')}
+                  {field(t('settings.zoomBaseH'), z.miniBaseH, 100, 2000, 10, 'miniBaseH')}
+                  {field(t('settings.zoomMin'), z.miniMin, 0.5, 3, 0.05, 'miniMin')}
+                  {field(t('settings.zoomMax'), z.miniMax, 0.5, 3, 0.05, 'miniMax')}
+                </div>
+              </>
+            );
+          })()}
+        </div>
         {/* ===== 界面动效（三档：全部开启 / 全部关闭 / 自定义，v2.3.92）===== */}
         <div id="sec-animations" className="section-title" style={{ marginTop: 16 }}>{t('settings.animations')}</div>
         {/* 旧版是一个勾选框式总开关（v2.3.90/91），用户反馈无法表达「关一部分但不是全关」，
@@ -1715,6 +2198,12 @@ export const Settings: React.FC<{
           {t('animCtl.streamNote')}
         </div>
 
+        {/* 高级设置折叠区（v2.3.102 需求 3）：动效速度 / 动效分组 / 输入框外观 / 光标 / 毛玻璃背景 —— 偏技术/低频项收进此项的高级设置。 */}
+        <AdvancedSection
+          sectionId="adv-appearance"
+          open={draft?.advSections?.['adv-appearance'] === true}
+          onToggle={toggleAdv}
+        >
         {/* ===== 界面动效速度（v2.3.97）：五档预设 + 自定义秒数 =====
             与上方三档开关**正交**：三档管「动不动」，这里管「动不动得快慢」。
             实现方式是往 documentElement 写一个倍率变量 --anim-speed，
@@ -1890,274 +2379,327 @@ export const Settings: React.FC<{
           </>
         )}
 
-        {/* ===== 软件更新（v2.3.45）：检查 GitHub Releases → 提醒 → 下载安装包 ===== */}
-        <div id="sec-update" className="section-title" style={{ marginTop: 16 }}>{t('settings.updateTitle')}</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <button
-            className="btn-ghost"
-            disabled={updateBusy || updateSt?.state === 'checking'}
-            onClick={async () => {
-              setUpdateBusy(true);
-              try {
-                const st = await api.checkUpdate(true);
-                setUpdateSt(st);
-                if (st.state === 'latest') showToast(t('settings.updateIsLatest', { v: st.currentVersion }));
-                else if (st.state === 'available') showToast(t('settings.updateFound', { v: st.latestVersion || '' }));
-                else if (st.state === 'error') showToast(st.message || t('settings.updateCheckFailed'), { error: true });
-              } catch (e: any) {
-                showToast(e?.message || t('settings.updateCheckFailed'), { error: true });
-              } finally {
-                setUpdateBusy(false);
-              }
-            }}
-          >
-            {updateSt?.state === 'checking' || updateBusy ? t('settings.updateChecking') : t('settings.updateCheck')}
-          </button>
-          <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
-            {t('settings.updateCurrent', { v: updateSt?.currentVersion || '' })}
-          </span>
-          {updateSt?.state === 'latest' && (
-            <span style={{ fontSize: 13, color: 'var(--color-success)' }}>{t('settings.updateIsLatestShort')}</span>
-          )}
-          {updateSt?.state === 'error' && updateSt.message && (
-            <span style={{ fontSize: 13, color: 'var(--color-danger)' }}>{updateSt.message}</span>
-          )}
-        </div>
 
-        {updateSt?.state === 'available' && (
-          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, color: 'var(--color-primary-ink)' }}>
-              {t('settings.updateAvailable', { v: updateSt.latestVersion || '' })}
-            </span>
-            <button className="btn-primary" onClick={async () => { setUpdateBusy(true); try { setUpdateSt(await api.downloadUpdate()); } finally { setUpdateBusy(false); } }}>
-              {t('settings.updateDownload')}
-            </button>
-            <button className="btn-ghost" onClick={() => { void api.openReleasePage(); }}>
-              {t('settings.updateOpenRelease')}
-            </button>
-          </div>
-        )}
-
-        {updateSt?.state === 'downloading' || updateSt?.state === 'verifying' ? (
-          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'var(--color-hover)', overflow: 'hidden' }}>
-              <div
-                style={{
-                  width: `${updateSt.percent ?? 0}%`,
-                  height: '100%',
-                  background: 'var(--color-primary)',
-                  transition: animOn ? `width calc(0.2s * var(--anim-speed, 1)) linear` : 'none',
-                }}
+        {/* ===== 输入框外观（文字色 / 背景色）===== */}
+        <div id="sec-inputappearance" className="section-title">{t('settings.inputAppearance')}<Hint text={t('settings.inputColorDesc')} /></div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13 }}>{t('settings.inputBgColor')}</span>
+              <input
+                type="color"
+                value={draft.inputBgColor || '#f2f3f5'}
+                onChange={(e) => patch({ inputBgColor: e.target.value })}
+                style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
               />
-            </div>
-            <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-              {t('settings.updateDownloading', {
-                p: String(updateSt.percent ?? 0),
-                mb: ((updateSt.received || 0) / 1048576).toFixed(1),
-              })}
-            </span>
-          </div>
-        ) : null}
-
-        {updateSt?.state === 'downloaded' && (
-          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, color: 'var(--color-success)' }}>{t('settings.updateDownloaded')}</span>
-            <button className="btn-ghost" onClick={() => { void api.openUpdateFolder(); }}>
-              {t('settings.updateOpenFolder')}
-            </button>
-            <button className="btn-primary" onClick={() => { void api.installUpdate(); }}>
-              {t('settings.updateInstall')}
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13 }}>{t('settings.inputTextColor')}</span>
+              <input
+                type="color"
+                value={draft.inputTextColor || '#1f2329'}
+                onChange={(e) => patch({ inputTextColor: e.target.value })}
+                style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
+              />
+            </label>
+            <button type="button" className="btn-ghost" onClick={() => patch({ inputBgColor: '', inputTextColor: '' })}>
+              {t('settings.resetColor')}
             </button>
           </div>
-        )}
-
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 10 }}>
-          <input
-            type="checkbox"
-            checked={draft.autoCheckUpdate !== false}
-            onChange={(e) => patch({ autoCheckUpdate: e.target.checked })}
-          />
-          <span>{t('settings.updateAutoCheck')}<Hint text={t('settings.updateAutoCheckDesc')} /></span>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 6 }}>
-          <input
-            type="checkbox"
-            checked={draft.autoDownloadUpdate === true}
-            onChange={(e) => patch({ autoDownloadUpdate: e.target.checked })}
-          />
-          <span>{t('settings.updateAutoDownload')}<Hint text={t('settings.updateAutoDownloadDesc')} /></span>
-        </label>
-        {/* v2.3.48：永久关闭更新提醒（弹窗 + 聊天界面提示条都不再出现；手动检查不受影响） */}
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 6 }}>
-          <input
-            type="checkbox"
-            checked={draft.disableUpdateReminder === true}
-            onChange={(e) => patch({ disableUpdateReminder: e.target.checked })}
-          />
-          <span>{t('settings.updateDisableReminder')}<Hint text={t('settings.updateDisableReminderDesc')} /></span>
-        </label>
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 6, lineHeight: 1.6 }}>
-          {t('settings.updateNotesHint', { v: updateSt?.currentVersion || '' })}
-        </div>
-
-
-          {/* ===== 我的角色卡（自我身份） ===== */}
-          <div id="sec-self" className="section-title" style={{ marginTop: 16 }}>{t('self.title')}</div>
-          <div
-            className="theme-card"
-            style={{ cursor: 'pointer', maxWidth: 420 }}
-            onClick={() => setSub('self')}
-          >
-            <div
-              className="theme-swatch"
-              style={{ background: 'linear-gradient(135deg,#ff8fb1,#42b4e8)' }}
-            />
-            <div>
-              <div style={{ fontWeight: 600 }}>{t('self.manage')}<Hint text={t('self.enter')} /></div>
-            </div>
-          </div>
-
-          {/* ===== 模型管理（子页面入口，类似字体 / 角色卡） ===== */}
-          <div id="sec-models" className="section-title" style={{ marginTop: 16 }}>{t('settings.modelManage')}</div>
-          <div
-            className="theme-card"
-            style={{ cursor: 'pointer', maxWidth: 420 }}
-            onClick={() => setSub('models')}
-          >
-            <div
-              className="theme-swatch"
-              style={{ background: 'linear-gradient(135deg,#6a3aa8,#a1429c)' }}
-            />
-            <div>
-              <div style={{ fontWeight: 600 }}>{t('settings.modelManage')}<Hint text={t('settings.modelManageEnter')} /></div>
-            </div>
-          </div>
-
-          {/* ===== 开机自启动 ===== */}
-          <div id="sec-launch" className="section-title" style={{ marginTop: 16 }}>{t('settings.launchOnBoot')}</div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={!!draft.launchOnBoot}
-              onChange={(e) => patch({ launchOnBoot: e.target.checked })}
-            />
-            <span>{t('settings.launchOnBoot')}<Hint text={t('settings.launchOnBootDesc')} /></span>
-          </label>
-
-          {/* ===== 调试模式（v2.3.19）：数据快照保护 + 手动触发 + 错误报告 ===== */}
-          <div id="sec-debug" className="section-title" style={{ marginTop: 16 }}>{t('settings.debugMode')}<Hint text={t('settings.debugModeDesc')} /></div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            {!debugSession ? (
-              <button
-                className="btn-primary"
-                style={{ padding: '4px 12px', fontSize: 12 }}
-                disabled={debugBusy}
-                onClick={async () => {
-                  setDebugBusy(true);
-                  try {
-                    const r = await api.debugStart();
-                    if (r.ok) setDebugSession(true);
-                    else showToast(r.error || t('settings.debugTrigFail'), { error: true });
-                  } finally {
-                    setDebugBusy(false);
-                  }
-                }}
-              >
-                {t('settings.debugStart')}
-              </button>
-            ) : (
-              <button
-                className="btn-primary"
-                style={{ padding: '4px 12px', fontSize: 12 }}
-                disabled={debugBusy}
-                onClick={() => void endDebug()}
-              >
-                {t('settings.debugEnd')}
-              </button>
-            )}
-            <select
-              value={debugChat}
-              onChange={(e) => setDebugChat(e.target.value)}
-              style={{ padding: '4px 8px', borderRadius: 8, fontSize: 12, maxWidth: 240 }}
-            >
-              <option value="">{t('settings.debugPickChat')}</option>
-              {chatList.map((c) => (
-                <option key={`${c.chat_type}:${c.chat_id}`} value={`${c.chat_type}:${c.chat_id}`}>
-                  {c.chat_type === 'group' ? '👥 ' : '👤 '}
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          <Hint text={t('settings.debugHint')} /></div>
+          {/* 预览：实时反映当前配色下的对比度，便于判断文字是否清晰 */}
           <div
             style={{
-              display: 'flex',
-              gap: 6,
-              flexWrap: 'wrap',
-              marginTop: 8,
-              opacity: debugSession ? 1 : 0.5,
-              pointerEvents: debugSession ? 'auto' : 'none',
+              marginTop: 4,
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid var(--color-border)',
+              background: draft.inputBgColor || '#f2f3f5',
+              color: draft.inputTextColor || '#1f2329',
+              fontSize: 13,
+              lineHeight: 1.6,
             }}
           >
-            {([
-              ['proactive', 'settings.debugTrigProactive'],
-              ['moments', 'settings.debugTrigMoments'],
-              ['relationship', 'settings.debugTrigRelationship'],
-              ['sceneImage', 'settings.debugTrigSceneImage'],
-            ] as const).map(([k, key]) => (
-              <button
-                key={k}
-                className="btn-ghost"
-                style={{ padding: '3px 10px', fontSize: 12 }}
-                disabled={debugBusy}
-                onClick={() => void runDebugTrigger(k)}
-              >
-                {t(key)}
-              </button>
-            ))}
+            {t('settings.inputPreview')}
           </div>
+        </div>
 
-          {/* 调试报告弹窗：结束调试后展示各功能错误分类汇总
-              v2.3.97：原先整块内联 style（无入场动画、不受动效开关 custom 档管控），
-              现改用通用 .modal-mask + .modal，本轮统一补上的 popupLinearIn 线性动画
-              与 theme 组门禁即刻生效。 */}
-          {debugReport && (
-            <div
-              className="modal-mask"
-              onClick={() => setDebugReport(null)}
-            >
-              <div
-                className="modal modal-debug-report"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="modal-head">
-                  <div className="modal-title">{t('settings.debugReportTitle')}<Hint text={t('settings.debugReportNote')} /></div>
-                  <button className="btn-ghost" style={{ padding: '2px 10px', fontSize: 12 }} onClick={() => setDebugReport(null)}>
-                    {t('common.cancel')}
-                  </button>
-                </div>
-                <div className="modal-body">
-                {Object.keys(debugReport).length === 0 && (
-                  <div style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>{t('settings.debugReportEmpty')}</div>
-                )}
-                {Object.entries(debugReport).map(([cat, items]) => (
-                  <div key={cat} style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>
-                      {cat === 'functional' ? t('settings.debugCatFunctional') : cat === 'model' ? t('settings.debugCatModel') : t('settings.debugCatOther')}（{items.length}）
-                    </div>
-                    {items.slice(0, 20).map((it, i) => (
-                      <div key={i} style={{ fontSize: 12, color: 'var(--color-text-secondary)', wordBreak: 'break-all' }}>
-                        · [{String(it.time || '').slice(11, 19)}] {it.message}
-                      </div>
-                    ))}
+        {/* ===== 动态 Canvas 光标 ===== */}
+        <div id="sec-cursor" className="section-title">{t('settings.cursor')}<Hint text={t('settings.cursorDesc')} /></div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={!!cursor.enabled}
+              onChange={(e) => {
+                patchCursor({ enabled: e.target.checked });
+                api.saveSettings({ customCursor: { ...cursor, enabled: e.target.checked } }).then(reloadSettings);
+              }}
+            />
+            <span style={{ fontSize: 13 }}>{t('settings.cursorEnabled')}</span>
+          </label>
+          {cursor.enabled && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorLerpSpeed')}</span>
+                <input
+                  type="range"
+                  min={10}
+                  max={50}
+                  step={1}
+                  value={Math.round((cursor.lerpSpeed ?? 0.25) * 100)}
+                  onChange={(e) => saveCursor({ lerpSpeed: Number(e.target.value) / 100 })}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
+                  {(cursor.lerpSpeed ?? 0.25).toFixed(2)}
+                </span>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+                {t('settings.cursorLerpSpeedDesc')}
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={cursor.trailEnabled !== false}
+                  onChange={(e) => saveCursor({ trailEnabled: e.target.checked })}
+                />
+                <span style={{ fontSize: 13 }}>{t('settings.cursorTrail')}</span>
+              </label>
+              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginLeft: 24 }}>
+                {t('settings.cursorTrailDesc')}
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={cursor.particlesEnabled !== false}
+                  onChange={(e) => saveCursor({ particlesEnabled: e.target.checked })}
+                />
+                <span style={{ fontSize: 13 }}>{t('settings.cursorParticles')}</span>
+              </label>
+              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginLeft: 24 }}>
+                {t('settings.cursorParticlesDesc')}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorHoverScale')}</span>
+                <input
+                  type="range"
+                  min={100}
+                  max={150}
+                  step={5}
+                  value={Math.round((cursor.hoverScale ?? 1.25) * 100)}
+                  onChange={(e) => saveCursor({ hoverScale: Number(e.target.value) / 100 })}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
+                  {(cursor.hoverScale ?? 1.25).toFixed(2)}x
+                </span>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+                {t('settings.cursorHoverScaleDesc')}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorIdleHide')}</span>
+                <input
+                  type="range"
+                  min={1}
+                  max={300}
+                  step={1}
+                  value={Math.max(1, Math.round((cursor.idleHideMs ?? 5000) / 1000))}
+                  onChange={(e) => saveCursor({ idleHideMs: Number(e.target.value) * 1000 })}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 48, textAlign: 'right' }}>
+                  {Math.max(1, Math.round((cursor.idleHideMs ?? 5000) / 1000))}s
+                </span>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+                {t('settings.cursorIdleHideDesc')}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorSize')}</span>
+                <input
+                  type="range"
+                  min={16}
+                  max={64}
+                  step={1}
+                  value={cursor.cursorSize ?? 28}
+                  onChange={(e) => saveCursor({ cursorSize: Number(e.target.value) })}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
+                  {cursor.cursorSize ?? 28}px
+                </span>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+                {t('settings.cursorSizeDesc')}
+              </div>
+
+              {/* 热点（点击位置）设置：左侧可拖动预览，右侧滑块微调 */}
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginTop: 4 }}>
+                <div style={{ flexShrink: 0 }}>
+                  <CursorHotspotPreview
+                    hotspotX={cursor.hotspotX ?? 1}
+                    hotspotY={cursor.hotspotY ?? 1}
+                    onChange={(x, y) => saveCursor({ hotspotX: x, hotspotY: y })}
+                  />
+                  <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 4, textAlign: 'center' }}>
+                    {t('settings.hotspotPreview')}
                   </div>
-                ))}
+                </div>
+                <div style={{ flex: 1, minWidth: 240, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.hotspot')}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.hotspotX')}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={28}
+                      step={1}
+                      value={cursor.hotspotX ?? 1}
+                      onChange={(e) => saveCursor({ hotspotX: Number(e.target.value) })}
+                      style={{ flex: 1 }}
+                    />
+                    <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
+                      {cursor.hotspotX ?? 1}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.hotspotY')}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={28}
+                      step={1}
+                      value={cursor.hotspotY ?? 1}
+                      onChange={(e) => saveCursor({ hotspotY: Number(e.target.value) })}
+                      style={{ flex: 1 }}
+                    />
+                    <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
+                      {cursor.hotspotY ?? 1}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+                    {t('settings.hotspotDesc')}
+                  </div>
                 </div>
               </div>
-            </div>
+            </>
           )}
+        </div>
 
-          </div>{/* end cat-general */}
+        {/* ===== 毛玻璃主题背景（仅 glass/frost/liquid 主题生效，未开启时隐藏） =====
+            v2.3.97：新增 liquid（液态玻璃）。它与 glass/frost 同属「半透明 + 磨砂」
+            家族，同样需要「自定义背景色/图」与聊天区文字色覆盖，故一并开放该面板。
+            面板底部另加「液态流动」开关（liquidFlow），控制背景的缓慢流动动画。 */}
+        {(theme === 'glass' || theme === 'frost' || theme === 'liquid') && (
+          <>
+            <div id="sec-glassbg" className="section-title" style={{ marginTop: 16 }}>{t('settings.glassBg')}<Hint text={t('settings.glassBgDesc')} /></div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13 }}>{t('settings.glassBgColor')}</span>
+                  <input
+                    type="color"
+                    value={draft.glassBgColor || '#6a3aa8'}
+                    onChange={(e) => patch({ glassBgColor: e.target.value, glassBgImage: '' })}
+                    style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
+                  />
+                </label>
+                {/* v2.3.97：改为打开自绘引导弹窗，由弹窗里的按钮触发隐藏 input */}
+                <button type="button" className="btn-ghost" onClick={() => setGlassBgGuideOpen(true)}>{t('settings.glassBgImport')}</button>
+                <button type="button" className="btn-ghost" onClick={() => patch({ glassBgColor: '', glassBgImage: '' })}>{t('settings.glassBgReset')}</button>
+              </div>
+              {/* v2.3.97：隐藏的真实 file input（由 ImagePickGuide 触发 .click()）*/}
+              <input
+                ref={glassBgInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = '';
+                  if (!f) return;
+                  const reader = new FileReader();
+                  reader.onload = () => patch({ glassBgImage: String(reader.result), glassBgColor: '' });
+                  reader.readAsDataURL(f);
+                }}
+              />
+              {/* 预览：实时反映当前毛玻璃背景（颜色或图片） */}
+              <div
+                style={{
+                  marginTop: 4,
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid var(--color-border)',
+                  background: draft.glassBgImage
+                    ? `center/cover no-repeat url("${draft.glassBgImage}")`
+                    : draft.glassBgColor || 'linear-gradient(135deg,#1e2a78,#6a3aa8,#a1429c)',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                  minHeight: 48,
+                }}
+              >
+                {t('settings.glassBgPreview')}
+              </div>
+              {/* 聊天界面颜色覆盖（仅玻璃/frost 生效）：防止自定义背景后字体/边框与背景融合看不清 */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13 }}>{t('settings.glassTokenText')}</span>
+                  <input type="color" value={draft.glassTokenText || '#ffffff'} onChange={(e) => patch({ glassTokenText: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13 }}>{t('settings.glassTokenBorder')}</span>
+                  <input type="color" value={draft.glassTokenBorder || '#ffffff'} onChange={(e) => patch({ glassTokenBorder: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13 }}>{t('settings.glassBubbleUserText')}</span>
+                  <input type="color" value={draft.glassBubbleUserText || '#ffffff'} onChange={(e) => patch({ glassBubbleUserText: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13 }}>{t('settings.glassBubbleAiText')}</span>
+                  <input type="color" value={draft.glassBubbleAiText || '#ffffff'} onChange={(e) => patch({ glassBubbleAiText: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13 }}>{t('settings.glassBubbleBorder')}</span>
+                  <input type="color" value={draft.glassBubbleBorder || '#ffffff'} onChange={(e) => patch({ glassBubbleBorder: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
+                </label>
+              </div>
+              <div style={{ marginTop: 6 }}>
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => patch({ glassTokenText: '', glassTokenBorder: '', glassBubbleUserText: '', glassBubbleAiText: '', glassBubbleBorder: '' })}
+                >{t('settings.glassColorReset')}</button>
+              </div>
+              {/* v2.3.97：液态玻璃（liquid）专属 —— 「液态流动」开关。
+                  背景的缓慢流动是 @keyframes 动画（见 index.css 的 liquid-flow-drift），
+                  有人会觉得持续动 distracting，故给独立开关。
+                  写入 settings.liquidFlow=false 时由 ThemeContext 挂
+                  `html[data-liquid-flow="off"]`，CSS 侧直接 animation:none（不是把动画
+                  「暂停在首帧」——暂停在首帧等于一张静止的图，用户会以为功能坏了）。
+                  注：该开关与「高级动画控制」三档是**两个独立维度**：动效总开关关掉时
+                  流动也会停（.anim-off * 的 animation:none !important 覆盖一切），
+                  但本开关只管流动、不影响其他动效，故仍需单独存在。 */}
+              {theme === 'liquid' && (
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={draft.liquidFlow !== false}
+                      onChange={(e) => patch({ liquidFlow: e.target.checked })}
+                      style={{ width: 15, height: 15, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
+                    />
+                    <span style={{ fontSize: 13 }}>{t('settings.liquidFlow')}</span>
+                    <Hint text={t('settings.liquidFlowDesc')} />
+                  </label>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+        </AdvancedSection>
+        </div>{/* end cat-appearance */}
+        </>)}
         <div id="cat-chat" ref={(el) => { catRefs.current['cat-chat'] = el; }} className="settings-category">
           {/* ===== 群聊互聊（流式并行 / 调度 / 自动接话 / 主动续聊） ===== */}
           <div id="sec-groupchat" className="section-title" style={{ marginTop: 16 }}>{t('settings.groupChat')}</div>
@@ -2255,6 +2797,13 @@ export const Settings: React.FC<{
             />
             <span>{t('settings.hideReasoning')}<Hint text={t('settings.hideReasoningDesc')} /></span>
           </label>
+
+          {/* 高级设置折叠区（v2.3.102 需求 3）：情绪与事件演算 / 不常用聊天 —— 低频项收进此项的高级设置。 */}
+          <AdvancedSection
+            sectionId="adv-chat"
+            open={draft?.advSections?.['adv-chat'] === true}
+            onToggle={toggleAdv}
+          >
 
           <label
             style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
@@ -2505,6 +3054,8 @@ export const Settings: React.FC<{
             </div>
           </div>
 
+          </AdvancedSection>
+
           </div>{/* end cat-chat */}
         <div id="cat-proactive" ref={(el) => { catRefs.current['cat-proactive'] = el; }} className="settings-category">
           {/* ===== ① 主动消息机制（最高层决策：先选机制，再配该机制的参数） ===== */}
@@ -2663,6 +3214,12 @@ export const Settings: React.FC<{
           </>
           )}
 
+          {/* 高级设置折叠区（v2.3.102 需求 3）：随机间隔范围 / 切换行为 —— 低频项收进此项的高级设置。 */}
+          <AdvancedSection
+            sectionId="adv-proactive"
+            open={draft?.advSections?.['adv-proactive'] === true}
+            onToggle={toggleAdv}
+          >
           {(draft.idleTimingMode ?? 'fixed') === 'random' && (
           <div style={{ marginTop: 12 }}>
             <div style={{ fontSize: 13, marginBottom: 6 }}>{t('settings.idleRandomTitle')}<Hint text={t('settings.idleRandomDesc')} /></div>
@@ -2727,6 +3284,7 @@ export const Settings: React.FC<{
               })}
             </div>
           </div>
+          </AdvancedSection>
 
           {/* 主动消息记忆开关 */}
           <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -2976,6 +3534,12 @@ export const Settings: React.FC<{
             <span>{t('settings.autoMoments')}<Hint text={t('settings.autoMomentsDesc')} /></span>
           </label>
 
+          {/* 高级设置折叠区（v2.3.102 需求 3）：朋友圈视频生成 / 每日上限 / 敏感度 —— 低频项收进此项的高级设置。 */}
+          <AdvancedSection
+            sectionId="adv-social"
+            open={draft?.advSections?.['adv-social'] === true}
+            onToggle={toggleAdv}
+          >
           {/* 朋友圈视频生成开关（独立开关，需配置生视频模型） */}
           <label
             style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
@@ -3038,6 +3602,7 @@ export const Settings: React.FC<{
               style={{ width: '100%', marginTop: 6 }}
             />
           </div>
+          </AdvancedSection>
 
           </div>{/* end cat-social */}
         </>)}
@@ -3992,499 +4557,10 @@ export const Settings: React.FC<{
 
         </div>{/* end cat-models */}
         </>)}
-        {!onlyModels && (<>
-        <div id="cat-appearance" ref={(el) => { catRefs.current['cat-appearance'] = el; }} className="settings-category">
-        {/* ===== 字体（子页面入口） ===== */}
-        <div id="sec-font" className="section-title" style={{ marginTop: 16 }}>{t('settings.font')}</div>
-        <div
-          className="theme-card"
-          style={{ cursor: 'pointer', maxWidth: 420 }}
-          onClick={() => setSub('font')}
-        >
-          <div
-            className="theme-swatch"
-            style={{ background: 'linear-gradient(135deg,#7a869a,#a0abc0)' }}
-          />
-          <div>
-            <div style={{ fontWeight: 600 }}>{t('settings.font')}<Hint text={t('settings.fontEnter')} /></div>
-            </div>
-          </div>
-        <div id="sec-theme" className="section-title">{t('settings.theme')}</div>
-        <div className="theme-options">
-          {THEMES.map((titem) => (
-            <div
-              key={titem.key}
-              className={`theme-card ${theme === titem.key ? 'active' : ''}`}
-              onClick={() => {
-                setTheme(titem.key);
-                patch({ theme: titem.key });
-              }}
-            >
-              <div className="theme-swatch" style={{ background: titem.swatch }} />
-              <div>
-                <div style={{ fontWeight: 600 }}>{t(titem.nameKey)}</div>
-                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-                  {theme === titem.key ? t('settings.current') : t('settings.clickSwitch')}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* ===== v2.3.101：背景取色染色开关（dyeFromBackground）=====
-            聊天设了背景时，界面主题色取自背景主体色（实现见 ChatWindow.tsx / MiniChat.tsx）。
-            关闭后始终使用主题自带主色。默认开启（settings.dyeFromBackground 缺省 true）。
-            与同分类「液态流动」开关使用相同的写法与样式，保证观感一致。
-            本开关是原生 <input type="checkbox">，会被设置搜索索引规则①自动收录（无需静态登记）。 */}
-        <label
-          style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, cursor: 'pointer', maxWidth: 420 }}
-        >
-          <input
-            type="checkbox"
-            checked={draft.dyeFromBackground !== false}
-            onChange={(e) => patch({ dyeFromBackground: e.target.checked })}
-            style={{ width: 15, height: 15, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
-          />
-          <span style={{ fontSize: 13 }}>{t('settings.dyeFromBackground')}</span>
-          <Hint text={t('settings.dyeFromBackgroundDesc')} />
-        </label>
-
-        {/* ===== UI 圆角 ===== */}
-        <div id="sec-radius" className="section-title">{t('settings.radius')}<Hint text={t('settings.radiusDesc')} /></div>
-        <div style={{ maxWidth: 420 }}>
-          <div style={{ fontSize: 13, marginBottom: 4 }}>
-            {t('settings.uiRadius', { n: draft.uiRadius ?? 10 })}
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={28}
-            step={1}
-            value={draft.uiRadius ?? 10}
-            style={{ width: '100%' }}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              patch({ uiRadius: v });
-              // 实时预览
-              document.documentElement.style.setProperty('--radius', `${v}px`);
-              document.documentElement.style.setProperty(
-                '--radius-sm',
-                `${Math.max(2, Math.round(v * 0.6))}px`
-              );
-            }}
-          />
-          <div style={{ fontSize: 13, margin: '10px 0 4px' }}>
-            {t('settings.bubbleRadius', { n: draft.bubbleRadius ?? 10 })}
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={28}
-            step={1}
-            value={draft.bubbleRadius ?? 10}
-            style={{ width: '100%' }}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              patch({ bubbleRadius: v });
-              document.documentElement.style.setProperty('--bubble-radius', `${v}px`);
-            }}
-          />
-          <div style={{ fontSize: 13, margin: '10px 0 4px' }}>
-            {t('settings.bubbleOpacity')}<Hint text={t('settings.bubbleOpacityDesc')} />
-          </div>
-          <input
-            type="range"
-            min={50}
-            max={100}
-            step={5}
-            value={draft.bubbleOpacity ?? 100}
-            style={{ width: '100%' }}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              patch({ bubbleOpacity: v });
-              document.documentElement.style.setProperty('--bubble-opacity', String(v / 100));
-            }}
-          />
-        </div>
-
-        {/* ===== 窗口整体等比缩放：基准尺寸 + 上下限（主窗/小窗分别配置） ===== */}
-        <div id="sec-uizoom" className="section-title" style={{ marginTop: 16 }}>
-          {t('settings.uiZoom')}<Hint text={t('settings.uiZoomDesc')} />
-        </div>
-        <div style={{ maxWidth: 480 }}>
-          {(() => {
-            const z = draft.uiZoom || DEFAULT_SETTINGS.uiZoom!;
-            const setZoom = (p: Partial<NonNullable<AppSettings['uiZoom']>>) => {
-              const next = { ...z, ...p };
-              patch({ uiZoom: next });
-              api.saveSettings({ uiZoom: next }).then(reloadSettings);
-            };
-            const field = (
-              label: string,
-              val: number,
-              mn: number,
-              mx: number,
-              st: number,
-              keyName: keyof NonNullable<AppSettings['uiZoom']>
-            ) => (
-              <label className="zoom-field" key={keyName}>
-                <span>{label}</span>
-                <input
-                  type="number"
-                  min={mn}
-                  max={mx}
-                  step={st}
-                  value={val}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    if (!Number.isNaN(v)) setZoom({ [keyName]: v } as Partial<NonNullable<AppSettings['uiZoom']>>);
-                  }}
-                />
-              </label>
-            );
-            return (
-              <>
-                <div className="zoom-group">{t('settings.uiZoomMain')}</div>
-                <div className="zoom-grid">
-                  {field(t('settings.zoomBaseW'), z.mainBaseW, 200, 4000, 10, 'mainBaseW')}
-                  {field(t('settings.zoomBaseH'), z.mainBaseH, 200, 4000, 10, 'mainBaseH')}
-                  {field(t('settings.zoomMin'), z.mainMin, 0.5, 3, 0.05, 'mainMin')}
-                  {field(t('settings.zoomMax'), z.mainMax, 0.5, 3, 0.05, 'mainMax')}
-                </div>
-                <div className="zoom-group">{t('settings.uiZoomMini')}</div>
-                <div className="zoom-grid">
-                  {field(t('settings.zoomBaseW'), z.miniBaseW, 100, 2000, 10, 'miniBaseW')}
-                  {field(t('settings.zoomBaseH'), z.miniBaseH, 100, 2000, 10, 'miniBaseH')}
-                  {field(t('settings.zoomMin'), z.miniMin, 0.5, 3, 0.05, 'miniMin')}
-                  {field(t('settings.zoomMax'), z.miniMax, 0.5, 3, 0.05, 'miniMax')}
-                </div>
-              </>
-            );
-          })()}
-        </div>
-
-        {/* ===== 输入框外观（文字色 / 背景色）===== */}
-        <div id="sec-inputappearance" className="section-title">{t('settings.inputAppearance')}<Hint text={t('settings.inputColorDesc')} /></div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 13 }}>{t('settings.inputBgColor')}</span>
-              <input
-                type="color"
-                value={draft.inputBgColor || '#f2f3f5'}
-                onChange={(e) => patch({ inputBgColor: e.target.value })}
-                style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
-              />
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 13 }}>{t('settings.inputTextColor')}</span>
-              <input
-                type="color"
-                value={draft.inputTextColor || '#1f2329'}
-                onChange={(e) => patch({ inputTextColor: e.target.value })}
-                style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
-              />
-            </label>
-            <button type="button" className="btn-ghost" onClick={() => patch({ inputBgColor: '', inputTextColor: '' })}>
-              {t('settings.resetColor')}
-            </button>
-          </div>
-          {/* 预览：实时反映当前配色下的对比度，便于判断文字是否清晰 */}
-          <div
-            style={{
-              marginTop: 4,
-              padding: '10px 12px',
-              borderRadius: 8,
-              border: '1px solid var(--color-border)',
-              background: draft.inputBgColor || '#f2f3f5',
-              color: draft.inputTextColor || '#1f2329',
-              fontSize: 13,
-              lineHeight: 1.6,
-            }}
-          >
-            {t('settings.inputPreview')}
-          </div>
-        </div>
-
-        {/* ===== 动态 Canvas 光标 ===== */}
-        <div id="sec-cursor" className="section-title">{t('settings.cursor')}<Hint text={t('settings.cursorDesc')} /></div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={!!cursor.enabled}
-              onChange={(e) => {
-                patchCursor({ enabled: e.target.checked });
-                api.saveSettings({ customCursor: { ...cursor, enabled: e.target.checked } }).then(reloadSettings);
-              }}
-            />
-            <span style={{ fontSize: 13 }}>{t('settings.cursorEnabled')}</span>
-          </label>
-          {cursor.enabled && (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorLerpSpeed')}</span>
-                <input
-                  type="range"
-                  min={10}
-                  max={50}
-                  step={1}
-                  value={Math.round((cursor.lerpSpeed ?? 0.25) * 100)}
-                  onChange={(e) => saveCursor({ lerpSpeed: Number(e.target.value) / 100 })}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                  {(cursor.lerpSpeed ?? 0.25).toFixed(2)}
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                {t('settings.cursorLerpSpeedDesc')}
-              </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={cursor.trailEnabled !== false}
-                  onChange={(e) => saveCursor({ trailEnabled: e.target.checked })}
-                />
-                <span style={{ fontSize: 13 }}>{t('settings.cursorTrail')}</span>
-              </label>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginLeft: 24 }}>
-                {t('settings.cursorTrailDesc')}
-              </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={cursor.particlesEnabled !== false}
-                  onChange={(e) => saveCursor({ particlesEnabled: e.target.checked })}
-                />
-                <span style={{ fontSize: 13 }}>{t('settings.cursorParticles')}</span>
-              </label>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginLeft: 24 }}>
-                {t('settings.cursorParticlesDesc')}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorHoverScale')}</span>
-                <input
-                  type="range"
-                  min={100}
-                  max={150}
-                  step={5}
-                  value={Math.round((cursor.hoverScale ?? 1.25) * 100)}
-                  onChange={(e) => saveCursor({ hoverScale: Number(e.target.value) / 100 })}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                  {(cursor.hoverScale ?? 1.25).toFixed(2)}x
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                {t('settings.cursorHoverScaleDesc')}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorIdleHide')}</span>
-                <input
-                  type="range"
-                  min={1}
-                  max={300}
-                  step={1}
-                  value={Math.max(1, Math.round((cursor.idleHideMs ?? 5000) / 1000))}
-                  onChange={(e) => saveCursor({ idleHideMs: Number(e.target.value) * 1000 })}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 48, textAlign: 'right' }}>
-                  {Math.max(1, Math.round((cursor.idleHideMs ?? 5000) / 1000))}s
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                {t('settings.cursorIdleHideDesc')}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorSize')}</span>
-                <input
-                  type="range"
-                  min={16}
-                  max={64}
-                  step={1}
-                  value={cursor.cursorSize ?? 28}
-                  onChange={(e) => saveCursor({ cursorSize: Number(e.target.value) })}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                  {cursor.cursorSize ?? 28}px
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                {t('settings.cursorSizeDesc')}
-              </div>
-
-              {/* 热点（点击位置）设置：左侧可拖动预览，右侧滑块微调 */}
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginTop: 4 }}>
-                <div style={{ flexShrink: 0 }}>
-                  <CursorHotspotPreview
-                    hotspotX={cursor.hotspotX ?? 1}
-                    hotspotY={cursor.hotspotY ?? 1}
-                    onChange={(x, y) => saveCursor({ hotspotX: x, hotspotY: y })}
-                  />
-                  <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 4, textAlign: 'center' }}>
-                    {t('settings.hotspotPreview')}
-                  </div>
-                </div>
-                <div style={{ flex: 1, minWidth: 240, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.hotspot')}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.hotspotX')}</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={28}
-                      step={1}
-                      value={cursor.hotspotX ?? 1}
-                      onChange={(e) => saveCursor({ hotspotX: Number(e.target.value) })}
-                      style={{ flex: 1 }}
-                    />
-                    <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                      {cursor.hotspotX ?? 1}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.hotspotY')}</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={28}
-                      step={1}
-                      value={cursor.hotspotY ?? 1}
-                      onChange={(e) => saveCursor({ hotspotY: Number(e.target.value) })}
-                      style={{ flex: 1 }}
-                    />
-                    <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                      {cursor.hotspotY ?? 1}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                    {t('settings.hotspotDesc')}
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* ===== 毛玻璃主题背景（仅 glass/frost/liquid 主题生效，未开启时隐藏） =====
-            v2.3.97：新增 liquid（液态玻璃）。它与 glass/frost 同属「半透明 + 磨砂」
-            家族，同样需要「自定义背景色/图」与聊天区文字色覆盖，故一并开放该面板。
-            面板底部另加「液态流动」开关（liquidFlow），控制背景的缓慢流动动画。 */}
-        {(theme === 'glass' || theme === 'frost' || theme === 'liquid') && (
-          <>
-            <div id="sec-glassbg" className="section-title" style={{ marginTop: 16 }}>{t('settings.glassBg')}<Hint text={t('settings.glassBgDesc')} /></div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 13 }}>{t('settings.glassBgColor')}</span>
-                  <input
-                    type="color"
-                    value={draft.glassBgColor || '#6a3aa8'}
-                    onChange={(e) => patch({ glassBgColor: e.target.value, glassBgImage: '' })}
-                    style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
-                  />
-                </label>
-                {/* v2.3.97：改为打开自绘引导弹窗，由弹窗里的按钮触发隐藏 input */}
-                <button type="button" className="btn-ghost" onClick={() => setGlassBgGuideOpen(true)}>{t('settings.glassBgImport')}</button>
-                <button type="button" className="btn-ghost" onClick={() => patch({ glassBgColor: '', glassBgImage: '' })}>{t('settings.glassBgReset')}</button>
-              </div>
-              {/* v2.3.97：隐藏的真实 file input（由 ImagePickGuide 触发 .click()）*/}
-              <input
-                ref={glassBgInputRef}
-                type="file"
-                accept="image/*"
-                style={{ display: 'none' }}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  e.target.value = '';
-                  if (!f) return;
-                  const reader = new FileReader();
-                  reader.onload = () => patch({ glassBgImage: String(reader.result), glassBgColor: '' });
-                  reader.readAsDataURL(f);
-                }}
-              />
-              {/* 预览：实时反映当前毛玻璃背景（颜色或图片） */}
-              <div
-                style={{
-                  marginTop: 4,
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  border: '1px solid var(--color-border)',
-                  background: draft.glassBgImage
-                    ? `center/cover no-repeat url("${draft.glassBgImage}")`
-                    : draft.glassBgColor || 'linear-gradient(135deg,#1e2a78,#6a3aa8,#a1429c)',
-                  fontSize: 13,
-                  lineHeight: 1.6,
-                  minHeight: 48,
-                }}
-              >
-                {t('settings.glassBgPreview')}
-              </div>
-              {/* 聊天界面颜色覆盖（仅玻璃/frost 生效）：防止自定义背景后字体/边框与背景融合看不清 */}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 12 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 13 }}>{t('settings.glassTokenText')}</span>
-                  <input type="color" value={draft.glassTokenText || '#ffffff'} onChange={(e) => patch({ glassTokenText: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 13 }}>{t('settings.glassTokenBorder')}</span>
-                  <input type="color" value={draft.glassTokenBorder || '#ffffff'} onChange={(e) => patch({ glassTokenBorder: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 13 }}>{t('settings.glassBubbleUserText')}</span>
-                  <input type="color" value={draft.glassBubbleUserText || '#ffffff'} onChange={(e) => patch({ glassBubbleUserText: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 13 }}>{t('settings.glassBubbleAiText')}</span>
-                  <input type="color" value={draft.glassBubbleAiText || '#ffffff'} onChange={(e) => patch({ glassBubbleAiText: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 13 }}>{t('settings.glassBubbleBorder')}</span>
-                  <input type="color" value={draft.glassBubbleBorder || '#ffffff'} onChange={(e) => patch({ glassBubbleBorder: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
-                </label>
-              </div>
-              <div style={{ marginTop: 6 }}>
-                <button
-                  type="button"
-                  className="btn-ghost"
-                  onClick={() => patch({ glassTokenText: '', glassTokenBorder: '', glassBubbleUserText: '', glassBubbleAiText: '', glassBubbleBorder: '' })}
-                >{t('settings.glassColorReset')}</button>
-              </div>
-              {/* v2.3.97：液态玻璃（liquid）专属 —— 「液态流动」开关。
-                  背景的缓慢流动是 @keyframes 动画（见 index.css 的 liquid-flow-drift），
-                  有人会觉得持续动 distracting，故给独立开关。
-                  写入 settings.liquidFlow=false 时由 ThemeContext 挂
-                  `html[data-liquid-flow="off"]`，CSS 侧直接 animation:none（不是把动画
-                  「暂停在首帧」——暂停在首帧等于一张静止的图，用户会以为功能坏了）。
-                  注：该开关与「高级动画控制」三档是**两个独立维度**：动效总开关关掉时
-                  流动也会停（.anim-off * 的 animation:none !important 覆盖一切），
-                  但本开关只管流动、不影响其他动效，故仍需单独存在。 */}
-              {theme === 'liquid' && (
-                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={draft.liquidFlow !== false}
-                      onChange={(e) => patch({ liquidFlow: e.target.checked })}
-                      style={{ width: 15, height: 15, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
-                    />
-                    <span style={{ fontSize: 13 }}>{t('settings.liquidFlow')}</span>
-                    <Hint text={t('settings.liquidFlowDesc')} />
-                  </label>
-                </div>
-              )}
-            </div>
-          </>
-        )}
-        </div>{/* end cat-appearance */}
-        </>)}
         {/* ===== 语音功能（ASR + TTS） ===== */}
         {!onlyModels && (<>
-        <div id="cat-generation" ref={(el) => { catRefs.current['cat-generation'] = el; }} className="settings-category">
+        {/* v2.3.102 需求 3：原「生成与扩展」+「翻译」合并为「扩展与工具」(cat-extensions)。 */}
+        <div id="cat-extensions" ref={(el) => { catRefs.current['cat-extensions'] = el; }} className="settings-category">
         {/* ===== v2.3.94 需求 7：TTS / ASR / 生图 / 生视频 的配置表单已移入「模型设置」=====
             原先这四类服务的 API 端点表单散落在本分类下，只能填一套；现在它们与文本模型
             一样支持「多条配置 + 标记当前使用项」，故统一搬到模型设置二级页。
@@ -5028,11 +5104,13 @@ export const Settings: React.FC<{
           )}
         </div>
 
-          </div>{/* end cat-generation */}
-          </>)}
+          {/* 高级设置折叠区（v2.3.102 需求 3）：翻译 / 音效 —— 低频项收进「扩展与工具」的高级设置。 */}
+          <AdvancedSection
+            sectionId="adv-extensions"
+            open={draft?.advSections?.['adv-extensions'] === true}
+            onToggle={toggleAdv}
+          >
           {/* ===== 翻译（右键消息翻译文本） ===== */}
-          {!onlyModels && (<>
-        <div id="cat-translation" ref={(el) => { catRefs.current['cat-translation'] = el; }} className="settings-category">
         <div id="sec-translation" className="section-title">{t('settings.translation')}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
@@ -5141,7 +5219,8 @@ export const Settings: React.FC<{
           })}
         </div>
 
-        </div>{/* end cat-translation */}
+        </AdvancedSection>
+        </div>{/* end cat-extensions */}
         </>)}
         {/* ===== 快捷聊天小窗 ===== */}
         {!onlyModels && (<>
@@ -5270,6 +5349,125 @@ export const Settings: React.FC<{
           </button>
         </div>
 
+        {/* 高级设置折叠区（v2.3.102 需求 3）：调试模式 / 数据路径 / 错误日志 / 备份 / 重置 —— 技术性项收进此处。 */}
+        <AdvancedSection
+          sectionId="adv-window"
+          open={draft?.advSections?.['adv-window'] === true}
+          onToggle={toggleAdv}
+        >
+          {/* ===== 调试模式（v2.3.19）：数据快照保护 + 手动触发 + 错误报告 ===== */}
+          <div id="sec-debug" className="section-title" style={{ marginTop: 16 }}>{t('settings.debugMode')}<Hint text={t('settings.debugModeDesc')} /></div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {!debugSession ? (
+              <button
+                className="btn-primary"
+                style={{ padding: '4px 12px', fontSize: 12 }}
+                disabled={debugBusy}
+                onClick={async () => {
+                  setDebugBusy(true);
+                  try {
+                    const r = await api.debugStart();
+                    if (r.ok) setDebugSession(true);
+                    else showToast(r.error || t('settings.debugTrigFail'), { error: true });
+                  } finally {
+                    setDebugBusy(false);
+                  }
+                }}
+              >
+                {t('settings.debugStart')}
+              </button>
+            ) : (
+              <button
+                className="btn-primary"
+                style={{ padding: '4px 12px', fontSize: 12 }}
+                disabled={debugBusy}
+                onClick={() => void endDebug()}
+              >
+                {t('settings.debugEnd')}
+              </button>
+            )}
+            <select
+              value={debugChat}
+              onChange={(e) => setDebugChat(e.target.value)}
+              style={{ padding: '4px 8px', borderRadius: 8, fontSize: 12, maxWidth: 240 }}
+            >
+              <option value="">{t('settings.debugPickChat')}</option>
+              {chatList.map((c) => (
+                <option key={`${c.chat_type}:${c.chat_id}`} value={`${c.chat_type}:${c.chat_id}`}>
+                  {c.chat_type === 'group' ? '👥 ' : '👤 '}
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          <Hint text={t('settings.debugHint')} /></div>
+          <div
+            style={{
+              display: 'flex',
+              gap: 6,
+              flexWrap: 'wrap',
+              marginTop: 8,
+              opacity: debugSession ? 1 : 0.5,
+              pointerEvents: debugSession ? 'auto' : 'none',
+            }}
+          >
+            {([
+              ['proactive', 'settings.debugTrigProactive'],
+              ['moments', 'settings.debugTrigMoments'],
+              ['relationship', 'settings.debugTrigRelationship'],
+              ['sceneImage', 'settings.debugTrigSceneImage'],
+            ] as const).map(([k, key]) => (
+              <button
+                key={k}
+                className="btn-ghost"
+                style={{ padding: '3px 10px', fontSize: 12 }}
+                disabled={debugBusy}
+                onClick={() => void runDebugTrigger(k)}
+              >
+                {t(key)}
+              </button>
+            ))}
+          </div>
+
+          {/* 调试报告弹窗：结束调试后展示各功能错误分类汇总
+              v2.3.97：原先整块内联 style（无入场动画、不受动效开关 custom 档管控），
+              现改用通用 .modal-mask + .modal，本轮统一补上的 popupLinearIn 线性动画
+              与 theme 组门禁即刻生效。 */}
+          {debugReport && (
+            <div
+              className="modal-mask"
+              onClick={() => setDebugReport(null)}
+            >
+              <div
+                className="modal modal-debug-report"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="modal-head">
+                  <div className="modal-title">{t('settings.debugReportTitle')}<Hint text={t('settings.debugReportNote')} /></div>
+                  <button className="btn-ghost" style={{ padding: '2px 10px', fontSize: 12 }} onClick={() => setDebugReport(null)}>
+                    {t('common.cancel')}
+                  </button>
+                </div>
+                <div className="modal-body">
+                {Object.keys(debugReport).length === 0 && (
+                  <div style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>{t('settings.debugReportEmpty')}</div>
+                )}
+                {Object.entries(debugReport).map(([cat, items]) => (
+                  <div key={cat} style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>
+                      {cat === 'functional' ? t('settings.debugCatFunctional') : cat === 'model' ? t('settings.debugCatModel') : t('settings.debugCatOther')}（{items.length}）
+                    </div>
+                    {items.slice(0, 20).map((it, i) => (
+                      <div key={i} style={{ fontSize: 12, color: 'var(--color-text-secondary)', wordBreak: 'break-all' }}>
+                        · [{String(it.time || '').slice(11, 19)}] {it.message}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                </div>
+              </div>
+            </div>
+          )}
+
         {/* ===== 应用数据保存路径（实时数据，非备份） ===== */}
         <div id="sec-datapath" className="section-title" style={{ marginTop: 24 }}>{t('settings.dataPath')}</div>
         <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 10 }}>
@@ -5297,30 +5495,6 @@ export const Settings: React.FC<{
             {t('settings.dataPathDefault')}：{dataPathInfo.def}
           </div>
         )}
-
-        {/* ===== 关闭主界面行为 ===== */}
-        <div id="sec-closebehavior" className="section-title" style={{ marginTop: 24 }}>{t('settings.closeBehavior')}</div>
-        <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 10 }}>
-          {t('settings.closeBehaviorDesc')}
-        </div>
-        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-            <input
-              type="radio"
-              checked={draft.closeToTray !== false}
-              onChange={() => patch({ closeToTray: true })}
-            />
-            {t('settings.closeToTray')}
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-            <input
-              type="radio"
-              checked={draft.closeToTray === false}
-              onChange={() => patch({ closeToTray: false })}
-            />
-            {t('settings.closeExit')}
-          </label>
-        </div>
 
         {/* ===== 错误日志 ===== */}
         <div id="sec-errorlog" className="section-title" style={{ marginTop: 24 }}>{t('settings.errorLog')}</div>
@@ -5393,35 +5567,8 @@ export const Settings: React.FC<{
             {t('settings.deleteAllData')}
           </button>
         </div>
+        </AdvancedSection>
 
-        <div className="row-actions">
-          {onRerunWizard && (
-            <button
-              className="btn-ghost"
-              style={{ marginLeft: 12 }}
-              onClick={async () => {
-                await api.saveSettings({ firstRunDone: false });
-                onRerunWizard();
-              }}
-            >
-              {t('settings.rerunWizard')}
-            </button>
-          )}
-          {/* v2.3.90：重新运行新手引导。
-              注意：新手引导只在「一张人物卡都没有」时自动出现，因此对已有卡的用户点这个按钮
-              只是把 tutorialDone 写回 false，界面上不会立刻弹出——它主要在刚做完初始设置、
-              还没建卡时才有意义。 */}
-          <button
-            className="btn-ghost"
-            style={{ marginLeft: 8 }}
-            onClick={async () => {
-              await api.saveSettings({ tutorialDone: false });
-              showToast(t('tutorial.rerunDone'));
-            }}
-          >
-            {t('tutorial.rerun')}
-          </button>
-        </div>
         <div className="settings-about-row">
           <button type="button" className="btn-ghost" onClick={() => onAbout?.()}>
             {t('about.open')} · 念语

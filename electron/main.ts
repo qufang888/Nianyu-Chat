@@ -3533,6 +3533,8 @@ ${searchContext}`
           image_path: null,
           token_used: 0,
           timestamp: new Date().toISOString(),
+          // v2.3.102 需求 1：被打断而落库的占位消息标记 interrupted（前端据此显示「重发」）
+          interrupted: true,
         });
         sendStreamDone(streamId, msg);
         return { aiMsg: msg, roleId: role.id, total, tokens: 0 };
@@ -3691,6 +3693,10 @@ async function handleStream(p: {
   imagePaths?: string[];
   visibleToGroup?: boolean;
   toMemory?: boolean;
+  // v2.3.102 需求 1：重生成路径 —— true 时不写 user 消息（历史里已含锚点），改为回读锚点本体。
+  skipUserMessage?: boolean;
+  // v2.3.102 需求 1：锚点用户消息 id（skipUserMessage=true 时用于回读）。
+  anchorUserMsgId?: number;
 }): Promise<{ userMessage: ChatMessage; members: { streamId: string; roleId: string; roleName: string }[] }> {
   const settings = dm.getSettings();
   const parallel = Math.max(1, Math.floor(settings.streamParallel) || 1);
@@ -3700,7 +3706,11 @@ async function handleStream(p: {
   }
   validateModels(memberRoles, settings, p.chatType, p.chatId);
 
-  const userMsg = addUserMessage(p);
+  // v2.3.102 需求 1：重生成路径不新增 user 消息（历史已含锚点），改为回读锚点本体。
+  // ⚠️ `dm` 上**没有** getMessage(msgId)，必须从 getMessages 里 find。
+  const userMsg = p.skipUserMessage
+    ? (dm.getMessages(p.chatType, p.chatId).find((m) => m.id === p.anchorUserMsgId) ?? addUserMessage(p))
+    : addUserMessage(p);
   const storedImage = userMsg.image_path;
   const storedImages = userMsg.images || (userMsg.image_path ? [userMsg.image_path] : []);
   const history = dm.getMessages(p.chatType, p.chatId);
@@ -3806,6 +3816,8 @@ ${searchContext}`
         token_used: tokens,
         timestamp: new Date().toISOString(),
         search_results: searchPages || undefined,
+        // v2.3.102 需求 1：仅因打断而落库时标记 interrupted；正常完成写 undefined（缺省 falsy）
+        interrupted: interrupted ? true : undefined,
       });
       sendStreamDone(streamId, aiMsg);
       if (!interrupted) void requestMoodJudge(p.chatType, p.chatId, role.id);
@@ -5817,6 +5829,41 @@ function registerIPC(): void {
     }
     return res;
   });
+  // ---------- v2.3.102 需求 1：打断后重发（保留锚点用户消息，删其后 AI 回复并按正常路径重生成）----------
+  // 与「修改重发」的区别：本路径 keepAnchor=true，**保留**锚点用户消息本体（不删 u），只删 u 之后的
+  // 全部 AI 回复及其记忆/朋友圈/剧情节点级联；随后用同一 handleStream（skipUserMessage=true）重生成，
+  // 历史里已含锚点 u → 「重生成 ≡ 重发一遍」的上下文等价性得以成立。
+  ipcMain.handle(
+    'messages:regenerateReply',
+    async (_e, p: { chatType: string; chatId: string; fromUserMsgId: number }) => {
+      // 1) 先校验锚点再删，避免删完才发现锚点没了
+      const anchor = dm.getMessages(p.chatType, p.chatId).find((m) => m.id === p.fromUserMsgId);
+      if (!anchor) {
+        return { ok: false, error: 'anchor-missing', deletedMsgs: 0, deletedMems: 0, deletedMoments: 0, deletedNodes: 0 };
+      }
+      // 2) 兜底中止该聊天在飞的流
+      abortStreamsForChat(p.chatId);
+      // 3) 保留锚点，删其后全部内容（含记忆/朋友圈/剧情节点级联）
+      const res = dm.rollbackMessages(p.chatType, p.chatId, p.fromUserMsgId, true, true);
+      if (res.deletedMoments > 0) broadcast('moments:changed', { chatId: p.chatId });
+      if (res.deletedNodes > 0) {
+        broadcast('story:changed', { chatType: p.chatType, chatId: p.chatId, enabled: dm.getStoryEnabled(p.chatType, p.chatId) });
+      }
+      // 4) 按正常发送同一路径重生成（不新增 user 消息）
+      const r = await handleStream({
+        chatType: p.chatType,
+        chatId: p.chatId,
+        content: anchor.content,
+        imagePath: anchor.image_path ?? null,
+        imagePaths: anchor.images ?? undefined,
+        visibleToGroup: anchor.visibleToGroup,
+        toMemory: anchor.toMemory,
+        skipUserMessage: true,
+        anchorUserMsgId: p.fromUserMsgId,
+      });
+      return { ok: true, ...res, userMessage: r.userMessage, members: r.members };
+    }
+  );
   // ---------- 消息下方三个 AI 操作：续写 / 重写 / AI 回复（v2.3.63）----------
   ipcMain.handle('chats:aiAction', async (_e, p: {
     chatType: string; chatId: string; action: 'continue' | 'rewrite' | 'replyForUser';

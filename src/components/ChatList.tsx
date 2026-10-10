@@ -15,9 +15,7 @@ import { MAX_SUGGESTIONS } from '../utils/fuzzySearch';
 import SearchSuggest from './SearchSuggest';
 import { useRetract } from '../hooks/useRetract';
 import { useToast, ToastView } from './Toast';
-
-/** 跳转后目标卡片闪动高亮的时长（ms），与 Settings 的 goToSetting 一致 */
-const FLASH_MS = 5000;
+import { flashElement } from '../utils/flash';
 
 export const ChatList: React.FC<{
   selectedId: string | null;
@@ -189,10 +187,8 @@ export const ChatList: React.FC<{
       const el = document.getElementById(`chat-item-${key}`);
       if (!el) return;
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.classList.remove('setting-flash');
-      void el.offsetWidth; // 触发重排以重启动画
-      el.classList.add('setting-flash');
-      window.setTimeout(() => el.classList.remove('setting-flash'), FLASH_MS);
+      // v2.3.102 需求 4：统一走 flashElement（时长/去抖/清类都在工具里），删除本地重复的 FLASH_MS 常量
+      flashElement(el);
     }, 120);
   };
 

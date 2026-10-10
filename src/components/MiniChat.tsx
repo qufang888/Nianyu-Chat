@@ -1,8 +1,7 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, Fragment } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
-import { localeOf } from '../i18n/translations';
 import { useTheme } from '../theme/ThemeContext';
 import type { ChatListItem, ChatMessage, ChatType, Role, SelfRole, WorldBook } from '../types';
 
@@ -52,6 +51,8 @@ import { ClearChatModal } from './ClearChatModal';
 import { MessageSearch } from './MessageSearch';
 import { BondPanel } from './BondPanel';
 import { TranslateModal } from './TranslateModal';
+// v2.3.102 需求 1：小窗复用主窗的「打断后重发」锚点判定，避免两份逻辑分叉（单向依赖，无循环引用）
+import { computeInterruptedAnchorId } from './ChatWindow';
 // v2.3.101：主题色取自聊天背景主体色（小窗跟随其聊天背景）
 import {
   extractDominantColor,
@@ -64,7 +65,7 @@ import {
 // 快捷聊天小窗（独立无边框窗口，#mini 路由渲染）
 // 交互逻辑与 ChatWindow 主界面保持一致：图片发送/预览、语音输入、TTS、回到底部、重发、@提及、群聊转单聊提示等。
 export const MiniChat: React.FC = () => {
-  const { t, lang } = useI18n();
+  const { t } = useI18n();
   const { settings, reloadSettings } = useTheme();
   const [chats, setChats] = useState<ChatListItem[]>([]);
   const [current, setCurrent] = useState<ChatListItem | null>(null);
@@ -1807,6 +1808,49 @@ export const MiniChat: React.FC = () => {
     if (current) api.getMessages(current.chat_type, current.chat_id).then((msgs) => setMessages(msgs.slice(-10)));
   };
 
+  // v2.3.102 需求 1：打断后重发（与主窗同构）—— 复用 handleRollback / performSend 的调用链口径。
+  // 主进程侧先中止在飞的流 → rollback(keepAnchor) 保留锚点用户消息 m → 以 m 的内容走正常路径重生成。
+  const handleResendInterrupted = async (m: ChatMessage) => {
+    if (!current) return;
+    if (aiActionBusy) return; // 防连点（复用本组件已有的消息操作忙碌态）
+    setAiActionBusy(true);
+    const chatType = current.chat_type;
+    const chatId = current.chat_id;
+    try {
+      // 1) 若仍有流在飞 → 先打断，等 stream:done 广播清理占位
+      if (Object.keys(streamingMsgs).length > 0) {
+        await api.interruptStream(chatId);
+        await new Promise((r) => setTimeout(r, 400));
+        setStreamingMsgs({});
+      }
+      // 2) 主进程删除 + 重生成
+      const res = await api.regenerateReply({ chatType, chatId, fromUserMsgId: m.id });
+      if (!res.ok) {
+        showToast(t('chat.resendInterruptedFail', { msg: res.error ?? '' }));
+        return;
+      }
+      // 3) 刷新消息 / 剧情节点，并广播回滚（与 handleRollback 同口径）
+      reloadMessages();
+      setStoryNodes(await api.listStoryNodes(chatType, chatId));
+      setEditingNodeId(null);
+      api.syncMessages({ chatType, chatId, action: 'rolledBack' });
+      showToast(t('chat.resendInterruptedDone', {
+        n: res.deletedMsgs,
+        m: res.deletedMems,
+        k: res.deletedMoments,
+        d: res.deletedNodes,
+      }));
+    } catch (e: any) {
+      // ⚠️ 失败时数据可能**已经被删**（主进程先 rollback 再 handleStream，而 handleStream 会抛），
+      //    所以这里必须同时做两件事：① 如实告知；② 重新拉取，让界面反映「已删」的真实状态。
+      showToast(t('chat.resendInterruptedFail', { msg: e?.message || String(e) }), { error: true });
+      reloadMessages();
+      try { setStoryNodes(await api.listStoryNodes(chatType, chatId)); } catch { /* 拉取失败不掩盖原错误 */ }
+    } finally {
+      setAiActionBusy(false);
+    }
+  };
+
   // 消息列表更新后聚焦输入框（回滚/撤回等操作导致 messages 变化后自动恢复焦点）
   useEffect(() => {
     setTimeout(() => inputRef.current?.focus(), 0);
@@ -2167,14 +2211,6 @@ export const MiniChat: React.FC = () => {
     setTranslateModal({ source: text, senderName });
   };
 
-  const fmtTime = (iso: string) =>
-    new Date(iso).toLocaleString(localeOf(lang), {
-      month: 'numeric',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-
   const allMessages = [...messages];
   for (const sm of Object.values(streamingMsgs)) {
     const lastIdx = allMessages.findIndex((m) => m.id === sm.id);
@@ -2184,6 +2220,12 @@ export const MiniChat: React.FC = () => {
   const uniqueMessages = new Map<number | string, ChatMessage>();
   for (const m of allMessages) uniqueMessages.set(m.id, m);
   const allMessagesUnique = Array.from(uniqueMessages.values());
+
+  // v2.3.102 需求 1：唯一入口判定（复用主窗 computeInterruptedAnchorId）—— 需挂按钮的用户消息 id（无则 null）
+  const interruptedAnchorId = useMemo(
+    () => computeInterruptedAnchorId(allMessagesUnique),
+    [allMessagesUnique],
+  );
 
   // 是否处于「对方正在回复」状态：发送中，或仍有流式占位气泡在飞
   const replying = sending || Object.keys(streamingMsgs).length > 0;
@@ -2408,7 +2450,7 @@ export const MiniChat: React.FC = () => {
             {current ? t('chat.empty', { name: current.name }) : t('mini.empty')}
           </div>
         )}
-        {allMessagesUnique.map((m) => {
+        {allMessagesUnique.map((m, i) => {
           const sid = (m as any).streamId || streamMsgIdRef.current[String(m.id)];
           // 搜索结果优先取随消息持久化的 search_results（重启后历史消息仍可点击引用），
           // 否则回退到本次会话内存中按 streamId 分桶的结果
@@ -2422,7 +2464,6 @@ export const MiniChat: React.FC = () => {
                 msg={m}
                 animEnter={m.id === enteringId}
                 onImage={setPreview}
-                fmtTime={fmtTime}
                 avatarPath={m.sender_type === 'ai' ? avatarMap[m.sender_name] : undefined}
                 userAvatarPath={userAvatarPath}
                 showTts={ttsEnabled && voiceCfg.tts && m.sender_type === 'ai' && !!m.content}
@@ -2460,6 +2501,11 @@ export const MiniChat: React.FC = () => {
                 pseudoSpeed={pseudoCfg.speed}
                 pseudoKey={`${m.chat_id}:${m.id}`}
                 onOpenSearch={sr && sr.length > 0 ? () => setExpandedStreams((v) => ({ ...v, [expKey]: true })) : undefined}
+                // v2.3.102 需求 2：把「上一条消息的时间戳」传给行组件，复用主窗「同一分钟仅顶部显示」判定
+                prevTimestamp={i > 0 ? allMessagesUnique[i - 1].timestamp : undefined}
+                // v2.3.102 需求 1：打断后重发
+                interruptedAnchorId={interruptedAnchorId}
+                onResendInterrupted={handleResendInterrupted}
               />
               {sr && sr.length > 0 && (
                 <div className="search-result-bubble" key={`sr-${m.id}`}>
@@ -3126,7 +3172,6 @@ export const MiniChat: React.FC = () => {
 const MiniMessageRow: React.FC<{
   msg: ChatMessage;
   onImage: (src: string) => void;
-  fmtTime: (iso: string) => string;
   avatarPath?: string;
   userAvatarPath?: string;
   showTts?: boolean;
@@ -3162,10 +3207,15 @@ const MiniMessageRow: React.FC<{
   pseudoKey?: string;
   // v2.3.101：本条消息为「新追加」→ 播放「头像渐显 + 气泡弹出」入场动画
   animEnter?: boolean;
+  // v2.3.102 需求 2：上一条消息的时间戳，用于「同一分钟仅顶部显示」判定（与主窗同口径）
+  prevTimestamp?: string;
+  // v2.3.102 需求 1：若本条用户消息 id 等于唯一锚点 id，则在其 .msg-body 内渲染「重发」按钮
+  interruptedAnchorId?: number | null;
+  onResendInterrupted?: (m: ChatMessage) => void;
 }> = ({
-  msg, onImage, fmtTime, avatarPath, userAvatarPath, showTts, ttsState, onAiAction, showAiActions, aiActionBusy, hideReasoning, onSpeak, onReplayTts, onRegenerateTts, onReasoningCopied,
+  msg, onImage, avatarPath, userAvatarPath, showTts, ttsState, onAiAction, showAiActions, aiActionBusy, hideReasoning, onSpeak, onReplayTts, onRegenerateTts, onReasoningCopied,
   onQuickMemory, onSaveImageMemory, onRollback, onDeleteMsg, onCopy, onTranslate, onMarkNode, onViewPrompt, onForkFromHere, onSelectCopy, failed, searchResults, onOpenSearch,
-  pseudoOn, pseudoSpeed, pseudoKey, animEnter,
+  pseudoOn, pseudoSpeed, pseudoKey, animEnter, prevTimestamp, interruptedAnchorId, onResendInterrupted,
 }) => {
   const { t } = useI18n();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -3289,17 +3339,48 @@ const MiniMessageRow: React.FC<{
     ? (url: string) => { try { api?.openExternal?.(url); } catch { /* web/Capacitor 构建无此接口时忽略 */ } }
     : undefined;
   const citeOnMiss = citeCitations && onOpenSearch ? onOpenSearch : undefined;
+  // 发送时间（气泡上方）：同一分钟仅顶部消息显示；否则显示 HH:MM（24 小时制）。
+  // v2.3.102 需求 2（QA 复核修正）：**不再**显示本地化的「刚刚」文案。
+  // 原因：时间标签恒在 44px 的头像列内（.msg-avatar-col，flex:0 0 44px），而 msg.justNow 的译文本宽度
+  // 在 10 个 locale 里有 5 个超过 44px（西语「Hace un momento」≈82px 最甚），溢出会左右对称串出、压到旁边的气泡上。
+  // HH:MM 由 getHours()/getMinutes() 生成、与 locale 无关、恒为 ~28px，故统一采用。
+  const timeAbove = (() => {
+    const d = new Date(msg.timestamp).getTime();
+    if (isNaN(d)) return null;
+    if (prevTimestamp) {
+      const pd = new Date(prevTimestamp).getTime();
+      if (!isNaN(pd) && Math.floor(d / 60000) === Math.floor(pd / 60000)) return null;
+    }
+    const dt = new Date(d);
+    const hh = String(dt.getHours()).padStart(2, '0');
+    const mm = String(dt.getMinutes()).padStart(2, '0');
+    return `${hh}:${mm}`;
+  })();
+  // v2.3.102 需求 2：本行是否真的会渲染头像。用户消息未设本人头像（userAvatarPath 为空）时不算，
+  // 否则恒渲染的 44px 列 + 6px 外边距会在 row-reverse 下凭空占 50px 空白侧栏、挤压用户气泡。
+  const hasAvatar = !isUser || !!userAvatarPath;
   return (
     <div className={`msg-row ${isUser ? 'user' : 'ai'}${animEnter ? ' anim-enter' : ''}`} data-mid={msg.id} onContextMenu={handleContextMenu}>
-      {!isUser ? (
-        <div className="avatar" style={{ marginRight: 6, fontSize: 16 }}>
-          {avatarPath ? <AvatarImg path={avatarPath} /> : '🤖'}
+      {/* v2.3.102 需求 2：头像 + 时间合成固定 44px 竖列（.msg-avatar-col），时间恒在头像正下方。
+          仅「本行确有头像」（hasAvatar）时才用 44px 列；用户未设本人头像时该列为空，
+          若仍渲染会在 row-reverse 下占 50px 空白侧栏挤压气泡，故退回把时间作为 .msg-row 直接子项
+          （row-reverse 自动将其放到最右，.msg-time-above 自带 width:44px 居中）。 */}
+      {hasAvatar ? (
+        <div className="msg-avatar-col" style={{ marginRight: 6 }}>
+          {!isUser ? (
+            <div className="avatar" style={{ fontSize: 16 }}>
+              {avatarPath ? <AvatarImg path={avatarPath} /> : '🤖'}
+            </div>
+          ) : userAvatarPath ? (
+            <div className="avatar" style={{ fontSize: 16 }}>
+              <AvatarImg path={userAvatarPath} />
+            </div>
+          ) : null}
+          {timeAbove ? <div className="msg-time-above">{timeAbove}</div> : null}
         </div>
-      ) : userAvatarPath ? (
-        <div className="avatar" style={{ marginRight: 6, fontSize: 16 }}>
-          <AvatarImg path={userAvatarPath} />
-        </div>
-      ) : null}
+      ) : (
+        timeAbove ? <div className="msg-time-above">{timeAbove}</div> : null
+      )}
       {/* v2.3.78：加msg-body class —— flex 子项默认 min-width:auto，
           长消息会把该列撑出 .msg-row 宽度而换行，把气泡挤到头像下方（人物名称夹在中间）。*/}
       <div className="msg-body" style={{ maxWidth: '100%' }}>
@@ -3359,7 +3440,7 @@ const MiniMessageRow: React.FC<{
           </>
         )}
         <div className="msg-meta">
-          <span>{fmtTime(msg.timestamp)}</span>
+          {/* v2.3.102 需求 2：时间已移到 .msg-avatar-col（头像正下方），此处仅保留 tokens / 操作栏 */}
           {!isUser && msg.token_used > 0 && <span>{t('chat.tokensUsed', { n: msg.token_used })}</span>}
 
           {/* v2.3.78：操作栏移至「消耗 N tokens」同一行右侧（与主窗同构）。
@@ -3400,7 +3481,14 @@ const MiniMessageRow: React.FC<{
             {/* v2.3.65：分组隔断——左侧语音组（听这条消息），右侧 AI 操作组（让 AI 再干活）。
                 两者用途不同，用竖线分开避免误点：顺时针 ⟳ 是语音重播、逆时针 ⟲ 是 AI 重写，
                 方向相反极易混淆，隔断同时起到视觉分组作用。*/}
-            {showTts && onAiAction && !isUser && <span className="msg-action-divider" aria-hidden="true" />}
+            {/* v2.3.103：隔断线常驻 DOM，用 .is-shown 切换显隐并带过渡动画（与主窗同构）。
+                仅「朗读(🔊)」存在而无其它按钮时收起，出现 代写/重写/续写 等才展开。*/}
+            {showTts && (
+              <span
+                className={`msg-action-divider ${showAiActions && onAiAction && !isUser ? 'is-shown' : ''}`}
+                aria-hidden="true"
+              />
+            )}
             {/* v2.3.94 需求 2 连带修复（与主窗同步）：AI 操作组显式带上 showAiActions 门。
                 语义依据（见上方 v2.3.78 注释）：语音组每条 AI 消息都有；AI 操作组仅最后一条显示。
                 小窗此前靠外层 branch2 兜底，行为恰好正确，但这是隐式依赖 ——
@@ -3441,6 +3529,21 @@ const MiniMessageRow: React.FC<{
           </div>
           )}
         </div>
+        {/* v2.3.103：重发按钮改为横向按钮行形态，复用 .msg-action-bar 弹出动画（与主窗同构）。
+            常驻 DOM、用 .is-in 切换显隐。*/}
+        {onResendInterrupted && (
+          <div className={`msg-action-bar msg-resend-bar ${interruptedAnchorId === msg.id ? 'is-in' : ''}`}>
+            <button
+              type="button"
+              className="msg-resend-btn"
+              disabled={aiActionBusy}
+              title={t('chat.resendInterruptedTip')}
+              onClick={() => onResendInterrupted(msg)}
+            >
+              {t('chat.resendInterrupted')}
+            </button>
+          </div>
+        )}
       </div>
       {/* 右键菜单：Portal 到 body，脱离 .app-root 的 transform/filter 包含块，避免 fixed 坐标相对祖先偏移 */}
       {ctxMenu.shown && createPortal(
