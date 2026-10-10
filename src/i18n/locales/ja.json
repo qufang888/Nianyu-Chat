@@ -1751,5 +1751,11 @@
  "chat.resendInterruptedFail": "再送信に失敗しました：{msg}",
  "settings.advanced": "詳細設定",
  "settings.advancedTip": "詳細設定を展開または折りたたみます",
- "settings.catExtensions": "拡張およびツール"
+ "settings.catExtensions": "拡張およびツール",
+ "settings.glassTint": "ガラス色合い",
+ "settings.glassTintDesc": "ガラス／リキッドガラステーマの半透明パネルを好みの色で着色します。",
+ "settings.glassOpacity": "ガラス不透明度",
+ "settings.glassOpacityDesc": "ガラスパネルとバブルの不透明度を調整します。数値が小さいほど透明になります。",
+ "settings.glassBlur": "すりガラスぼかし",
+ "settings.glassBlurDesc": "すりガラス背景のぼかし半径を調整します。大きいほど曇ります。"
 }

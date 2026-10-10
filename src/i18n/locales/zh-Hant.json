@@ -1751,5 +1751,11 @@
  "chat.resendInterruptedFail": "重發失敗：{msg}",
  "settings.advanced": "高級設定",
  "settings.advancedTip": "展開或收合高級設定",
- "settings.catExtensions": "擴充與工具"
+ "settings.catExtensions": "擴充與工具",
+ "settings.glassTint": "玻璃色調",
+ "settings.glassTintDesc": "為毛玻璃 / 液態玻璃的半透明面板染色，可選出貼合你喜好的色調。",
+ "settings.glassOpacity": "玻璃不透明度",
+ "settings.glassOpacityDesc": "調節毛玻璃面板與氣泡的透明程度，數值越小越通透。",
+ "settings.glassBlur": "磨砂模糊度",
+ "settings.glassBlurDesc": "調節毛玻璃背景的模糊半徑，數值越大越朦朧。"
 }

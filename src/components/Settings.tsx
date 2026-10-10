@@ -206,6 +206,10 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   // v2.3.97 补：动效分组开关区。**条件渲染**（仅动效「自定义」档存在），
   // 由 filterStaticByDom() 在条件不满足时自动从候选里剔除，故不会退化成「搜得到点了没反应」。
   { id: 'sec-anim-control', key: 'animCtl.title', kw: ['动效分组', '动画分组', '分组开关', '自定义档', 'animation group', 'group toggle'] },
+  // v2.3.105 补：动效「速度」分区此前只靠动态规则⑥兜底（能搜到标题，但无手写关键词，
+  //搜「快一点 / 放慢 / 倍率」这类口语表达搜不到）。该分区**无条件渲染**，
+  // 故可安全静态登记；补上中英文关键词与倍率/秒数等口语说法。
+  { id: 'sec-anim-speed', key: 'animCtl.speedTitle', kw: ['动效速度', '动画速度', '速度', '快一点', '慢一点', '放慢', '加快', '倍率', '秒数', '动画时长', 'speed', 'animation speed', 'duration', 'faster', 'slower'] },
   { id: 'sec-update', key: 'settings.updateTitle', kw: ['更新', '升级', '版本', '检查更新', '自动更新', '下载更新', 'github', 'update', 'upgrade', 'version', 'release'] },
   // ===== 模型管理（二级页 sub='models'）=====
   { id: 'sec-globalparams', key: 'settings.globalModelParams', sub: 'models', kw: ['全局参数', '全局模型参数', '默认参数', '温度', 'temperature', 'top p', 'topp', 'top k', 'topk', '采样', '流式', 'stream', '打字机'] },
@@ -245,6 +249,12 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   // document.getElementById 返回 null，表现为「搜到了但点了没反应」，且无任何提示（静默失败）。
   // 现在改为**完全交给动态索引规则⑤（.section-title[id]）**：条件为真时它自然出现在候选里，
   // 条件为假时索引里根本没有这条，不会再产生死条目。
+  // v2.3.105：毛玻璃 / 液态玻璃专属细化控件（带稳定 id，条件渲染仅 glass/frost/liquid 主题出现）。
+  // 静态登记 + 关键词，确保「色调 / 不透明度 / 模糊度」可被中英文搜到；非对应主题下 DOM 不存在，
+  // 由 buildDynamicIndex 的 staticAlive 过滤自动剔除，不会产生死条目。
+  { id: 'sec-glass-tint', key: 'settings.glassTint', kw: ['色调', '色相', '染色', '玻璃色调', '液态玻璃色调', '毛玻璃色调', 'tint', 'hue', 'glass tint'] },
+  { id: 'sec-glass-opacity', key: 'settings.glassOpacity', kw: ['不透明度', '透明度', '玻璃透明度', '面板透明度', 'opacity', 'glass opacity'] },
+  { id: 'sec-glass-blur', key: 'settings.glassBlur', kw: ['模糊', '模糊度', '磨砂', '毛玻璃模糊', 'blur', 'frost blur', '磨砂模糊度'] },
   { id: 'sec-debug', key: 'settings.debugMode', kw: ['调试', '测试', 'debug', '快照', '错误报告', '手动触发', '触发'] },
   { id: 'sec-sceneimage', key: 'settings.sceneImage', kw: ['场景图', 'scene', '配图'] },
   // v2.3.97 补：生成与扩展分类的「语音/生图/生视频已移至模型设置」引导卡。
@@ -818,6 +828,9 @@ export const Settings: React.FC<{
       return t;
     };
     const add = (el: HTMLElement, prefix: string, explicitName?: string) => {
+      // v2.3.105：已被静态索引登记的元素（如 sec-glass-tint / sec-glass-opacity / sec-glass-blur）
+      // 保留其稳定 id 与中文关键词，动态索引不再重复登记、也不覆盖其 id（否则跳转会落到错误控件）。
+      if (el.id && STATIC_ID_SET.has(el.id)) return;
       const label = explicitName ?? nameOf(el);
       const norm = label.toLowerCase();
       if (!label || seen.has(norm)) return;
@@ -2031,23 +2044,25 @@ export const Settings: React.FC<{
           ))}
         </div>
 
-        {/* ===== v2.3.101：背景取色染色开关（dyeFromBackground）=====
-            聊天设了背景时，界面主题色取自背景主体色（实现见 ChatWindow.tsx / MiniChat.tsx）。
-            关闭后始终使用主题自带主色。默认开启（settings.dyeFromBackground 缺省 true）。
-            与同分类「液态流动」开关使用相同的写法与样式，保证观感一致。
-            本开关是原生 <input type="checkbox">，会被设置搜索索引规则①自动收录（无需静态登记）。 */}
-        <label
-          style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, cursor: 'pointer', maxWidth: 420 }}
-        >
-          <input
-            type="checkbox"
-            checked={draft.dyeFromBackground !== false}
-            onChange={(e) => patch({ dyeFromBackground: e.target.checked })}
-            style={{ width: 15, height: 15, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
-          />
-          <span style={{ fontSize: 13 }}>{t('settings.dyeFromBackground')}</span>
-          <Hint text={t('settings.dyeFromBackgroundDesc')} />
-        </label>
+        {/* ===== v2.3.105：背景取色染色开关（dyeFromBackground）=====
+            改为「液态玻璃(liquid)专属」：仅当主题为 liquid 时显示（其余主题天然回退主题默认主色，
+            见 ChatWindow.tsx / MiniChat.tsx 的 theme==='liquid' 守卫）。
+            聊天设了背景时，界面主题色取自背景主体色；关闭后始终使用主题自带主色。
+            默认开启（settings.dyeFromBackground 缺省 true）。原生 <input type="checkbox">，被搜索索引规则①自动收录。 */}
+        {theme === 'liquid' && (
+          <label
+            style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, cursor: 'pointer', maxWidth: 420 }}
+          >
+            <input
+              type="checkbox"
+              checked={draft.dyeFromBackground !== false}
+              onChange={(e) => patch({ dyeFromBackground: e.target.checked })}
+              style={{ width: 15, height: 15, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
+            />
+            <span style={{ fontSize: 13 }}>{t('settings.dyeFromBackground')}</span>
+            <Hint text={t('settings.dyeFromBackgroundDesc')} />
+          </label>
+        )}
 
         {/* ===== UI 圆角 ===== */}
         <div id="sec-radius" className="section-title">{t('settings.radius')}<Hint text={t('settings.radiusDesc')} /></div>
@@ -2595,6 +2610,48 @@ export const Settings: React.FC<{
           <>
             <div id="sec-glassbg" className="section-title" style={{ marginTop: 16 }}>{t('settings.glassBg')}<Hint text={t('settings.glassBgDesc')} /></div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
+              {/* v2.3.105：毛玻璃 / 液态玻璃专属细化 —— 色调 / 不透明度 / 模糊度。
+                  三项均带稳定 id（sec-glass-tint / sec-glass-opacity / sec-glass-blur），
+                  由设置搜索静态索引登记（含中英文关键词），见下方 SETTING_SEARCH_INDEX。 */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 12, borderBottom: '1px solid var(--color-border)' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <span style={{ fontSize: 13 }}>{t('settings.glassTint')}</span>
+                  <input
+                    id="sec-glass-tint"
+                    type="color"
+                    value={draft.glassTint || '#ffffff'}
+                    onChange={(e) => patch({ glassTint: e.target.value })}
+                    style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
+                  />
+                  <Hint text={t('settings.glassTintDesc')} />
+                </label>
+                <div>
+                  <div style={{ fontSize: 13, marginBottom: 4 }}>{t('settings.glassOpacity')}：{draft.glassOpacity ?? 20}%</div>
+                  <input
+                    id="sec-glass-opacity"
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={draft.glassOpacity ?? 20}
+                    onChange={(e) => patch({ glassOpacity: Number(e.target.value) })}
+                    style={{ width: '100%', accentColor: 'var(--color-primary)' }}
+                  />
+                </div>
+                <div>
+                  <div style={{ fontSize: 13, marginBottom: 4 }}>{t('settings.glassBlur')}：{draft.glassBlur ?? 30}px</div>
+                  <input
+                    id="sec-glass-blur"
+                    type="range"
+                    min={4}
+                    max={60}
+                    step={1}
+                    value={draft.glassBlur ?? 30}
+                    onChange={(e) => patch({ glassBlur: Number(e.target.value) })}
+                    style={{ width: '100%', accentColor: 'var(--color-primary)' }}
+                  />
+                </div>
+              </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: 13 }}>{t('settings.glassBgColor')}</span>

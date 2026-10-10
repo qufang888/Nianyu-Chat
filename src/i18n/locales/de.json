@@ -1751,5 +1751,11 @@
  "chat.resendInterruptedFail": "Erneut senden fehlgeschlagen: {msg}",
  "settings.advanced": "Erweiterte Einstellungen",
  "settings.advancedTip": "Erweiterte Einstellungen ein- oder ausblenden",
- "settings.catExtensions": "Erweiterungen & Werkzeuge"
+ "settings.catExtensions": "Erweiterungen & Werkzeuge",
+ "settings.glassTint": "Glasfarbton",
+ "settings.glassTintDesc": "Färbt die halbtransparenten Panels der Glas- und Flüssigglas-Themen in einer Farbe deiner Wahl.",
+ "settings.glassOpacity": "Glas-Deckkraft",
+ "settings.glassOpacityDesc": "Stellt ein, wie undurchsichtig die Glaspanels und Blasen sind; niedriger bedeutet durchsichtiger.",
+ "settings.glassBlur": "Glasunschärfe",
+ "settings.glassBlurDesc": "Stellt den Unschärfebereich des Glas-Hintergrunds ein; höher bedeutet nebeliger."
 }

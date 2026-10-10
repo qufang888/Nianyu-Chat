@@ -721,26 +721,28 @@ input[type='range']::-moz-range-thumb {
    方向：AI 头像在左 → 气泡从左侧（-8px）弹向中间；用户头像在右 → 气泡从右侧（+8px）弹向中间。
    落点：主窗 / 小窗的 .avatar / .bubble / .msg-body 类名同构，故本套规则两窗天然同时生效。 */
 @keyframes msgAvatarIn {
-  from { opacity: 0; transform: scale(0.92); }
+  from { opacity: 0; transform: scale(0.82); }
   to   { opacity: 1; transform: none; }
 }
-/* 终值 opacity 与 .bubble 基态（opacity: var(--bubble-opacity,1)）一致，避免动画结束瞬间跳色 */
+/* 终值 opacity 与 .bubble 基态（opacity: var(--bubble-opacity,1)）一致，避免动画结束瞬间跳色。
+   v2.3.105：放大初始位移与缩放幅度（translateX ±12px / scale 0.9），让「从头像一侧线性弹出」更明显、更利落。 */
 @keyframes msgBubbleIn {
-  from { opacity: 0; transform: translateX(var(--msg-enter-dx, 8px)) scale(0.98); }
+  from { opacity: 0; transform: translateX(var(--msg-enter-dx, 8px)) scale(0.9); }
   to   { opacity: var(--bubble-opacity, 1); transform: none; }
 }
 /* 头像先渐显（无延迟） */
 .msg-row.anim-enter .avatar {
-  animation: msgAvatarIn calc(0.34s * var(--anim-speed, 1)) linear both;
+  animation: msgAvatarIn calc(0.30s * var(--anim-speed, 1)) linear both;
 }
-/* 气泡随后弹出（延迟 0.10s，配合 both 的回填：延迟期间停在 from 态 = 隐藏） */
+/* 气泡随后弹出（延迟 0.08s，配合 both 的回填：延迟期间停在 from 态 = 隐藏）。
+   方向变量 --msg-enter-dx 在下方按 AI(左)/用户(右) 设定为 ±12px，确保从各自头像一侧线性弹出。 */
 .msg-row.anim-enter .bubble {
-  animation: msgBubbleIn calc(0.42s * var(--anim-speed, 1)) linear both;
-  animation-delay: calc(0.10s * var(--anim-speed, 1));
+  animation: msgBubbleIn calc(0.40s * var(--anim-speed, 1)) linear both;
+  animation-delay: calc(0.08s * var(--anim-speed, 1));
 }
 /* 方向变量：AI 头像在左 → 从左弹出；用户头像在右 → 从右弹出 */
-.msg-row.ai.anim-enter { --msg-enter-dx: -8px; }
-.msg-row.user.anim-enter { --msg-enter-dx: 8px; }
+.msg-row.ai.anim-enter { --msg-enter-dx: -12px; }
+.msg-row.user.anim-enter { --msg-enter-dx: 12px; }
 
 /* ===== 流式逐字渐显（v2.3.19） =====
    每个新输出的字固定 0.3s 渐显，速度不随模型输出快慢变化；
@@ -4462,7 +4464,10 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 .setting-flash,
 .model-flash {
   animation: flashPulse 1s linear 5;
-  border-radius: var(--radius-sm, 8px);
+  /* v2.3.105：强制统一圆角，避免闪动高亮跟随目标元素自身的 border-radius（如某些界面里
+     目标元素是圆角/胶囊形，会导致高亮环渲染成椭圆形）。!important 确保任意目标都呈一致的
+     圆角矩形（方形观感），不再出现椭圆。 */
+  border-radius: var(--radius-sm, 8px) !important;
 }
 @keyframes flashPulse {
   0% {
@@ -5390,6 +5395,15 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
   width: 1px;
   margin: 0 4px;
   opacity: 1;
+}
+/* v2.3.105：关动效档兜底（与 .qip-item / .msg-action-bar 同款双保险）。
+   登记进 animControl 的 panel 组后 transition 会被 kill，但隔断线仍应可见（只是不再有过渡），
+   故强制拉到展开态终值。两条选择器分别覆盖「全关档」(.anim-off) 与「自定义档关掉 panel 组」。 */
+.anim-off .msg-action-divider,
+html[data-anim-off~='panel'] .msg-action-divider {
+  width: 1px !important;
+  margin: 0 4px !important;
+  opacity: 1 !important;
 }
 
 /* 旧容器名保留为别名，避免遗漏引用导致样式丢失 */
@@ -7193,6 +7207,18 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
   -webkit-backdrop-filter: var(--liquid-content-backdrop);
   border: 1px solid var(--color-border);
   box-shadow: none;
+}
+
+/* v2.3.105：主题预览卡（.theme-card）在本主题下补一层「卡片底」。
+   动机有二：
+     ① 观感：.theme-card 基态**没有 background**（仅 2px 边框），在本主题深色渐变上
+        呈现为「一堆悬空描边框」，与液态玻璃的材质语言脱节，观感脏乱。
+     ② 可读性/稳定性：透明底会让 autoContrast 看门狗把它判成需干预的面；
+        补上不透明卡片底后，卡片自身即成稳定承载面，文字对比度不再随背景漂移浮动。
+   用 --liquid-content-bg（同内容层材质，alpha 0.78）而非纯白，保证 14 主题观感统一、
+   且浅色文字在其上仍 ≥ 4.5:1。 */
+[data-theme='liquid'] .theme-card {
+  background: var(--liquid-content-bg);
 }
 
 /* 4b. 输入框：同样玻璃描边 + 顶部高光；聚焦时叠加主色描边光环 */

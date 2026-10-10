@@ -1751,5 +1751,11 @@
  "chat.resendInterruptedFail": "Error al reenviar: {msg}",
  "settings.advanced": "Ajustes avanzados",
  "settings.advancedTip": "Mostrar u ocultar los ajustes avanzados",
- "settings.catExtensions": "Extensiones y herramientas"
+ "settings.catExtensions": "Extensiones y herramientas",
+ "settings.glassTint": "Tinte de cristal",
+ "settings.glassTintDesc": "Tiñe los paneles translúcidos de los temas de Cristal y Cristal líquido con el color que elijas.",
+ "settings.glassOpacity": "Opacidad del cristal",
+ "settings.glassOpacityDesc": "Ajusta la opacidad de los paneles y burbujas de cristal; menor significa más transparente.",
+ "settings.glassBlur": "Desenfoque del cristal",
+ "settings.glassBlurDesc": "Ajusta el radio de desenfoque del fondo de cristal; mayor significa más difuso."
 }

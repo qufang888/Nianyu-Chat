@@ -122,6 +122,38 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setGlassVar('--glass-bubble-user-fg', settings.glassBubbleUserText);
     setGlassVar('--glass-bubble-ai-fg', settings.glassBubbleAiText);
     setGlassVar('--glass-bubble-border', settings.glassBubbleBorder);
+    // v2.3.105：毛玻璃 / 液态玻璃专属细化 —— 色调 + 不透明度 + 模糊度。
+    // 仅 glass / frost / liquid 主题生效；其余主题清除内联覆盖，回退变量默认值。
+    // 不透明度按「白底基准 alpha 0.20」的比例同步缩放到 chat-bg(0.45×) / input-bg(0.95×)，
+    // 使三者随滑块等比增减，观感一致。色调缺省近白（#ffffff），即当前默认玻璃观感。
+    if (isGlass) {
+      const tint = settings.glassTint || '#ffffff';
+      const rawOp = Number(settings.glassOpacity);
+      const op = Number.isFinite(rawOp) && rawOp >= 0 && rawOp <= 100 ? rawOp : 20;
+      root.style.setProperty(
+        '--color-panel',
+        `color-mix(in srgb, ${tint} ${op}%, transparent)`
+      );
+      root.style.setProperty(
+        '--color-chat-bg',
+        `color-mix(in srgb, ${tint} ${Math.round(op * 0.45)}%, transparent)`
+      );
+      root.style.setProperty(
+        '--color-input-bg',
+        `color-mix(in srgb, ${tint} ${Math.round(op * 0.95)}%, transparent)`
+      );
+      const rawBlur = Number(settings.glassBlur);
+      if (Number.isFinite(rawBlur) && rawBlur > 0) {
+        root.style.setProperty('--blur', `${rawBlur}px`);
+      } else {
+        root.style.removeProperty('--blur');
+      }
+    } else {
+      root.style.removeProperty('--color-panel');
+      root.style.removeProperty('--color-chat-bg');
+      root.style.removeProperty('--color-input-bg');
+      root.style.removeProperty('--blur');
+    }
   }, [settings, theme]);
 
   const setTheme = (t: ThemeName) => {

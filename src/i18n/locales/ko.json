@@ -1751,5 +1751,11 @@
  "chat.resendInterruptedFail": "다시 보내기 실패: {msg}",
  "settings.advanced": "고급 설정",
  "settings.advancedTip": "고급 설정을 펼치거나 접습니다",
- "settings.catExtensions": "확장 및 도구"
+ "settings.catExtensions": "확장 및 도구",
+ "settings.glassTint": "유리 색조",
+ "settings.glassTintDesc": "글래스/리퀴드 글래스 테마의 반투명 패널을 원하는 색으로 염색합니다.",
+ "settings.glassOpacity": "유리 불투명도",
+ "settings.glassOpacityDesc": "글래스 패널과 말풍선의 불투명 정도를 조절합니다. 작을수록 더 투명해집니다.",
+ "settings.glassBlur": "블러 처리",
+ "settings.glassBlurDesc": "글래스 배경의 블러 반경을 조절합니다. 클수록 더 흐려집니다."
 }

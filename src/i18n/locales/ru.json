@@ -1751,5 +1751,11 @@
  "chat.resendInterruptedFail": "Не удалось отправить снова: {msg}",
  "settings.advanced": "Дополнительные настройки",
  "settings.advancedTip": "Развернуть или свернуть дополнительные настройки",
- "settings.catExtensions": "Расширения и инструменты"
+ "settings.catExtensions": "Расширения и инструменты",
+ "settings.glassTint": "Оттенок стекла",
+ "settings.glassTintDesc": "Окрашивает полупрозрачные панели тем стекла и жидкого стекла в выбранный вами цвет.",
+ "settings.glassOpacity": "Непрозрачность стекла",
+ "settings.glassOpacityDesc": "Регулирует непрозрачность стеклянных панелей и пузырьков; меньше — прозрачнее.",
+ "settings.glassBlur": "Размытие стекла",
+ "settings.glassBlurDesc": "Регулирует радиус размытия стеклянного фона; больше — туманнее."
 }

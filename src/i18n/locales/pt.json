@@ -1751,5 +1751,11 @@
  "chat.resendInterruptedFail": "Falha ao reenviar: {msg}",
  "settings.advanced": "Configurações avançadas",
  "settings.advancedTip": "Expandir ou recolher as configurações avançadas",
- "settings.catExtensions": "Extensões & Ferramentas"
+ "settings.catExtensions": "Extensões & Ferramentas",
+ "settings.glassTint": "Tonalidade do vidro",
+ "settings.glassTintDesc": "Tinge os painéis translúcidos dos temas de Vidro e Vidro líquido com a cor à sua escolha.",
+ "settings.glassOpacity": "Opacidade do vidro",
+ "settings.glassOpacityDesc": "Ajusta a opacidade dos painéis e bolhas de vidro; menor = mais transparente.",
+ "settings.glassBlur": "Desfoque do vidro",
+ "settings.glassBlurDesc": "Ajusta o raio de desfoque do fundo de vidro; maior = mais nebuloso."
 }

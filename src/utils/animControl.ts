@@ -83,6 +83,13 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       // 刻意不把 .msg-ai-action-btn 也加进来：它属于 bubble 组（animControl.ts 的 bubble 项），
       // 同时登记到两个组会导致「关掉 panel 连带关掉 bubble 想保留的按钮动画」的语义冲突。
       '.msg-action-bar',
+      // v2.3.105：消息下方按钮组里的**分隔竖线**（v2.3.103 新增）。
+      // 与 .msg-action-bar 同理属「功能性必需」：基态是 opacity:0，靠 transition 插值到
+      // .is-shown 的 opacity:1。若不登记，自定义档关掉 panel 组时 transition 被抹掉，
+      // 竖线会**永久卡在 opacity:0**（整条隔断不可见）。transition:none 只是取消插值、
+      // 元素仍跳到终值，所以登记后开关是安全的。
+      '.msg-action-divider',
+      '.msg-action-divider.is-shown',
       '.scroll-to-bottom',
       '.mini-scroll-to-bottom',
       // v2.3.102 需求 3：高级设置折叠区（grid-template-rows 0fr↔1fr 的 transition）。
@@ -240,6 +247,12 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       // v2.3.97：实心危险按钮（恢复出厂/删除全部数据/清空错误日志）。
       // 它的 hover/disabled 走 var(--transition) 过渡，与 .btn-primary 同族。
       '.btn-danger',
+      // v2.3.105：液态玻璃主题的**果冻按钮弹簧**（.mini-btn 按压缩放 transform 过渡 +
+      // ::before 斜向扫光的 background-position 位移）。此前只有 .btn-primary/.ctb-btn 登记，
+      // .mini-btn（含小窗与弹窗内的小按钮）缺席，自定义档关掉 theme 组时这两条动画照样播。
+      // 语义与 .btn-primary 同族（通用 UI 交互反馈），故归 theme 组。
+      '.mini-btn',
+      '.mini-btn::before',
       '.role-card',
       '.speaker-item',
       '.select-menu-trigger',

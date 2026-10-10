@@ -612,9 +612,11 @@ export const ChatWindow: React.FC<{
   const [chatBg, setChatBg] = useState<string | null>(null);
 
   // v2.3.101：主题色取自聊天背景主体色。dyeSeqRef 保护异步取色竞态；dyeActive 控制滚动区玻璃类
+  // v2.3.105：背景取色染色改为「液态玻璃(liquid)专属」——仅 liquid 主题生效，其余主题回退主题默认主色。
   const { settings: themeSettings } = useTheme();
   const dyeSeqRef = useRef(0);
-  const dyeActive = themeSettings?.dyeFromBackground !== false && !!chatBg;
+  const dyeActive =
+    themeSettings?.theme === 'liquid' && themeSettings?.dyeFromBackground !== false && !!chatBg;
 
   // 有背景且未关染色 → 提取主体色作为内联主题主色（渐变过渡由 variables.css 的 @property/transition 完成）。
   // 无背景 / 关闭开关 → 清除内联覆盖，回退主题默认色（即口径上的「无背景主体色为白」）。
@@ -627,7 +629,7 @@ export const ChatWindow: React.FC<{
       root.style.removeProperty('--color-primary-text');
       root.style.removeProperty('--color-primary-ink');
     };
-    if (themeSettings?.dyeFromBackground === false || !chatBg) {
+    if (themeSettings?.theme !== 'liquid' || themeSettings?.dyeFromBackground === false || !chatBg) {
       clear();
       return;
     }

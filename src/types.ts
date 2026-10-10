@@ -745,6 +745,12 @@ export interface AppSettings {
   glassBubbleUserText?: string; // 毛玻璃主题：用户气泡文字色（空=跟随主题）
   glassBubbleAiText?: string; // 毛玻璃主题：AI 气泡文字色（空=跟随主题）
   glassBubbleBorder?: string; // 毛玻璃主题：气泡边框色（空=透明/无）
+  // ===== 毛玻璃 / 液态玻璃专属细化设置（v2.3.105）=====
+  // 以下三项由「毛玻璃 / 液态玻璃」专属设置面板统一控制，仅 glass / frost / liquid 主题生效。
+  // 应用逻辑见 ThemeContext（写入 --color-panel / --color-chat-bg / --color-input-bg / --blur）。
+  glassTint?: string; // 色调：玻璃承载面染色（CSS 颜色），空=近白（#ffffff）；与下方不透明度合成半透明面板
+  glassOpacity?: number; // 不透明度：玻璃面板透明度（0~100，百分比），空/缺省=20（与 variables.css 默认 --color-panel alpha 一致）
+  glassBlur?: number; // 模糊度：毛玻璃 backdrop-filter 模糊半径（px），空/缺省=30（与 variables.css 默认 --blur 一致）
   // ===== 液态玻璃主题（liquid）专属（v2.3.97）=====
   // 背景缓慢流动动画开关。留空 / true = 流动（默认）；false = 静止。
   // 实现见 ThemeContext（挂 html[data-liquid-flow="off"]）与 index.css 的 liquid-flow-drift。
@@ -1242,6 +1248,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   glassBubbleUserText: '',
   glassBubbleAiText: '',
   glassBubbleBorder: '',
+  // v2.3.105：毛玻璃 / 液态玻璃专属细化默认（与 variables.css 默认 --color-panel/--blur 一致）
+  glassTint: '#ffffff',
+  glassOpacity: 20,
+  glassBlur: 30,
   // v2.3.97：液态玻璃默认开启背景流动（用户可在毛玻璃面板里关掉）
   liquidFlow: true,
   enableRandomEvents: true,

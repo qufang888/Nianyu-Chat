@@ -19,6 +19,9 @@
  *  3. 判级：容器解析后的文字色 vs 合成背景做 WCAG 对比度——
  *     ≥ 4.5 不干预；< 4.5 挂 `data-auto-contrast='boost'`；
  *     模拟叠加 boost 加深层后仍 < 4.5 → 升级 `'flip'`（整体翻转为浅底深字）。
+ *     **v2.3.105：flip 仅限「浮层」**（元素自身 position 为 absolute/fixed）。
+ *     静态内容面（主题卡网格、侧栏、面板等 position:static 者）最高只到 boost，
+ *     绝不翻成浅底 —— 否则深色玻璃主题上会出现整片近白色块（用户实测反馈「非常恶心」）。
  *  4. 触发与门禁：
  *     - documentElement attributes MutationObserver（data-theme / data-liquid-flow / data-liquid-custom-bg）；
  *     - body childList+subtree MutationObserver（debounce 120ms，捕捉菜单/弹窗 portal 动态挂载）；
@@ -356,8 +359,49 @@ function compositeBackground(el: Element): RGBA {
 // 判级
 // ---------------------------------------------------------------------------
 
-/** 计算单个容器的判定结果；返回 null 表示对比度达标、无需干预 */
-function judge(el: Element, bg: RGBA): Verdict | null {
+/**
+ * 判定某容器是否**允许 flip**（浅底深字）。
+ *
+ * ## 为什么需要这道闸门（v2.3.105，用户实测反馈「液态玻璃主题非常恶心」）
+ * `flip` 的设计初衷只有一个：**浮在动态背景之上、承载正文的小面积玻璃层**
+ * （菜单 / 弹窗 / 下拉 / 抽屉）。这类元素翻转成浅底深字是合理的。
+ *
+ * 但看门狗此前对 `WATCH_SELECTORS` 里的**所有**元素无差别判级，于是静态内容面
+ * （最典型：设置页的 `.theme-card` 主题预览卡网格）也被翻成浅底。实测后果是
+ * 深色液态玻璃主题上出现 15 块近乎纯白的大色块 —— 经像素复核恰为
+ * `--auto-contrast-flip-bg: rgba(240,246,255,0.94)` 压在深底上的合成色
+ * `rgb(226,233,243)`（理论值与实测值逐通道完全一致），卡内文字被翻成
+ * `--color-primary-ink` 近黑 —— 这就是用户所说的「恶心 / 反人类」观感。
+ *
+ * ## 判据：必须处于「浮层上下文」中
+ * 自 el 沿祖先链向上（止于 body/documentElement），只要**任意一层**是
+ * `position: absolute/fixed`，即认为它浮在动画背景之上，允许 flip。
+ *
+ * 为什么看祖先而不只看自身：浮层里常有一批 `position: static` 的内容元素，
+ * 例如 `.modal-card`（自身 static）嵌在 `position: fixed` 的 `.modal-mask` 里、
+ * `.chat-model-picker`（自身 static）嵌在 absolute 的容器里 —— 它们确实是
+ * 「浮在动态背景上的正文承载面」，翻转是合理且必要的（底下就是流动渐变）。
+ * 反之 `.theme-card` / `.sidebar` / `.role-card` / `.reasoning-block`
+ * 这类**文档流内的静态内容**，整条祖先链都是 static，翻成浅底就会在深色主题上
+ * 糊出一大片白块（正是本次要修的缺陷）。
+ *
+ * getComputedStyle 会反映内联 style，因此组件里用内联 `position` 定位的浮层
+ * （如 ctx-menu / more-dropdown）同样能被正确识别。
+ */
+function allowsFlip(el: Element): boolean {
+  for (let node: Element | null = el; node && node !== document.body; node = node.parentElement) {
+    const pos = getComputedStyle(node).position;
+    if (pos === 'absolute' || pos === 'fixed') return true;
+  }
+  return false;
+}
+
+/**
+ * 计算单个容器的判定结果；返回 null 表示对比度达标、无需干预。
+ *
+ * @param allowFlip 该容器是否允许 flip（见 {@link allowsFlip}）；false 时最高只到 'boost'。
+ */
+function judge(el: Element, bg: RGBA, allowFlip: boolean): Verdict | null {
   const cs = getComputedStyle(el);
   const textRaw = parseColor(cs.color);
   if (!textRaw) return null;
@@ -368,7 +412,9 @@ function judge(el: Element, bg: RGBA): Verdict | null {
   const scrim = tokenOr('--auto-contrast-scrim', FALLBACK_SCRIM);
   const boostedBg = compositeOver(scrim, bg);
   if (contrastRatio(text, boostedBg) >= AA_CONTRAST) return 'boost';
-  return 'flip';
+  // v2.3.105：静态内容面走到这里说明「加深也救不回」，但翻成浅底会毁掉深色主题观感，
+  // 故按闸门降级为 boost（保底加深）而不是 flip。
+  return allowFlip ? 'flip' : 'boost';
 }
 
 /** 清除全部受管元素上的 data-auto-contrast 属性 */
@@ -393,14 +439,16 @@ function applyVerdicts(): void {
   const els = document.querySelectorAll(WATCH_SELECTOR_ALL);
   els.forEach((el) => {
     const bg = compositeBackground(el);
-    const verdict = judge(el, bg);
+    // v2.3.105：flip 仅限浮层（见 allowsFlip），静态内容面最高只到 boost。
+    const allowFlip = allowsFlip(el);
+    const verdict = judge(el, bg, allowFlip);
     // 签名必须包含背景/文字的实际取值：换自定义背景图、调玻璃文字色等都会改变
     // 合成结果，即使判定档位相同也要重算（否则属性停在旧判级上）。
     const textRaw = parseColor(getComputedStyle(el).color);
     const sigText = textRaw
       ? `${Math.round(textRaw.r * 255)},${Math.round(textRaw.g * 255)},${Math.round(textRaw.b * 255)}`
       : 'na';
-    const signature = `${theme}|${verdict || 'ok'}|${Math.round(relativeLuminance(bg) * 1000)}|${sigText}`;
+    const signature = `${theme}|${verdict || 'ok'}|${Math.round(relativeLuminance(bg) * 1000)}|${sigText}|${allowFlip ? 'f' : 's'}`;
     if (verdictCache.get(el) === signature) return; // 无变化，跳过 DOM 写入
     verdictCache.set(el, signature);
     if (verdict) el.setAttribute('data-auto-contrast', verdict);

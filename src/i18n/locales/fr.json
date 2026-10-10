@@ -1751,5 +1751,11 @@
  "chat.resendInterruptedFail": "Échec du renvoi : {msg}",
  "settings.advanced": "Paramètres avancés",
  "settings.advancedTip": "Développer ou réduire les paramètres avancés",
- "settings.catExtensions": "Extensions & outils"
+ "settings.catExtensions": "Extensions & outils",
+ "settings.glassTint": "Teinte du verre",
+ "settings.glassTintDesc": "Teinte les panneaux translucides des thèmes Verre et Verre liquide avec la couleur de votre choix.",
+ "settings.glassOpacity": "Opacité du verre",
+ "settings.glassOpacityDesc": "Règle l’opacité des panneaux et bulles de verre ; plus bas = plus transparent.",
+ "settings.glassBlur": "Flou du verre",
+ "settings.glassBlurDesc": "Règle le rayon de flou de l’arrière-plan verre ; plus élevé = plus brumeux."
 }

@@ -411,8 +411,9 @@ export const MiniChat: React.FC = () => {
   const [observerPrivate, setObserverPrivate] = useState(false);
   const [chatBg, setChatBg] = useState<string | null>(null);
   // v2.3.101：主题色取自聊天背景主体色（小窗跟随其当前聊天）。dyeSeqRef 保护异步取色竞态
+  // v2.3.105：背景取色染色改为「液态玻璃(liquid)专属」——仅 liquid 主题生效，其余主题回退主题默认主色。
   const dyeSeqRef = useRef(0);
-  const dyeActive = settings?.dyeFromBackground !== false && !!chatBg;
+  const dyeActive = settings?.theme === 'liquid' && settings?.dyeFromBackground !== false && !!chatBg;
 
   // 有背景且未关染色 → 提取主体色作为内联主题主色（小窗是独立 document，须挂到自己的 documentElement）。
   // 无背景 / 关闭开关 / 切主题 → 清除内联覆盖，回退主题默认色。
@@ -424,7 +425,7 @@ export const MiniChat: React.FC = () => {
       root.style.removeProperty('--color-primary-text');
       root.style.removeProperty('--color-primary-ink');
     };
-    if (settings?.dyeFromBackground === false || !chatBg) {
+    if (settings?.theme !== 'liquid' || settings?.dyeFromBackground === false || !chatBg) {
       clear();
       return;
     }
