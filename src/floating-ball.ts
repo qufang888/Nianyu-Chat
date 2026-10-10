@@ -160,7 +160,9 @@ function baseCSS(): string {
   .fb-ctx-aot-row{justify-content:flex-start;}
   .fb-ctx-aot-row input{accent-color:var(--color-primary);cursor:pointer;width:15px;height:15px;margin:0;}
   [data-theme='glass'] .fb-ctx{ background:rgba(18,16,38,0.88); border-color:rgba(255,255,255,0.28); }
-  [data-theme='liquid'] .fb-ctx{ background:var(--liquid-overlay); border-color:var(--liquid-overlay-border-strong); }
+  /* v2.3.104：fb-ctx 消费 specular/refract（顶部镜面线 + 底部折射暗缘，Apple 要素1/2） */
+  [data-theme='liquid'] .fb-ctx{ background:var(--liquid-overlay); border-color:var(--liquid-overlay-border-strong); box-shadow:var(--liquid-specular), var(--liquid-refract); }
+  [data-theme='liquid'] .fb-ctx-item:hover{ background:var(--liquid-overlay-hover); }
 
   /* 毛玻璃主题：原面板背景为浅白低不透明（rgba(255,255,255,0.22)）+白字，
      在亮桌面下对比不足、字被吃掉。改用深暗半透明磨砂底，保证浅色文字始终可读。
@@ -174,10 +176,14 @@ function baseCSS(): string {
 
   /* 液态玻璃主题：与上面 glass 分支同款处理，但改用 variables.css 的 --liquid-* 令牌
      （本文件第 10 行已 import ./theme/variables.css，其 [data-theme='liquid'] 块提供这些变量），
-     加深半透明浮层底以压住高饱和流动背景透出的亮斑，保证文字可读。 */
+     加深半透明浮层底以压住高饱和流动背景透出的亮斑，保证文字可读。
+     v2.3.104（Apple Liquid Glass 对齐）：补 specular/refract 消费 +
+     backdrop-filter 换 --liquid-backdrop（blur 30px + saturate 1.6，要素3）。 */
   [data-theme='liquid'] .fb-panel{
     background:var(--liquid-overlay);
     border-color:var(--liquid-overlay-border);
+    box-shadow:var(--liquid-specular), var(--liquid-refract);
+    backdrop-filter:var(--liquid-backdrop);-webkit-backdrop-filter:var(--liquid-backdrop);
   }
   [data-theme='liquid'] .fb-row:hover{ background:var(--liquid-overlay-hover); }
   [data-theme='liquid'] .fb-panel-h .cnt{ color:var(--liquid-overlay-text); background:var(--liquid-overlay-field); }

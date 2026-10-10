@@ -2694,6 +2694,25 @@ export const Settings: React.FC<{
                   </label>
                 </div>
               )}
+              {/* v2.3.104：「自动对比度调节」开关（glass / liquid 主题生效）。
+                  可读性兜底功能（非动画）：看门狗（src/utils/autoContrast.ts）在这些主题的
+                  玻璃承载面上检测文字对比度 < 4.5:1 时，自动加深背景（boost）或
+                  翻转为浅底深字（flip）。与「高级动画控制」三档正交——anim-off 不影响它，
+                  故需要独立开关。缺省视为开启（settings.autoContrast !== false）。 */}
+              {(theme === 'glass' || theme === 'liquid') && (
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={draft.autoContrast !== false}
+                      onChange={(e) => patch({ autoContrast: e.target.checked })}
+                      style={{ width: 15, height: 15, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
+                    />
+                    <span style={{ fontSize: 13 }}>{t('settings.autoContrast')}</span>
+                    <Hint text={t('settings.autoContrastTip')} />
+                  </label>
+                </div>
+              )}
             </div>
           </>
         )}

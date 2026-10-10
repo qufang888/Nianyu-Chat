@@ -1099,6 +1099,8 @@
  "settings.glassColorReset": "重置顏色",
  "settings.liquidFlow": "液態流動",
  "settings.liquidFlowDesc": "讓背景的漸層緩慢流動，營造流體折射的觀感。若覺得太動態可關閉；關閉後背景靜止，但配色不變。",
+ "settings.autoContrast": "自動對比度調節",
+  "settings.autoContrastTip": "玻璃與毛玻璃主題下，自動加深背景或翻轉文字顏色以保證可讀",
  "settings.dyeFromBackground": "背景取色染色",
  "settings.dyeFromBackgroundDesc": "聊天設了背景時，介面主題色跟隨背景主體色；關閉則始終使用主題自帶主色。",
  "settings.glassTokenBorder": "Token 欄邊框顏色",

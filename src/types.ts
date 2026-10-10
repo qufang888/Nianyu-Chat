@@ -650,6 +650,9 @@ export interface AppSettings {
   // 向后兼容：老 settings 里没有 animMode 时，读档位按 animControlMode==='single' → custom、
   // 否则 enableAnimations===false → all-off、其余 → all-on 映射（见 src/utils/animControl.ts）。
   animMode?: 'all-on' | 'all-off' | 'custom';
+  // v2.3.104：玻璃/液态玻璃主题「自动对比度调节」开关（可读性功能，与 animMode 正交——
+  // anim-off 不影响本机制）。默认 true；关闭后看门狗清空全部 data-auto-contrast 并停观察。
+  autoContrast?: boolean;
   // 【以下两个为兼容字段，v2.3.92 起不再作为档位真源，仅在写入时同步以兼容旧版回滚】
   // animControlMode：'master'=全开/'single'=自定义；'master' 另可对应全关（配合 enableAnimations=false）
   animControlMode?: 'master' | 'single';
@@ -1177,6 +1180,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   searchApiKey: '',
   // ===== 高级动画控制（v2.3.92）：三档制，默认「全部开启」+ 全部分组开启 =====
   animMode: 'all-on',
+  // v2.3.104：玻璃/液态玻璃主题自动对比度调节，默认开启（可读性兜底）
+  autoContrast: true,
   enableAnimations: true,
   animControlMode: 'master',
   animGroups: {

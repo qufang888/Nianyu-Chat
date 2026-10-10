@@ -27,9 +27,12 @@ function cardCSS(theme?: string): string {
     return `
     .ny-card{position:absolute;right:0;bottom:0;width:${CARD_W}px;height:${CARD_H}px;box-sizing:border-box;
       background:linear-gradient(135deg,rgba(12,42,68,.94),rgba(52,34,96,.94));
-      backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+      /* v2.3.104：backdrop 补 saturate(1.6)（Apple 要素3，与主界面 --liquid-backdrop 对齐）+
+         顶部 1px 镜面高光 inset（要素2，与主界面 --liquid-specular 对齐）。
+         本窗为独立透明窗口、不加载 variables.css，故沿用本文件既有的字面量写法。 */
+      backdrop-filter:blur(20px) saturate(1.6);-webkit-backdrop-filter:blur(20px) saturate(1.6);
       border:1px solid rgba(190,220,255,.22);border-radius:14px;
-      box-shadow:0 8px 32px rgba(2,10,26,.42),0 2px 8px rgba(2,10,26,.28);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 8px 32px rgba(2,10,26,.42),0 2px 8px rgba(2,10,26,.28);
       color:#eef4ff;padding:12px 14px 12px 12px;
       display:flex;flex-direction:row;align-items:center;gap:12px;cursor:pointer;
       transform:translateX(380px);opacity:0;

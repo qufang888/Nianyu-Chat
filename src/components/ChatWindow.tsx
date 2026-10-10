@@ -51,6 +51,7 @@ import SelectMenu from './SelectMenu';
 
 // v2.3.90：菜单缩入（关闭）动画通用 Hook —— 关闭时先播与弹出对称的缩入动画再卸载 DOM
 import { useRetract } from '../hooks/useRetract';
+import { useMenuRelocate } from '../hooks/useMenuRelocate';
 
 import { previewSound, playSoundSync } from '../utils/sound';
 
@@ -5487,9 +5488,7 @@ export const ChatWindow: React.FC<{
 
                   color: 'var(--color-text)',
 
-                  border: '1px solid var(--color-border)', borderRadius: 8,
-
-                  boxShadow: 'var(--shadow-panel, 0 8px 24px rgba(0,0,0,0.18))', padding: 6, minWidth: 200,
+                  padding: 6, minWidth: 200,
 
                 }}
 
@@ -7481,11 +7480,12 @@ const MessageRow: React.FC<{
 
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
 
-  const [selPopup, setSelPopup] = useState<{ x: number; y: number; text: string } | null>(null);
-  // v2.3.90：右键菜单与选中一键记忆弹窗的缩入（关闭）动画；closeMenu 会同时关闭两者，
-  // 故各自独立 retract —— 两者总是同开同关，视觉上一起缩入。
+  // v2.3.90：右键菜单的缩入（关闭）动画。
+  // v2.3.104 R1：原「文字选中一键记忆弹窗」及其独立 retract 已整体移除，
+  // 记忆入口收敛为右键菜单「一键记忆」按钮（保留于下方 portal）。
   const ctxMenu = useRetract(menuPos);
-  const selPop = useRetract(selPopup);
+  // v2.3.104 R3：同气泡二次右键重定位 → 旧隐新弹并行（退役快照 + key 重挂载）
+  const menuRelocate = useMenuRelocate(menuPos);
 
   const failed = msg.status === 'failed';
 
@@ -7608,29 +7608,7 @@ const MessageRow: React.FC<{
 
 
 
-  const closeMenu = () => { setMenuPos(null); setSelPopup(null); };
-
-
-
-  // 在气泡内检测文字选中
-
-  const handleMouseUp = (e: React.MouseEvent) => {
-
-    const sel = window.getSelection();
-
-    const text = sel?.toString().trim();
-
-    if (text && text.length > 0 && onQuickMemory) {
-
-      setSelPopup({ x: e.clientX, y: e.clientY, text });
-
-    } else {
-
-      setSelPopup(null);
-
-    }
-
-  };
+  const closeMenu = () => { setMenuPos(null); };
 
 
 
@@ -7638,25 +7616,23 @@ const MessageRow: React.FC<{
 
   useEffect(() => {
 
-    if (!menuPos && !selPopup) return;
+    if (!menuPos) return;
 
     const onDoc = (e: MouseEvent) => {
 
       const el = e.target as HTMLElement | null;
 
-      if (el && (el.closest('.ctx-menu') || el.closest('.sel-popup'))) return;
+      if (el && el.closest('.ctx-menu')) return;
 
       if (e.type === 'contextmenu' && el && el.closest('.msg-row')) return;
 
       setMenuPos(null);
 
-      setSelPopup(null);
-
     };
 
     const onKey = (e: KeyboardEvent) => {
 
-      if (e.key === 'Escape') { setMenuPos(null); setSelPopup(null); }
+      if (e.key === 'Escape') { setMenuPos(null); }
 
     };
 
@@ -7676,7 +7652,7 @@ const MessageRow: React.FC<{
 
     };
 
-  }, [menuPos, selPopup]);
+  }, [menuPos]);
 
 
 
@@ -7688,7 +7664,7 @@ const MessageRow: React.FC<{
 
       const detail = (ev as CustomEvent<unknown>).detail;
 
-      if (detail !== msg.id) { setMenuPos(null); setSelPopup(null); }
+      if (detail !== msg.id) { setMenuPos(null); }
 
     };
 
@@ -7711,8 +7687,6 @@ const MessageRow: React.FC<{
   const handleQuickMemory = (text: string) => {
 
     onQuickMemory?.(text);
-
-    setSelPopup(null);
 
     closeMenu();
 
@@ -7751,7 +7725,6 @@ const MessageRow: React.FC<{
   const streamTailClass = `stream-char${tailStalled ? ' stall' : ''}`;
 
 
-
   if (msg.sender_type === 'system') {
 
     return <div className="system-msg">{msg.content}</div>;
@@ -7764,7 +7737,59 @@ const MessageRow: React.FC<{
 
   const hasText = !!(msg.content && msg.content.trim());
 
-
+  // v2.3.104 R3：右键菜单项抽为局部 JSX，供「活菜单」与「退役快照」两个 portal 共用，
+  // 保证快照与活菜单渲染内容一致（尺寸一致、无跳动）。快照侧 pointer-events:none，
+  // 这些 onClick 不会被触发，保留是为内容完全同源。
+  const menuItems = (
+    <>
+      <button className="ctx-menu-item" onClick={handleCopy}>{t('msg.copy')}</button>
+      {onQuickMemory && <button className="ctx-menu-item" onClick={() => handleQuickMemory(msg.content)}>{t('msg.quickMemory')}</button>}
+      {onTranslate && <button className="ctx-menu-item" onClick={() => { onTranslate(msg.content, msg.sender_name); closeMenu(); }}>{t('msg.translate')}</button>}
+      {/* 朗读：任何有文本的气泡都可右键朗读（用户消息用全局音色，AI 消息按角色音色） */}
+      {hasText && onSpeak && (
+        <button className="ctx-menu-item" onClick={() => { onSpeak(); closeMenu(); }}>
+          {ttsState === 'playing' ? t('chat.ttsPause') : t('chat.ttsPlay')}
+        </button>
+      )}
+      {/* v2.3.44：强制重新合成语音（忽略磁盘缓存）；平时的播放/重播一律复用缓存不重新生成 */}
+      {hasText && onRegenerateTts && (
+        <button className="ctx-menu-item" onClick={() => { onRegenerateTts(); closeMenu(); }}>
+          {t('msg.regenerateTts')}
+        </button>
+      )}
+      {onMarkNode && <button className="ctx-menu-item" onClick={() => { onMarkNode(msg); closeMenu(); }}>{t('chat.markNode')}</button>}
+      {/* v2.3.94 需求 1：从此处开启新对话。放在「标记剧情节点」之后 ——
+          两者语义相邻（都是「以这条消息为起点做一条新时间线」），但结果不同：
+          标记节点只打标记，分叉会真的开出一个新聊天。 */}
+      {onForkFromHere && (
+        <button className="ctx-menu-item" onClick={() => { onForkFromHere(msg); closeMenu(); }}>
+          {t('msg.forkFromHere')}
+        </button>
+      )}
+      {/* v2.3.94 需求 3：选取文字复制。弹出文本框让用户手动选取气泡内文字，
+          再复制到剪贴板（区别于上面的「复制」——后者直接复制整条）。 */}
+      {onSelectCopy && hasText && (
+        <button className="ctx-menu-item" onClick={() => { onSelectCopy(msg); closeMenu(); }}>
+          {t('msg.selectCopy')}
+        </button>
+      )}
+      {onSaveImageMemory && (msg.images?.length || msg.image_path) && (
+        <button className="ctx-menu-item" onClick={() => { onSaveImageMemory(msg); closeMenu(); }}>{t('chat.drawMemory')}</button>
+      )}
+      {msg.genPrompt && (
+        <button className="ctx-menu-item" onClick={() => { onViewPrompt?.(msg.genPrompt!); closeMenu(); }}>{t('msg.viewPrompt')}</button>
+      )}
+      {onForward && <button className="ctx-menu-item" onClick={handleForward}>{t('msg.forward')}</button>}
+      {isUser && onEdit && <button className="ctx-menu-item" onClick={handleEdit}>{t('msg.edit')}</button>}
+      {onRollback && <button className="ctx-menu-item ctx-menu-danger" onClick={handleRollback}>{t('msg.rollback')}</button>}
+      {onDeleteMsg && <button className="ctx-menu-item ctx-menu-danger" onClick={handleDeleteMsg}>{t('msg.deleteMsg')}</button>}
+      {onToggleCollapse && (
+        <button className="ctx-menu-item" onClick={() => { onToggleCollapse(); closeMenu(); }}>
+          {allCollapsed ? t('msg.expandAll') : t('msg.collapseAll')}
+        </button>
+      )}
+    </>
+  );
 
   // 联网搜索内联引用：仅 AI 消息启用 [n] 可点击。资料来源优先取随消息持久化的 search_results，
 
@@ -7846,7 +7871,7 @@ const MessageRow: React.FC<{
 
         {typing ? (
 
-          <div className="bubble" onMouseUp={handleMouseUp}>
+          <div className="bubble">
 
             <div className="typing" aria-label={t('chat.replying')}>
 
@@ -7865,8 +7890,6 @@ const MessageRow: React.FC<{
               <div
 
                 className={`bubble ${failed ? 'bubble-failed' : ''}`}
-
-                onMouseUp={handleMouseUp}
 
                 style={pseudoActive ? ({ ['--pseudo-char-dur' as any]: pseudoCharDur }) : undefined}
 
@@ -7920,7 +7943,7 @@ const MessageRow: React.FC<{
 
             ) : (
 
-              <div className="bubble bubble-loading" onMouseUp={handleMouseUp}>
+              <div className="bubble bubble-loading">
 
                 <div className="typing" aria-label={t('chat.replying')}>
 
@@ -8142,11 +8165,14 @@ const MessageRow: React.FC<{
       </div>
 
 
-      {/* 右键菜单：Portal 到 body，脱离 .app-root 的 transform/filter 包含块，避免 fixed 坐标相对祖先偏移 */}
-
+      {/* 右键菜单：Portal 到 body，脱离 .app-root 的 transform/filter 包含块，避免 fixed 坐标相对祖先偏移。
+          v2.3.104 R3：key={menuRelocate.seq} —— 同气泡二次右键重定位时 seq+1 强制重挂载，
+          重放 popupLinearIn（跨气泡路径由 useRetract 既有 leaving 分支天然并行，不经此处）。 */}
       {ctxMenu.shown && createPortal(
 
         <div
+
+          key={menuRelocate.seq}
 
           className={`ctx-menu${ctxMenu.leaving ? ' leaving' : ''}`}
 
@@ -8164,84 +8190,7 @@ const MessageRow: React.FC<{
 
         >
 
-          <button className="ctx-menu-item" onClick={handleCopy}>{t('msg.copy')}</button>
-
-          {onQuickMemory && <button className="ctx-menu-item" onClick={() => handleQuickMemory(msg.content)}>{t('msg.quickMemory')}</button>}
-
-          {onTranslate && <button className="ctx-menu-item" onClick={() => { onTranslate(msg.content, msg.sender_name); closeMenu(); }}>{t('msg.translate')}</button>}
-
-          {/* 朗读：任何有文本的气泡都可右键朗读（用户消息用全局音色，AI 消息按角色音色） */}
-
-          {hasText && onSpeak && (
-
-            <button className="ctx-menu-item" onClick={() => { onSpeak(); closeMenu(); }}>
-
-              {ttsState === 'playing' ? t('chat.ttsPause') : t('chat.ttsPlay')}
-
-            </button>
-
-          )}
-
-          {/* v2.3.44：强制重新合成语音（忽略磁盘缓存）；平时的播放/重播一律复用缓存不重新生成 */}
-
-          {hasText && onRegenerateTts && (
-
-            <button className="ctx-menu-item" onClick={() => { onRegenerateTts(); closeMenu(); }}>
-
-              {t('msg.regenerateTts')}
-
-            </button>
-
-          )}
-
-          {onMarkNode && <button className="ctx-menu-item" onClick={() => { onMarkNode(msg); closeMenu(); }}>{t('chat.markNode')}</button>}
-
-          {/* v2.3.94 需求 1：从此处开启新对话。放在「标记剧情节点」之后 ——
-              两者语义相邻（都是「以这条消息为起点做一条新时间线」），但结果不同：
-              标记节点只打标记，分叉会真的开出一个新聊天。 */}
-          {onForkFromHere && (
-            <button className="ctx-menu-item" onClick={() => { onForkFromHere(msg); closeMenu(); }}>
-              {t('msg.forkFromHere')}
-            </button>
-          )}
-
-          {/* v2.3.94 需求 3：选取文字复制。弹出文本框让用户手动选取气泡内文字，
-              再复制到剪贴板（区别于上面的「复制」——后者直接复制整条）。 */}
-          {onSelectCopy && hasText && (
-            <button className="ctx-menu-item" onClick={() => { onSelectCopy(msg); closeMenu(); }}>
-              {t('msg.selectCopy')}
-            </button>
-          )}
-
-          {onSaveImageMemory && (msg.images?.length || msg.image_path) && (
-
-            <button className="ctx-menu-item" onClick={() => { onSaveImageMemory(msg); closeMenu(); }}>{t('chat.drawMemory')}</button>
-
-          )}
-
-          {msg.genPrompt && (
-
-            <button className="ctx-menu-item" onClick={() => { onViewPrompt?.(msg.genPrompt!); closeMenu(); }}>{t('msg.viewPrompt')}</button>
-
-          )}
-
-          {onForward && <button className="ctx-menu-item" onClick={handleForward}>{t('msg.forward')}</button>}
-
-          {isUser && onEdit && <button className="ctx-menu-item" onClick={handleEdit}>{t('msg.edit')}</button>}
-
-          {onRollback && <button className="ctx-menu-item ctx-menu-danger" onClick={handleRollback}>{t('msg.rollback')}</button>}
-
-          {onDeleteMsg && <button className="ctx-menu-item ctx-menu-danger" onClick={handleDeleteMsg}>{t('msg.deleteMsg')}</button>}
-
-          {onToggleCollapse && (
-
-            <button className="ctx-menu-item" onClick={() => { onToggleCollapse(); closeMenu(); }}>
-
-              {allCollapsed ? t('msg.expandAll') : t('msg.collapseAll')}
-
-            </button>
-
-          )}
+          {menuItems}
 
         </div>,
 
@@ -8249,33 +8198,34 @@ const MessageRow: React.FC<{
 
       )}
 
-      {/* 文字选中一键记忆弹窗 */}
-
-      {selPop.shown && onQuickMemory && createPortal(
+      {/* v2.3.104 R3：同气泡重定位的「退役快照」——旧坐标处的静态退场实例。
+          className 命中 index.css 既有 `.ctx-menu.leaving`（popupLinearOut 0.15s forwards +
+          pointer-events:none），零新增动画 CSS；内容与活菜单共用 menuItems 保证尺寸一致。
+          卸载由 useMenuRelocate 的 scaledRetractMs(160) 定时器负责（不依赖 animationend）；
+          zIndex 299 使其垫在活菜单（300）之下，旧隐新弹并行时新菜单始终在上。 */}
+      {menuRelocate.retiring && createPortal(
 
         <div
 
-          className={`sel-popup${selPop.leaving ? ' leaving' : ''}`}
+          className="ctx-menu leaving"
 
           style={{
 
             position: 'fixed',
 
-            left: Math.min(selPop.shown.x, window.innerWidth - 160),
+            left: Math.min(menuRelocate.retiring.x, window.innerWidth - 160),
 
-            top: selPop.shown.y + 16,
+            top: Math.min(menuRelocate.retiring.y, window.innerHeight - 200),
 
-            zIndex: 300,
+            zIndex: 299,
+
+            pointerEvents: 'none',
 
           }}
 
         >
 
-          <button className="sel-popup-btn" onClick={() => handleQuickMemory(selPop.shown!.text)}>
-
-            🧠 {t('msg.quickMemory')}
-
-          </button>
+          {menuItems}
 
         </div>,
 

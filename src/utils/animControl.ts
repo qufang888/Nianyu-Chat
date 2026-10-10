@@ -101,7 +101,6 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
     selectors: [
       '.ctx-menu',
       '.list-menu',
-      '.sel-popup',
       '.more-dropdown',
       '.obs-menu',
       '.obs-config',

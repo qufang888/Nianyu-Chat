@@ -15,6 +15,7 @@ import { renderMarkdown } from '../utils/markdown';
 import { filterSpeechText } from '../utils/speechScope';
 // v2.3.90：菜单/抽屉缩入（关闭）动画通用 Hook
 import { useRetract } from '../hooks/useRetract';
+import { useMenuRelocate } from '../hooks/useMenuRelocate';
 import { CustomTitleBar } from './CustomTitleBar';
 import CustomCursor from './CustomCursor';
 import ErrorBubble from './ErrorBubble';
@@ -3219,10 +3220,12 @@ const MiniMessageRow: React.FC<{
 }) => {
   const { t } = useI18n();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
-  const [selPopup, setSelPopup] = useState<{ x: number; y: number; text: string } | null>(null);
-  // v2.3.90：右键菜单与选中一键记忆弹窗的缩入（关闭）动画
+  // v2.3.90：右键菜单的缩入（关闭）动画。
+  // v2.3.104 R1：原「文字选中一键记忆弹窗」及其独立 retract 已整体移除，
+  // 记忆入口收敛为右键菜单「一键记忆」按钮（保留于下方 portal）。
   const ctxMenu = useRetract(menuPos);
-  const selPop = useRetract(selPopup);
+  // v2.3.104 R3：同气泡二次右键重定位 → 旧隐新弹并行（退役快照 + key 重挂载）
+  const menuRelocate = useMenuRelocate(menuPos);
   // v2.3.63：已移除「撤回」渲染分支——历史 recalled 消息按普通消息显示，避免空白块
 
   const handleContextMenu = (e: React.MouseEvent) => {
@@ -3231,30 +3234,19 @@ const MiniMessageRow: React.FC<{
     window.dispatchEvent(new CustomEvent('nianyu:closeCtxMenu', { detail: msg.id }));
     setMenuPos({ x: e.clientX, y: e.clientY });
   };
-  const closeMenu = () => { setMenuPos(null); setSelPopup(null); };
-
-  const handleMouseUp = (e: React.MouseEvent) => {
-    const sel = window.getSelection();
-    const text = sel?.toString().trim();
-    if (text && text.length > 0 && onQuickMemory) {
-      setSelPopup({ x: e.clientX, y: e.clientY, text });
-    } else {
-      setSelPopup(null);
-    }
-  };
+  const closeMenu = () => { setMenuPos(null); };
 
   // 全局关闭菜单：左键点菜单外关闭；右键气泡交给 React onContextMenu 打开/重定位，不再在同事件里关闭导致二次右键失效；Esc 关闭
   useEffect(() => {
-    if (!menuPos && !selPopup) return;
+    if (!menuPos) return;
     const onDoc = (e: MouseEvent) => {
       const el = e.target as HTMLElement | null;
-      if (el && (el.closest('.ctx-menu') || el.closest('.sel-popup'))) return;
+      if (el && el.closest('.ctx-menu')) return;
       if (e.type === 'contextmenu' && el && el.closest('.msg-row')) return;
       setMenuPos(null);
-      setSelPopup(null);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { setMenuPos(null); setSelPopup(null); }
+      if (e.key === 'Escape') { setMenuPos(null); }
     };
     window.addEventListener('click', onDoc);
     window.addEventListener('contextmenu', onDoc);
@@ -3264,13 +3256,13 @@ const MiniMessageRow: React.FC<{
       window.removeEventListener('contextmenu', onDoc);
       window.removeEventListener('keydown', onKey);
     };
-  }, [menuPos, selPopup]);
+  }, [menuPos]);
 
   // 跨气泡菜单协调：收到其他气泡的打开通知时关闭本气泡菜单，确保整窗唯一
   useEffect(() => {
     const onCloseOthers = (ev: Event) => {
       const detail = (ev as CustomEvent<unknown>).detail;
-      if (detail !== msg.id) { setMenuPos(null); setSelPopup(null); }
+      if (detail !== msg.id) { setMenuPos(null); }
     };
     window.addEventListener('nianyu:closeCtxMenu', onCloseOthers);
     return () => window.removeEventListener('nianyu:closeCtxMenu', onCloseOthers);
@@ -3327,6 +3319,52 @@ const MiniMessageRow: React.FC<{
   // 多图优先
   const imgs = msg.images && msg.images.length ? msg.images : msg.image_path ? [msg.image_path] : [];
   const hasText = !!(msg.content && msg.content.trim());
+
+  // v2.3.104 R3：右键菜单项抽为局部 JSX，供「活菜单」与「退役快照」两个 portal 共用，
+  // 保证快照与活菜单渲染内容一致（尺寸一致、无跳动）。快照侧 pointer-events:none，
+  // 这些 onClick 不会被触发，保留是为内容完全同源。
+  const menuItems = (
+    <>
+      <button className="ctx-menu-item" onClick={() => { onCopy?.(msg.content); closeMenu(); }}>{t('msg.copy')}</button>
+      {msg.genPrompt && (
+        <button className="ctx-menu-item" onClick={() => { onViewPrompt?.(msg.genPrompt!); closeMenu(); }}>{t('msg.viewPrompt')}</button>
+      )}
+      {onQuickMemory && <button className="ctx-menu-item" onClick={() => { onQuickMemory(msg.content); closeMenu(); }}>{t('msg.quickMemory')}</button>}
+      {onTranslate && <button className="ctx-menu-item" onClick={() => { onTranslate(msg.content, msg.sender_name); closeMenu(); }}>{t('msg.translate')}</button>}
+      {/* 朗读：任何有文本的气泡都可右键朗读（同主窗口） */}
+      {hasText && (
+        <>
+          <button className="ctx-menu-item" onClick={() => { onSpeak?.(); closeMenu(); }}>
+            {ttsState === 'playing' ? t('chat.ttsPause') : t('chat.ttsPlay')}
+          </button>
+          {/* v2.3.44：强制重新合成语音（忽略缓存）；平时播放/重播一律复用缓存 */}
+          {onRegenerateTts && (
+            <button className="ctx-menu-item" onClick={() => { onRegenerateTts(); closeMenu(); }}>
+              {t('msg.regenerateTts')}
+            </button>
+          )}
+        </>
+      )}
+      {onMarkNode && <button className="ctx-menu-item" onClick={() => { onMarkNode(msg); closeMenu(); }}>{t('chat.markNode')}</button>}
+      {/* v2.3.94 P2-3：从此处开启新对话（镜像主窗 onForkFromHere） */}
+      {onForkFromHere && (
+        <button className="ctx-menu-item" onClick={() => { onForkFromHere(msg); closeMenu(); }}>
+          {t('msg.forkFromHere')}
+        </button>
+      )}
+      {/* v2.3.94 P2-3：选取文字复制（区别于上面的「复制」——后者直接复制整条） */}
+      {onSelectCopy && hasText && (
+        <button className="ctx-menu-item" onClick={() => { onSelectCopy(msg); closeMenu(); }}>
+          {t('msg.selectCopy')}
+        </button>
+      )}
+      {onSaveImageMemory && (msg.images?.length || msg.image_path) && (
+        <button className="ctx-menu-item" onClick={() => { onSaveImageMemory(msg); closeMenu(); }}>{t('chat.drawMemory')}</button>
+      )}
+      {onRollback && <button className="ctx-menu-item ctx-menu-danger" onClick={() => { onRollback(msg.id); closeMenu(); }}>{t('msg.rollback')}</button>}
+      {onDeleteMsg && <button className="ctx-menu-item ctx-menu-danger" onClick={() => { onDeleteMsg(msg.id); closeMenu(); }}>{t('msg.deleteMsg')}</button>}
+    </>
+  );
 
   // 联网搜索内联引用：仅 AI 消息启用 [n] 可点击。资料来源优先取随消息持久化的 search_results，
   // 缺失时回退到本次会话内存中按 streamId 分桶的搜索结果（两者顺序都与注入模型的编号一致）
@@ -3393,7 +3431,7 @@ const MiniMessageRow: React.FC<{
           </div>
         )}
         {typing ? (
-          <div className="bubble" onMouseUp={handleMouseUp}>
+          <div className="bubble">
             <div className="typing">
               <div className="typing-bar" />
             </div>
@@ -3403,7 +3441,6 @@ const MiniMessageRow: React.FC<{
             {(!isUser && msg.reasoning) || hasText ? (
               <div
                 className={`bubble ${failed ? 'bubble-failed' : ''}`}
-                onMouseUp={handleMouseUp}
                 style={pseudoActive ? ({ ['--pseudo-char-dur' as any]: pseudoCharDur }) : undefined}
               >
                 {!isUser && msg.reasoning && (
@@ -3430,7 +3467,7 @@ const MiniMessageRow: React.FC<{
                 )}
               </div>
             ) : (
-              <div className="bubble bubble-loading" onMouseUp={handleMouseUp}>
+              <div className="bubble bubble-loading">
                 <div className="typing" aria-label={t('chat.replying')}>
                   <span className="typing-bar" />
                 </div>
@@ -3545,9 +3582,12 @@ const MiniMessageRow: React.FC<{
           </div>
         )}
       </div>
-      {/* 右键菜单：Portal 到 body，脱离 .app-root 的 transform/filter 包含块，避免 fixed 坐标相对祖先偏移 */}
+      {/* 右键菜单：Portal 到 body，脱离 .app-root 的 transform/filter 包含块，避免 fixed 坐标相对祖先偏移。
+          v2.3.104 R3：key={menuRelocate.seq} —— 同气泡二次右键重定位时 seq+1 强制重挂载，
+          重放 popupLinearIn（跨气泡路径由 useRetract 既有 leaving 分支天然并行，不经此处）。 */}
       {ctxMenu.shown && createPortal(
         <div
+          key={menuRelocate.seq}
           className={`ctx-menu${ctxMenu.leaving ? ' leaving' : ''}`}
           style={{
             position: 'fixed',
@@ -3556,61 +3596,27 @@ const MiniMessageRow: React.FC<{
             zIndex: 300,
           }}
         >
-          <button className="ctx-menu-item" onClick={() => { onCopy?.(msg.content); closeMenu(); }}>{t('msg.copy')}</button>
-          {msg.genPrompt && (
-            <button className="ctx-menu-item" onClick={() => { onViewPrompt?.(msg.genPrompt!); closeMenu(); }}>{t('msg.viewPrompt')}</button>
-          )}
-          {onQuickMemory && <button className="ctx-menu-item" onClick={() => { onQuickMemory(msg.content); closeMenu(); }}>{t('msg.quickMemory')}</button>}
-          {onTranslate && <button className="ctx-menu-item" onClick={() => { onTranslate(msg.content, msg.sender_name); closeMenu(); }}>{t('msg.translate')}</button>}
-          {/* 朗读：任何有文本的气泡都可右键朗读（同主窗口） */}
-          {hasText && (
-            <>
-              <button className="ctx-menu-item" onClick={() => { onSpeak?.(); closeMenu(); }}>
-                {ttsState === 'playing' ? t('chat.ttsPause') : t('chat.ttsPlay')}
-              </button>
-              {/* v2.3.44：强制重新合成语音（忽略缓存）；平时播放/重播一律复用缓存 */}
-              {onRegenerateTts && (
-                <button className="ctx-menu-item" onClick={() => { onRegenerateTts(); closeMenu(); }}>
-                  {t('msg.regenerateTts')}
-                </button>
-              )}
-            </>
-          )}
-          {onMarkNode && <button className="ctx-menu-item" onClick={() => { onMarkNode(msg); closeMenu(); }}>{t('chat.markNode')}</button>}
-          {/* v2.3.94 P2-3：从此处开启新对话（镜像主窗 onForkFromHere） */}
-          {onForkFromHere && (
-            <button className="ctx-menu-item" onClick={() => { onForkFromHere(msg); closeMenu(); }}>
-              {t('msg.forkFromHere')}
-            </button>
-          )}
-          {/* v2.3.94 P2-3：选取文字复制（区别于上面的「复制」——后者直接复制整条） */}
-          {onSelectCopy && hasText && (
-            <button className="ctx-menu-item" onClick={() => { onSelectCopy(msg); closeMenu(); }}>
-              {t('msg.selectCopy')}
-            </button>
-          )}
-          {onSaveImageMemory && (msg.images?.length || msg.image_path) && (
-            <button className="ctx-menu-item" onClick={() => { onSaveImageMemory(msg); closeMenu(); }}>{t('chat.drawMemory')}</button>
-          )}
-          {onRollback && <button className="ctx-menu-item ctx-menu-danger" onClick={() => { onRollback(msg.id); closeMenu(); }}>{t('msg.rollback')}</button>}
-          {onDeleteMsg && <button className="ctx-menu-item ctx-menu-danger" onClick={() => { onDeleteMsg(msg.id); closeMenu(); }}>{t('msg.deleteMsg')}</button>}
+          {menuItems}
         </div>,
         document.body
       )}
-      {/* 文字选中一键记忆弹窗 */}
-      {selPop.shown && onQuickMemory && createPortal(
+      {/* v2.3.104 R3：同气泡重定位的「退役快照」——旧坐标处的静态退场实例。
+          className 命中 index.css 既有 `.ctx-menu.leaving`（popupLinearOut 0.15s forwards +
+          pointer-events:none），零新增动画 CSS；内容与活菜单共用 menuItems 保证尺寸一致。
+          卸载由 useMenuRelocate 的 scaledRetractMs(160) 定时器负责（不依赖 animationend）；
+          zIndex 299 使其垫在活菜单（300）之下，旧隐新弹并行时新菜单始终在上。 */}
+      {menuRelocate.retiring && createPortal(
         <div
-          className={`sel-popup${selPop.leaving ? ' leaving' : ''}`}
+          className="ctx-menu leaving"
           style={{
             position: 'fixed',
-            left: Math.min(selPop.shown.x, window.innerWidth - 160),
-            top: selPop.shown.y + 16,
-            zIndex: 300,
+            left: Math.min(menuRelocate.retiring.x, window.innerWidth - 160),
+            top: Math.min(menuRelocate.retiring.y, window.innerHeight - 200),
+            zIndex: 299,
+            pointerEvents: 'none',
           }}
         >
-          <button className="sel-popup-btn" onClick={() => { onQuickMemory(selPop.shown!.text); setSelPopup(null); }}>
-            🧠 {t('msg.quickMemory')}
-          </button>
+          {menuItems}
         </div>,
         document.body
       )}

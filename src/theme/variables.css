@@ -208,6 +208,13 @@
   --titlebar-close-hover-icon: #ffffff;
   --titlebar-border: rgba(255, 255, 255, 0.12);
   --titlebar-blur: 30px;
+  /* v2.3.104：auto-contrast 看门狗数据契约（与 liquid 块同构一份；值按 glass 深蓝紫底定。
+     消费端 CSS 在 index.css 的 [data-theme='glass'] [data-auto-contrast=...] 规则，
+     JS 侧读取方为 src/utils/autoContrast.ts，属性/令牌名是两端契约，勿单方改动。 */
+  --auto-contrast-base: rgba(24, 28, 66, 1);
+  --auto-contrast-scrim: rgba(8, 10, 26, 0.55);
+  --auto-contrast-flip-bg: rgba(240, 244, 255, 0.94);
+  --auto-contrast-flip-text: #0b1220;
 }
 
 /* 极简暗色模式 */
@@ -774,4 +781,35 @@
   --liquid-press: inset 0 2px 6px rgba(2, 8, 22, 0.30);
   /* 按钮 hover 高光光斑（浅色斜向带，沿表面缓慢扫过；基态透明，anim-off 下只是没有流动） */
   --liquid-btn-sheen: linear-gradient(105deg, transparent 32%, rgba(255, 255, 255, 0.55) 50%, transparent 68%);
+  /* ── v2.3.104 R2：Apple Liquid Glass 对齐令牌（命名即契约，T01/T03 共同遵守）──
+     11 要素 → CSS 手段映射见 team-docs/v23104/02-arch-incremental.md §4.1：
+     · --liquid-backdrop           要素3 saturate+blur 透底（现状 30px blur 未配 saturate 是「不像」主因，第一优先）
+     · --liquid-content-backdrop   要素8 内容层轻磨砂（去玻璃化后的「标准材质」用）
+     · --liquid-specular/-refract  要素2/1 顶部镜面高光线 + 底部折射暗缘与内圈暗缘（inset 双向近似 Lensing）
+     · --liquid-shadow-sm/-lg      要素4 尺寸决定材质厚度（小浮层 / 大面板分级阴影）
+     · --liquid-ambient            要素6 环境溢色（大面板低强度主色 radial 柔光层，P1）
+     · --liquid-sheen-panel        要素2 面板级 hover 扫光（扩展现有 --liquid-btn-sheen 思路）
+     · --liquid-content-bg         要素8 内容层标准材质底（更实、降饱和，正文可读性优先）
+     · --liquid-scroll-fade        要素10 滚动边缘渐隐（mask-image 用，P1）
+     均为纯视觉修饰，不改动 --color-text / --color-panel 等承载面令牌，
+     WCAG AA 对比度与既有基线一致（verify-dye-contrast / verify-liquid-glass / verify-chat-ui-contrast 无回归）。 */
+  --liquid-backdrop: blur(30px) saturate(1.6);
+  --liquid-content-backdrop: blur(12px) saturate(1.15);
+  --liquid-specular: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  --liquid-refract: inset 0 -1px 0 rgba(4, 10, 24, 0.38), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --liquid-shadow-sm: 0 8px 24px rgba(2, 8, 22, 0.28);
+  --liquid-shadow-lg: 0 24px 64px rgba(2, 8, 22, 0.42);
+  --liquid-ambient: radial-gradient(120% 90% at 18% 0%, rgba(90, 209, 245, 0.10), transparent 62%);
+  --liquid-sheen-panel: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, 0.32) 50%, transparent 62%);
+  --liquid-content-bg: rgba(10, 20, 46, 0.78);
+  --liquid-scroll-fade: linear-gradient(to bottom, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%);
+  /* ── auto-contrast 看门狗数据契约（§4.6，T01 的 src/utils/autoContrast.ts 按名读取）──
+     glass 块（本文件上方）有同构一份，两边值按各自主题底色定：
+     · base     窗口底等效基准色（JS 合成到根之后垫底用）
+     · scrim    boost 判级：承载面叠加的加深层
+     · flip-*   flip 判级：整体翻转为浅底时的底色 / 深字色 */
+  --auto-contrast-base: rgba(14, 30, 62, 1);
+  --auto-contrast-scrim: rgba(6, 12, 28, 0.55);
+  --auto-contrast-flip-bg: rgba(240, 246, 255, 0.94);
+  --auto-contrast-flip-text: #0b1220;
 }

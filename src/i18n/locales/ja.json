@@ -1099,6 +1099,8 @@
  "settings.glassColorReset": "色をリセット",
  "settings.liquidFlow": "流動アニメーション",
  "settings.liquidFlowDesc": "背景のグラデーションをゆっくり流すように動かして、流体の屈折を再現します。動きが大きすぎると感じる場合はオフにしてください。背景は静止したまま、配色は変わりません。",
+ "settings.autoContrast": "自動コントラスト調整",
+  "settings.autoContrastTip": "ガラス・リキッドガラスの各テーマで、背景を自動的に暗くしたり文字色を反転させて、文字の見やすさを保ちます。",
  "settings.dyeFromBackground": "背景からテーマ色を抽出",
  "settings.dyeFromBackgroundDesc": "チャットに背景を設定している場合、インターフェースのテーマカラーが背景の主要色に合わせて変化します。オフにすると常にテーマ本来のメインカラーを使用します。",
  "settings.glassTokenBorder": "トークンバー ボーダー色",

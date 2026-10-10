@@ -212,6 +212,22 @@ const REQUIRED_VARS = [
   '--liquid-overlay-text-strong',
   '--liquid-overlay-text-body',
   '--liquid-bar-base',
+  // v2.3.104 R2：Apple Liquid Glass 对齐令牌（§4.2，命名即契约）
+  '--liquid-backdrop',
+  '--liquid-content-backdrop',
+  '--liquid-specular',
+  '--liquid-refract',
+  '--liquid-shadow-sm',
+  '--liquid-shadow-lg',
+  '--liquid-ambient',
+  '--liquid-sheen-panel',
+  '--liquid-content-bg',
+  '--liquid-scroll-fade',
+  // v2.3.104：auto-contrast 看门狗数据契约（§4.6，glass 块同构一份另行断言）
+  '--auto-contrast-base',
+  '--auto-contrast-scrim',
+  '--auto-contrast-flip-bg',
+  '--auto-contrast-flip-text',
 ];
 
 function readLiquidBlock() {
@@ -254,6 +270,10 @@ const DEEPENING_SELECTORS = [
   '.queue-dock-panel',
   '.api-params-panel',
   '.chat-model-picker-results',
+  // v2.3.104 R2（§4.4 未适配面修复）：三个菜单纳入 deepening（三步修复之一）
+  '.ctx-menu',
+  '.obs-menu',
+  '.list-menu',
 ];
 
 // ============================================================================
@@ -718,6 +738,82 @@ section('10. 浮层加深后的文字对比度（deepening 底色上）');
     }
   }
 }
+
+// ============================================================================
+// v2.3.104 R2：Apple Liquid Glass 对齐断言（§4.1-§4.7）+ R1 的 CSS 残留清零
+// ============================================================================
+section('11. Apple Liquid Glass 对齐（v2.3.104 R2）+ R1 残留清零');
+
+// 11.1 glass 块的 auto-contrast 令牌（liquid 块那份已随 REQUIRED_VARS 断言）
+{
+  const cssAll = fs.readFileSync(path.join(ROOT, 'src', 'theme', 'variables.css'), 'utf8');
+  const gStart = cssAll.indexOf("[data-theme='glass']");
+  check("variables.css 能定位 [data-theme='glass'] 块", gStart >= 0);
+  if (gStart >= 0) {
+    const gEnd = cssAll.indexOf('\n}', gStart);
+    const glassVars = parseVars(cssAll.slice(gStart, gEnd));
+    for (const t of ['--auto-contrast-base', '--auto-contrast-scrim', '--auto-contrast-flip-bg', '--auto-contrast-flip-text']) {
+      check(`glass 块 ${t} 已定义（看门狗数据契约，两主题各一份）`, Object.prototype.hasOwnProperty.call(glassVars, t), '缺失');
+    }
+  }
+}
+
+// 11.2 R1：.sel-popup 在 T03 所有权文件内残留清零
+for (const f of ['src/styles/index.css', 'src/theme/variables.css', 'src/floating-ball.ts', 'src/notify.ts']) {
+  const txt = fs.readFileSync(path.join(ROOT, f), 'utf8');
+  const hits = (txt.match(/sel-?popup/gi) || []).length;
+  check(`${f} 无 sel-popup 残留（R1 删功能后不得留死样式）`, hits === 0, `命中 ${hits} 处`);
+}
+
+// 11.3 三菜单已进 4a 玻璃组（shadow-sm + specular/refract + saturate 透底）
+check(
+  '三菜单（ctx/obs/list）已进玻璃组：shadow-sm + specular + refract（§4.4 之三步修复）',
+  /\[data-theme='liquid'\]\s\.ctx-menu,[\s\S]{0,200}?box-shadow:\s*var\(--liquid-specular\),\s*var\(--liquid-refract\),\s*var\(--liquid-shadow-sm\)/.test(indexCss)
+);
+check(
+  '三菜单玻璃组带 saturate 透底（backdrop-filter: var(--liquid-backdrop)）',
+  /\[data-theme='liquid'\]\s\.ctx-menu,[\s\S]{0,400}?backdrop-filter:\s*var\(--liquid-backdrop\)/.test(indexCss)
+);
+
+// 11.4 内容层去玻璃化（§4.3，要素8）：.main-pane/.list-pane/.panel 移投「标准材质」规则
+check(
+  '内容层标准材质规则存在（--liquid-content-bg + --liquid-content-backdrop）',
+  /\[data-theme='liquid'\]\s\.main-pane,[\s\S]{0,300}?background:\s*var\(--liquid-content-bg\);[\s\S]{0,200}?backdrop-filter:\s*var\(--liquid-content-backdrop\)/.test(indexCss)
+);
+{
+  // 锚点必须含注释起始符 /*，否则切片从注释中间开始、剥注释会漏掉首条
+  const a4Start = indexCss.indexOf('/* 4a. 玻璃面');
+  const a4End = indexCss.indexOf('/* 4a-1.', a4Start);
+  check('4a 玻璃组注释锚点可定位', a4Start >= 0 && a4End > a4Start);
+  if (a4Start >= 0 && a4End > a4Start) {
+    // 剥掉 CSS 注释再判定：4a 的说明注释里会提到 .main-pane 等（说明「已移除」），不能算命中
+    const a4 = indexCss.slice(a4Start, a4End).replace(/\/\*[\s\S]*?\*\//g, '');
+    check(
+      '4a 玻璃组已移除 .main-pane/.list-pane/.panel（内容层去玻璃化）',
+      !/\.main-pane|\.list-pane|\.panel\b/.test(a4)
+    );
+    check('4a 玻璃组消费 specular/refract/shadow-lg（要素1/2/4）', /var\(--liquid-specular\),\s*var\(--liquid-refract\),\s*var\(--liquid-shadow-lg\)/.test(a4));
+    check('4a 玻璃组消费 --liquid-backdrop（要素3 saturate 透底）', /backdrop-filter:\s*var\(--liquid-backdrop\)/.test(a4));
+  }
+}
+
+// 11.5 面板级 hover 扫光 / 环境溢色 / 滚动边缘渐隐（要素2/6/10）
+check('面板级 hover 扫光消费 --liquid-sheen-panel（要素2）', /background:\s*var\(--liquid-sheen-panel\)/.test(indexCss));
+check('环境溢色消费 --liquid-ambient（要素6，大面板柔光层）', /background-image:\s*var\(--liquid-ambient\)/.test(indexCss));
+check('滚动边缘渐隐消费 --liquid-scroll-fade（要素10，mask-image）', /mask-image:\s*var\(--liquid-scroll-fade\)/.test(indexCss));
+
+// 11.6 auto-contrast CSS 消费端（§4.6）：liquid + glass 各 boost/flip 一份，属性名即契约
+check("liquid boost 规则消费 --auto-contrast-scrim", /\[data-theme='liquid'\]\s\[data-auto-contrast='boost'\]\s*\{[\s\S]{0,300}?var\(--auto-contrast-scrim\)/.test(indexCss));
+check("liquid flip 规则消费 --auto-contrast-flip-*", /\[data-theme='liquid'\]\s\[data-auto-contrast='flip'\]\s*\{[\s\S]{0,300}?var\(--auto-contrast-flip-bg\)[\s\S]{0,200}?var\(--auto-contrast-flip-text\)/.test(indexCss));
+check("glass boost 规则存在（毛玻璃同样自适应）", /\[data-theme='glass'\]\s\[data-auto-contrast='boost'\]\s*\{[\s\S]{0,300}?var\(--auto-contrast-scrim\)/.test(indexCss));
+check("glass flip 规则存在", /\[data-theme='glass'\]\s\[data-auto-contrast='flip'\]\s*\{[\s\S]{0,300}?var\(--auto-contrast-flip-bg\)/.test(indexCss));
+
+// 11.7 悬浮球 / 通知窗 liquid 面补齐（§4.4 独立样式源）
+const fb = fs.readFileSync(path.join(ROOT, 'src', 'floating-ball.ts'), 'utf8');
+check('floating-ball.ts 的 fb-panel liquid 分支消费 specular/refract', /\[data-theme='liquid'\]\s\.fb-panel\{[\s\S]{0,300}?var\(--liquid-specular\),\s*var\(--liquid-refract\)/.test(fb));
+check('floating-ball.ts 的 fb-panel liquid 分支消费 --liquid-backdrop（saturate 透底）', /\[data-theme='liquid'\]\s\.fb-panel\{[\s\S]{0,400}?backdrop-filter:var\(--liquid-backdrop\)/.test(fb));
+check('floating-ball.ts 的 fb-ctx liquid 分支消费 specular/refract', /\[data-theme='liquid'\]\s\.fb-ctx\{[\s\S]{0,300}?var\(--liquid-specular\),\s*var\(--liquid-refract\)/.test(fb));
+check('notify.ts 的 liquid 卡片补了 saturate 透底（Apple 要素3）', /backdrop-filter:blur\(20px\)\s*saturate\(1\.6\)/.test(notify));
 
 // ============================================================================
 console.log('\n========================================');

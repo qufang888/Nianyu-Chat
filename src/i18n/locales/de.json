@@ -1099,6 +1099,8 @@
  "settings.glassColorReset": "Farben zurücksetzen",
  "settings.liquidFlow": "Flüssige Bewegung",
  "settings.liquidFlowDesc": "Lässt den Hintergrundverlauf langsam driften und imitiert die Brechung einer Flüssigkeit. Ausschalten, wenn es zu dynamisch wirkt – der Hintergrund bleibt dann statisch, die Farben ändern sich nicht.",
+ "settings.autoContrast": "Automatische Kontrastanpassung",
+  "settings.autoContrastTip": "Verdunkelt Glas-Hintergründe automatisch oder kehrt die Textfarbe um, damit Text in den Glas- und Flüssigglas-Themen lesbar bleibt.",
  "settings.dyeFromBackground": "Themenfarbe aus Hintergrund",
  "settings.dyeFromBackgroundDesc": "Wenn ein Chat einen Hintergrund hat, folgt die Themenfarbe der Oberfläche der dominierenden Farbe des Hintergrunds. Ausgeschaltet wird stets die themeneigene Hauptfarbe verwendet.",
  "settings.glassTokenBorder": "Token-Leisten-Rahmenfarbe",

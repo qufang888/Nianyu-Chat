@@ -1099,6 +1099,8 @@
  "settings.glassColorReset": "Réinitialiser les couleurs",
  "settings.liquidFlow": "Flux liquide",
  "settings.liquidFlowDesc": "Fait dériver lentement le dégradé d'arrière-plan pour imiter la réfraction d'un fluide. Désactivez-le si le résultat vous semble trop animé : l'arrière-plan reste fixe et les couleurs inchangées.",
+ "settings.autoContrast": "Ajustement automatique du contraste",
+  "settings.autoContrastTip": "Assombrit automatiquement les fonds en verre ou inverse la couleur du texte pour garantir la lisibilité dans les thèmes Verre et Verre liquide.",
  "settings.dyeFromBackground": "Teinter le thème depuis l'arrière-plan",
  "settings.dyeFromBackgroundDesc": "Lorsqu'une discussion a un arrière-plan, la couleur du thème de l'interface suit la couleur dominante de cet arrière-plan. Désactivez pour toujours utiliser la couleur principale propre au thème.",
  "settings.glassTokenBorder": "Couleur de la bordure de la barre Token",

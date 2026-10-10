@@ -1099,6 +1099,8 @@
  "settings.glassColorReset": "Redefinir cores",
  "settings.liquidFlow": "Fluxo líquido",
  "settings.liquidFlowDesc": "Faz o degradê de fundo derivar lentamente para imitar a refração de um fluido. Desligue se parecer demasiado dinâmico — o fundo fica parado e as cores não mudam.",
+ "settings.autoContrast": "Ajuste automático de contraste",
+  "settings.autoContrastTip": "Escurece automaticamente os fundos de vidro ou inverte a cor do texto para manter a legibilidade nos temas Vidro e Vidro líquido.",
  "settings.dyeFromBackground": "Tingir o tema a partir do fundo",
  "settings.dyeFromBackgroundDesc": "Quando um chat tem fundo, a cor do tema da interface segue a cor dominante desse fundo. Desative para usar sempre a cor principal própria do tema.",
  "settings.glassTokenBorder": "Cor da borda da barra de token",

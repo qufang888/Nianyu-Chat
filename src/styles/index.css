@@ -1434,6 +1434,12 @@ input[type='range']::-moz-range-thumb {
 /* 聊天工具栏「其他操作」下拉菜单（原 inline background 移入 CSS，便于主题覆盖） */
 .more-dropdown {
   background: var(--color-panel);
+  /* v2.3.104：基础描边/圆角/阴影收进 CSS（原为 ChatWindow.tsx 内联三件套，
+     内联会以更高优先级压过各主题的 border/box-shadow 定制——如 liquid 4a 的
+     玻璃描边与分级阴影、glass 组的 border-color）。值与原内联逐字一致。 */
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-panel, 0 8px 24px rgba(0, 0, 0, 0.18));
   /* linear 弹出动画（与 .ctx-menu 统一；受「动效开关」.anim-off 全局规则控制） */
   animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
@@ -3593,32 +3599,6 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   color: #e74c3c !important;
 }
 
-/* 文字选中一键记忆弹窗 */
-.sel-popup {
-  background: var(--color-bg);
-  border: 1px solid var(--color-primary, #6366f1);
-  border-radius: 8px;
-  box-shadow: 0 2px 12px rgba(99,102,241,0.25);
-  padding: 4px;
-  z-index: 300;
-  /* linear 弹出动画（与 .ctx-menu 统一；受「动效开关」.anim-off 全局规则控制） */
-  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
-}
-.sel-popup-btn {
-  padding: 5px 12px;
-  border: none;
-  background: rgba(99,102,241,0.08);
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: calc(13px * var(--font-scale));
-  color: var(--color-primary, #6366f1);
-  font-weight: 500;
-  white-space: nowrap;
-}
-.sel-popup-btn:hover {
-  background: rgba(99,102,241,0.18);
-}
-
 
 /* 发送失败气泡 */
 .bubble-failed {
@@ -4586,7 +4566,6 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 .select-menu-panel.leaving,
 .chat-model-picker.leaving,
 .list-menu.leaving,
-.sel-popup.leaving,
 .more-dropdown.leaving {
   animation: popupLinearOut calc(0.15s * var(--anim-speed, 1)) linear forwards;
   pointer-events: none;
@@ -7073,8 +7052,14 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
    模糊（backdrop-filter）不改变亮度关系，所以「加模糊」不能替代「加深底」。
    注意：底色 alpha 取 0.90 而非 glass 的 0.88（值已收进 --liquid-overlay）——
    本主题背景色斑饱和度更高，
-   需要更实一点才能把透过来的亮斑压到文字可读的范围。 */
+   需要更实一点才能把透过来的亮斑压到文字可读的范围。
+   v2.3.104 R2（§4.4 未适配面修复）：.ctx-menu / .obs-menu / .list-menu 三个菜单
+   原本用 --color-bg / --color-panel 半透明底，缺席本清单 —— 现一并纳入（共 19 面），
+   与 autoContrast.ts 的 WATCH_SELECTORS 注册表同步维护。 */
 [data-theme='liquid'] .more-dropdown,
+[data-theme='liquid'] .ctx-menu,
+[data-theme='liquid'] .obs-menu,
+[data-theme='liquid'] .list-menu,
 [data-theme='liquid'] .mention-pop,
 [data-theme='liquid'] .mini-drawer,
 [data-theme='liquid'] .modal-card,
@@ -7161,15 +7146,16 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
    全部色值走 variables.css 的 --liquid-* 变量（项目铁律：index.css 不写死色值、注释也不含 #hex）。
    仅作用于 [data-theme='liquid']，其余 14 套主题零回归；不改变任何承载面令牌，对比度与既有基线一致。 ── */
 
-/* 4a. 面板/卡片/输入框/按钮：细淡玻璃描边 + 顶部柔和漫反射高光 + 弥散浅淡柔和阴影（悬浮层次感） */
+/* 4a. 玻璃面（导航层/浮层）：细淡玻璃描边 + 镜面高光线 + 底部折射暗缘 + 弥散阴影（大面板分级）
+   v2.3.104 R2（Apple Liquid Glass 对齐，要素1/2/3/4/8）：
+   · 内容层 .main-pane/.list-pane/.panel 从本组移除，改投下方 4a-2「内容层标准材质」规则（要素8 分层原则）；
+   · box-shadow 升级为 specular（顶部镜面线）+ refract（底部折射暗缘+内圈暗缘）+ shadow-lg（大面板材质厚度）；
+   · backdrop-filter 换用 --liquid-backdrop（blur 30px + saturate 1.6，要素3 —— 缺 saturate 是「不像苹果」主因）。 */
 [data-theme='liquid'] .modal,
 [data-theme='liquid'] .modal-card,
 [data-theme='liquid'] .role-card,
 [data-theme='liquid'] .theme-card,
 [data-theme='liquid'] .sidebar,
-[data-theme='liquid'] .list-pane,
-[data-theme='liquid'] .main-pane,
-[data-theme='liquid'] .panel,
 [data-theme='liquid'] .more-dropdown,
 [data-theme='liquid'] .mention-pop,
 [data-theme='liquid'] .mini-drawer,
@@ -7179,7 +7165,34 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
 [data-theme='liquid'] .update-banner,
 [data-theme='liquid'] .fb-ctx {
   border: 1px solid var(--liquid-edge);
-  box-shadow: var(--liquid-shadow), var(--liquid-highlight);
+  box-shadow: var(--liquid-specular), var(--liquid-refract), var(--liquid-shadow-lg), var(--liquid-highlight);
+  backdrop-filter: var(--liquid-backdrop);
+  -webkit-backdrop-filter: var(--liquid-backdrop);
+}
+
+/* 4a-1. 小浮层菜单玻璃组：.ctx-menu / .obs-menu / .list-menu 三步修复之二（§4.4）。
+   玻璃描边 + specular/refract + 小号分级阴影（shadow-sm，尺寸决定材质厚度）+ saturate 透底。
+   三步之一（deepening 加深底）见上方 deepening 块；之三（4e springy）本就覆盖这三个选择器。 */
+[data-theme='liquid'] .ctx-menu,
+[data-theme='liquid'] .obs-menu,
+[data-theme='liquid'] .list-menu {
+  border: 1px solid var(--liquid-edge);
+  box-shadow: var(--liquid-specular), var(--liquid-refract), var(--liquid-shadow-sm), var(--liquid-highlight);
+  backdrop-filter: var(--liquid-backdrop);
+  -webkit-backdrop-filter: var(--liquid-backdrop);
+}
+
+/* 4a-2. 内容层标准材质（§4.3 去玻璃化，HIG 要素8「玻璃只用于导航层」）：
+   更实的内容底（--liquid-content-bg）+ 轻 blur（--liquid-content-backdrop）+ 无 specular/refract。
+   正文区降饱和提可读性，玻璃感集中在浮层/导航/按钮；聊天气泡（.bubble）本就素净，不动。 */
+[data-theme='liquid'] .main-pane,
+[data-theme='liquid'] .list-pane,
+[data-theme='liquid'] .panel {
+  background: var(--liquid-content-bg);
+  backdrop-filter: var(--liquid-content-backdrop);
+  -webkit-backdrop-filter: var(--liquid-content-backdrop);
+  border: 1px solid var(--color-border);
+  box-shadow: none;
 }
 
 /* 4b. 输入框：同样玻璃描边 + 顶部高光；聚焦时叠加主色描边光环 */
@@ -7249,6 +7262,41 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
   opacity: 1;
 }
 
+/* 4c-2. 面板级 hover 扫光（v2.3.104 R2，要素2「镜面高光响应运动」的面板级扩展）：
+   模式照抄 4c 按钮扫光（::before 斜向光带 + background-position 位移），光带换 --liquid-sheen-panel。
+   仅覆盖已定位（absolute/fixed，CSS 或 inline 均已存在，此处不再另设 position 以免
+   以更高优先级覆盖既有定位）的浮层面板，::before 的 absolute 以面板自身为包含块，不影响布局；
+   pointer-events:none 不拦截点击。transition 走 --anim-speed 缩放；
+   .anim-off 全局门禁下只是没有扫光，面板照常可见（与 4c 同一兜底语义）。 */
+[data-theme='liquid'] .more-dropdown::before,
+[data-theme='liquid'] .mention-pop::before,
+[data-theme='liquid'] .mini-drawer::before,
+[data-theme='liquid'] .chat-model-picker::before,
+[data-theme='liquid'] .ctx-menu::before,
+[data-theme='liquid'] .obs-menu::before,
+[data-theme='liquid'] .list-menu::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--liquid-sheen-panel);
+  background-size: 250% 100%;
+  background-position: 150% 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: background-position calc(1.4s * var(--anim-speed)) linear,
+              opacity calc(0.25s * var(--anim-speed)) ease;
+}
+[data-theme='liquid'] .more-dropdown:hover::before,
+[data-theme='liquid'] .mention-pop:hover::before,
+[data-theme='liquid'] .mini-drawer:hover::before,
+[data-theme='liquid'] .chat-model-picker:hover::before,
+[data-theme='liquid'] .ctx-menu:hover::before,
+[data-theme='liquid'] .obs-menu:hover::before,
+[data-theme='liquid'] .list-menu:hover::before {
+  background-position: -120% 0;
+  opacity: 1;
+}
+
 /* 4d. 半透明细款滚动条（宽 7px、浅蓝半透明，hover 略增亮） */
 [data-theme='liquid'] ::-webkit-scrollbar {
   width: 7px;
@@ -7279,13 +7327,60 @@ html[data-anim-off~="panel"] .msg-action-bar.is-in {
 [data-theme='liquid'] .obs-menu,
 [data-theme='liquid'] .select-menu-panel,
 [data-theme='liquid'] .list-menu,
-[data-theme='liquid'] .sel-popup,
 [data-theme='liquid'] .more-dropdown.leaving,
 [data-theme='liquid'] .mini-drawer.leaving,
 [data-theme='liquid'] .chat-model-picker.leaving,
-[data-theme='liquid'] .list-menu.leaving,
-[data-theme='liquid'] .sel-popup.leaving {
+[data-theme='liquid'] .list-menu.leaving {
   animation-timing-function: cubic-bezier(.34, 1.56, .64, 1);
+}
+
+/* 4f. 环境溢色（v2.3.104 R2，要素6，P1）：大面板背景追加低强度主色 radial 柔光层。
+   deepening 用的是 background 简写（会重置 background-image），故这里以同优先级、
+   更后位置 + !important 只覆盖 background-image 长手 —— 深色底保留、柔光层叠在其上。 */
+[data-theme='liquid'] .modal,
+[data-theme='liquid'] .modal-card,
+[data-theme='liquid'] .mini-drawer,
+[data-theme='liquid'] .queue-dock-panel,
+[data-theme='liquid'] .api-params-panel {
+  background-image: var(--liquid-ambient) !important;
+}
+
+/* 4g. 滚动边缘效果（v2.3.104 R2，要素10，P1）：聊天滚动区上下缘 mask 渐隐，
+   内容从「导航层下方」滚入的 Apple 观感。挂在滚动区外层容器（.messages / .mini-messages，
+   overflow:hidden 且不随内容滚动，见 .has-chat-bg 注释），mask 才能固定在视口边缘；
+   若挂在滚动内容层，mask 会随内容滚走而失效。渐变形状来自 --liquid-scroll-fade。 */
+[data-theme='liquid'] .messages,
+[data-theme='liquid'] .mini-messages {
+  -webkit-mask-image: var(--liquid-scroll-fade);
+  mask-image: var(--liquid-scroll-fade);
+}
+
+/* ── 5. auto-contrast 看门狗 CSS 消费端（§4.6，v2.3.104）───────────────────
+   T01 的 src/utils/autoContrast.ts 在 glass/liquid 两主题下，对对比度不足的玻璃承载面
+   挂 data-auto-contrast='boost'（叠加加深层）或 'flip'（整体翻转为浅底深字）；
+   其余 13 主题不计算、不挂属性，本组规则自然不命中。属性名是两端契约，勿单方改动。
+   写法说明：color-mix 需要 Chromium 111+（Electron 32 为 Chromium 128，支持但为确定性
+   与未来兼容仍用「同色渐变叠层」写法 —— linear-gradient(same,same) 叠在 background-color
+   之上，视觉效果等价于叠加一层 scrim）。!important 用于压过 deepening 的 background 简写
+   （同优先级下本组位置更后，且 flip 需要清掉 4f 的 ambient 图层）。 */
+[data-theme='liquid'] [data-auto-contrast='boost'] {
+  background-color: var(--liquid-overlay) !important;
+  background-image: linear-gradient(var(--auto-contrast-scrim), var(--auto-contrast-scrim)) !important;
+}
+[data-theme='liquid'] [data-auto-contrast='flip'] {
+  background-color: var(--auto-contrast-flip-bg) !important;
+  background-image: none !important;
+  color: var(--auto-contrast-flip-text) !important;
+}
+/* glass 主题同构一份（用户原话：毛玻璃同样要自适应）；glass 基底色多样，
+   boost 只叠 scrim 层、不动 background-color，保留各面原有底色。 */
+[data-theme='glass'] [data-auto-contrast='boost'] {
+  background-image: linear-gradient(var(--auto-contrast-scrim), var(--auto-contrast-scrim)) !important;
+}
+[data-theme='glass'] [data-auto-contrast='flip'] {
+  background-color: var(--auto-contrast-flip-bg) !important;
+  background-image: none !important;
+  color: var(--auto-contrast-flip-text) !important;
 }
 
 /* ---------- v2.3.101：「最喜爱的人物」6 个资料字段（职业/性格/爱好/国籍/学历/菜） ---------- */
