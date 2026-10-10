@@ -94,6 +94,27 @@ const themeGroup = animCtl.slice(animCtl.indexOf("id: 'theme'"), animCtl.indexOf
 check('F7 `.setting-flash` / `.model-flash` 仍登记在 animControl 的 theme 动画组',
   /'\.setting-flash'/.test(themeGroup) && /'\.model-flash'/.test(themeGroup));
 
+// ──────────────────────── F8/F9（v2.3.105 新增）────────────────────────
+// 背景：用户反馈「我说正方形你就全部改成正方形了」——本版曾用
+//   `.setting-flash, .model-flash { border-radius: var(--radius-sm) !important }`
+// 把**所有**闪动目标强制成同一圆角，结果把本来正常的方形界面（.section-title /
+// .list-item，实测 radius 本就是 0）也压成了小圆角，属于过度修改。
+// 现已改为：闪动形状跟随控件自身，仅对实测确认会渲染成椭圆的目标（.mem-item）收敛圆角。
+// F8/F9 把这条「按控件尺寸确定形状、不得一刀切」的约束固化成闸门。
+section('F8–F9 闪动形状跟随控件（禁止一刀切统一圆角）');
+const flashRuleBlk = css.match(/\.setting-flash\s*,\s*\.model-flash\s*\{([^}]*)\}/);
+check('F8 `.setting-flash, .model-flash` 不再声明 border-radius（形状交给控件自身）',
+  !!flashRuleBlk && !/border-radius/.test(flashRuleBlk[1]),
+  flashRuleBlk && /border-radius/.test(flashRuleBlk[1]) ? `规则里仍有 border-radius：${flashRuleBlk[1].trim()}` : '');
+// 更宽松但同样能兜住回归：整个 flash 相关段落里不得出现 !important 的 border-radius
+const flashArea = css.slice(Math.max(0, css.indexOf('.setting-flash') - 600), css.indexOf('.setting-flash') + 1600);
+check('F9 闪动规则不含 `border-radius … !important`（禁止强制统一形状）',
+  !/border-radius\s*:[^;}]*!important/.test(flashArea),
+  /border-radius\s*:[^;}]*!important/.test(flashArea) ? '存在 !important 的 border-radius' : '');
+// 确认针对椭圆目标的**局部**修正确实存在（mem-item 横向撑满 + 大圆角 = 扁椭圆）
+check('F10 记忆条目(.mem-item，16:1 扁长 + 22px 圆角)有局部圆角收敛规则',
+  /\.mem-item\.setting-flash/.test(css) && /\.mem-item\.model-flash/.test(css));
+
 // ──────────────────────────── 汇总 ────────────────────────────
 console.log('\n' + '='.repeat(70));
 console.log(`${fail === 0 ? '✅' : '❌'}  ${pass} 通过 / ${fail} 失败`);

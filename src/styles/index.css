@@ -4460,14 +4460,33 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 }
 
 /* v2.3.102 需求 4：跳转 / 模型卡高亮闪动统一为「1s × 5 次 = 5s」。
-   两者共用同一个 keyframe flashPulse，颜色一律走主题变量（14 套主题经 :root 继承自动适配）。 */
+   两者共用同一个 keyframe flashPulse，颜色一律走主题变量（14 套主题经 :root 继承自动适配）。
+
+   ⚠️ v2.3.105 修正（用户反馈「我说正方形你就全部改成正方形了」）：
+   闪动高亮是控件的「临时描边」，**形状必须跟随控件自身**——方形控件闪方形、
+   圆角卡片闪圆角、扁长控件闪扁长。绝不能用一条 border-radius 强行统一所有目标
+   （曾试过 `border-radius: var(--radius-sm) !important`，结果把本来正常的方形
+   界面也压成了小圆角，属于过度修改，已撤回）。
+
+   【椭圆的真实成因】box-shadow 光晕的形状**跟随元素 border-radius**。
+   当元素「横向很宽 + 圆角相对高度偏大」时，圆弧会连成一条 → 视觉上变成扁椭圆/胶囊。
+   用 headless Edge 量了各闪动目标的**真实布局尺寸**再逐个判定：
+     · `.mem-item`  712×44（比例 16:1）+ radius 22px → ❌ 圆角超过高度一半，扁椭圆；
+     · `.theme-card` 404×62（6.5:1）+ radius 22px  → ✅ 22 < 62×0.4=24.8，正常圆角矩形；
+     · `.select-menu-trigger` 712×42 + radius 14px  → ✅ 14 < 16.8，正常；
+     · `.section-title` / `.list-item`（radius 0）  → ✅ 本来就是方形，**保持原样不动**。
+
+   【修法】只收敛「圆角相对高度过大」这一种畸形，且**只作用于确认有问题的目标**：
+   `.mem-item` 横向撑满整栏（16:1）却仍用 22px 圆角，圆弧连成椭圆；
+   收敛到 10px（≈ 高度 44px 的 23%）后既是圆角矩形、又不再像椭圆，形状语义不变。
+   其它界面一律不碰——「有些是正方形、有些是长方形、有些是圆角矩形」都是正常的。
+
+   ⚠️ 踩坑记录：**不要**用 `border-radius: min(var(--radius-sm), 50%)` 之类写法。
+   实测 Chromium 对 border-radius 的 min() 解析不生效（computed 值原样返回
+   `min(22px, 40%)`，不参与计算），且会**连本来方形的控件一起改掉**——已弃用。 */
 .setting-flash,
 .model-flash {
   animation: flashPulse 1s linear 5;
-  /* v2.3.105：强制统一圆角，避免闪动高亮跟随目标元素自身的 border-radius（如某些界面里
-     目标元素是圆角/胶囊形，会导致高亮环渲染成椭圆形）。!important 确保任意目标都呈一致的
-     圆角矩形（方形观感），不再出现椭圆。 */
-  border-radius: var(--radius-sm, 8px) !important;
 }
 @keyframes flashPulse {
   0% {
@@ -4478,6 +4497,13 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
     background: transparent;
     box-shadow: 0 0 0 0 transparent;
   }
+}
+
+/* 唯一实测确认会渲染成椭圆的目标：记忆面板条目（横向撑满 + 22px 圆角）。
+   收敛圆角即可，其余界面零影响。 */
+.mem-item.setting-flash,
+.mem-item.model-flash {
+  border-radius: 10px;
 }
 
 /* ===== 聊天模型选择器（v2.3.43）：主窗「其他操作」与小窗抽屉共用，所有主题统一走主题变量 =====
