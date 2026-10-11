@@ -101,7 +101,8 @@ const sys = (id) => ({ id, sender_type: 'system' });
 
 const matrix = [
   { name: '[u, ai{int}] → u.id', msgs: [u(1), ai(2, true)], expect: 1 },
-  { name: '[u, ai{int}, u] → null（锚点非尾部）', msgs: [u(1), ai(2, true), u(3)], expect: null },
+  // v2.3.107 需求 3：末条 user 之后完全没有回复也算锚点。此处末条 user 为 u(3)，其 tail 为空 → 返回 3（显示重发）。
+  { name: '[u, ai{int}, u] → 3（末条 user 无回复，触发重发）', msgs: [u(1), ai(2, true), u(3)], expect: 3 },
   { name: '[u, ai{}, u, ai{int}] → 第二个 u.id', msgs: [u(1), ai(2, false), u(3), ai(4, true)], expect: 3 },
   { name: '[u, ai{int}, ai{int}] → u.id（多个都标记）', msgs: [u(1), ai(2, true), ai(3, true)], expect: 1 },
   { name: '[ai{int}]（无 user）→ null（不崩、非 undefined）', msgs: [ai(1, true)], expect: null },
@@ -152,8 +153,8 @@ if (typeof fn === 'function') {
 
 // ---------- R1d MiniChat 复用 ----------
 console.log('\n=== R1d 主窗/小窗同构（单一实现）===');
-check('R1d-1 MiniChat 从 ./ChatWindow import computeInterruptedAnchorId',
-  /import\s*\{\s*computeInterruptedAnchorId\s*\}\s*from\s*'\.\/ChatWindow'/.test(MC));
+check('R1d-1 MiniChat 从 ./ChatWindow import computeInterruptedAnchorId（允许同批导入其他符号）',
+  /import\s*\{[^}]*computeInterruptedAnchorId[^}]*\}\s*from\s*'\.\/ChatWindow'/.test(MC));
 check('R1d-2 MiniChat **未**自行定义 computeInterruptedAnchorId（无两份漂移）',
   !/function computeInterruptedAnchorId/.test(MC));
 

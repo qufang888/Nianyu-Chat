@@ -91,6 +91,9 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.msg-action-divider',
       '.msg-action-divider.is-shown',
       '.scroll-to-bottom',
+      // v2.3.107：重发按钮栏改为「挂载即播 popupLinearIn」的入场动画，
+      // 按项目硬约束（新增动画必须可被三档开关控制）登记进本组。
+      '.msg-resend-bar',
       '.mini-scroll-to-bottom',
       // v2.3.102 需求 3：高级设置折叠区（grid-template-rows 0fr↔1fr 的 transition）。
       // 语义为「面板展开 / 折叠」，故登记进 panel 组；不登记的话「自定义档」关不掉折叠动画，

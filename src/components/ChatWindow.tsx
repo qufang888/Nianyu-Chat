@@ -99,12 +99,15 @@ import { TranslateModal } from './TranslateModal';
 
 // 拖拽添加接受的图片扩展名（v2.3.51）：与主进程 dialog:pickImage 的过滤器保持一致
 
-// v2.3.102 需求 1：计算「打断后重发」按钮应挂在哪条用户消息下（主窗定义，小窗 import 复用同一份逻辑）。
-// 语义：取最后一条用户消息；若它之后存在被标记 interrupted 的非用户消息 → 返回该用户消息 id，否则 null。
-// 覆盖两种用户场景：
+// v2.3.102 需求 1：计算「重新发送」按钮应挂在哪条用户消息下（主窗定义，小窗 import 复用同一份逻辑）。
+// 语义：取最后一条用户消息；满足以下任一 → 返回该用户消息 id，否则 null。
 //   a) AI 已输出一部分后被用户打断（末尾存在 interrupted=true 的 AI 消息）；
-//   b) AI 一个字都没输出就被打断（主进程在打断分支仍会落一条带 interrupted=true 的占位消息）。
-// 两种情况都能命中同一条判定分支。interrupted 仅由主进程在打断落库时写入，正常完成不写。
+//   b) AI 一个字都没输出就被打断（主进程在打断分支仍会落一条带 interrupted=true 的占位消息）；
+//   c) **v2.3.107 新增需求 3**：发出后**完全没有回复**（其后一条非用户消息都没有）
+//      —— 请求失败 / 中途退出 / 压根没生成，这正是最需要「重新发送」的场景。
+// interrupted 仅由主进程在打断落库时写入，正常完成不写。
+// ⚠️ 调用方必须用「正在生成」状态把本函数的结果置空（见 interruptedAnchorId 的 useMemo），
+//    否则 c) 会在 AI 正常生成期间（回复尚未落库）误显示按钮。
 export function computeInterruptedAnchorId(msgs: ChatMessage[]): number | null {
   // 1) 定位最后一条用户消息
   let ui = -1;
@@ -112,12 +115,22 @@ export function computeInterruptedAnchorId(msgs: ChatMessage[]): number | null {
     if (msgs[i].sender_type === 'user') { ui = i; break; }
   }
   if (ui < 0) return null;
-  // 2) 若其后存在被标记「打断」的非用户消息 → 该用户消息即锚点；否则不显示按钮
+  // 2) 其后的非用户消息
   const tail = msgs.slice(ui + 1);
+  // v2.3.107 需求 3：**发出后完全没有回复**（tail 为空 —— 请求失败 / 中途退出 / 就没生成）
+  // 也属于「需要重新发送」的情形，此前只认 interrupted 标记，导致这种最需要重发的场景反而没有按钮。
+  if (tail.length === 0) return msgs[ui].id;
+  // 3) 或者其后存在被标记「打断」的非用户消息 → 该用户消息即锚点
   return tail.some((m) => m.sender_type !== 'user' && m.interrupted) ? msgs[ui].id : null;
 }
 
 const IMAGE_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp)$/i;
+
+// v2.3.107 需求 2：打开聊天界面时的「气泡入场」参数。
+// 为免长历史一次性齐闪，只对**末尾 ENTER_BATCH 条**做自上而下错峰入场；
+// 错峰步长经 CSS 变量 --msg-enter-stagger 下发，并随 --anim-speed 一起缩放（总时长有界）。
+export const ENTER_BATCH = 12;
+export const ENTER_STAGGER_MS = 45;
 
 
 
@@ -464,12 +477,14 @@ export const ChatWindow: React.FC<{
 
   const chatKey = `${chatType}:${chatId}`;
 
-  // ===== v2.3.101 消息气泡入场动画 =====
-  // 目标：新追加的消息行 → 头像先渐显，气泡再从头像一侧向中间弹出（CSS 见 index.css 的 .msg-row.anim-enter）。
-  // 判定「新追加」：仅在**同一聊天**内、末尾消息相对上一次变化时触发；切聊天（chatKey 变化）只重建基线、
-  // 绝不播放入场，避免打开聊天时历史消息重放。
-  // 用「末尾消息是否属于本聊天（chat_id 归属）」判断，专门避开「切聊天后消息异步加载被误判为新追加」的坑。
-  const [enteringId, setEnteringId] = useState<number | null>(null);
+  // ===== v2.3.101 消息气泡入场动画（v2.3.107 需求 2：打开聊天时也播）=====
+  // 目标：消息行 → 头像先渐显，气泡再从头像一侧（AI 头像在左 → 气泡从其**右侧**弹出；
+  // 用户头像在右 → 从其左侧弹出）向中间弹出（CSS 见 index.css 的 .msg-row.anim-enter）。
+  // v2.3.107：**打开聊天界面时也播放**（此前刻意「切聊天一律不播」，用户实测要求打开时也要有）。
+  //   为免长历史一次性齐闪，只对**末尾 ENTER_BATCH 条**做自上而下错峰入场（延迟走
+  //   --msg-enter-stagger，并随 --anim-speed 缩放），总时长有界。
+  //   判定「新追加」仍靠「末尾消息 id 相对上一帧是否变化」，避开「切聊天后消息异步加载」的误判。
+  const [entering, setEntering] = useState<Record<number, number> | null>(null);
   const enterRef = useRef<{ chat: string; id: number | null; valid: boolean }>({
     chat: '',
     id: null,
@@ -486,26 +501,41 @@ export const ChatWindow: React.FC<{
     const belongs = !!last && last.chat_id === chatId;
     const lastId = last ? (last.id as number) : null;
     const prev = enterRef.current;
-    enterRef.current = { chat: chatKey, id: belongs ? lastId : null, valid: belongs };
+    // 「刚进入本聊天」或「本聊天消息上一帧尚未就绪」→ 走整批入场分支
+    const enteringChat = prev.chat !== chatKey || !prev.valid;
+    enterRef.current = { chat: chatKey, id: belongs ? lastId : null, valid: belongs && lastId !== null };
 
-    // 切聊天：只重建基线，不播放（历史消息不重放）
-    if (prev.chat !== chatKey) {
-      setEnteringId(null);
+    // 本聊天消息尚未就绪（显示的还是上一个聊天的内容）：清掉并等下一帧
+    if (!belongs || lastId === null) {
+      if (enteringChat) setEntering(null);
       return;
     }
-    // 末尾消息不属于本聊天（仍显示上一个聊天的内容），或上一帧基线无效 → 不播放
-    if (!belongs || lastId === null || !prev.valid) return;
+
+    if (enteringChat) {
+      // ---- 打开聊天：末尾 ENTER_BATCH 条自上而下错峰入场 ----
+      const n = Math.min(ENTER_BATCH, messages.length);
+      const start = messages.length - n;
+      const map: Record<number, number> = {};
+      for (let i = 0; i < n; i++) map[messages[start + i].id as number] = i;
+      setEntering(map);
+      // 清空时机与 CSS 动画时长同步缩放（末条延迟 + 0.6s 基准），避免慢速档下动画被截断。
+      const timer = window.setTimeout(
+        () => setEntering((cur) => (cur === map ? null : cur)),
+        animMs(0.6 + (ENTER_BATCH - 1) * (ENTER_STAGGER_MS / 1000))
+      );
+      return () => window.clearTimeout(timer);
+    }
+
+    // ---- 同一聊天内新追加的消息 ----
     if (lastId === prev.id) return;
     // v2.3.101：真实流式收尾的消息（正文已实时显示过）→ 跳过入场动画，避免「闪一下再淡入」。
     if (suppressEnterIdRef.current !== null && lastId === suppressEnterIdRef.current) {
       suppressEnterIdRef.current = null;
       return;
     }
-
-    setEnteringId(lastId);
-    // 清空时机与 CSS 动画时长同步缩放（气泡 0.10s 延迟 + 0.42s ≈ 0.6s 基准），
-    // 避免「慢速档」下动画尚未播完就摘掉 anim-enter 导致动画被截断。
-    const timer = window.setTimeout(() => setEnteringId((cur) => (cur === lastId ? null : cur)), animMs(0.6));
+    const single: Record<number, number> = { [lastId]: 0 };
+    setEntering(single);
+    const timer = window.setTimeout(() => setEntering((cur) => (cur === single ? null : cur)), animMs(0.6));
     return () => window.clearTimeout(timer);
   }, [messages, chatKey, chatId]);
 
@@ -3322,7 +3352,7 @@ export const ChatWindow: React.FC<{
 
   // continue = AI 接着往下说一段（落库为新消息）
 
-  // rewrite  = 换个说法重写最后一条（**保留原消息**，新版本追加在后面）
+  // rewrite  = 换个说法重写最后一条（v2.3.107 需求 4：**先删除原消息**，再生成一条顶替它）
 
   // replyForUser = 以用户身份代写一条回复，**只填进输入框不发送**
 
@@ -4816,11 +4846,13 @@ export const ChatWindow: React.FC<{
 
   const allMessagesUnique = Array.from(uniqueMessages.values());
 
-  // v2.3.102 需求 1：唯一入口判定 —— 需要挂「打断后重发」按钮的那条用户消息 id（无则 null）。
+  // v2.3.102 需求 1：唯一入口判定 —— 需要挂「重新发送」按钮的那条用户消息 id（无则 null）。
   // 向下传给 MessageRow：showResendInterrupted = isUser && msg.id === interruptedAnchorId。
+  // v2.3.107 需求 3：新增「发出后完全没回复」也算；但**生成中必须置空** ——
+  // 回复尚未落库时末尾同样是用户消息，不挡会在 AI 正常作答期间闪出重发按钮。
   const interruptedAnchorId = useMemo(
-    () => computeInterruptedAnchorId(allMessagesUnique),
-    [allMessagesUnique],
+    () => (replying ? null : computeInterruptedAnchorId(allMessagesUnique)),
+    [allMessagesUnique, replying],
   );
 
 
@@ -5949,7 +5981,9 @@ export const ChatWindow: React.FC<{
 
                 msg={m}
 
-                animEnter={m.id === enteringId}
+                animEnter={entering !== null && entering[m.id] !== undefined}
+
+                enterDelayMs={entering ? (entering[m.id] ?? 0) * ENTER_STAGGER_MS : 0}
 
                 onImage={setPreview}
 
@@ -7462,6 +7496,9 @@ const MessageRow: React.FC<{
 
   // v2.3.101：本条消息为「新追加」→ 播放「头像渐显 + 气泡弹出」入场动画
   animEnter?: boolean;
+  // v2.3.107 需求 2：本条消息在「打开聊天错峰入场」中的延迟（毫秒，0=不延迟）。
+  // 由父级下发，经 CSS 变量 --msg-enter-stagger 传给关键帧，随 --anim-speed 一起缩放。
+  enterDelayMs?: number;
 
   // v2.3.102 需求 1：若本条用户消息的 id 等于唯一锚点 id，则在其 .msg-body 内渲染「重发」按钮
   interruptedAnchorId?: number | null;
@@ -7474,7 +7511,7 @@ const MessageRow: React.FC<{
 
   onQuickMemory, onSaveImageMemory, onViewPrompt, onForward, onEdit, onRollback, onCopy, onTranslate, onMarkNode, onForkFromHere, onSelectCopy, onDeleteMsg, onAiAction, showAiActions, aiActionBusy, onToggleCollapse, allCollapsed, roleMood, searchResults, onOpenSearch,
 
-  pseudoOn, pseudoSpeed, pseudoKey, animEnter, interruptedAnchorId, onResendInterrupted,
+  pseudoOn, pseudoSpeed, pseudoKey, animEnter, enterDelayMs, interruptedAnchorId, onResendInterrupted,
 
 }) => {
 
@@ -7825,7 +7862,7 @@ const MessageRow: React.FC<{
 
   return (
 
-    <div className={`msg-row ${isUser ? 'user' : 'ai'}${animEnter ? ' anim-enter' : ''}`} data-mid={msg.id} style={{ position: 'relative' }} onContextMenu={handleContextMenu}>
+    <div className={`msg-row ${isUser ? 'user' : 'ai'}${animEnter ? ' anim-enter' : ''}`} data-mid={msg.id} style={{ position: 'relative', '--msg-enter-stagger': `${enterDelayMs ?? 0}ms` } as React.CSSProperties} onContextMenu={handleContextMenu}>
 
       {/* v2.3.102 需求 2：头像 + 时间合成一个固定 44px 的竖列（.msg-avatar-col），
           时间恒在头像正下方；.msg-row.user 的 row-reverse 只翻转行方向，列内是 column，
@@ -8144,14 +8181,15 @@ const MessageRow: React.FC<{
 
 
 
-        </div>
-
-        {/* v2.3.103：重发按钮改为「横向按钮行」形态（与 AI 代写/重写/续写/朗读 同一行式样），
-            复用 .msg-action-bar 的 0.5s 弹出动画。常驻 DOM、用 .is-in 切换显隐，
-            这样从「无 → 有」时才会触发过渡（与 AI 操作栏同机制），而非挂载即终态。
-            按钮本身仍是 block 级独占一格、左对齐（msg-resend-bar 覆盖对齐）。*/}
-        {onResendInterrupted && (
-          <div className={`msg-action-bar msg-resend-bar ${interruptedAnchorId === msg.id ? 'is-in' : ''}`}>
+        {/* v2.3.107 需求 3：重发按钮移入 .msg-body 内部，并**只在它确实是锚点时才渲染**。
+            迁移原因：它在 .msg-row 下是 .msg-body 的**兄弟**，而 .msg-row.user 是 row-reverse
+            的横向 flex —— 于是按钮变成一个「横向排布的 flex 子项」，被挤到最右并被容器裁掉
+            （用户截图实证：按钮只露出半截）。移入 .msg-body 后与 AI 操作栏同层，正常垂直排在气泡下方。
+            改为条件渲染（原为常驻 DOM + .is-in 过渡）的原因：常驻会让**每一条消息**都多占一行
+            （.msg-action-bar 用 visibility 显隐、不脱离布局），整页凭空多出大量空白。
+            入场动画改由 .msg-resend-bar 的 popupLinearIn 关键帧承担（挂载即播，见 index.css）。 */}
+        {onResendInterrupted && interruptedAnchorId === msg.id && (
+          <div className="msg-action-bar msg-resend-bar is-in">
             <button
               type="button"
               className="msg-resend-btn"
@@ -8163,6 +8201,8 @@ const MessageRow: React.FC<{
             </button>
           </div>
         )}
+
+        </div>
 
       </div>
 

@@ -362,6 +362,13 @@ class DataManager {
     this.errorLogPath = path.join(this.dataDir, 'errors.json');
     this.store = this.loadStore();
     this.settings = this.loadSettings();
+    // v2.3.107 需求 7：液态玻璃（liquid）主题已整体删除（THEMES 不再收录、
+    // variables.css 的 [data-theme='liquid'] 段已删）。老用户若曾持久化 theme==='liquid'，
+    // 界面会因缺少主题令牌而「花掉」。单向迁移为最接近的存活主题 glass 并落盘，保证老数据不崩。
+    // 幂等：仅当确为 'liquid' 时回写，正常用户文件不被无谓改动。
+    if (this.settings.theme === 'liquid') {
+      this.saveSettings({ theme: 'glass' });
+    }
     this.migrate();
   }
 
@@ -369,6 +376,10 @@ class DataManager {
   reloadAll(): void {
     this.store = this.loadStore();
     this.settings = this.loadSettings();
+    // v2.3.107 需求 7：备份里若残留 theme==='liquid'，同样迁移为 glass 并落盘。
+    if (this.settings.theme === 'liquid') {
+      this.saveSettings({ theme: 'glass' });
+    }
   }
 
   // ===== 错误日志：持久化到 dataDir/errors.json，按时间倒序，上限 1000 条 =====

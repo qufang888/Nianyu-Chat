@@ -824,15 +824,11 @@ export const translations: Record<Lang, Dict> = {
     'settings.glassBubbleAiText': 'AI 气泡文字颜色',
     'settings.glassBubbleBorder': '气泡边框颜色',
     'settings.glassColorReset': '重置颜色',
-    'settings.liquidFlow': '液态流动',
-    'settings.liquidFlowDesc': '让背景的渐变缓慢流动，营造流体折射的观感。觉得太动态可以关掉；关闭后背景静止，但配色不变。',
     'settings.autoContrast': '自动对比度调节',
     'settings.autoContrastTip': '玻璃与毛玻璃主题下，自动加深背景或翻转文字颜色以保证可读',
-    'settings.dyeFromBackground': '背景取色染色',
-    'settings.dyeFromBackgroundDesc': '液态玻璃专属：聊天设了背景时，界面主题色跟随背景主体色；关闭则始终使用主题自带主色。',
-    // v2.3.105：毛玻璃 / 液态玻璃专属细化设置
+    // v2.3.105：毛玻璃专属细化设置
     'settings.glassTint': '玻璃色调',
-    'settings.glassTintDesc': '为毛玻璃 / 液态玻璃的半透明面板染色，可选贴合你喜好的色调。',
+    'settings.glassTintDesc': '为毛玻璃的半透明面板染色，可选贴合你喜好的色调。',
     'settings.glassOpacity': '玻璃不透明度',
     'settings.glassOpacityDesc': '调节毛玻璃面板与气泡的透明程度，数值越小越通透。',
     'settings.glassBlur': '磨砂模糊度',
@@ -1103,7 +1099,6 @@ export const translations: Record<Lang, Dict> = {
     'theme.graphite': '石墨极简灰',
     'theme.indigo': '深海靛蓝',
     'theme.sand': '暖米浅棕',
-    'theme.liquid': '液态玻璃',
 
     'model.needName': '请填写显示名称',
     'model.needBaseUrl': '请填写 API Base URL',
@@ -2623,15 +2618,11 @@ export const translations: Record<Lang, Dict> = {
     'settings.glassBubbleAiText': 'AI bubble text color',
     'settings.glassBubbleBorder': 'Bubble border color',
     'settings.glassColorReset': 'Reset colors',
-    'settings.liquidFlow': 'Liquid flow',
-    'settings.liquidFlowDesc': 'Slowly drifts the background gradient to mimic fluid refraction. Turn it off if it feels too dynamic — the background stays still and the colors are unchanged.',
     'settings.autoContrast': 'Auto contrast adjustment',
-    'settings.autoContrastTip': 'Automatically darkens glass backgrounds or flips text color to keep text readable in Glass and Liquid Glass themes.',
-    'settings.dyeFromBackground': 'Dye theme from background',
-    'settings.dyeFromBackgroundDesc': 'Liquid Glass only: when a chat has a background, the interface theme color follows the dominant color of that background. Turn off to always use the theme’s built-in primary color.',
-    // v2.3.105：Glass / Liquid Glass fine-tuning settings
+    'settings.autoContrastTip': 'Automatically darkens glass backgrounds or flips text color to keep text readable in Glass themes.',
+    // v2.3.105：毛玻璃（glass）专属细化设置
     'settings.glassTint': 'Glass tint',
-    'settings.glassTintDesc': 'Tints the translucent panels of Glass and Liquid Glass themes with a color of your choice.',
+    'settings.glassTintDesc': 'Tints the translucent panels of Glass themes with a color of your choice.',
     'settings.glassOpacity': 'Glass opacity',
     'settings.glassOpacityDesc': 'Adjusts how opaque the frosted panels and bubbles are; lower means more see-through.',
     'settings.glassBlur': 'Frost blur',
@@ -2921,7 +2912,6 @@ export const translations: Record<Lang, Dict> = {
     'theme.graphite': 'Graphite Gray',
     'theme.indigo': 'Deep Indigo',
     'theme.sand': 'Warm Sand',
-    'theme.liquid': 'Liquid Glass',
 
     'model.needName': 'Please enter a display name',
     'model.needBaseUrl': 'Please enter API Base URL',

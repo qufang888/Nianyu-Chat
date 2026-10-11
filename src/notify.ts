@@ -11,6 +11,8 @@ const CARD_H = 96;
 /** 深色系主题列表（其余为浅色系） */
 // v2.3.97：新增 'liquid'（液态玻璃）。它的底色是深蓝紫多色渐变，
 // 若漏登记，通知卡片会按「浅色主题」生成（浅底 + 深字），叠在深色软件窗口上会突兀。
+// v2.3.107 需求 7：liquid 主题已删除；此处保留 'liquid' 仅作历史兜底
+// （老数据已在 electron/db.ts 读盘层单向迁移为 glass，正常情况下不会走到该分支）。
 const DARK_THEMES = new Set(['dark', 'glass', 'galaxy', 'cyber', 'ember', 'liquid']);
 
 /** 根据主题名判断是否深色 */
@@ -23,6 +25,7 @@ function cardCSS(theme?: string): string {
   // 液态玻璃（v2.3.101）：独立透明窗口不加载 variables.css，故此处硬编码与主界面一致的
   // 深蓝紫磨砂卡；结构（尺寸/起手位移/过渡/子元素）与深/浅分支严格一致，仅换色，
   // 保证通知卡观感与主界面（含小窗）统一。
+  // v2.3.107 需求 7：liquid 主题已删除，此分支仅作历史兜底（读盘层已迁移为 glass）。
   if (theme === 'liquid') {
     return `
     .ny-card{position:absolute;right:0;bottom:0;width:${CARD_W}px;height:${CARD_H}px;box-sizing:border-box;

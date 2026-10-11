@@ -54,7 +54,8 @@ type Verdict = 'boost' | 'flip';
 // ---------------------------------------------------------------------------
 
 /** 看门狗作用主题（其余 13 主题早退） */
-const WATCHED_THEMES: ReadonlySet<string> = new Set(['glass', 'liquid']);
+// v2.3.107 需求 7：液态玻璃（liquid）主题已删除，看门狗只服务毛玻璃（glass）。
+const WATCHED_THEMES: ReadonlySet<string> = new Set(['glass']);
 
 /** 玻璃 backdrop blur 半径（px），与 --liquid-backdrop 的 blur(30px) 对应，用于小浮层判定 */
 const BLUR_RADIUS_PX = 30;

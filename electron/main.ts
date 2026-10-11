@@ -5869,16 +5869,48 @@ function registerIPC(): void {
     chatType: string; chatId: string; action: 'continue' | 'rewrite' | 'replyForUser';
   }) => {
     const settings = dm.getSettings();
-    const history = dm.getMessages(p.chatType, p.chatId);
+    let history = dm.getMessages(p.chatType, p.chatId);
     if (history.length === 0) return { ok: false, error: '没有可参考的历史消息' };
     const isGroup = p.chatType === 'group';
     const memberRoles = resolveMembers(p.chatType, p.chatId, '');
     if (memberRoles.length === 0) return { ok: false, error: '未找到可用的角色' };
+
+    // ===== v2.3.107 需求 4：重写 = **先删除原消息**，再重写这一条 =====
+    // 此前实现是「保留原消息、把新版本追加在后面」，用户实测后要求改为替换：
+    // 点重写应把被重写的那条 AI 消息删掉，然后重新生成一条顶替它。
+    // 删完后该消息已不在 history 里，模型看不到「刚才那条」，故把原文**内联进指令**，
+    // 否则「把你刚才最后一条消息换个说法」会失去指代对象。
+    let rewriteOriginal: string | null = null;
+    let rewriteRoleName: string | null = null;
+    if (p.action === 'rewrite') {
+      const last = history[history.length - 1];
+      if (!last || last.sender_type === 'user') {
+        return { ok: false, error: '没有可重写的 AI 消息' };
+      }
+      rewriteOriginal = last.content || '';
+      rewriteRoleName = last.sender_name;
+      // 兜底中止该聊天在飞的流，避免删除与流式落库互相打架
+      abortStreamsForChat(p.chatId);
+      // withStoryNodes=true 保证连带清理该消息关联的剧情节点（项目硬约束：删消息必须连带删节点）
+      const del = dm.rollbackMessages(p.chatType, p.chatId, last.id, true, false);
+      if (del.deletedMoments > 0) broadcast('moments:changed', { chatId: p.chatId });
+      if (del.deletedNodes > 0) {
+        broadcast('story:changed', {
+          chatType: p.chatType,
+          chatId: p.chatId,
+          enabled: dm.getStoryEnabled(p.chatType, p.chatId),
+        });
+      }
+      history = dm.getMessages(p.chatType, p.chatId);
+    }
+
     // 群聊取最后发言者，单聊取唯一角色（ChatMessage 无 sender_id，按 sender_name 匹配角色名）
-    const lastMsg = history[history.length - 1];
+    // 重写场景必须用**被删除那条**的发言者，否则删完后「最后一条」可能变成别人的消息、角色就跑偏了。
+    const lastMsg = history.length ? history[history.length - 1] : null;
+    const roleName = rewriteRoleName ?? lastMsg?.sender_name ?? '';
     const role =
       isGroup
-        ? memberRoles.find((r) => r.name === lastMsg.sender_name) || memberRoles[0]
+        ? memberRoles.find((r) => r.name === roleName) || memberRoles[0]
         : memberRoles[0];
     const cfg = resolveChatModel(p.chatType, p.chatId, role, settings);
     if (!cfg) return { ok: false, error: '未找到可用模型' };
@@ -5890,7 +5922,8 @@ function registerIPC(): void {
       p.action === 'continue'
         ? '（续写）请沿着你刚才说到的话自然地继续往下说一段，把话说完。只输出你要说的内容，不要重复已说过的内容，不要加任何前缀或说明。'
         : p.action === 'rewrite'
-          ? '（重写）请把你刚才最后一条消息**换一个说法重新写一遍**：保持原意与语气，但用不同的措辞、不同的角度重新表达。只输出重写后的内容，不要解释，不要加前缀。'
+          ? '（重写）请把下面这条消息**换一个说法重新写一遍**：保持原意与语气，但用不同的措辞、不同的角度重新表达。只输出重写后的内容，不要解释，不要加前缀。\n\n【需要重写的原消息】\n' +
+            (rewriteOriginal ?? '')
           : '（代写回复）请以**用户的身份**写一条要发给对方的回复消息：站在用户此刻的立场与心情出发，自然、口语化，长度与对话节奏相当。只输出回复正文，不要加引号、前缀或「用户回复：」之类的标注。';
 
     let messages;

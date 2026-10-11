@@ -310,7 +310,6 @@ section('E. 静态表补齐关键锚点');
 {
   const mustHave = [
     ['sec-anim-control', '动效分组（仅自定义档渲染，绝不能漏）'],
-    ['sec-mediastub', '生成与扩展的跳转卡'],
     ['sec-proactive-engine', '主动消息机制'],
   ];
   for (const [id, why] of mustHave) {
@@ -388,7 +387,7 @@ section('I. 索引条目结构对外不变（多处依赖，硬性约束）');
 {
   check('SettingSearchItem 类型仍是 {id,key,kw,sub?}（未改对外结构）', /type SettingSearchItem = \{ id: string; key: string; kw: string\[\]; sub\?: 'models' \| 'font' \| 'self' \};/.test(code));
   check('searchIndex 仍是 SettingSearchItem[]', /useState<SettingSearchItem\[\]>\(SETTING_SEARCH_INDEX\)/.test(code));
-  check('候选仍走 suggestWithCount + MAX_SUGGESTIONS（最多 5 条，用户铁律）', /suggestWithCount\(searchQ, searchIndex/.test(code) && /MAX_SUGGESTIONS\)/.test(code));
+  check('候选仍走完整候选集 + max=MAX_SUGGESTIONS（最多 5 条，用户铁律）', /items=\{searchIndex\}/.test(code) && /max=\{MAX_SUGGESTIONS\}/.test(code));
   check('按场景缓存 dynIndexCache 结构保留（models/main 两桶）', /dynIndexCache\.current\[scene\] = dyn/.test(code));
 }
 

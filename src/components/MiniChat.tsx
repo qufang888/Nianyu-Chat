@@ -53,7 +53,7 @@ import { MessageSearch } from './MessageSearch';
 import { BondPanel } from './BondPanel';
 import { TranslateModal } from './TranslateModal';
 // v2.3.102 需求 1：小窗复用主窗的「打断后重发」锚点判定，避免两份逻辑分叉（单向依赖，无循环引用）
-import { computeInterruptedAnchorId } from './ChatWindow';
+import { computeInterruptedAnchorId, ENTER_BATCH, ENTER_STAGGER_MS } from './ChatWindow';
 // v2.3.101：主题色取自聊天背景主体色（小窗跟随其聊天背景）
 import {
   extractDominantColor,
@@ -294,10 +294,10 @@ export const MiniChat: React.FC = () => {
   // 随机事件（与主界面一致，按 chatKey 隔离）
   const chatKey = current ? `${current.chat_type}:${current.chat_id}` : '';
 
-  // ===== v2.3.101 消息气泡入场动画（与主窗对称）=====
-  // 仅让「新追加的消息」播放（头像渐显 → 气泡从头像一侧向中间弹出）；切聊天只重建基线、不重放。
-  // 用「末尾消息是否属于当前聊天（chat_id 归属）」判断，避开切聊天后消息异步加载被误判为追加。
-  const [enteringId, setEnteringId] = useState<number | null>(null);
+  // ===== v2.3.101 消息气泡入场动画（与主窗对称；v2.3.107 需求 2：打开聊天时也播）=====
+  // 打开小窗/切换聊天 → 末尾 ENTER_BATCH 条自上而下错峰入场（参数与主窗共用同一常量）；
+  // 同一聊天内新追加的消息 → 单条入场。判定靠「末尾消息 id 是否变化」，避开异步加载误判。
+  const [entering, setEntering] = useState<Record<number, number> | null>(null);
   const enterRef = useRef<{ chat: string; id: number | null; valid: boolean }>({ chat: '', id: null, valid: false });
   // v2.3.101：真实流式收尾落库的消息 id —— 正文已实时显示过，跳过入场动画（避免闪一下）。
   const suppressEnterIdRef = useRef<number | null>(null);
@@ -308,20 +308,36 @@ export const MiniChat: React.FC = () => {
     const belongs = !!last && !!current && last.chat_id === current.chat_id;
     const lastId = last ? (last.id as number) : null;
     const prev = enterRef.current;
-    enterRef.current = { chat: chatKey, id: belongs ? lastId : null, valid: belongs };
-    // 切聊天：只重建基线，不播放（历史消息不重放）
-    if (prev.chat !== chatKey) { setEnteringId(null); return; }
-    if (!belongs || lastId === null || !prev.valid) return;
+    const enteringChat = prev.chat !== chatKey || !prev.valid;
+    enterRef.current = { chat: chatKey, id: belongs ? lastId : null, valid: belongs && lastId !== null };
+
+    // 没有当前聊天 / 本聊天消息尚未就绪 → 清掉并等下一帧
+    if (!chatKey || !belongs || lastId === null) {
+      if (enteringChat) setEntering(null);
+      return;
+    }
+
+    if (enteringChat) {
+      const n = Math.min(ENTER_BATCH, messages.length);
+      const start = messages.length - n;
+      const map: Record<number, number> = {};
+      for (let i = 0; i < n; i++) map[messages[start + i].id as number] = i;
+      setEntering(map);
+      const timer = window.setTimeout(
+        () => setEntering((cur) => (cur === map ? null : cur)),
+        animMs(0.6 + (ENTER_BATCH - 1) * (ENTER_STAGGER_MS / 1000))
+      );
+      return () => window.clearTimeout(timer);
+    }
+
     if (lastId === prev.id) return;
-    // v2.3.101：真实流式收尾的消息（正文已实时显示过）→ 跳过入场动画。
     if (suppressEnterIdRef.current !== null && lastId === suppressEnterIdRef.current) {
       suppressEnterIdRef.current = null;
       return;
     }
-    setEnteringId(lastId);
-    // 清空时机与 CSS 动画时长同步缩放（气泡 0.10s 延迟 + 0.42s ≈ 0.6s 基准），
-    // 避免「慢速档」下动画尚未播完就摘掉 anim-enter 导致动画被截断。
-    const timer = window.setTimeout(() => setEnteringId((cur) => (cur === lastId ? null : cur)), animMs(0.6));
+    const single: Record<number, number> = { [lastId]: 0 };
+    setEntering(single);
+    const timer = window.setTimeout(() => setEntering((cur) => (cur === single ? null : cur)), animMs(0.6));
     return () => window.clearTimeout(timer);
   }, [messages, chatKey, current]);
   const [eventState, setEventState] = useState<RandomEventData | null>(() => (chatKey ? getEventStore(chatKey).event : null));
@@ -2464,7 +2480,9 @@ export const MiniChat: React.FC = () => {
               <MiniMessageRow
                 key={m.id}
                 msg={m}
-                animEnter={m.id === enteringId}
+                animEnter={entering !== null && entering[m.id] !== undefined}
+
+                enterDelayMs={entering ? (entering[m.id] ?? 0) * ENTER_STAGGER_MS : 0}
                 onImage={setPreview}
                 avatarPath={m.sender_type === 'ai' ? avatarMap[m.sender_name] : undefined}
                 userAvatarPath={userAvatarPath}
@@ -3209,6 +3227,8 @@ const MiniMessageRow: React.FC<{
   pseudoKey?: string;
   // v2.3.101：本条消息为「新追加」→ 播放「头像渐显 + 气泡弹出」入场动画
   animEnter?: boolean;
+  /** v2.3.107 需求 2：打开聊天错峰入场的延迟（毫秒） */
+  enterDelayMs?: number;
   // v2.3.102 需求 2：上一条消息的时间戳，用于「同一分钟仅顶部显示」判定（与主窗同口径）
   prevTimestamp?: string;
   // v2.3.102 需求 1：若本条用户消息 id 等于唯一锚点 id，则在其 .msg-body 内渲染「重发」按钮
@@ -3217,7 +3237,7 @@ const MiniMessageRow: React.FC<{
 }> = ({
   msg, onImage, avatarPath, userAvatarPath, showTts, ttsState, onAiAction, showAiActions, aiActionBusy, hideReasoning, onSpeak, onReplayTts, onRegenerateTts, onReasoningCopied,
   onQuickMemory, onSaveImageMemory, onRollback, onDeleteMsg, onCopy, onTranslate, onMarkNode, onViewPrompt, onForkFromHere, onSelectCopy, failed, searchResults, onOpenSearch,
-  pseudoOn, pseudoSpeed, pseudoKey, animEnter, prevTimestamp, interruptedAnchorId, onResendInterrupted,
+  pseudoOn, pseudoSpeed, pseudoKey, animEnter, enterDelayMs, prevTimestamp, interruptedAnchorId, onResendInterrupted,
 }) => {
   const { t } = useI18n();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -3399,7 +3419,7 @@ const MiniMessageRow: React.FC<{
   // 否则恒渲染的 44px 列 + 6px 外边距会在 row-reverse 下凭空占 50px 空白侧栏、挤压用户气泡。
   const hasAvatar = !isUser || !!userAvatarPath;
   return (
-    <div className={`msg-row ${isUser ? 'user' : 'ai'}${animEnter ? ' anim-enter' : ''}`} data-mid={msg.id} onContextMenu={handleContextMenu}>
+    <div className={`msg-row ${isUser ? 'user' : 'ai'}${animEnter ? ' anim-enter' : ''}`} data-mid={msg.id} style={{ '--msg-enter-stagger': `${enterDelayMs ?? 0}ms` } as React.CSSProperties} onContextMenu={handleContextMenu}>
       {/* v2.3.102 需求 2：头像 + 时间合成固定 44px 竖列（.msg-avatar-col），时间恒在头像正下方。
           仅「本行确有头像」（hasAvatar）时才用 44px 列；用户未设本人头像时该列为空，
           若仍渲染会在 row-reverse 下占 50px 空白侧栏挤压气泡，故退回把时间作为 .msg-row 直接子项
@@ -3566,11 +3586,10 @@ const MiniMessageRow: React.FC<{
             </>)}
           </div>
           )}
-        </div>
-        {/* v2.3.103：重发按钮改为横向按钮行形态，复用 .msg-action-bar 弹出动画（与主窗同构）。
-            常驻 DOM、用 .is-in 切换显隐。*/}
-        {onResendInterrupted && (
-          <div className={`msg-action-bar msg-resend-bar ${interruptedAnchorId === msg.id ? 'is-in' : ''}`}>
+        {/* v2.3.107 需求 3：移入 .msg-body 内部 + 仅在确为锚点时渲染（与主窗同构）。
+            原先挂在 .msg-row 下会被 row-reverse 横向 flex 挤到最右并裁掉。 */}
+        {onResendInterrupted && interruptedAnchorId === msg.id && (
+          <div className="msg-action-bar msg-resend-bar is-in">
             <button
               type="button"
               className="msg-resend-btn"
@@ -3582,6 +3601,8 @@ const MiniMessageRow: React.FC<{
             </button>
           </div>
         )}
+
+        </div>
       </div>
       {/* 右键菜单：Portal 到 body，脱离 .app-root 的 transform/filter 包含块，避免 fixed 坐标相对祖先偏移。
           v2.3.104 R3：key={menuRelocate.seq} —— 同气泡二次右键重定位时 seq+1 强制重挂载，

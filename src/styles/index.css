@@ -720,29 +720,63 @@ input[type='range']::-moz-range-thumb {
      · 时长统一 `calc(<原值> * var(--anim-speed, 1))`，由「动画速度」总控统一缩放。
    方向：AI 头像在左 → 气泡从左侧（-8px）弹向中间；用户头像在右 → 气泡从右侧（+8px）弹向中间。
    落点：主窗 / 小窗的 .avatar / .bubble / .msg-body 类名同构，故本套规则两窗天然同时生效。 */
+/* v2.3.107 需求 2（用户二次明确）：气泡入场要**从左往右「展开」**，不是放大。
+   故彻底去掉 scale —— 头像只做淡入，气泡只做「自头像一侧向另一侧平移 + 淡入」。
+   为什么不用 clip-path 做真正的横向展开：clip-path 会把气泡的 box-shadow 一起裁掉
+   （inset(0) 的参考框是 border-box，外扩阴影必被裁），且 animation-fill-mode:both 会把
+   这个「无阴影」的终态永久保留，等于悄悄改掉了气泡观感。
+   为什么也不用 scaleX + transform-origin:left：横向缩放会把文字一起压扁/拉长，观感更差。
+   平移方案既无副作用，方向（--msg-enter-dx 负 → 0）本身就是「从左往右」。 */
 @keyframes msgAvatarIn {
-  from { opacity: 0; transform: scale(0.82); }
-  to   { opacity: 1; transform: none; }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
-/* 终值 opacity 与 .bubble 基态（opacity: var(--bubble-opacity,1)）一致，避免动画结束瞬间跳色。
-   v2.3.105：放大初始位移与缩放幅度（translateX ±12px / scale 0.9），让「从头像一侧线性弹出」更明显、更利落。 */
+/* 单边固定、另一边展开（用户第二次明确：「左边不动，右边展开，或者右边不动，左边展开，
+   而不是整个气泡平移」）：
+     起点用 clip-path 把气泡完全裁掉、只在**固定的那一侧**留 0 宽度，
+     终点裁到 inset(0) —— 于是可见区域从固定边向另一侧「长出来」，气泡本体位置不动。
+       · AI（头像在左）→ 左边不动、右边向右展开：inset(0 100% 0 0 …)
+       · 用户（头像在右）→ 右边不动、左边向左展开：inset(0 0 0 100% …)
+   为什么用 clip-path 而不是 scaleX：scaleX 会把文字一起横向压扁/拉长，观感很差；
+   clip-path 只裁切，内容不变形。
+   round 参数取与 .bubble 相同的圆角变量，保证展开过程中圆角不被切成直角。
+   ⚠️ fill-mode 必须是 backwards、不能是 both：clip-path 的参考框是 border-box，
+   若在终态永久保留 inset(0)，气泡外扩的 box-shadow 会被一起裁掉；backwards 只在
+   animation-delay 期间应用起点、动画结束后回到元素自身样式（阴影恢复）。 */
 @keyframes msgBubbleIn {
-  from { opacity: 0; transform: translateX(var(--msg-enter-dx, 8px)) scale(0.9); }
-  to   { opacity: var(--bubble-opacity, 1); transform: none; }
+  from {
+    opacity: 0;
+    clip-path: var(--bubble-clip-from, inset(0 100% 0 0 round var(--bubble-radius, var(--radius))));
+  }
+  to {
+    opacity: var(--bubble-opacity, 1);
+    clip-path: inset(0 0 0 0 round var(--bubble-radius, var(--radius)));
+  }
 }
 /* 头像先渐显（无延迟） */
 .msg-row.anim-enter .avatar {
   animation: msgAvatarIn calc(0.30s * var(--anim-speed, 1)) linear both;
+  /* v2.3.107 需求 2：打开聊天时末尾若干条自上而下错峰入场。
+     错峰量由父级经 --msg-enter-stagger 下发，与动画时长同样随 --anim-speed 缩放；
+     单条新消息时该变量为 0ms（行为与旧版完全一致）。 */
+  animation-delay: calc(var(--msg-enter-stagger, 0s) * var(--anim-speed, 1));
 }
-/* 气泡随后弹出（延迟 0.08s，配合 both 的回填：延迟期间停在 from 态 = 隐藏）。
+/* 气泡随后弹出（基础延迟 0.08s + 错峰量，配合 both 的回填：延迟期间停在 from 态 = 隐藏）。
    方向变量 --msg-enter-dx 在下方按 AI(左)/用户(右) 设定为 ±12px，确保从各自头像一侧线性弹出。 */
 .msg-row.anim-enter .bubble {
-  animation: msgBubbleIn calc(0.40s * var(--anim-speed, 1)) linear both;
-  animation-delay: calc(0.08s * var(--anim-speed, 1));
+  /* backwards（不是 both）：终态不保留，动画结束后回到 .bubble 自身样式 → box-shadow 不被裁 */
+  animation: msgBubbleIn calc(0.40s * var(--anim-speed, 1)) linear backwards;
+  animation-delay: calc((0.08s + var(--msg-enter-stagger, 0s)) * var(--anim-speed, 1));
 }
-/* 方向变量：AI 头像在左 → 从左弹出；用户头像在右 → 从右弹出 */
-.msg-row.ai.anim-enter { --msg-enter-dx: -12px; }
-.msg-row.user.anim-enter { --msg-enter-dx: 12px; }
+/* 展开锚点：气泡哪一边固定不动（另一边向对侧展开）。
+   AI 头像在左 → 气泡**左边不动、右边向右展开**；用户头像在右 → **右边不动、左边向左展开**。
+   即：始终从「离头像最近的那一侧」开始展开，气泡整体不平移。 */
+.msg-row.ai.anim-enter {
+  --bubble-clip-from: inset(0 100% 0 0 round var(--bubble-radius, var(--radius)));
+}
+.msg-row.user.anim-enter {
+  --bubble-clip-from: inset(0 0 0 100% round var(--bubble-radius, var(--radius)));
+}
 
 /* ===== 流式逐字渐显（v2.3.19） =====
    每个新输出的字固定 0.3s 渐显，速度不随模型输出快慢变化；
@@ -867,6 +901,11 @@ input[type='range']::-moz-range-thumb {
   justify-content: flex-start;
   margin-left: 0;
   margin-top: 4px;
+  /* v2.3.107 需求 3：本栏改为「仅在确为锚点时渲染」（此前常驻 DOM + .is-in 过渡，
+     会让每条消息都多占一行空位）。既然挂载即终态，过渡不会播，故改用挂载即播的关键帧
+     popupLinearIn（自上而下 6px 弹入，与菜单/面板同款），保持「弹出来」的观感。
+     时长与项目统一口径 calc(N * var(--anim-speed)) —— 受动效三档与分组开关控制。 */
+  animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
 .msg-resend-btn {
   display: inline-flex;
@@ -7012,400 +7051,6 @@ html[data-anim-off~='panel'] .msg-action-divider {
   color: #f4f4ff;
 }
 
-/* ============================================================================
-   液态玻璃主题（liquid）· v2.3.97 新增
-   ----------------------------------------------------------------------------
-   本段为本任务的**独占新增段落**，追加在文件末尾，不修改任何他人段落。
-   配套：src/theme/variables.css 的 [data-theme='liquid'] 块（32 个核心变量 + 11 个浮层令牌）。
-
-   ── 1. 背景「流动」动画 ────────────────────────────────────────────────
-   载体选择：`.app-root`（主窗）与 `.mini-shell`（小窗）的背景层。
-   方案：`background-position` 位移（不是伪元素位移）。
-     · 选它的理由：伪元素需要额外图层与 z-index 协调，而 .app-root /
-       .mini-shell 本来就因 transform:translateZ(0) 建立了独立合成层，
-       在其上做 background 位移动画最省事，且不会与任何浮层的 z-index 打架。
-     · background-size 必须 > 100%（这里 220%），否则渐变被拉伸铺满、
-       没有「可位移的余量」，动画会变成原地抖动。
-   为什么 `0%` 与 `100%` 声明值相同：
-     位移类动画若首尾状态不同，循环点会出现**跳变**（渐变瞬间弹回原位）。
-     本动画把 0%/100% 都声明为 `0% 0%`，并让 50% 走到 `100% 100%`，
-     于是每一轮都是「起点→对角→起点」的完整往返，首尾严格重合，无缝。
-   为什么周期 36s + linear：
-     · 36s 远长于 15s 阈值 —— 背景层不该抢注意力，低于 ~15s 会明显「躁动」；
-     · linear 保证往返两段速度一致，不会出现 ease-in-out 那种两端一顿一顿的
-       「呼吸泵」感（液体是匀质流动，不该有加减速）。
-   为什么注册进 animControl 的 theme 组：
-     它是**主题外观**的一部分（换主题就该换），与 .theme-card / body 同族；
-     且某些用户会觉得背景持续流动 distracting，需要一个能单独关掉的开关，
-     故同时提供 liquidFlow 独立开关（默认开）。
-   关掉后的兜底：`animation:none` 后元素退回**基态**——
-   基态是 `background-position: 0% 0%`（动画的 0% 声明值），
-   即「静止的第一帧」，背景照常可见，**不会变透明/不可见**。
-   ========================================================================== */
-@keyframes liquid-flow-drift {
-  0% {
-    background-position: 0% 0%;
-  }
-  50% {
-    background-position: 100% 100%;
-  }
-  100% {
-    background-position: 0% 0%;
-  }
-}
-/* 背景层本体：四色相柔和渐变，色标 alpha 压低（理由见 variables.css 文件头）。
-   background-size:220% 给出可位移余量；no-repeat 防拼接缝。
-   用 `background-image: var(--app-bg)` 而不是硬编码渐变 —— variables.css 的
-   --app-bg 就是这套渐变，而 ThemeContext 在用户自定义背景时会**覆盖** --app-bg。
-   这样写才能在「用户自定义背景图」时自动让位（见下方 data-liquid-custom-bg）。 */
-[data-theme='liquid'] .app-root,
-[data-theme='liquid'] .mini-shell {
-  background-image: var(--app-bg);
-  background-size: 220% 220%;
-  background-repeat: no-repeat;
-  animation: liquid-flow-drift 36s linear infinite;
-}
-/* 「液态流动」开关关掉 → 完全静止（不是暂停在首帧，那会让用户以为坏了）。
-   选择器同时命中主窗与小窗。data-liquid-flow 由 ThemeContext / MiniChat 挂载。 */
-[data-theme='liquid'][data-liquid-flow='off'] .app-root,
-[data-theme='liquid'][data-liquid-flow='off'] .mini-shell {
-  animation: none;
-  background-position: 0% 0%;
-}
-/* 用户自定义了背景色/图（data-liquid-custom-bg，由 ThemeContext 挂载）：
-   此时 --app-bg 已是 `url(...) center/cover no-repeat`，若继续跑 background-position
-   位移，等于让用户的照片在窗口里缓慢漂移。故停掉流动、按原样铺满显示。
-   （--app-bg 里的 center/cover 已自带尺寸与定位，故把 background-size 交还 auto。） */
-[data-theme='liquid'][data-liquid-custom-bg] .app-root,
-[data-theme='liquid'][data-liquid-custom-bg] .mini-shell {
-  animation: none;
-  background-size: auto;
-  background-repeat: no-repeat;
-  background-position: 0% 0%;
-}
-
-/* ── 2. deepening 覆盖块：半透明浮层提纯为近不透明 ────────────────────────
-   模式完全照抄 index.css:4765 的 glass deepening（16 个选择器），
-   底色换成与本主题蓝紫基调一致的深蓝紫（--liquid-overlay，alpha 0.90）。
-   为什么必须做：这些面板默认用 --color-panel（20% 半透明白），
-   在液态玻璃的多色高饱和流动背景上，文字会与穿过的高亮色斑打架。
-   模糊（backdrop-filter）不改变亮度关系，所以「加模糊」不能替代「加深底」。
-   注意：底色 alpha 取 0.90 而非 glass 的 0.88（值已收进 --liquid-overlay）——
-   本主题背景色斑饱和度更高，
-   需要更实一点才能把透过来的亮斑压到文字可读的范围。
-   v2.3.104 R2（§4.4 未适配面修复）：.ctx-menu / .obs-menu / .list-menu 三个菜单
-   原本用 --color-bg / --color-panel 半透明底，缺席本清单 —— 现一并纳入（共 19 面），
-   与 autoContrast.ts 的 WATCH_SELECTORS 注册表同步维护。 */
-[data-theme='liquid'] .more-dropdown,
-[data-theme='liquid'] .ctx-menu,
-[data-theme='liquid'] .obs-menu,
-[data-theme='liquid'] .list-menu,
-[data-theme='liquid'] .mention-pop,
-[data-theme='liquid'] .mini-drawer,
-[data-theme='liquid'] .modal-card,
-[data-theme='liquid'] .modal,
-[data-theme='liquid'] .error-bubble,
-[data-theme='liquid'] .reasoning-block,
-[data-theme='liquid'] .qps-queue,
-[data-theme='liquid'] .mini-toast,
-[data-theme='liquid'] .hint-tip,
-[data-theme='liquid'] .chat-model-picker,
-[data-theme='liquid'] .update-banner,
-[data-theme='liquid'] .queue-dock-handle,
-[data-theme='liquid'] .queue-dock-panel,
-[data-theme='liquid'] .api-params-panel,
-[data-theme='liquid'] .chat-model-picker-results {
-  background: var(--liquid-overlay) !important;
-  border-color: var(--liquid-overlay-border);
-}
-/* 选择器输入框：低透明白底 + 亮字（照抄 glass 同款做法换色相） */
-[data-theme='liquid'] .chat-model-picker-input {
-  background: var(--liquid-overlay-field) !important;
-  border-color: var(--liquid-overlay-field-border);
-  color: var(--liquid-overlay-text);
-}
-[data-theme='liquid'] .chat-model-picker-input::placeholder {
-  color: var(--liquid-overlay-text-dim);
-}
-[data-theme='liquid'] .chat-model-picker-empty {
-  color: var(--liquid-overlay-text-dim);
-}
-[data-theme='liquid'] .reasoning-block {
-  color: var(--liquid-overlay-text-strong);
-}
-[data-theme='liquid'] .reasoning-body {
-  color: var(--liquid-overlay-text-body);
-}
-[data-theme='liquid'] .mention-pop .item:hover,
-[data-theme='liquid'] .more-dropdown .tool-btn:hover,
-[data-theme='liquid'] .mini-drawer-item:hover,
-[data-theme='liquid'] .qps-queue .qps-cancel:hover {
-  background: var(--liquid-overlay-hover);
-}
-/* 拖放提示浮层（同 glass deepening 的第二处，一并提纯） */
-[data-theme='liquid'] .drop-hint,
-[data-theme='liquid'] .quick-import-card {
-  background: var(--liquid-overlay) !important;
-  border-color: var(--liquid-overlay-border-strong);
-  color: var(--liquid-overlay-text);
-}
-/* 场景图状态条：glass 主题已有同类兜底（index.css:1037），本主题复制一份。
-   直接 color-mix 到 --color-panel 会把浅色文字的对比度稀释到 AA 以下，
-   故底色直接给不透明的深蓝紫。 */
-[data-theme='liquid'] .scene-image-bar {
-  /* var() 不带 fallback：--color-primary 在 [data-theme='liquid'] 块里必定已定义，
-     写 fallback 反而会在此处留下硬编码色值字面量（违反「颜色一律走变量」的铁律）。*/
-  background: color-mix(in srgb, var(--color-primary) 8%, var(--liquid-bar-base));
-  border-color: color-mix(in srgb, var(--color-primary) 42%, transparent);
-}
-/* 悬浮球（独立文档，floating-ball.ts 注入自己的样式；此处补 liquid 分支，
-   与该文件里 [data-theme='glass'] 的三处加深同款做法） */
-[data-theme='liquid'] .fb-ctx {
-  background: var(--liquid-overlay);
-  border-color: var(--liquid-overlay-border-strong);
-}
-
-/* ── 3. 半透明承载面上的小字：禁用 secondary，改用 --color-text + 字号/字重 ──
-   依据：index.css:978-979 已定的方案（v2.3.81）。半透明底上的浅灰 secondary
-   （经典微信主题用的是中灰）合成后普遍只有 3.0~4.4:1，低于 AA。
-   这里覆盖本主题里所有「小字 + 承载面为半透明」的常见元素。 */
-[data-theme='liquid'] .msg-meta,
-[data-theme='liquid'] .scene-image-sub {
-  color: var(--color-text);
-}
-[data-theme='liquid'] .msg-meta {
-  font-weight: 500;
-}
-[data-theme='liquid'] .narration,
-[data-theme='liquid'] .psyche {
-  color: var(--color-text);
-  font-weight: 500;
-}
-
-/* ── 4. v2.3.103 需求 3：液态玻璃观感增强 ───────────────────────────────────────
-   全部色值走 variables.css 的 --liquid-* 变量（项目铁律：index.css 不写死色值、注释也不含 #hex）。
-   仅作用于 [data-theme='liquid']，其余 14 套主题零回归；不改变任何承载面令牌，对比度与既有基线一致。 ── */
-
-/* 4a. 玻璃面（导航层/浮层）：细淡玻璃描边 + 镜面高光线 + 底部折射暗缘 + 弥散阴影（大面板分级）
-   v2.3.104 R2（Apple Liquid Glass 对齐，要素1/2/3/4/8）：
-   · 内容层 .main-pane/.list-pane/.panel 从本组移除，改投下方 4a-2「内容层标准材质」规则（要素8 分层原则）；
-   · box-shadow 升级为 specular（顶部镜面线）+ refract（底部折射暗缘+内圈暗缘）+ shadow-lg（大面板材质厚度）；
-   · backdrop-filter 换用 --liquid-backdrop（blur 30px + saturate 1.6，要素3 —— 缺 saturate 是「不像苹果」主因）。 */
-[data-theme='liquid'] .modal,
-[data-theme='liquid'] .modal-card,
-[data-theme='liquid'] .role-card,
-[data-theme='liquid'] .theme-card,
-[data-theme='liquid'] .sidebar,
-[data-theme='liquid'] .more-dropdown,
-[data-theme='liquid'] .mention-pop,
-[data-theme='liquid'] .mini-drawer,
-[data-theme='liquid'] .chat-model-picker,
-[data-theme='liquid'] .queue-dock-panel,
-[data-theme='liquid'] .api-params-panel,
-[data-theme='liquid'] .update-banner,
-[data-theme='liquid'] .fb-ctx {
-  border: 1px solid var(--liquid-edge);
-  box-shadow: var(--liquid-specular), var(--liquid-refract), var(--liquid-shadow-lg), var(--liquid-highlight);
-  backdrop-filter: var(--liquid-backdrop);
-  -webkit-backdrop-filter: var(--liquid-backdrop);
-}
-
-/* 4a-1. 小浮层菜单玻璃组：.ctx-menu / .obs-menu / .list-menu 三步修复之二（§4.4）。
-   玻璃描边 + specular/refract + 小号分级阴影（shadow-sm，尺寸决定材质厚度）+ saturate 透底。
-   三步之一（deepening 加深底）见上方 deepening 块；之三（4e springy）本就覆盖这三个选择器。 */
-[data-theme='liquid'] .ctx-menu,
-[data-theme='liquid'] .obs-menu,
-[data-theme='liquid'] .list-menu {
-  border: 1px solid var(--liquid-edge);
-  box-shadow: var(--liquid-specular), var(--liquid-refract), var(--liquid-shadow-sm), var(--liquid-highlight);
-  backdrop-filter: var(--liquid-backdrop);
-  -webkit-backdrop-filter: var(--liquid-backdrop);
-}
-
-/* 4a-2. 内容层标准材质（§4.3 去玻璃化，HIG 要素8「玻璃只用于导航层」）：
-   更实的内容底（--liquid-content-bg）+ 轻 blur（--liquid-content-backdrop）+ 无 specular/refract。
-   正文区降饱和提可读性，玻璃感集中在浮层/导航/按钮；聊天气泡（.bubble）本就素净，不动。 */
-[data-theme='liquid'] .main-pane,
-[data-theme='liquid'] .list-pane,
-[data-theme='liquid'] .panel {
-  background: var(--liquid-content-bg);
-  backdrop-filter: var(--liquid-content-backdrop);
-  -webkit-backdrop-filter: var(--liquid-content-backdrop);
-  border: 1px solid var(--color-border);
-  box-shadow: none;
-}
-
-/* v2.3.105：主题预览卡（.theme-card）在本主题下补一层「卡片底」。
-   动机有二：
-     ① 观感：.theme-card 基态**没有 background**（仅 2px 边框），在本主题深色渐变上
-        呈现为「一堆悬空描边框」，与液态玻璃的材质语言脱节，观感脏乱。
-     ② 可读性/稳定性：透明底会让 autoContrast 看门狗把它判成需干预的面；
-        补上不透明卡片底后，卡片自身即成稳定承载面，文字对比度不再随背景漂移浮动。
-   用 --liquid-content-bg（同内容层材质，alpha 0.78）而非纯白，保证 14 主题观感统一、
-   且浅色文字在其上仍 ≥ 4.5:1。 */
-[data-theme='liquid'] .theme-card {
-  background: var(--liquid-content-bg);
-}
-
-/* 4b. 输入框：同样玻璃描边 + 顶部高光；聚焦时叠加主色描边光环 */
-[data-theme='liquid'] input,
-[data-theme='liquid'] textarea,
-[data-theme='liquid'] select {
-  border: 1px solid var(--liquid-edge);
-  box-shadow: var(--liquid-highlight);
-  transition: border-color var(--transition), box-shadow calc(0.2s * var(--anim-speed)) ease;
-}
-[data-theme='liquid'] input:focus,
-[data-theme='liquid'] textarea:focus,
-[data-theme='liquid'] select:focus {
-  box-shadow: var(--liquid-highlight), 0 0 0 3px var(--color-primary);
-}
-
-/* 4c. 按钮果冻液态质感：:active 轻微 scale(0.96) + 内陷阴影（点击凹陷）；
-   hover 时浅色高光光斑沿表面缓慢流动（transition 驱动的单向扫光，anim-off 下只是没有流动、控件仍可见）。 */
-[data-theme='liquid'] .btn-primary,
-[data-theme='liquid'] .btn-ghost,
-[data-theme='liquid'] .btn-danger,
-[data-theme='liquid'] .ctb-btn,
-[data-theme='liquid'] .tool-btn,
-[data-theme='liquid'] .mini-btn {
-  position: relative;
-  overflow: hidden;
-  border: 1px solid var(--liquid-edge);
-  box-shadow: var(--liquid-highlight);
-  transition: transform calc(0.12s * var(--anim-speed)) cubic-bezier(.34, 1.56, .64, 1),
-              box-shadow calc(0.2s * var(--anim-speed)) ease,
-              background var(--transition),
-              opacity var(--transition);
-}
-[data-theme='liquid'] .btn-primary:active,
-[data-theme='liquid'] .btn-ghost:active,
-[data-theme='liquid'] .btn-danger:active,
-[data-theme='liquid'] .ctb-btn:active,
-[data-theme='liquid'] .tool-btn:active,
-[data-theme='liquid'] .mini-btn:active {
-  transform: scale(0.96);
-  box-shadow: var(--liquid-press);
-}
-[data-theme='liquid'] .btn-primary::before,
-[data-theme='liquid'] .btn-ghost::before,
-[data-theme='liquid'] .btn-danger::before,
-[data-theme='liquid'] .ctb-btn::before,
-[data-theme='liquid'] .tool-btn::before,
-[data-theme='liquid'] .mini-btn::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: var(--liquid-btn-sheen);
-  background-size: 250% 100%;
-  background-position: 150% 0;
-  opacity: 0;
-  pointer-events: none;
-  transition: background-position calc(1.4s * var(--anim-speed)) linear,
-              opacity calc(0.25s * var(--anim-speed)) ease;
-}
-[data-theme='liquid'] .btn-primary:hover::before,
-[data-theme='liquid'] .btn-ghost:hover::before,
-[data-theme='liquid'] .btn-danger:hover::before,
-[data-theme='liquid'] .ctb-btn:hover::before,
-[data-theme='liquid'] .tool-btn:hover::before,
-[data-theme='liquid'] .mini-btn:hover::before {
-  background-position: -120% 0;
-  opacity: 1;
-}
-
-/* 4c-2. 面板级 hover 扫光（v2.3.104 R2，要素2「镜面高光响应运动」的面板级扩展）：
-   模式照抄 4c 按钮扫光（::before 斜向光带 + background-position 位移），光带换 --liquid-sheen-panel。
-   仅覆盖已定位（absolute/fixed，CSS 或 inline 均已存在，此处不再另设 position 以免
-   以更高优先级覆盖既有定位）的浮层面板，::before 的 absolute 以面板自身为包含块，不影响布局；
-   pointer-events:none 不拦截点击。transition 走 --anim-speed 缩放；
-   .anim-off 全局门禁下只是没有扫光，面板照常可见（与 4c 同一兜底语义）。 */
-[data-theme='liquid'] .more-dropdown::before,
-[data-theme='liquid'] .mention-pop::before,
-[data-theme='liquid'] .mini-drawer::before,
-[data-theme='liquid'] .chat-model-picker::before,
-[data-theme='liquid'] .ctx-menu::before,
-[data-theme='liquid'] .obs-menu::before,
-[data-theme='liquid'] .list-menu::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: var(--liquid-sheen-panel);
-  background-size: 250% 100%;
-  background-position: 150% 0;
-  opacity: 0;
-  pointer-events: none;
-  transition: background-position calc(1.4s * var(--anim-speed)) linear,
-              opacity calc(0.25s * var(--anim-speed)) ease;
-}
-[data-theme='liquid'] .more-dropdown:hover::before,
-[data-theme='liquid'] .mention-pop:hover::before,
-[data-theme='liquid'] .mini-drawer:hover::before,
-[data-theme='liquid'] .chat-model-picker:hover::before,
-[data-theme='liquid'] .ctx-menu:hover::before,
-[data-theme='liquid'] .obs-menu:hover::before,
-[data-theme='liquid'] .list-menu:hover::before {
-  background-position: -120% 0;
-  opacity: 1;
-}
-
-/* 4d. 半透明细款滚动条（宽 7px、浅蓝半透明，hover 略增亮） */
-[data-theme='liquid'] ::-webkit-scrollbar {
-  width: 7px;
-  height: 7px;
-}
-[data-theme='liquid'] ::-webkit-scrollbar-thumb {
-  background: var(--liquid-edge);
-  border-radius: 4px;
-}
-[data-theme='liquid'] ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-hover);
-}
-[data-theme='liquid'] * {
-  scrollbar-width: thin;
-  scrollbar-color: var(--liquid-edge) transparent;
-}
-
-/* 4e. 弹窗/下拉/右键菜单：果冻弹性回弹（springy bezier 替代生硬 linear）。
-   仅覆盖 timing-function，基态（动画结束/未触发）仍是正常可见的静态样式；
-   anim-off 下 animation 被门禁置 none，元素照常可见，只是没有弹性。 */
-[data-theme='liquid'] .modal,
-[data-theme='liquid'] .modal-card,
-[data-theme='liquid'] .more-dropdown,
-[data-theme='liquid'] .mention-pop,
-[data-theme='liquid'] .mini-drawer,
-[data-theme='liquid'] .chat-model-picker,
-[data-theme='liquid'] .ctx-menu,
-[data-theme='liquid'] .obs-menu,
-[data-theme='liquid'] .select-menu-panel,
-[data-theme='liquid'] .list-menu,
-[data-theme='liquid'] .more-dropdown.leaving,
-[data-theme='liquid'] .mini-drawer.leaving,
-[data-theme='liquid'] .chat-model-picker.leaving,
-[data-theme='liquid'] .list-menu.leaving {
-  animation-timing-function: cubic-bezier(.34, 1.56, .64, 1);
-}
-
-/* 4f. 环境溢色（v2.3.104 R2，要素6，P1）：大面板背景追加低强度主色 radial 柔光层。
-   deepening 用的是 background 简写（会重置 background-image），故这里以同优先级、
-   更后位置 + !important 只覆盖 background-image 长手 —— 深色底保留、柔光层叠在其上。 */
-[data-theme='liquid'] .modal,
-[data-theme='liquid'] .modal-card,
-[data-theme='liquid'] .mini-drawer,
-[data-theme='liquid'] .queue-dock-panel,
-[data-theme='liquid'] .api-params-panel {
-  background-image: var(--liquid-ambient) !important;
-}
-
-/* 4g. 滚动边缘效果（v2.3.104 R2，要素10，P1）：聊天滚动区上下缘 mask 渐隐，
-   内容从「导航层下方」滚入的 Apple 观感。挂在滚动区外层容器（.messages / .mini-messages，
-   overflow:hidden 且不随内容滚动，见 .has-chat-bg 注释），mask 才能固定在视口边缘；
-   若挂在滚动内容层，mask 会随内容滚走而失效。渐变形状来自 --liquid-scroll-fade。 */
-[data-theme='liquid'] .messages,
-[data-theme='liquid'] .mini-messages {
-  -webkit-mask-image: var(--liquid-scroll-fade);
-  mask-image: var(--liquid-scroll-fade);
-}
 
 /* ── 5. auto-contrast 看门狗 CSS 消费端（§4.6，v2.3.104）───────────────────
    T01 的 src/utils/autoContrast.ts 在 glass/liquid 两主题下，对对比度不足的玻璃承载面
@@ -7415,15 +7060,6 @@ html[data-anim-off~='panel'] .msg-action-divider {
    与未来兼容仍用「同色渐变叠层」写法 —— linear-gradient(same,same) 叠在 background-color
    之上，视觉效果等价于叠加一层 scrim）。!important 用于压过 deepening 的 background 简写
    （同优先级下本组位置更后，且 flip 需要清掉 4f 的 ambient 图层）。 */
-[data-theme='liquid'] [data-auto-contrast='boost'] {
-  background-color: var(--liquid-overlay) !important;
-  background-image: linear-gradient(var(--auto-contrast-scrim), var(--auto-contrast-scrim)) !important;
-}
-[data-theme='liquid'] [data-auto-contrast='flip'] {
-  background-color: var(--auto-contrast-flip-bg) !important;
-  background-image: none !important;
-  color: var(--auto-contrast-flip-text) !important;
-}
 /* glass 主题同构一份（用户原话：毛玻璃同样要自适应）；glass 基底色多样，
    boost 只叠 scrim 层、不动 background-color，保留各面原有底色。 */
 [data-theme='glass'] [data-auto-contrast='boost'] {

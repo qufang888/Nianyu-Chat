@@ -189,11 +189,16 @@ section('G2 现有 rollbackMessages 调用点未被污染');
   }
   for (const s of sites) console.log(`   · ${s.file}:${s.line}  args=${s.args}  ${s.text.slice(0, 76)}`);
   const over4 = sites.filter((s) => s.args > 4);
-  check('G2.1 恰有 1 个调用点传了 keepAnchor（第 5 实参）', over4.length === 1,
+  // v2.3.107 需求 4：改写(rewrite)分支新增了一个 5 实参调用点（withStoryNodes=true，keepAnchor=false），
+  // 故合法调用点现为 2 个：regenerateReply(..., fromUserMsgId, true, true) 与 rewrite(..., last.id, true, false)。
+  check('G2.1 恰有 2 个调用点传第 5 实参（regenerateReply + rewrite，均为需求①/③/④ 显式引入）', over4.length === 2,
     `实为 ${over4.length} 个：${over4.map((s) => s.file + ':' + s.line).join(', ')}`);
-  check('G2.2 该调用点实参为 (..., fromUserMsgId, true, true)',
-    over4.length === 1 && /fromUserMsgId\s*,\s*true\s*,\s*true/.test(over4[0].text),
-    over4.length === 1 ? over4[0].text : '');
+  check('G2.2 regenerateReply 调用点为 (..., fromUserMsgId, true, true)（保留锚点 + 连带删节点）',
+    over4.some((s) => /fromUserMsgId\s*,\s*true\s*,\s*true/.test(s.text)),
+    over4.map((s) => s.text).join(' | '));
+  check('G2.2b rewrite 调用点为 (..., last.id, true, false)（删原 AI 消息、不保留锚点、连带删节点）',
+    over4.some((s) => /last\.id\s*,\s*true\s*,\s*false/.test(s.text)),
+    over4.map((s) => s.text).join(' | '));
   const othersLe4 = sites.filter((s) => !over4.includes(s)).every((s) => s.args <= 4);
   check('G2.3 其余调用点实参数 ≤ 4（均未传 keepAnchor，普通回滚/修改重发行为不变）', othersLe4,
     sites.filter((s) => !over4.includes(s) && s.args > 4).map((s) => `${s.file}:${s.line}`).join(', '));

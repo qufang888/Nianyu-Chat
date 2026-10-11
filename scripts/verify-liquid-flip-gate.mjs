@@ -95,10 +95,10 @@ ok(
   'C4 判级签名含 allowFlip（布局变化后不会残留旧 flip 属性）'
 );
 
-console.log('\n=== D. CSS 侧 flip 规则保留（浮层仍需翻转保底）===');
+console.log('\n=== D. liquid flip 规则已随主题删除（v2.3.107 需求 7 删净护栏）===');
 ok(
-  /\[data-theme='liquid'\] \[data-auto-contrast='flip'\]/.test(css),
-  "D1 liquid flip 规则仍存在"
+  !/\[data-theme='liquid'\] \[data-auto-contrast='flip'\]/.test(css),
+  "D1 liquid flip 规则已不存在（主题已删，不再是漏删的死规则）"
 );
 ok(
   /\[data-theme='glass'\] \[data-auto-contrast='flip'\]/.test(css),
@@ -109,13 +109,9 @@ ok(
   'D3 flip 规则把文字改写为 flip-text（浅底深字，保证浮层可读）'
 );
 
-console.log('\n=== E. liquid 主题卡有独立深色卡片底 ===');
+console.log('\n=== E. liquid 主题卡规则已删除（v2.3.107 需求 7 删净护栏）===');
 const cardBlock = css.match(/\[data-theme='liquid'\] \.theme-card\s*\{([\s\S]*?)\}/);
-ok(!!cardBlock, 'E1 存在 [data-theme=\'liquid\'] .theme-card 规则');
-ok(
-  !!cardBlock && /background:\s*var\(--liquid-content-bg\)/.test(cardBlock[1]),
-  'E2 liquid .theme-card 显式给了 background（不再透明悬空）'
-);
+ok(!cardBlock, 'E1 [data-theme=\'liquid\'] .theme-card 规则已不存在（liquid 主题已删）');
 
 console.log('\n=== F. flip 令牌仍为浅底 + 深字 ===');
 ok(

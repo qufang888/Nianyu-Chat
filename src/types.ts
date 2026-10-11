@@ -751,9 +751,11 @@ export interface AppSettings {
   glassTint?: string; // 色调：玻璃承载面染色（CSS 颜色），空=近白（#ffffff）；与下方不透明度合成半透明面板
   glassOpacity?: number; // 不透明度：玻璃面板透明度（0~100，百分比），空/缺省=20（与 variables.css 默认 --color-panel alpha 一致）
   glassBlur?: number; // 模糊度：毛玻璃 backdrop-filter 模糊半径（px），空/缺省=30（与 variables.css 默认 --blur 一致）
-  // ===== 液态玻璃主题（liquid）专属（v2.3.97）=====
+  // ===== 液态玻璃主题（liquid）专属（v2.3.97，v2.3.107 起仅作兼容残留）=====
   // 背景缓慢流动动画开关。留空 / true = 流动（默认）；false = 静止。
   // 实现见 ThemeContext（挂 html[data-liquid-flow="off"]）与 index.css 的 liquid-flow-drift。
+  // v2.3.107 需求 7：液态玻璃主题已删除、对应 UI 开关已移除；此字段仅保留以兼容老持久化数据
+  // （读盘层会按 theme 迁移处理，UI 不再渲染该开关）。
   liquidFlow?: boolean;
   enableRandomEvents: boolean; // 随机事件：开启后聊天过程中会自动弹出随机事件（关闭则仅手动触发）
   // ===== 空闲主动回复 =====
@@ -898,6 +900,9 @@ export type ThemeName =
   | 'indigo'
   | 'sand'
   // v2.3.97：液态玻璃（第 15 套主题）。半透明 + 多色渐变，背景带缓慢流动动画。
+  // v2.3.107 需求 7：该主题已整体删除（THEMES 不再收录、variables.css 的 [data-theme='liquid'] 段已删）。
+  // 此处仅保留 'liquid' 作为类型兼容残留：老用户持久化数据可能仍带 theme==='liquid'，
+  // 读盘层（electron/db.ts loadSettings）已单向迁移为 'glass' 并落盘，故运行时不会真正进入该分支。
   | 'liquid';
 
 // v2.3.44：model 一律留空（不预填模型名，由用户手填或从「刷新模型列表」选取）；

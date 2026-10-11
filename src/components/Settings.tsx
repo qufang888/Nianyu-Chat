@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../ipc';
 import { useTheme } from '../theme/ThemeContext';
 import { useI18n } from '../i18n/I18nContext';
@@ -66,7 +66,7 @@ import ImagePickGuide from './ImagePickGuide';
 import SelectMenu from './SelectMenu';
 import ComboBox from './ComboBox';
 import SearchSuggest from './SearchSuggest';
-import { MAX_SUGGESTIONS, suggest, suggestWithCount } from '../utils/fuzzySearch';
+import { MAX_SUGGESTIONS } from '../utils/fuzzySearch';
 import {
   INACTIVE_DAYS_DEFAULT,
   INACTIVE_DAYS_MAX,
@@ -92,8 +92,9 @@ export const THEMES: { key: ThemeName; nameKey: string; swatch: string }[] = [
   { key: 'graphite', nameKey: 'theme.graphite', swatch: 'linear-gradient(135deg,#7a869a,#a0abc0)' },
   { key: 'indigo', nameKey: 'theme.indigo', swatch: 'linear-gradient(135deg,#255b9c,#3d78c2)' },
   { key: 'sand', nameKey: 'theme.sand', swatch: 'linear-gradient(135deg,#a16f49,#c89468)' },
-  // v2.3.97：液态玻璃。swatch 用四色相渐变，呼应 variables.css 里的实际配色
-  { key: 'liquid', nameKey: 'theme.liquid', swatch: 'linear-gradient(135deg,#0c2a44,#162c5c,#342260,#58265c)' },
+  // v2.3.107 需求 7：液态玻璃（liquid）主题已按用户要求**整体删除**
+  //（THEMES 不再收录 → 不可选；index.css / variables.css 的 liquid 段落已删除；
+  //  液态流动 liquidFlow 等相关设置一并移除）。
 ];
 
 // 设置分类区块（左侧导航 + 右侧分组），顺序即展示顺序
@@ -136,7 +137,8 @@ const ADVANCED_ANCHORS: Record<string, string> = {
   'sec-glassbg': 'adv-appearance',
   // 扩展与工具
   'sec-translation': 'adv-extensions',
-  'sec-sound': 'adv-extensions',
+  // v2.3.107 需求 7：'sec-sound' 已移出折叠区、恢复为直接可见，故不再登记（否则 goToSetting
+  // 会以为它还在折叠区里、先行展开一个并不包含它的折叠区）。
   // 窗口与系统
   'sec-debug': 'adv-window',
   'sec-datapath': 'adv-window',
@@ -249,7 +251,7 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   // document.getElementById 返回 null，表现为「搜到了但点了没反应」，且无任何提示（静默失败）。
   // 现在改为**完全交给动态索引规则⑤（.section-title[id]）**：条件为真时它自然出现在候选里，
   // 条件为假时索引里根本没有这条，不会再产生死条目。
-  // v2.3.105：毛玻璃 / 液态玻璃专属细化控件（带稳定 id，条件渲染仅 glass/frost/liquid 主题出现）。
+  // v2.3.105：毛玻璃（glass）/ frost 专属细化控件（带稳定 id，条件渲染仅 glass/frost 主题出现）。
   // 静态登记 + 关键词，确保「色调 / 不透明度 / 模糊度」可被中英文搜到；非对应主题下 DOM 不存在，
   // 由 buildDynamicIndex 的 staticAlive 过滤自动剔除，不会产生死条目。
   { id: 'sec-glass-tint', key: 'settings.glassTint', kw: ['色调', '色相', '染色', '玻璃色调', '液态玻璃色调', '毛玻璃色调', 'tint', 'hue', 'glass tint'] },
@@ -257,10 +259,8 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-glass-blur', key: 'settings.glassBlur', kw: ['模糊', '模糊度', '磨砂', '毛玻璃模糊', 'blur', 'frost blur', '磨砂模糊度'] },
   { id: 'sec-debug', key: 'settings.debugMode', kw: ['调试', '测试', 'debug', '快照', '错误报告', '手动触发', '触发'] },
   { id: 'sec-sceneimage', key: 'settings.sceneImage', kw: ['场景图', 'scene', '配图'] },
-  // v2.3.97 补：生成与扩展分类的「语音/生图/生视频已移至模型设置」引导卡。
-  // 该分类在 v2.3.94 搬走四类服务表单后只剩这张卡，用户点进来会觉得「分类空了/失效」，
-  // 故给它一个可被搜到的名字（旧静态表漏收，导致「已移到模型设置」这句话搜不到）。
-  { id: 'sec-mediastub', key: 'settings.genMovedTitle', kw: ['生成', '扩展', '已移至模型设置', '语音配置', '生图配置', '生视频配置', 'generation', 'extension'] },
+  // v2.3.107 需求 5：原 `sec-mediastub`（「语音与生图服务」跳转卡）已被删除，
+  // 对应的静态搜索条目一并移除（否则会变成指向不存在 DOM 的死条目）。
   { id: 'sec-websearch', key: 'settings.webSearch', kw: ['联网', '搜索', 'web', 'search', '联网搜索'] },
   { id: 'sec-plugins', key: 'settings.plugins', kw: ['插件', 'plugin', '扩展'] },
   { id: 'sec-skills', key: 'skill.title', kw: ['技能', 'skill', '技能包', 'skill.md', '说明书', '注入'] },
@@ -964,17 +964,13 @@ export const Settings: React.FC<{
     if (!draftReady) return;
     buildDynamicIndex();
   }, [lang, draftReady, buildDynamicIndex]);
-  // 需求 12：设置搜索改走 fuzzySearch（模糊匹配 + 相关度排序），最多 5 个候选。
-  // 旧实现是自研的 startsWith/includes 打分，只能做「前缀/包含」匹配，
-  // 搜「语音」找不到「朗读与语音」、搜「ms」找不到「Mini」，与全局搜索规范不一致。
-  const searchHit = useMemo(
-    () =>
-      searchQ.trim()
-        ? suggestWithCount(searchQ, searchIndex, (item) => ({ label: t(item.key), keywords: item.kw }), MAX_SUGGESTIONS)
-        : { items: [] as SettingSearchItem[], total: 0 },
-    [searchQ, lang, searchIndex]
-  );
-  const searchResults = searchHit.items;
+  // v2.3.107 修复：设置搜索此前**完全搜不到任何东西**（用户实测「什么都没用」）。
+  // 根因：候选面板 SearchSuggest 收到的候选是 `{id,key,kw,sub}` 结构，**没有 `label` 字段**，
+  // 而调用方**没有传 `getText`** —— 组件内部退化为「把候选对象本身当作 {label}」，
+  // 于是每一项的可搜索文本都成了 `String({...})` = `"[object Object]"`，任何查询都 0 命中。
+  //（同时父层还把结果预截断到 5 条，等于「先正确排完又丢掉、再交给面板用错的字段排一遍」。）
+  // 修法：**把完整候选集交给 SearchSuggest，并显式传 getText** —— 排序/截断/滚动全部由
+  // 唯一真源组件内部完成（符合「最多 5 行 + 滚动条看其余」的铁律）。
 
   // 按关键字（多词）高亮标题
   const renderSearchHL = (label: string, q: string): React.ReactNode => {
@@ -1079,12 +1075,11 @@ export const Settings: React.FC<{
     PROVIDER_DEFAULTS[p as keyof typeof PROVIDER_DEFAULTS]?.label || p;
 
   // ===== 模型管理页搜索：匹配 名称 / 模型 ID / 提供方 / 标签 / 分组名 / BaseURL =====
-  // 需求 12：走 fuzzySearch 统一规范（模糊 + 相关度排序 + 最多 5 个候选）。
-  // 名称作主文本（决定档位与排序），其余字段作 keywords（同档排序时降权）。
-  const modelSearchResults = (() => {
-    if (!modelSearchQ.trim()) return [] as typeof draft.models;
+  // v2.3.107：改为把**完整模型列表**交给 SearchSuggest，由它内部排序/截断（与设置搜索同口径）。
+  // 必须显式提供 getText —— 模型对象没有 label 字段，不传会导致面板 0 命中（与设置搜索同一根因）。
+  const modelText = (m: (typeof draft.models)[number]) => {
     const groups = draft?.modelGroups || [];
-    return suggest(modelSearchQ, draft?.models || [], (m) => ({
+    return {
       label: m.name,
       keywords: [
         m.model,
@@ -1092,9 +1087,9 @@ export const Settings: React.FC<{
         ...(m.tags || []),
         ...(m.groupIds || []).map((gid) => groups.find((g) => g.id === gid)?.name || '').filter(Boolean),
         m.baseUrl || '',
-      ].filter(Boolean),
-    }), MAX_SUGGESTIONS);
-  })();
+      ].filter(Boolean) as string[],
+    };
+  };
   // 点击搜索结果：滚动到对应模型卡片并高亮闪动。
   // v2.3.102 需求 4：统一走 flashElement（1s×5 = 5000ms，与 .model-flash 的 flashPulse 严格配对）；
   // 旧实现写死 3200ms，与 CSS 动画时长不一致，会导致类残留 / 提前移除。
@@ -1694,11 +1689,14 @@ export const Settings: React.FC<{
               <SearchSuggest
                 open={showSuggest}
                 query={searchQ}
-                items={searchResults}
+                items={searchIndex}
                 max={MAX_SUGGESTIONS}
                 anchorRef={searchInputRef}
                 emptyHint={t('settings.searchEmpty')}
                 itemKey={(r) => r.id}
+                // v2.3.107：必须显式传 getText —— 设置项没有 label 字段（是 key/kw），
+                // 不传会让面板把每项算成 "[object Object]" → 0 命中（本次修复的根因）。
+                getText={(r) => ({ label: t(r.key), keywords: r.kw })}
                 renderItem={(r, ctx) => renderSearchHL(t(r.key), ctx.query)}
                 onPick={(r) => goToSetting(r.id, r.sub)}
                 onClose={() => setShowSuggest(false)}
@@ -1732,11 +1730,13 @@ export const Settings: React.FC<{
             <SearchSuggest
               open={modelSuggestOpen}
               query={modelSearchQ}
-              items={modelSearchResults}
+              items={draft.models || []}
               max={MAX_SUGGESTIONS}
               anchorRef={modelSearchInputRef}
               emptyHint={t('models.searchEmpty')}
               itemKey={(m) => m.id}
+              // v2.3.107：显式 getText（模型对象无 label 字段，不传则 0 命中 —— 与设置搜索同一根因）
+              getText={modelText}
               renderItem={(m, ctx) =>
                 renderSearchHL(`${m.name} · ${providerLabel(m.provider)} · ${m.model}`, ctx.query)
               }
@@ -2043,26 +2043,6 @@ export const Settings: React.FC<{
             </div>
           ))}
         </div>
-
-        {/* ===== v2.3.105：背景取色染色开关（dyeFromBackground）=====
-            改为「液态玻璃(liquid)专属」：仅当主题为 liquid 时显示（其余主题天然回退主题默认主色，
-            见 ChatWindow.tsx / MiniChat.tsx 的 theme==='liquid' 守卫）。
-            聊天设了背景时，界面主题色取自背景主体色；关闭后始终使用主题自带主色。
-            默认开启（settings.dyeFromBackground 缺省 true）。原生 <input type="checkbox">，被搜索索引规则①自动收录。 */}
-        {theme === 'liquid' && (
-          <label
-            style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, cursor: 'pointer', maxWidth: 420 }}
-          >
-            <input
-              type="checkbox"
-              checked={draft.dyeFromBackground !== false}
-              onChange={(e) => patch({ dyeFromBackground: e.target.checked })}
-              style={{ width: 15, height: 15, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
-            />
-            <span style={{ fontSize: 13 }}>{t('settings.dyeFromBackground')}</span>
-            <Hint text={t('settings.dyeFromBackgroundDesc')} />
-          </label>
-        )}
 
         {/* ===== UI 圆角 ===== */}
         <div id="sec-radius" className="section-title">{t('settings.radius')}<Hint text={t('settings.radiusDesc')} /></div>
@@ -2602,11 +2582,11 @@ export const Settings: React.FC<{
           )}
         </div>
 
-        {/* ===== 毛玻璃主题背景（仅 glass/frost/liquid 主题生效，未开启时隐藏） =====
-            v2.3.97：新增 liquid（液态玻璃）。它与 glass/frost 同属「半透明 + 磨砂」
-            家族，同样需要「自定义背景色/图」与聊天区文字色覆盖，故一并开放该面板。
-            面板底部另加「液态流动」开关（liquidFlow），控制背景的缓慢流动动画。 */}
-        {(theme === 'glass' || theme === 'frost' || theme === 'liquid') && (
+        {/* ===== 毛玻璃主题背景（仅 glass/frost 主题生效，未开启时隐藏） =====
+            v2.3.97：glass / frost 同属「半透明 + 磨砂」家族，需要「自定义背景色/图」
+            与聊天区文字色覆盖，故开放该面板。
+            v2.3.107 需求 7：液态玻璃（liquid）主题已整体删除，相关开关（液态流动 / 背景取色染色）一并移除。 */}
+        {(theme === 'glass' || theme === 'frost') && (
           <>
             <div id="sec-glassbg" className="section-title" style={{ marginTop: 16 }}>{t('settings.glassBg')}<Hint text={t('settings.glassBgDesc')} /></div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
@@ -2728,35 +2708,12 @@ export const Settings: React.FC<{
                   onClick={() => patch({ glassTokenText: '', glassTokenBorder: '', glassBubbleUserText: '', glassBubbleAiText: '', glassBubbleBorder: '' })}
                 >{t('settings.glassColorReset')}</button>
               </div>
-              {/* v2.3.97：液态玻璃（liquid）专属 —— 「液态流动」开关。
-                  背景的缓慢流动是 @keyframes 动画（见 index.css 的 liquid-flow-drift），
-                  有人会觉得持续动 distracting，故给独立开关。
-                  写入 settings.liquidFlow=false 时由 ThemeContext 挂
-                  `html[data-liquid-flow="off"]`，CSS 侧直接 animation:none（不是把动画
-                  「暂停在首帧」——暂停在首帧等于一张静止的图，用户会以为功能坏了）。
-                  注：该开关与「高级动画控制」三档是**两个独立维度**：动效总开关关掉时
-                  流动也会停（.anim-off * 的 animation:none !important 覆盖一切），
-                  但本开关只管流动、不影响其他动效，故仍需单独存在。 */}
-              {theme === 'liquid' && (
-                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={draft.liquidFlow !== false}
-                      onChange={(e) => patch({ liquidFlow: e.target.checked })}
-                      style={{ width: 15, height: 15, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
-                    />
-                    <span style={{ fontSize: 13 }}>{t('settings.liquidFlow')}</span>
-                    <Hint text={t('settings.liquidFlowDesc')} />
-                  </label>
-                </div>
-              )}
-              {/* v2.3.104：「自动对比度调节」开关（glass / liquid 主题生效）。
-                  可读性兜底功能（非动画）：看门狗（src/utils/autoContrast.ts）在这些主题的
+              {/* v2.3.104：「自动对比度调节」开关（仅 glass 主题生效）。
+                  可读性兜底功能（非动画）：看门狗（src/utils/autoContrast.ts）在 glass 主题的
                   玻璃承载面上检测文字对比度 < 4.5:1 时，自动加深背景（boost）或
                   翻转为浅底深字（flip）。与「高级动画控制」三档正交——anim-off 不影响它，
                   故需要独立开关。缺省视为开启（settings.autoContrast !== false）。 */}
-              {(theme === 'glass' || theme === 'liquid') && (
+              {(theme === 'glass') && (
                 <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
                     <input
@@ -4637,52 +4594,10 @@ export const Settings: React.FC<{
         {!onlyModels && (<>
         {/* v2.3.102 需求 3：原「生成与扩展」+「翻译」合并为「扩展与工具」(cat-extensions)。 */}
         <div id="cat-extensions" ref={(el) => { catRefs.current['cat-extensions'] = el; }} className="settings-category">
-        {/* ===== v2.3.94 需求 7：TTS / ASR / 生图 / 生视频 的配置表单已移入「模型设置」=====
-            原先这四类服务的 API 端点表单散落在本分类下，只能填一套；现在它们与文本模型
-            一样支持「多条配置 + 标记当前使用项」，故统一搬到模型设置二级页。
-            本分类只保留一张跳转卡片（不再重复渲染表单，避免两处都能改、互相覆盖）。*/}
-        {/* v2.3.97：用户反馈「点『生成与扩展』像坏了」。本分类在 v2.3.94 搬走四类服务表单后
-            只剩这张卡，标题还叫「生成与扩展」，内容与分类名严重不符，容易被当成分类失效。
-            处置（不把功能搬回来，只讲清楚）：
-              ① 标题改为「语音与生图服务」并补一句说明这些设置现在住在哪里；
-              ② 跳转卡加方向箭头 + 高亮边框 + 键盘可达（role/tabIndex/Enter-Space），
-                 原来是裸 div + onClick，键盘用户 tab 不到、WCAG AA 不合格。 */}
-        <div id="sec-mediastub" className="section-title">{t('settings.genMovedTitle')}</div>
-        <div
-          style={{ fontSize: 12.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', maxWidth: 560, marginTop: 4, marginBottom: 10 }}
-        >
-          {t('settings.genMovedLead')}
-        </div>
-        <div
-          className="theme-card"
-          role="button"
-          tabIndex={0}
-          aria-label={t('settings.mcfgMovedEnter')}
-          style={{ cursor: 'pointer', maxWidth: 480, borderColor: 'var(--color-primary)' }}
-          onClick={() => setSub('models')}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              setSub('models');
-            }
-          }}
-        >
-          <div
-            className="theme-swatch"
-            style={{ background: 'linear-gradient(135deg,#4a9eff,#39ff99)' }}
-          />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600 }}>
-              {t('settings.mcfgMovedTitle')}
-              <Hint text={t('settings.mcfgMovedDesc')} />
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-              {t('settings.mcfgMovedEnter')}
-            </div>
-          </div>
-          {/* 方向箭头：明确「这是一张跳转卡，不是设置项本身」，避免用户以为分类点不动 */}
-          <span aria-hidden style={{ color: 'var(--color-primary-ink)', fontSize: 18, lineHeight: 1, flexShrink: 0 }}>→</span>
-        </div>
+        {/* v2.3.107 需求 5：**删除「语音与生图服务」跳转卡**（原 sec-mediastub 区块）。
+            用户实测反馈：TTS / ASR / 生图 / 生视频 的 API 配置早已与「模型管理」入口合并，
+            这张「点击前往「模型管理」」的引导卡属于重复入口，直接删掉。
+            （该分类下仍有 场景生图 / 联网搜索 / 插件与技能 / 翻译 / 音效 等真实设置项，不会变空。） */}
 
         {/* ===== 异步场景生图 ===== */}
         <div id="sec-sceneimage" className="section-title">{t('settings.sceneImage')}<Hint text={t('settings.sceneImageDesc')} /></div>
@@ -5180,7 +5095,8 @@ export const Settings: React.FC<{
           )}
         </div>
 
-          {/* 高级设置折叠区（v2.3.102 需求 3）：翻译 / 音效 —— 低频项收进「扩展与工具」的高级设置。 */}
+          {/* 高级设置折叠区（v2.3.102 需求 3）：翻译 —— 低频项收进「扩展与工具」的高级设置。
+              v2.3.107：音效已移出（用户实测「调整不了消息音频」，常用项不应藏在折叠区）。 */}
           <AdvancedSection
             sectionId="adv-extensions"
             open={draft?.advSections?.['adv-extensions'] === true}
@@ -5227,7 +5143,14 @@ export const Settings: React.FC<{
           </div>
         </div>
 
-        {/* ===== 音效 ===== */}
+        {/* 折叠区到此为止 —— 音效已移出（见下方说明），不再收进高级设置。 */}
+        </AdvancedSection>
+
+        {/* ===== 音效 =====
+             v2.3.107 需求 7：本区块已**移出**「扩展与工具」的高级设置折叠区，恢复为直接可见。
+             用户实测反馈「调整不了软件内的消息音频之类的」——此前它被收进折叠区，
+             叠加当时设置搜索整体失效（见 v2.3.107 需求 1），等于完全找不到。
+             音效属于常用项（开关 / 音量 / 各提示音自定义），不应藏在高级设置里。 */}
         <div id="sec-sound" className="section-title">{t('settings.sound')}<Hint text={t('settings.soundCustomTip')} /></div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
           <input
@@ -5295,7 +5218,6 @@ export const Settings: React.FC<{
           })}
         </div>
 
-        </AdvancedSection>
         </div>{/* end cat-extensions */}
         </>)}
         {/* ===== 快捷聊天小窗 ===== */}

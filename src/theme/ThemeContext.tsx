@@ -88,6 +88,8 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // 语义：缺省 / true = 流动；false = 完全静止（animation:none，而非暂停在首帧）。
     // 注意与 animControl 的正交关系：三档「全部关闭」已经能停掉流动，这里管的是
     // 「其他动效照常播放、唯独背景不流动」这一档，故需要独立属性。
+    // v2.3.107 需求 7：liquid 主题已删除，老数据在 electron/db.ts 读盘层已单向迁移为 glass；
+    // 此分支仅作历史兜底（正常情况下 settings.theme 不会是 'liquid'）。
     if (settings && settings.liquidFlow === false) {
       root.setAttribute('data-liquid-flow', 'off');
     } else {
@@ -95,6 +97,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     // 毛玻璃主题背景（仅 glass/frost/liquid 主题生效）：自定义背景色或图片，磨砂效果由主题 CSS 的 backdrop-filter 保留
     // v2.3.97：liquid 加入判断 —— 液态玻璃同为半透明家族，同样支持自定义背景图。
+    // v2.3.107 需求 7：liquid 主题已删除；此处 'liquid' 仅作历史兜底（老数据已在读盘层迁移为 glass）。
     const isGlass = theme === 'glass' || theme === 'frost' || theme === 'liquid';
     const glassBg = settings.glassBgImage
       ? `url("${settings.glassBgImage}") center/cover no-repeat`
