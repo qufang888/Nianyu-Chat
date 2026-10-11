@@ -376,6 +376,132 @@ export function compositeOver(fg: { rgb: RGB; a: number }, bg: RGB): RGB {
   };
 }
 
+/* ─────────────────────────────────────────────────────────────────────
+ * v2.3.109 测试 oracle 能力：主题令牌求值（var() 引用 + color-mix）
+ * ─────────────────────────────────────────────────────────────────────
+ * aura（琉璃幻境）主题色可调后，variables.css 的部分令牌改写为：
+ *   --color-primary: var(--aura-accent)
+ *   --color-bg: linear-gradient(… color-mix(in srgb, var(--aura-accent) 10%, #001a28) …)
+ * 闸门脚本的解析器（parseCssColor / extractGradientStops / 行级变量采集）不理解
+ * 这两种写法，直接解析会把 aura 承载面塌到灰色兜底、给出假结果。
+ * 这里提供统一求值：var() 链式解析 + color-mix(in srgb, …) 按 CSS 规范
+ * （sRGB 逐通道 + **premultiplied alpha**）递归求值，transparent 视为 rgba(0,0,0,0)。
+ * 求值按令牌表里的出厂默认（如 --aura-accent: #45e0c8）进行，与「用户未自定义
+ * 主题色」的真实渲染一致；用户自定义不改变令牌基线，无需纳入门禁。
+ */
+
+/** 解析 color-mix 的单侧颜色：transparent / var() / #hex / rgb() / rgba()；非法返回 null */
+function parseTokenColorSide(
+  raw: string,
+  lookup: (name: string) => string | undefined,
+  depth: number
+): { rgb: RGB; a: number } | null {
+  const t = String(raw).trim();
+  if (!t) return null;
+  if (/^transparent$/i.test(t)) return { rgb: { r: 0, g: 0, b: 0 }, a: 0 };
+  const vm = t.match(/^var\(\s*(--[\w-]+)\s*(?:,\s*([\s\S]+))?\)$/);
+  if (vm) {
+    const resolved = lookup(vm[1]) != null ? lookup(vm[1]) : vm[2] != null ? vm[2] : '';
+    if (!resolved) return null;
+    return parseTokenColorSide(resolved, lookup, depth + 1);
+  }
+  const c = parseCssColorWithAlpha(t);
+  if (c) return { rgb: c.rgb, a: c.a };
+  // 可能是尚未展开的内层 color-mix → 先求值再解析（depth 防环）
+  const nested = resolveColorToken(t, lookup, depth + 1);
+  const c2 = parseCssColorWithAlpha(String(nested));
+  return c2 ? { rgb: c2.rgb, a: c2.a } : null;
+}
+
+/** 对单个令牌值做 var() / color-mix 求值（内部实现，见 resolveColorTokenVars） */
+function resolveColorToken(
+  value: unknown,
+  lookup: (name: string) => string | undefined,
+  depth: number
+): string {
+  if (value == null) return '';
+  if (depth > 16) return String(value);
+  let s = String(value);
+  // 1) 整值 var() 引用（含 fallback）
+  const vm = s.trim().match(/^var\(\s*(--[\w-]+)\s*(?:,\s*([\s\S]+))?\)$/);
+  if (vm) {
+    const val = lookup(vm[1]);
+    if (val != null) return resolveColorToken(val, lookup, depth + 1);
+    if (vm[2] != null) return resolveColorToken(vm[2], lookup, depth + 1);
+    return s;
+  }
+  // 2) color-mix：循环求值「最内层」（其括号体内不再含 color-mix(）直到全部展开
+  if (!/color-mix\(/i.test(s)) return s;
+  for (let guard = 0; guard < 24; guard++) {
+    let target: [number, number] | null = null;
+    let idx = s.indexOf('color-mix(');
+    while (idx >= 0) {
+      let d = 0;
+      let j = idx + 'color-mix('.length - 1;
+      let inner = false;
+      for (; j < s.length; j++) {
+        if (s.startsWith('color-mix(', j)) { inner = true; break; }
+        if (s[j] === '(') d++;
+        else if (s[j] === ')') { d--; if (d === 0) break; }
+      }
+      if (!inner) { target = [idx, j]; break; } // j 指向收尾 ')'
+      idx = s.indexOf('color-mix(', idx + 10);
+    }
+    if (!target) break;
+    const [start, end] = target;
+    const body = s.slice(start + 'color-mix('.length, end);
+    const m = body.match(/^\s*in\s+srgb\s*,\s*([\s\S]+)$/i);
+    if (!m) return s; // 非 sRGB 语法：保持原样（调用方按解析失败处理，行为同旧版）
+    // 顶层逗号切两段
+    const parts: string[] = [];
+    let d2 = 0;
+    let cur = '';
+    for (const ch of m[1]) {
+      if (ch === '(') d2++;
+      else if (ch === ')') d2--;
+      if (ch === ',' && d2 === 0) { parts.push(cur); cur = ''; } else cur += ch;
+    }
+    parts.push(cur);
+    if (parts.length !== 2) return s;
+    const pm = parts[0].trim().match(/^([\s\S]+?)\s+([\d.]+)%$/);
+    if (!pm) return s;
+    const p = parseFloat(pm[2]) / 100;
+    const c1 = parseTokenColorSide(pm[1], lookup, depth);
+    const c2 = parseTokenColorSide(parts[1], lookup, depth);
+    if (!c1 || !c2) return s;
+    // CSS 规范：premultiplied alpha —— 结果 alpha = p·a1 + (1-p)·a2，
+    // 通道 = (c1·a1·p + c2·a2·(1-p)) / 结果alpha（alpha 为 0 时通道取 0）
+    const a = c1.a * p + c2.a * (1 - p);
+    const mixCh = (x1: number, x2: number) =>
+      a <= 0 ? 0 : clamp255(Math.round((x1 * c1.a * p + x2 * c2.a * (1 - p)) / a));
+    const out = `rgba(${mixCh(c1.rgb.r, c2.rgb.r)}, ${mixCh(c1.rgb.g, c2.rgb.g)}, ${mixCh(c1.rgb.b, c2.rgb.b)}, ${Number(a.toFixed(4))})`;
+    s = s.slice(0, start) + out + s.slice(end + 1);
+    if (!/color-mix\(/i.test(s)) break;
+  }
+  return s;
+}
+
+/**
+ * 对整张主题变量表做 var() / color-mix 令牌求值。
+ * @param vars 变量表（键可带或不带 `--` 前缀；值可为 null/undefined，原样跳过）
+ * @returns 新表：每个值中的 var() 引用按表内其它令牌解析、color-mix 展开为 rgba()；
+ *          无法求值的片段保持原样（调用方按解析失败处理）。
+ */
+export function resolveColorTokenVars(vars: Record<string, string>): Record<string, string> {
+  const table: Record<string, string> = {};
+  for (const [k, v] of Object.entries(vars)) {
+    if (v == null) continue;
+    table[k] = v;
+    table[k.startsWith('--') ? k : '--' + k] = v;
+  }
+  const lookup = (name: string): string | undefined => table[name];
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(vars)) {
+    out[k] = v == null ? (v as unknown as string) : resolveColorToken(v, lookup, 0);
+  }
+  return out;
+}
+
 /**
  * 从 `linear-gradient(...)` 声明中抽取所有颜色色标，规范化为 `#rrggbb`。
  * 支持 #hex 与 rgb()/rgba()；方向关键字（135deg / to right 等）会被忽略；

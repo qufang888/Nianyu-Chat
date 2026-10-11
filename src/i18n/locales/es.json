@@ -1097,6 +1097,8 @@
  "settings.glassBubbleBorder": "Color del borde del globo",
  "settings.glassBubbleUserText": "Color del texto del globo de usuario",
  "settings.glassColorReset": "Restablecer colores",
+ "settings.auraAccent": "Color de acento de Aura líquida",
+ "settings.auraAccentDesc": "Elige cualquier color de acento para el tema Aura líquida: el color principal, tus burbujas, el hover y los reflejos cambian en conjunto. Bórralo para restaurar el turquesa predeterminado.",
  "settings.autoContrast": "Ajuste automático de contraste",
   "settings.autoContrastTip": "Oscurece automáticamente los fondos de vidrio o invierte el color del texto para mantenerlo legible en los temas de Vidrio.",
  "settings.glassTokenBorder": "Color del borde de la barra de token",

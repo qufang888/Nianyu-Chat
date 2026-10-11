@@ -194,18 +194,23 @@ function ringCheckPasses(v) {
 }
 
 // 各主题：flash-bg(=primary) 对 面板/聊天 面的可感知性（≥3:1）
-const { contrastRatio, parseCssColor, compositeOver, rgbToHex, parseCssColorWithAlpha, computePrimarySurfaces } = await import(
+const { contrastRatio, parseCssColor, compositeOver, rgbToHex, parseCssColorWithAlpha, computePrimarySurfaces, resolveColorTokenVars } = await import(
   new URL('./lib/dominantColor.ts', import.meta.url).href
 );
 const varsOf = (body) => {
   const g = (p) => { const m = body.match(new RegExp('--' + p + '\\s*:\\s*([^;]*);')); return m ? m[1].trim() : null; };
-  return { bg: g('color-bg'), panel: g('color-panel'), chatBg: g('color-chat-bg'), primary: g('color-primary') };
+  return { bg: g('color-bg'), panel: g('color-panel'), chatBg: g('color-chat-bg'), primary: g('color-primary'), 'aura-accent': g('aura-accent') };
 };
 const rv = varsOf(rootBlock ? rootBlock.body : '');
 const themes = themeBlocks.map((b) => {
   const v = varsOf(b.body);
   for (const k of Object.keys(v)) v[k] = v[k] ?? rv[k];
-  return { name: b.sel.match(/\[data-theme=['"]([^'"]+)['"]\]/)[1], ...v };
+  // v2.3.109：aura 主题色可调后 --color-primary 写作 var(--aura-accent)、--color-bg 含
+  // color-mix(…) —— oracle 解析前先做令牌求值（按出厂 accent，与未自定义时渲染一致）。
+  // aura-accent 仅作为求值查找表条目，求值后从主题行移除（不参与输出）。
+  const full = resolveColorTokenVars(v);
+  delete full['aura-accent'];
+  return { name: b.sel.match(/\[data-theme=['"]([^'"]+)['"]\]/)[1], ...full };
 });
 const overBg = (layerCss, bgHex) => {
   const layer = parseCssColorWithAlpha(layerCss); const bg = parseCssColor(bgHex);

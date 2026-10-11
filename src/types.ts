@@ -750,6 +750,8 @@ export interface AppSettings {
   glassTint?: string; // 色调：玻璃承载面染色（CSS 颜色），空=近白（#ffffff）；与下方不透明度合成半透明面板
   glassOpacity?: number; // 不透明度：玻璃面板透明度（0~100，百分比），空/缺省=20（与 variables.css 默认 --color-panel alpha 一致）
   glassBlur?: number; // 模糊度：毛玻璃 backdrop-filter 模糊半径（px），空/缺省=30（与 variables.css 默认 --blur 一致）
+  // 琉璃幻境主题色（v2.3.109 需求 2c，仅 aura 主题生效；设置面板仅 aura 下渲染）
+  auraAccent?: string; // 主题色（#rrggbb），空=跟随主题默认 #45e0c8；ThemeContext 派生 --aura-accent / --color-primary / --color-primary-text
   enableRandomEvents: boolean; // 随机事件：开启后聊天过程中会自动弹出随机事件（关闭则仅手动触发）
   // ===== 空闲主动回复 =====
   idleEnabled: boolean; // 全局主开关：关闭时所有按聊天的主动消息都失效（默认开）
@@ -1249,6 +1251,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   glassTint: '#ffffff',
   glassOpacity: 20,
   glassBlur: 30,
+  auraAccent: '', // 琉璃幻境主题色：空 = 跟随主题默认 #45e0c8
   enableRandomEvents: true,
   idleEnabled: true,
   chatIdleEnabled: {},

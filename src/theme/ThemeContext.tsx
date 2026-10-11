@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { api } from '../ipc';
 import { FONT_FAMILIES, type AppSettings, type ThemeName } from '../types';
 import { applyAnimControl } from '../utils/animControl';
+import { auraPrimaryText, isValidAuraAccent } from '../utils/auraAccent';
 
 interface ThemeCtx {
   theme: ThemeName;
@@ -94,10 +95,29 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       // 用户自定义了背景色/图之后挂标记属性，供 autoContrast 看门狗把采样出的
       // 自定义背景色垫在最底参与对比度求解（属性名 v2.3.108 起由 data-liquid-custom-bg
       // 更名为 data-glass-custom-bg，旧名随 liquid 主题一并退役）。
+      // 该属性同时是 index.css「aura 背景流动」的停流开关：自定义背景 = 用户素材，
+      // 流动叠层会盖在素材上，故 ::before 整层隐藏（见 index.css auraFlowDrift 注释）。
       root.setAttribute('data-glass-custom-bg', 'on');
     } else {
       root.style.removeProperty('--app-bg');
       root.removeAttribute('data-glass-custom-bg');
+    }
+    // 琉璃幻境主题色（v2.3.109 需求 2c）：仅 aura 主题生效，空/非法 = 跟随主题默认 #45e0c8。
+    // 三件事：写 --aura-accent（variables.css 的 bg 渐变 / hover / nav-active / border 等
+    // color-mix 链条的总开关）；派生 --color-primary（直接用该色）；按 WCAG 相对亮度派生
+    // --color-primary-text（亮 accent 配深字 #06222a、暗 accent 配白字，见 utils/auraAccent.ts）。
+    // 清空/切走主题时移除全部内联值，回退 variables.css 出厂默认。
+    // 注意作用域是 theme==='aura' 而非 isGlass：--color-primary 是全主题通用令牌，
+    // 若在 glass/frost 下也写入会把 aura 的主题色漏进玻璃家族其余成员。
+    const auraAccent = isValidAuraAccent(settings.auraAccent) ? settings.auraAccent : '';
+    if (theme === 'aura' && auraAccent) {
+      root.style.setProperty('--aura-accent', auraAccent);
+      root.style.setProperty('--color-primary', auraAccent);
+      root.style.setProperty('--color-primary-text', auraPrimaryText(auraAccent));
+    } else {
+      root.style.removeProperty('--aura-accent');
+      root.style.removeProperty('--color-primary');
+      root.style.removeProperty('--color-primary-text');
     }
     // 玻璃家族主题：聊天界面颜色覆盖（仅 glass/frost/aura 生效），解决自定义背景后字体/边框与背景融合看不清
     const setGlassVar = (name: string, val?: string) => {

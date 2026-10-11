@@ -1097,6 +1097,8 @@
  "settings.glassBubbleBorder": "Cor da borda do balão",
  "settings.glassBubbleUserText": "Cor do texto do balão do usuário",
  "settings.glassColorReset": "Redefinir cores",
+ "settings.auraAccent": "Cor de destaque do Aura Líquida",
+ "settings.auraAccentDesc": "Escolha qualquer cor de destaque para o tema Aura Líquida: a cor principal, suas bolhas, o hover e os brilhos mudam em conjunto. Limpe para restaurar o turquesa padrão.",
  "settings.autoContrast": "Ajuste automático de contraste",
   "settings.autoContrastTip": "Escurece automaticamente os fundos de vidro ou inverte a cor do texto para manter a legibilidade nos temas Vidro.",
  "settings.glassTokenBorder": "Cor da borda da barra de token",

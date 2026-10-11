@@ -60,6 +60,7 @@ const {
   rgbToHex,
   computePrimarySurfaces,
   computeSecondarySurfaces,
+  resolveColorTokenVars,
 } = await import(new URL('./lib/dominantColor.ts', import.meta.url).href);
 
 const BREAK = process.env.NY_QA_CONTRAST_BREAK === '1';
@@ -114,6 +115,17 @@ const namedThemes = blocks
   .filter((t) => t.name);
 const themes = namedThemes.map((t) => ({ name: t.name, vars: { ...rootVars, ...collectVars(t.body) } }));
 const declaredThemeCount = (css.match(/\[data-theme=/g) || []).length;
+
+// ---------- 2b. v2.3.109：aura 主题色可调 → color-mix 令牌求值 ----------
+// variables.css 的 aura 块改写为 `color-mix(in srgb, var(--aura-accent) N%, <base>)`
+// 形式（bg 渐变色标 / hover / nav-active / border / bubble-user 等）。oracle 的
+// parseCssColor 不理解 color-mix，直接解析会把整个色标当解析失败 → aura 承载面
+// 塌到灰色兜底，门禁给出假结果。统一走共享 oracle 的令牌求值器（sRGB 逐通道 +
+// premultiplied alpha，与 CSS 规范一致；按出厂默认 accent 求值，与「未自定义主题色」
+// 的真实渲染一致；用户自定义 accent 不改变令牌基线）。
+for (const t of themes) {
+  t.vars = resolveColorTokenVars(t.vars);
+}
 
 // ---------- 3. index.css → 控件配色令牌（真实来源）----------
 const idxRaw = fs.readFileSync(path.join(ROOT, 'src/styles/index.css'), 'utf8');

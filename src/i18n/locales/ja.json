@@ -1097,6 +1097,8 @@
  "settings.glassBubbleBorder": "バブル ボーダー色",
  "settings.glassBubbleUserText": "ユーザー バブル テキスト色",
  "settings.glassColorReset": "色をリセット",
+ "settings.auraAccent": "Liquid Aura アクセントカラー",
+ "settings.auraAccentDesc": "Liquid Aura テーマに好きなアクセントカラーを設定できます：メインカラー・自分の吹き出し・ホバー・ハイライトがまとめて連動して変化します。空にすると既定のティールに戻ります。",
  "settings.autoContrast": "自動コントラスト調整",
   "settings.autoContrastTip": "ガラスの各テーマで、背景を自動的に暗くしたり文字色を反転させて、文字の見やすさを保ちます。",
  "settings.glassTokenBorder": "トークンバー ボーダー色",

@@ -324,8 +324,8 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.event-option',
       '.event-close-top',
       // v2.3.108：原 v2.3.97 liquid「液态流动」登记（.app-root / .mini-shell 裸类名）
-      // 已随 liquid 主题整体删除而移除 —— index.css 已无任何作用于这两个元素的
-      // animation/transition，keyframes liquid-flow-drift 也已删除，登记成为死配置。
+      // 已随 liquid 主题整体删除而移除 —— v2.3.109 起这两处因 aura 流动 + 换主题过渡
+      // 审计补登记重新入组（见文件末尾 v2.3.109 段说明）。
       // v2.3.97：拖拽导入「预检确认弹窗」的文件列表行。
       // 这一条是**功能性必需**，与 .msg-action-bar 同理：.qip-item 的基态是
       // `opacity:0`（靠 transition 插值到 .is-in 的 opacity:1），
@@ -350,6 +350,28 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.filepicker-namefield input',
       '.filepicker-newdir',
       '.filepicker-mkdir input',
+      // ===== v2.3.109 需求 1（动画登记全量审计补齐）=====
+      // 全量扫描 index.css 所有 animation:/transition: 宿主选择器与登记清单逐条比对，
+      // 唯一游离项：.app-root / .mini-shell 的换主题过渡
+      // （transition: background/color/border-color var(--transition)）—— 此前未登记，
+      // 「自定义档 → 关掉 theme 组」杀不掉这条过渡。语义与 body（已登记）同族
+      // （全局主题过渡），归 theme 组。transition:none 只是取消插值、元素瞬间跳终值，
+      // 两容器基态本就可见，无功能性风险，无需 .anim-off 兜底。
+      // 注意用**裸类名**登记即可：门禁规则由 buildGateCss 统一加前缀
+      // （html[data-anim-off~="theme"] .app-root），data-theme 在 html 上不影响后代匹配。
+      '.app-root',
+      '.mini-shell',
+      // ===== v2.3.109 需求 2a（aura 液体流动）=====
+      // 流动动画的载体是两根容器的 **::before 叠层** —— 动画挂在伪元素上，只登记宿主
+      // .app-root / .mini-shell 杀不到它（门禁规则作用于宿主元素本身），故伪元素必须
+      // 单独登记（与 .mini-btn / .mini-btn::before 的既有范式同理）。duration 拆 longhand
+      // 后参与 --anim-speed 缩放（36s 基准，见 index.css 的 auraFlowDrift 注释）。
+      '.app-root::before',
+      '.mini-shell::before',
+      // ===== v2.3.109 需求 2b（aura 镜面扫光）=====
+      // 扫光动画挂在 .modal / .modal-card **自身**（background-image 层 + background-position
+      // 位移，与 popupLinearIn 入场以 longhand 列表共存，见 index.css auraSheen 注释），
+      // 这两类 v2.3.97 起已在 theme 组登记，门禁天然覆盖，无需新增条目。
     ],
   },
   {

@@ -833,6 +833,9 @@ export const translations: Record<Lang, Dict> = {
     'settings.glassOpacityDesc': '调节毛玻璃面板与气泡的透明程度，数值越小越通透。',
     'settings.glassBlur': '磨砂模糊度',
     'settings.glassBlurDesc': '调节毛玻璃背景的模糊半径，数值越大越朦胧。',
+    // v2.3.109 需求 2c：琉璃幻境主题色（仅 aura 主题渲染）
+    'settings.auraAccent': '琉璃幻境主题色',
+    'settings.auraAccentDesc': '为琉璃幻境选定任意主题色：界面主色、你的气泡、悬停与高光会随之整套联动变色；清空即恢复默认青色。',
     'settings.current': '当前',
     'settings.clickSwitch': '点击切换',
     'settings.backup': '数据备份与还原',
@@ -2629,6 +2632,9 @@ export const translations: Record<Lang, Dict> = {
     'settings.glassOpacityDesc': 'Adjusts how opaque the frosted panels and bubbles are; lower means more see-through.',
     'settings.glassBlur': 'Frost blur',
     'settings.glassBlurDesc': 'Adjusts the blur radius of the frosted background; higher means hazier.',
+    // v2.3.109 需求 2c：琉璃幻境主题色（仅 aura 主题渲染）
+    'settings.auraAccent': 'Liquid Aura accent',
+    'settings.auraAccentDesc': 'Pick any accent color for the Liquid Aura theme: the primary color, your bubbles, hover states and highlights all follow as a coherent set. Clear it to restore the default teal.',
     'settings.current': 'Current',
     'settings.clickSwitch': 'Click to switch',
     'settings.backup': 'Backup & restore',

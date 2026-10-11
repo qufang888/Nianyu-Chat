@@ -1097,6 +1097,8 @@
  "settings.glassBubbleBorder": "氣泡邊框顏色",
  "settings.glassBubbleUserText": "用戶氣泡文字顏色",
  "settings.glassColorReset": "重置顏色",
+ "settings.auraAccent": "琉璃幻境主題色",
+ "settings.auraAccentDesc": "為琉璃幻境選定任意主題色：介面主色、你的氣泡、懸停與高光會隨之整套連動變色；清空即恢復預設青色。",
  "settings.autoContrast": "自動對比度調節",
   "settings.autoContrastTip": "玻璃與毛玻璃主題下，自動加深背景或翻轉文字顏色以保證可讀",
  "settings.glassTokenBorder": "Token 欄邊框顏色",

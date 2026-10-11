@@ -1097,6 +1097,8 @@
  "settings.glassBubbleBorder": "Цвет границы пузыря",
  "settings.glassBubbleUserText": "Цвет текста пользовательского пузыря",
  "settings.glassColorReset": "Сбросить цвета",
+ "settings.auraAccent": "Акцентный цвет Liquid Aura",
+ "settings.auraAccentDesc": "Выберите любой акцентный цвет для темы Liquid Aura: основной цвет, ваши пузыри, наведение и блики меняются единым набором. Очистите, чтобы вернуть бирюзовый по умолчанию.",
  "settings.autoContrast": "Авто-контраст",
   "settings.autoContrastTip": "Автоматически затемняет стеклянные фоны или меняет цвет текста, чтобы он оставался читаемым в темах «Стекло».",
  "settings.glassTokenBorder": "Цвет границы панели токенов",

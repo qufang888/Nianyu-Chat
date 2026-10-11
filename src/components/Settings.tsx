@@ -258,6 +258,9 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-glass-tint', key: 'settings.glassTint', kw: ['色调', '色相', '染色', '玻璃色调', '毛玻璃色调', '琉璃幻境色调', 'tint', 'hue', 'glass tint'] },
   { id: 'sec-glass-opacity', key: 'settings.glassOpacity', kw: ['不透明度', '透明度', '玻璃透明度', '面板透明度', 'opacity', 'glass opacity'] },
   { id: 'sec-glass-blur', key: 'settings.glassBlur', kw: ['模糊', '模糊度', '磨砂', '毛玻璃模糊', '琉璃幻境模糊', 'blur', 'frost blur', 'aura blur', '磨砂模糊度'] },
+  // v2.3.109 需求 2c：琉璃幻境主题色（仅 aura 主题渲染；非 aura 下 DOM 不存在，
+  // 由 buildDynamicIndex 的 staticAlive 过滤自动剔除，不会产生死条目 —— 同上三条的范式）。
+  { id: 'sec-aura-accent', key: 'settings.auraAccent', kw: ['主题色', '琉璃幻境主题色', '主题颜色', '强调色', '任意颜色', 'accent', 'aura accent', 'aura 主题色', 'aura color'] },
   { id: 'sec-debug', key: 'settings.debugMode', kw: ['调试', '测试', 'debug', '快照', '错误报告', '手动触发', '触发'] },
   { id: 'sec-sceneimage', key: 'settings.sceneImage', kw: ['场景图', 'scene', '配图'] },
   // v2.3.107 需求 5：原 `sec-mediastub`（「语音与生图服务」跳转卡）已被删除，
@@ -2633,6 +2636,29 @@ export const Settings: React.FC<{
                     style={{ width: '100%', accentColor: 'var(--color-primary)' }}
                   />
                 </div>
+                {/* v2.3.109 需求 2c：琉璃幻境主题色（仅 aura 主题渲染）。
+                    写入 draft.auraAccent（空 = 跟随主题默认 #45e0c8）；ThemeContext 据此
+                    派生 --aura-accent / --color-primary / --color-primary-text。 */}
+                {theme === 'aura' && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    <span style={{ fontSize: 13 }}>{t('settings.auraAccent')}</span>
+                    <input
+                      id="sec-aura-accent"
+                      type="color"
+                      value={draft.auraAccent || '#45e0c8'}
+                      onChange={(e) => patch({ auraAccent: e.target.value })}
+                      style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
+                    />
+                    <Hint text={t('settings.auraAccentDesc')} />
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      onClick={() => patch({ auraAccent: '' })}
+                    >
+                      {t('settings.glassColorReset')}
+                    </button>
+                  </label>
+                )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

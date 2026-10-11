@@ -228,6 +228,11 @@ section('G. 2 处死 CSS 已清理');
     '死 keyframes toastIn / toastOut（含 scale 0.96）已删除',
     !/@keyframes\s+toastIn\s*\{/.test(src) && !/@keyframes\s+toastOut\s*\{/.test(src)
   );
+  // v2.3.109 需求 1：硬编码清单 #178 备案的两处零引用 keyframes 正式清除
+  //（自 v2.3.97 起调用点已统一为 popupLinearIn；保留死代码只会诱导误用回退，
+  //  尤其 popIn 含被用户两次否定的 scale(0.96) 表现）。
+  check('死 keyframes floatUp（零引用历史残留）已删除', !/@keyframes\s+floatUp\s*\{/.test(src));
+  check('死 keyframes popIn（含 scale 0.96，用户已否定该表现）已删除', !/@keyframes\s+popIn\s*\{/.test(src));
 }
 
 // ════════════════════════════════════════════════════════════════════════

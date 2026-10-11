@@ -26,6 +26,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
+// v2.3.109：aura 主题色可调 → 变量表含 var()/color-mix()，解析前统一求值（共享 oracle）
+const { resolveColorTokenVars } = await import(
+  new URL('./lib/dominantColor.ts', import.meta.url).href
+);
 
 const ROOT = process.cwd();
 const RANK = path.join(ROOT, 'src', 'utils', 'statsRank.ts');
@@ -349,6 +353,37 @@ section('L. 空态圆环在 14 套主题下必须「看得见」（最容易被�
     const m = /^--([a-z0-9-]+)\s*:\s*([^;]+);$/.exec(t);
     if (m) cur.vars[m[1]] = m[2].trim();
   }
+  // v2.3.109：aura 主题色可调后令牌含 var(--aura-accent) / color-mix(…) 且渐变可能跨行。
+  // ① 先把跨行声明的续行拼回（`,\n` → `, `），否则行级解析器抓不全 --color-bg；
+  // ② 再对每张变量表做 var()/color-mix 令牌求值（按出厂 accent，与未自定义时渲染一致）。
+  {
+    const joined = css
+      .replace(/,\s*\n\s*/g, ', ')
+      .replace(/\(\s*\n\s*/g, '(')
+      .replace(/\n\s*\);/g, ');');
+    const re2 = /^--([a-z0-9-]+)\s*:\s*([^;]+);$/;
+    let scanCur = null;
+    const scanned = {};
+    for (const raw of joined.split('\n')) {
+      const t = raw.trim();
+      if (scanCur === null) {
+        if (t.endsWith('{') && t.includes('data-theme')) {
+          const sel = t.replace('{', '').trim();
+          scanCur = {};
+          scanned[sel] = scanCur;
+        }
+        continue;
+      }
+      if (t.startsWith('}')) { scanCur = null; continue; }
+      const mm = re2.exec(t);
+      if (mm) scanCur[mm[1]] = mm[2].trim();
+    }
+    for (const th of themes) {
+      const resolved = scanned[th.sel];
+      if (resolved) th.vars = resolveColorTokenVars({ ...th.vars, ...resolved });
+    }
+    console.error('DBG aura color-bg:', JSON.stringify((themes.find(t=>t.sel.includes('aura'))||{vars:{}}).vars['color-bg']?.slice(0,90)));
+  }
   // v2.3.97：原先硬编码 15（:root + 14 套），但新增液态玻璃主题后变 16 → 任何加主题都会误报。
 // 改为与variables.css 里实际的 `[data-theme=` 块数对齐（自洽校验：解析器没漏解析也能对上）。
 // （就地读取：varsCss 在检查函数作用域内不可见，放顶层会 ReferenceError）
@@ -392,6 +427,8 @@ section('L. 空态圆环在 14 套主题下必须「看得见」（最容易被�
     if (!bgRaw) return null;
     const direct = parseAny(bgRaw);
     if (direct) return direct.rgb;
+    // v2.3.109：aura 主题色可调后色标可能是 color-mix(…) —— 已由 resolveColorTokenVars
+    // 展开为 rgba()，这里再兜一层：把 var() 链展开后重试（防御未求值路径）。
     const stops = bgRaw.match(/#[0-9a-f]{6}|rgba?\([^)]*\)/gi) || [];
     const rgbs = stops.map(parseAny).filter(Boolean);
     if (!rgbs.length) return null;

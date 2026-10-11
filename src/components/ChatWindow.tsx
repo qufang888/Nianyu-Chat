@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Fragment } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react';
 
 import { createPortal } from 'react-dom';
 
@@ -477,7 +477,13 @@ export const ChatWindow: React.FC<{
   //   --msg-enter-stagger，并随 --anim-speed 缩放），总时长有界。
   //   判定「新追加」仍靠「末尾消息 id 相对上一帧是否变化」，避开「切聊天后消息异步加载」的误判。
   const [entering, setEntering] = useState<Record<number, number> | null>(null);
-  const enterRef = useRef<{ chat: string; id: number | null; valid: boolean }>({
+  // v2.3.109 需求 3（闪跳修复）：基线从 useRef 升级为 state（enterSnap），入场标记整体
+  // 改在 **render 阶段派生**。旧实现在 layout effect 里挂类：新行先以「无 anim-enter」
+  // 的 DOM 提交、effect 里 setState 再重打标记 —— 依赖 React 的同步重渲染抢在绘制前，
+  // 一旦调度插入间隙（并发渲染/批量更新边界），首帧就会闪现终态气泡再从头播动画。
+  // 改为 render 阶段计算后，首个**提交**的 DOM 就已带 anim-enter（React 对 render 期间
+  // 的 setState 会丢弃当前输出、立即重跑渲染函数再提交），不存在「先见终态」的帧。
+  const [enterSnap, setEnterSnap] = useState<{ chat: string; id: number | null; valid: boolean }>({
     chat: '',
     id: null,
     valid: false,
@@ -486,50 +492,55 @@ export const ChatWindow: React.FC<{
   // 完成瞬间不应再重播「气泡从透明弹出」的入场动画（否则会闪一下）。
   const suppressEnterIdRef = useRef<number | null>(null);
 
-  // 用 useLayoutEffect（而非 useEffect）在**绘制前**打上 anim-enter：
-  // 否则新行会先整帧可见、随后才从 opacity:0 重播动画，出现「闪一下」。
-  useLayoutEffect(() => {
-    const last = messages.length ? messages[messages.length - 1] : null;
-    const belongs = !!last && last.chat_id === chatId;
-    const lastId = last ? (last.id as number) : null;
-    const prev = enterRef.current;
-    // 「刚进入本聊天」或「本聊天消息上一帧尚未就绪」→ 走整批入场分支
-    const enteringChat = prev.chat !== chatKey || !prev.valid;
-    enterRef.current = { chat: chatKey, id: belongs ? lastId : null, valid: belongs && lastId !== null };
-
-    // 本聊天消息尚未就绪（显示的还是上一个聊天的内容）：清掉并等下一帧
-    if (!belongs || lastId === null) {
+  // ---- render 阶段派生（v2.3.109 闪跳修复，见上）----
+  const enterLastMsg = messages.length ? messages[messages.length - 1] : null;
+  const enterLastBelongs = !!enterLastMsg && enterLastMsg.chat_id === chatId;
+  const enterLastId = enterLastMsg ? (enterLastMsg.id as number) : null;
+  const enterNextSnap = {
+    chat: chatKey,
+    id: enterLastBelongs ? enterLastId : null,
+    valid: enterLastBelongs && enterLastId !== null,
+  };
+  // 仅在基线真正变化时 setState（否则每帧新建对象会触发无限重渲染）
+  if (enterSnap.chat !== enterNextSnap.chat || enterSnap.id !== enterNextSnap.id || enterSnap.valid !== enterNextSnap.valid) {
+    const enteringChat = enterSnap.chat !== chatKey || !enterSnap.valid;
+    if (enterNextSnap.valid && enterLastId !== null) {
+      if (enteringChat) {
+        // ---- 打开聊天：末尾 ENTER_BATCH 条自上而下错峰入场 ----
+        const n = Math.min(ENTER_BATCH, messages.length);
+        const start = messages.length - n;
+        const map: Record<number, number> = {};
+        for (let i = 0; i < n; i++) map[messages[start + i].id as number] = i;
+        setEntering(map);
+      } else if (
+        suppressEnterIdRef.current !== null && enterLastId === suppressEnterIdRef.current
+      ) {
+        // v2.3.101：真实流式收尾的消息（正文已实时显示过）→ 跳过入场动画，避免「闪一下再淡入」。
+        suppressEnterIdRef.current = null;
+      } else {
+        // ---- 同一聊天内新追加的消息 ----
+        setEntering({ [enterLastId]: 0 });
+      }
+      setEnterSnap(enterNextSnap);
+    } else {
+      // 本聊天消息尚未就绪（显示的还是上一个聊天的内容）：清掉并等下一帧
+      setEnterSnap(enterNextSnap);
       if (enteringChat) setEntering(null);
-      return;
     }
+  }
 
-    if (enteringChat) {
-      // ---- 打开聊天：末尾 ENTER_BATCH 条自上而下错峰入场 ----
-      const n = Math.min(ENTER_BATCH, messages.length);
-      const start = messages.length - n;
-      const map: Record<number, number> = {};
-      for (let i = 0; i < n; i++) map[messages[start + i].id as number] = i;
-      setEntering(map);
-      // 清空时机与 CSS 动画时长同步缩放（末条延迟 + 0.6s 基准），避免慢速档下动画被截断。
-      const timer = window.setTimeout(
-        () => setEntering((cur) => (cur === map ? null : cur)),
-        animMs(0.6 + (ENTER_BATCH - 1) * (ENTER_STAGGER_MS / 1000))
-      );
-      return () => window.clearTimeout(timer);
-    }
-
-    // ---- 同一聊天内新追加的消息 ----
-    if (lastId === prev.id) return;
-    // v2.3.101：真实流式收尾的消息（正文已实时显示过）→ 跳过入场动画，避免「闪一下再淡入」。
-    if (suppressEnterIdRef.current !== null && lastId === suppressEnterIdRef.current) {
-      suppressEnterIdRef.current = null;
-      return;
-    }
-    const single: Record<number, number> = { [lastId]: 0 };
-    setEntering(single);
-    const timer = window.setTimeout(() => setEntering((cur) => (cur === single ? null : cur)), animMs(0.6));
+  // 清空 entering（摘掉 anim-enter）的时机与 CSS 动画时长同步缩放：单条 0.6s 基准；
+  // 整批按末条错峰延迟追加。摘类只是收尾 —— 动画早已播完，摘除不会重播。
+  useEffect(() => {
+    if (!entering) return;
+    const maxStagger = Math.max(0, ...Object.values(entering));
+    const hold =
+      maxStagger > 0
+        ? animMs(0.6 + maxStagger * (ENTER_STAGGER_MS / 1000))
+        : animMs(0.6);
+    const timer = window.setTimeout(() => setEntering((cur) => (cur === entering ? null : cur)), hold);
     return () => window.clearTimeout(timer);
-  }, [messages, chatKey, chatId]);
+  }, [entering]);
 
   const [eventState, setEventState] = useState<RandomEventData | null>(() => {
 

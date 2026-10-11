@@ -1097,6 +1097,8 @@
  "settings.glassBubbleBorder": "Blasen-Rahmenfarbe",
  "settings.glassBubbleUserText": "Benutzer-Blase-Textfarbe",
  "settings.glassColorReset": "Farben zurücksetzen",
+ "settings.auraAccent": "Liquid-Aura-Akzentfarbe",
+ "settings.auraAccentDesc": "Wähle eine beliebige Akzentfarbe für das Liquid-Aura-Theme: Primärfarbe, deine Sprechblasen, Hover und Glanzlichter passen sich als stimmiges Set an. Zurücksetzen stellt das Standard-Türkis wieder her.",
  "settings.autoContrast": "Automatische Kontrastanpassung",
   "settings.autoContrastTip": "Verdunkelt Glas-Hintergründe automatisch oder kehrt die Textfarbe um, damit Text in den Glas-Themen lesbar bleibt.",
  "settings.glassTokenBorder": "Token-Leisten-Rahmenfarbe",

@@ -19,7 +19,17 @@ body {
   font-size: var(--font-size);
   line-height: var(--line-height);
   color: var(--color-text);
-  background: var(--app-bg);
+  /* v2.3.109 需求 4（真圆角）：body 背景改透明。
+     根因：窗口本身 transparent:true（electron/main.ts），.app-root / .mini-shell 有
+     border-radius，但 body 把视口整块刷上 --app-bg → 圆角外露出 body 的方形底，
+     形成「方形套圆角」。背景职责完全交给 .app-root / .mini-shell（二者本就有
+     background: var(--app-bg) / var(--color-bg)），body 透明后圆角外直接透出桌面。
+     · [data-maximized='true'] 时 .app-root radius 归 0 的既有行为保留（贴边铺满）；
+     · 非玻璃主题 .app-root 不透明底 → 观感不变；玻璃家族 .app-root 半透明底照常透底；
+     · 弹窗遮罩/滚动条等全部自带底色或挂在 .app-root 内，均不依赖 body 底色（已逐处核查）。
+     注意：玻璃家族此前 body + .app-root 双层叠加 --app-bg，现只剩 .app-root 单层，
+     透明度略升 —— 这正是 variables.css 注释里「alpha 压低保留通透观感」的设计本意。 */
+  background: transparent;
   overflow: hidden;
   transition: background var(--transition), color var(--transition);
 }
@@ -138,6 +148,10 @@ input[type='range']::-moz-range-thumb {
   height: 100vh;
   width: 100vw;
   background: var(--app-bg);
+  /* v2.3.109 需求 2a：为 aura 背景流动的 ::before 叠层提供定位上下文。
+     .app-root 是 100vw×100vh、位于页面原点 —— 与原先绝对定位子元素回退到的
+     初始包含块（视口）几何完全一致，故加 relative 不改变任何既有布局。 */
+  position: relative;
   backdrop-filter: blur(var(--window-bg-blur, 0px));
   -webkit-backdrop-filter: blur(var(--window-bg-blur, 0px));
   overflow: hidden;
@@ -744,39 +758,61 @@ input[type='range']::-moz-range-thumb {
    ⚠️ fill-mode 必须是 backwards、不能是 both：clip-path 的参考框是 border-box，
    若在终态永久保留 inset(0)，气泡外扩的 box-shadow 会被一起裁掉；backwards 只在
    animation-delay 期间应用起点、动画结束后回到元素自身样式（阴影恢复）。 */
+/* v2.3.109 需求 3（方角→圆角跳变修复）：
+   旧 from 态 inset(0 100% 0 0 round R) 在展开初期可见区是一条比 2R 还窄的细条，
+   CSS 规范会在相邻边相向重叠时**按比例压缩圆角半径** → 前缘被压成近似直角，
+   展开到后半程半径才恢复 R，终态突然「变圆」，实测肉眼可见一次跳变。
+   修复：from 态直接保留**最小可视宽度 2R** 的完整圆角 ——
+     inset(0 calc(100% - 2 * R) 0 0 round R)
+   即起点就是一枚「宽 2R 的完整圆角小药丸」（左端圆角与终态一致、右端前缘也是 R），
+   全程可见宽度恒 ≥ 2R，圆角半径**从头到尾都是 R**，展开前缘与终态观感完全一致、无突变。
+   起点瞬间以 opacity:0 起步（原方案本就如此），小药丸不会突兀出现。
+   ⚠️ fill-mode 仍必须 backwards、不能是 both：clip-path 的参考框是 border-box，
+   若在终态永久保留 inset(0)，气泡外扩的 box-shadow 会被一起裁掉；backwards 只在
+   animation-delay 期间应用起点、动画结束后回到元素自身样式（阴影恢复）。 */
 @keyframes msgBubbleIn {
   from {
     opacity: 0;
-    clip-path: var(--bubble-clip-from, inset(0 100% 0 0 round var(--bubble-radius, var(--radius))));
+    clip-path: var(
+      --bubble-clip-from,
+      inset(0 calc(100% - (2 * var(--bubble-radius, var(--radius)))) 0 0 round var(--bubble-radius, var(--radius)))
+    );
   }
   to {
     opacity: var(--bubble-opacity, 1);
     clip-path: inset(0 0 0 0 round var(--bubble-radius, var(--radius)));
   }
 }
-/* 头像先渐显（无延迟） */
+/* 头像先渐显（无延迟）。
+   v2.3.109 需求 3 提速：0.30s → 0.24s（气泡全程 0.04s 延迟 + 0.22s 时长 = 0.26s，
+   明显快于 0.5s；幅度/缩放参数不变，只动时序）。 */
 .msg-row.anim-enter .avatar {
-  animation: msgAvatarIn calc(0.30s * var(--anim-speed, 1)) linear both;
+  animation: msgAvatarIn calc(0.24s * var(--anim-speed, 1)) linear both;
   /* v2.3.107 需求 2：打开聊天时末尾若干条自上而下错峰入场。
      错峰量由父级经 --msg-enter-stagger 下发，与动画时长同样随 --anim-speed 缩放；
      单条新消息时该变量为 0ms（行为与旧版完全一致）。 */
   animation-delay: calc(var(--msg-enter-stagger, 0s) * var(--anim-speed, 1));
 }
-/* 气泡随后弹出（基础延迟 0.08s + 错峰量，配合 both 的回填：延迟期间停在 from 态 = 隐藏）。
-   方向变量 --msg-enter-dx 在下方按 AI(左)/用户(右) 设定为 ±12px，确保从各自头像一侧线性弹出。 */
+/* 气泡随后弹出（v2.3.109 需求 3 提速：基础延迟 0.08s → 0.04s、时长 0.40s → 0.22s）。
+   方向变量 --bubble-clip-from 在下方按 AI(左锚)/用户(右锚) 设定，确保从各自头像一侧展开。 */
 .msg-row.anim-enter .bubble {
   /* backwards（不是 both）：终态不保留，动画结束后回到 .bubble 自身样式 → box-shadow 不被裁 */
-  animation: msgBubbleIn calc(0.40s * var(--anim-speed, 1)) linear backwards;
-  animation-delay: calc((0.08s + var(--msg-enter-stagger, 0s)) * var(--anim-speed, 1));
+  animation: msgBubbleIn calc(0.22s * var(--anim-speed, 1)) linear backwards;
+  animation-delay: calc((0.04s + var(--msg-enter-stagger, 0s)) * var(--anim-speed, 1));
 }
 /* 展开锚点：气泡哪一边固定不动（另一边向对侧展开）。
    AI 头像在左 → 气泡**左边不动、右边向右展开**；用户头像在右 → **右边不动、左边向左展开**。
-   即：始终从「离头像最近的那一侧」开始展开，气泡整体不平移。 */
+   即：始终从「离头像最近的那一侧」开始展开，气泡整体不平移。
+   from 宽度给足 2R 最小可视宽度（见 @keyframes msgBubbleIn 处的跳变修复说明）。 */
 .msg-row.ai.anim-enter {
-  --bubble-clip-from: inset(0 100% 0 0 round var(--bubble-radius, var(--radius)));
+  --bubble-clip-from: inset(
+    0 calc(100% - (2 * var(--bubble-radius, var(--radius)))) 0 0 round var(--bubble-radius, var(--radius))
+  );
 }
 .msg-row.user.anim-enter {
-  --bubble-clip-from: inset(0 0 0 100% round var(--bubble-radius, var(--radius)));
+  --bubble-clip-from: inset(
+    0 0 0 calc(100% - (2 * var(--bubble-radius, var(--radius)))) round var(--bubble-radius, var(--radius))
+  );
 }
 
 /* ===== 流式逐字渐显（v2.3.19） =====
@@ -2521,16 +2557,10 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 }
 
 /* 动画 */
-@keyframes floatUp {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
+/* v2.3.109 需求 1（审计收尾）：零引用死 keyframes floatUp / popIn 已删除
+   （硬编码清单 #178 原为「保留以备复用」备案；自 v2.3.97 起零引用至今，本版正式清除，
+   调用点早已统一为 popupLinearIn，git 历史可随时找回）。
+   .affinity-pop 等调用点不受影响 —— 它们引用的是 popupLinearIn。 */
 .affinity-pop {
   position: absolute;
   top: -18px;
@@ -2538,7 +2568,7 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   font-size: calc(12px * var(--font-scale));
   color: var(--color-primary-ink);
   /* v2.3.97：原为 floatUp 0.6s ease（0.6s 偏长且非线性）→ 改用项目统一的
-     popupLinearIn 0.16s linear。keyframes floatUp 现已零引用，保留在下方以备复用。 */
+     popupLinearIn 0.16s linear。floatUp 自此零引用，keyframes 已于 v2.3.109 删除。 */
   animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
   pointer-events: none;
 }
@@ -2831,10 +2861,9 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   from { opacity: 0; }
   to { opacity: 1; }
 }
-@keyframes popIn {
-  from { opacity: 0; transform: scale(0.96) translateY(8px); }
-  to { opacity: 1; transform: scale(1) translateY(0); }
-}
+/* v2.3.109 需求 1（审计收尾）：零引用死 keyframes popIn（含 scale(0.96)，用户已两次
+   否定「先很小再放大」的表现）已删除 —— 调用点 v2.3.97 起统一为 popupLinearIn，
+   保留死代码只会诱导误用回退到被否定的 scale 表现（verify-modal-animations 同款考量）。 */
 
 @media (max-width: 520px) {
   .list-pane {
@@ -2856,6 +2885,8 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   color: var(--color-text);
   overflow: hidden;
   border-radius: var(--radius-sm);
+  /* v2.3.109 需求 2a：同 .app-root，为 aura 背景流动的 ::before 叠层提供定位上下文 */
+  position: relative;
   /* 毛玻璃主题下小窗也需背景模糊，防止多层文字重叠 */
   backdrop-filter: blur(var(--window-bg-blur, 0px));
   -webkit-backdrop-filter: blur(var(--window-bg-blur, 0px));
@@ -5070,6 +5101,112 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 [data-theme='aura'] .mini-drawer-item:hover,
 [data-theme='aura'] .qps-queue .qps-cancel:hover {
   background: rgba(125, 240, 220, 0.12);
+}
+
+/* ===== 琉璃幻境（aura）动态化（v2.3.109 需求 2）=====
+   ── 2a 液体流动 ──
+   载体是 .app-root / .mini-shell 各自的 **::before 叠层**（而非动画宿主自身的 background）：
+     · 宿主自身的 background 承担 --app-bg / --color-bg —— 用户自定义玻璃背景时
+       ThemeContext 直接内联改写该变量，若在同一元素上跑 background-position 位移，
+       会把用户的照片/纯色一起拖动（自定义背景 = 用户素材，跑位移是 bug）；
+     · ::before 挂 z-index:-1：.app-root / .mini-shell 因 transform: translateZ(0)
+       自成堆叠上下文，负 z-index 伪元素画在宿主背景**之上**、常规内容**之下**，
+       半透明多层渐变叠在主题底色上，透出桌面的通透感保留。
+   多层渐变不同速度：一条 background-position 关键帧同时驱动 3 层 radial-gradient，
+   各层 background-size 不同（190%/230%/270%）→ 同一周期内位移行程不同 = 不同速度。
+   36s linear + alternate（往返）；登记进 animControl 的 **theme 组**（裸类名宿主
+   .app-root/.mini-shell + 伪元素 .app-root::before/.mini-shell::before，缺一不可 ——
+   门禁规则 `html[data-anim-off~="theme"] .app-root` 杀不到伪元素自身的动画）。
+   【为什么 duration 拆 longhand 分行写】速度闸门 verify-anim-speed 把「含 infinite 的
+   animation 声明」整体豁免，且豁免声明里不得再出现 var(--anim-speed)（防误缩放）；
+   硬约束又要求新增动画时长 calc(N * var(--anim-speed,1)) 缩放。拆 longhand 后
+   duration 行（含缩放、不含 infinite）正常参与缩放检查，iteration-count 行
+   （含 infinite、不含时长）走豁免，两道闸门同时满足。
+   ── 自定义玻璃背景停流 ──
+   html[data-glass-custom-bg='on']（用户设置了自定义背景色/图）时整层隐藏：
+   语义与 v2.3.97 liquid 方案一致 —— 用户背景是素材，任何叠加/流动都会破坏它。 */
+@keyframes auraFlowDrift {
+  from {
+    background-position: 0% 0%, 100% 0%, 50% 100%;
+  }
+  to {
+    background-position: 100% 100%, 0% 100%, 50% 0%;
+  }
+}
+[data-theme='aura'] .app-root,
+[data-theme='aura'] .mini-shell {
+  position: relative; /* ::before 的定位上下文（.app-root/.mini-shell 基态已带，此处仅为自洽声明） */
+}
+[data-theme='aura'] .app-root::before,
+[data-theme='aura'] .mini-shell::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: inherit;
+  background-image:
+    radial-gradient(
+      120% 90% at 18% 12%,
+      color-mix(in srgb, var(--aura-accent) 20%, transparent),
+      transparent 62%
+    ),
+    radial-gradient(110% 90% at 82% 22%, rgba(63, 127, 214, 0.16), transparent 64%),
+    radial-gradient(130% 100% at 50% 92%, rgba(124, 58, 237, 0.14), transparent 68%);
+  background-size: 190% 190%, 230% 230%, 270% 270%;
+  background-repeat: no-repeat;
+  animation-name: auraFlowDrift;
+  animation-duration: calc(36s * var(--anim-speed, 1));
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+}
+/* 用户自定义玻璃背景（照片/颜色）→ 停止流动并隐藏叠层（用户素材优先） */
+[data-glass-custom-bg='on'] .app-root::before,
+[data-glass-custom-bg='on'] .mini-shell::before {
+  display: none;
+}
+
+/* ── 2b 动态高光折射（镜面扫光）──
+   载体：通用模态双本体 .modal / .modal-card（18 个弹窗共用，aura deepening 清单里的主要浮层）。
+   实现走 background-image 高光层 + background-position 位移（**不是** ::after 伪元素）：
+     · 伪元素方案要求宿主 position:relative —— .modal / .modal-card 不是全屏元素，
+       加 relative 会让弹窗内所有回退到视口锚点的绝对定位子元素改锚到弹窗，风险不可控；
+     · background 层天生裁剪在 border-box 内（background-clip 默认值），无需 overflow；
+     · 与上方 deepening 块的 `background: … !important` 共存：本规则声明在**其后**，
+       background-image/size/position 以同特异性 + !important 的长手声明覆盖其
+       shorthand 展开值，background-color（深色底）原样保留。
+   参数克制（硬约束）：扫光透明度 0.08 ≤ 0.10；周期 14s ≥ 8s；线性无弹跳。
+   基态可见性：background-position 基态 220% 0 = 高光停在画外 → 关动画（anim-off /
+   自定义档关 theme 组）时面板就是纯深色底，照常可见，只是没有扫光。
+   入场动画共存：aura 下的 animation 用 longhand 列表同时挂 popupLinearIn（入场，
+   时长随 --anim-speed 缩放）与 auraSheen（循环扫光）—— 等价于基态 shorthand 的
+   单动画 + 追加一层，不会互相覆盖（animation-name 列表按层合成）。
+   登记：.modal / .modal-card 本就在 theme 组（v2.3.97），扫光挂在宿主自身 → 门禁天然覆盖。 */
+@keyframes auraSheen {
+  from {
+    background-position: 220% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
+}
+[data-theme='aura'] .modal,
+[data-theme='aura'] .modal-card {
+  background-image: linear-gradient(
+    115deg,
+    transparent 42%,
+    rgba(255, 255, 255, 0.08) 50%,
+    transparent 58%
+  ) !important;
+  background-size: 300% 100% !important;
+  background-repeat: no-repeat !important;
+  background-position: 220% 0 !important;
+  animation-name: popupLinearIn, auraSheen;
+  animation-duration: calc(0.16s * var(--anim-speed, 1)), calc(14s * var(--anim-speed, 1));
+  animation-timing-function: linear, linear;
+  animation-iteration-count: 1, infinite;
+  animation-fill-mode: none, none;
 }
 
 /* ===== 剧情节点横幅（v2.3.37）：1s 弹入 → 停留 3.5s → 0.6s 渐隐 =====

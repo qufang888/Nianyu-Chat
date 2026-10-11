@@ -1,4 +1,7 @@
 // v2.3.101 需求 2 验证：消息气泡入场动画（头像渐显 → 气泡向中间弹出）
+// v2.3.109 需求 3 增补：① 时序提速（avatar 0.24s；bubble 延迟 0.04s + 时长 0.22s，全程 0.26s < 0.5s）；
+//   ② 方角→圆角跳变修复（clip-from 带最小可视宽度 2R 的完整圆角，全程圆角不塌陷）；
+//   ③ 闪跳修复（anim-enter 首帧 render 即在 className 中，不得由 useLayoutEffect/effect 挂载）。
 // 用法：node scripts/verify-bubble-anim.mjs
 //
 // 可证伪性对照（每条都必须能失败）：
@@ -75,12 +78,19 @@ check('@keyframes msgBubbleIn 存在', /@keyframes\s+msgBubbleIn\s*\{/.test(css)
   );
 }
 {
-  // 展开锚点：AI（头像在左）→ 左固定、右展开（inset 右侧 100%）；用户（头像在右）→ 右固定、左展开
-  const ai = /\.msg-row\.ai\.anim-enter\s*\{[^}]*--bubble-clip-from:\s*inset\(([^)]*)\)/.exec(css);
-  const u = /\.msg-row\.user\.anim-enter\s*\{[^}]*--bubble-clip-from:\s*inset\(([^)]*)\)/.exec(css);
-  check('AI 气泡：左边不动、右边展开（inset 第 2 个值 = 100%）', !!ai && /0\s+100%/.test(ai[1]));
-  check('用户气泡：右边不动、左边展开（inset 第 4 个值 = 100%）', !!u && /100%\s*\)?$/.test(u[1].trim()) || !!u && /0\s+0\s+0\s+100%/.test(u[1]));
-  check('展开保留圆角（inset 带 round）', !!ai && /round/.test(ai[1]));
+  // 展开锚点：AI（头像在左）→ 左固定、右展开；用户（头像在右）→ 右固定、左展开。
+  // v2.3.109：from 宽度给足「最小可视宽度 2R」（calc(100% - (2 * var(--bubble-radius…)))），
+  // 保证展开全程可见宽度 ≥ 2R、圆角半径恒等于 R —— 修复「细条阶段圆角被压缩成直角、
+  // 终态突然变圆」的跳变。两处都断言 calc 最小宽度变体 + round。
+  const ai = /\.msg-row\.ai\.anim-enter\s*\{[\s\S]*?--bubble-clip-from:\s*inset\(([^;]*)\)/.exec(css);
+  const u = /\.msg-row\.user\.anim-enter\s*\{[\s\S]*?--bubble-clip-from:\s*inset\(([^;]*)\)/.exec(css);
+  const nub = /calc\(\s*100%\s*-\s*\(?\s*2\s*\*\s*var\(--bubble-radius/;
+  check('AI 气泡：左边不动、右边展开（inset 第 2 个值 = 100% - 2R 最小可视宽度）', !!ai && nub.test(ai[1]));
+  check('用户气泡：右边不动、左边展开（inset 第 4 个值 = 100% - 2R 最小可视宽度）', !!u && nub.test(u[1]));
+  check('展开保留圆角（inset 带 round）', !!ai && /round/.test(ai[1]) && !!u && /round/.test(u[1]));
+  check('关键帧 from 态同样带最小可视宽度（非 .anim-enter 行内联时也不塌角）',
+    /--bubble-clip-from,\s*inset\([^)]*calc\(\s*100%\s*-\s*\(?\s*2\s*\*\s*var\(--bubble-radius/.test(css.replace(/\n/g, ' '))
+  );
 }
 
 section('2. 应用规则：先头像、后气泡，且为线性');
@@ -106,6 +116,19 @@ check(
   /msgAvatarIn\s+calc\([^)]*var\(--anim-speed/.test(css) &&
     /msgBubbleIn\s+calc\([^)]*var\(--anim-speed/.test(css)
 );
+
+section('2b. v2.3.109 提速时序（全程 0.26s < 0.5s；幅度参数不变只动时序）');
+{
+  const flat = css.replace(/\s+/g, ' ');
+  check('头像时长 0.24s（0.30s → 0.24s）', /msgAvatarIn calc\(0\.24s \* var\(--anim-speed, 1\)\)/.test(flat));
+  check('气泡时长 0.22s（0.40s → 0.22s）', /msgBubbleIn calc\(0\.22s \* var\(--anim-speed, 1\)\)/.test(flat));
+  check('气泡基础延迟 0.04s（0.08s → 0.04s）', /animation-delay: calc\(\(0\.04s \+ var\(--msg-enter-stagger, 0s\)\) \* var\(--anim-speed, 1\)\)/.test(flat));
+  check('旧时序残留清零（不得再出现 0.30s/0.40s/0.08s 旧值）',
+    !/msgAvatarIn calc\(0\.30s/.test(flat) && !/msgBubbleIn calc\(0\.40s/.test(flat) && !/calc\(\(0\.08s \+ var\(--msg-enter-stagger/.test(flat));
+  // 全程 = 0.04（延迟）+ 0.22（时长）= 0.26s，数值上锁死「明显快于 0.5s」
+  check('全程时序 ≤ 0.3s（0.04 + 0.22 = 0.26，硬性快于 0.5s）',
+    /msgBubbleIn calc\(0\.22s/.test(flat) && /calc\(\(0\.04s \+/.test(flat));
+}
 
 section('3. 展开锚点：AI 头在左 → 左固定右展开；用户头在右 → 右固定左展开');
 // v2.3.107：方向不再用位移 --msg-enter-dx（用户明确不要整体平移），改为 clip-path 锚点。
@@ -140,15 +163,26 @@ check(
     !/\.msg-row\s+\.bubble\s*\{[^}]*animation:\s*msgBubbleIn/.test(css)
 );
 
-section('5. 触发端：主窗与小窗都实现 entering 批次 + anim-enter');
+section('5. 触发端：主窗与小窗都实现 entering 批次 + anim-enter（v2.3.109 首帧即带类）');
 for (const f of ['src/components/ChatWindow.tsx', 'src/components/MiniChat.tsx']) {
   const s = read(f);
   const name = f.split('/').pop();
   // v2.3.107 需求 2：单条 enteringId 升级为「批次 map」（id → 错峰序号），
   // 以便打开聊天时末尾若干条错峰入场；故这里断言批次状态而非旧的 enteringId。
   check(`${name} 有 entering 批次状态`, /const \[entering,\s*setEntering\]/.test(s));
-  check(`${name} 有 enterRef 基线`, /enterRef/.test(s));
-  check(`${name} 用 useLayoutEffect（绘制前打标记，避免闪一下）`, /useLayoutEffect/.test(s));
+  check(`${name} 有 render 阶段基线 enterSnap（取代旧 enterRef + effect 挂类）`, /enterSnap/.test(s));
+  // ── v2.3.109 需求 3 闪跳修复（闸门固化）──
+  // anim-enter 必须在**首帧 render 时**即在 className 中：派生逻辑放在 render 阶段
+  // （对 enterSnap 比对后直接 setState，React 丢弃当前输出、重跑渲染后提交），
+  // 不得回退为 useLayoutEffect/useEffect 挂载（那会产生「先见终态」的闪帧）。
+  check(
+    `${name} anim-enter 由 render 阶段派生（含 setEnterSnap(enterNextSnap) 同步写基线）`,
+    /setEnterSnap\(enterNextSnap\)/.test(s) && /setEntering\(map\)|setEntering\(\{ \[enterLastId\]: 0 \}\)/.test(s)
+  );
+  check(
+    `${name} 不得再用 useLayoutEffect 挂 anim-enter（闪跳修复红线）`,
+    !/useLayoutEffect/.test(s)
+  );
   check(`${name} 清空时机用 animMs(0.6)（与 CSS 时长同步缩放）`, /animMs\(0\.6\)/.test(s));
   check(`${name} 把 anim-enter 挂到 .msg-row`, /anim-enter/.test(s));
   check(
@@ -163,7 +197,7 @@ section('5b. 打开聊天也播（v2.3.107 需求 2）—— CSS 消费错峰变
   const css = read('src/styles/index.css');
   check(
     'CSS 的 .msg-row.anim-enter .bubble 延迟含 --msg-enter-stagger',
-    /\.msg-row\.anim-enter\s+\.bubble\s*\{[^}]*animation-delay:\s*calc\(\(0\.08s \+ var\(--msg-enter-stagger/.test(css.replace(/\n/g, ' ')) ||
+    /\.msg-row\.anim-enter\s+\.bubble\s*\{[^}]*animation-delay:\s*calc\(\(0\.04s \+ var\(--msg-enter-stagger/.test(css.replace(/\n/g, ' ')) ||
       /--msg-enter-stagger/.test(css)
   );
   check(
@@ -200,8 +234,8 @@ for (const f of ['src/components/ChatWindow.tsx', 'src/components/MiniChat.tsx']
     /if \(streamOnRef\.current && data\.message\.id != null\)/.test(s)
   );
   check(
-    `${name} 入场检测里对抑制 id 提前返回`,
-    /suppressEnterIdRef\.current !== null && lastId === suppressEnterIdRef\.current/.test(s)
+    `${name} 入场检测里对抑制 id 提前返回（v2.3.109 起变量名为 enterLastId）`,
+    /suppressEnterIdRef\.current !== null && enterLastId === suppressEnterIdRef\.current/.test(s)
   );
 }
 

@@ -1097,6 +1097,8 @@
  "settings.glassBubbleBorder": "Couleur de la bordure de la bulle",
  "settings.glassBubbleUserText": "Couleur du texte de la bulle utilisateur",
  "settings.glassColorReset": "Réinitialiser les couleurs",
+ "settings.auraAccent": "Couleur d'accent de Liquid Aura",
+ "settings.auraAccentDesc": "Choisissez n'importe quelle couleur d'accent pour le thème Liquid Aura : la couleur principale, vos bulles, le survol et les reflets suivent de façon cohérente. Videz pour restaurer le turquoise par défaut.",
  "settings.autoContrast": "Ajustement automatique du contraste",
   "settings.autoContrastTip": "Assombrit automatiquement les fonds en verre ou inverse la couleur du texte pour garantir la lisibilité dans les thèmes Verre.",
  "settings.glassTokenBorder": "Couleur de la bordure de la barre Token",
