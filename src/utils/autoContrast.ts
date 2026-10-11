@@ -1,9 +1,10 @@
 /**
- * autoContrast —— 玻璃/液态玻璃主题的「文字对比度看门狗」（v2.3.104，任务 T01）
+ * autoContrast —— 玻璃家族主题的「文字对比度看门狗」（v2.3.104，任务 T01）
  *
  * 定位：可读性功能（非动画）。事件驱动的近似机制（非逐像素实时），
  * 对应 Apple Liquid Glass「材质随底层内容自适应、必要时明暗翻转」的 Web 可达近似。
- * 作用域：仅 `data-theme ∈ {glass, liquid}`；其余 13 主题零开销早退。
+ * 作用域：仅 `data-theme ∈ {glass, aura}`；其余主题零开销早退。
+ *（v2.3.108：aura（琉璃幻境）加入看门狗；前代 liquid 主题已在 v2.3.107 整体删除。）
  *
  * 工作原理（设计文档 §4.6）：
  *  1. WATCH_SELECTORS 注册表：玻璃文字承载面清单。
@@ -11,7 +12,7 @@
  *     两处必须同步维护——index.css 侧由 T03 维护，此处由本文件维护，改动任一侧务必同步另一侧。
  *  2. compositeBackground(el)：自 el 沿祖先链向上做 premultiplied alpha 合成 backgroundColor，
  *     累计 alpha ≥ 0.97 即停；合成到根之后垫 `--auto-contrast-base` 基准色（窗口底等效色）。
- *     若 html 挂了 `data-liquid-custom-bg`（用户自定义背景图生效），用离屏 canvas 把背景图
+ *     若 html 挂了 `data-glass-custom-bg`（用户自定义背景图生效），用离屏 canvas 把背景图
  *     降采样 8×8 求均值色参与合成（按 URL 缓存，避免重复绘制）。
  *     【blur 近似说明】backdrop blur 保持区域平均亮度，故对自定义背景取均值是合理近似；
  *     但对小浮层（尺寸 < 3× blur 半径）存在边界效应——透出的多半是暗缘而非区域平均，
@@ -23,14 +24,14 @@
  *     静态内容面（主题卡网格、侧栏、面板等 position:static 者）最高只到 boost，
  *     绝不翻成浅底 —— 否则深色玻璃主题上会出现整片近白色块（用户实测反馈「非常恶心」）。
  *  4. 触发与门禁：
- *     - documentElement attributes MutationObserver（data-theme / data-liquid-flow / data-liquid-custom-bg）；
+ *     - documentElement attributes MutationObserver（data-theme / data-glass-custom-bg）；
  *     - body childList+subtree MutationObserver（debounce 120ms，捕捉菜单/弹窗 portal 动态挂载）；
  *     - window resize（debounce 200ms）；
- *     - 非 glass/liquid 主题：移除全部 `data-auto-contrast` 后早退（观察器保持存活以响应换主题）；
+ *     - 非 glass/aura 主题：移除全部 `data-auto-contrast` 后早退（观察器保持存活以响应换主题）；
  *     - anim-off 不影响本机制（可读性功能，不依赖任何动画）；
  *     - 开关关闭（setAutoContrastEnabled(false)）：清空属性并停止全部观察，零开销。
  *
- * CSS 消费端（T03，src/styles/index.css）：`[data-theme='glass|liquid'] [data-auto-contrast='boost'|'flip']`
+ * CSS 消费端（T03，src/styles/index.css）：`[data-theme='glass|aura'] [data-auto-contrast='boost'|'flip']`
  * 规则与 `--auto-contrast-*` 令牌定义；本文件只在容器上挂属性，不定义任何样式。
  */
 
@@ -53,11 +54,13 @@ type Verdict = 'boost' | 'flip';
 // 常量（Shared Knowledge：JS 侧允许的 fallback 字面量，CSS 侧令牌由 T03 定义）
 // ---------------------------------------------------------------------------
 
-/** 看门狗作用主题（其余 13 主题早退） */
-// v2.3.107 需求 7：液态玻璃（liquid）主题已删除，看门狗只服务毛玻璃（glass）。
-const WATCHED_THEMES: ReadonlySet<string> = new Set(['glass']);
+/** 看门狗作用主题（其余主题早退） */
+// v2.3.108：aura（琉璃幻境）加入玻璃家族看门狗；liquid 已随 v2.3.107 删除。
+const WATCHED_THEMES: ReadonlySet<string> = new Set(['glass', 'aura']);
 
-/** 玻璃 backdrop blur 半径（px），与 --liquid-backdrop 的 blur(30px) 对应，用于小浮层判定 */
+/** 玻璃 backdrop blur 半径（px），玻璃家族默认 --blur（30px），用于小浮层判定。
+ *  注：实际 blur 可被「玻璃家族设置面板」的模糊度滑块（glassBlur 4~60px）覆盖，
+ *  此处取出厂默认做近似即可（判定阈值本就是启发式）。 */
 const BLUR_RADIUS_PX = 30;
 
 /** 小浮层判定阈值：最大边长 < 3× blur 半径（设计文档 §4.6 第 2 条） */
@@ -313,7 +316,7 @@ function sampleImageColor(url: string, smallFloat: boolean): RGBA | null {
  */
 function resolveCustomBg(smallFloat: boolean): RGBA | null {
   const root = document.documentElement;
-  if (root.getAttribute('data-liquid-custom-bg') !== 'on') return null;
+  if (root.getAttribute('data-glass-custom-bg') !== 'on') return null;
   const appBg = root.style.getPropertyValue('--app-bg').trim();
   if (!appBg) return null;
   const urlMatch = appBg.match(/url\(\s*['"]?([^'")]+)['"]?\s*\)/i);
@@ -324,7 +327,7 @@ function resolveCustomBg(smallFloat: boolean): RGBA | null {
 /**
  * 有效背景合成：自 el 沿祖先链向上 premultiplied 合成 backgroundColor，
  * 累计 alpha ≥ 0.97 停；到根后垫 --auto-contrast-base；
- * data-liquid-custom-bg 生效时把采样出的背景色垫在最底（自定义背景是整个窗口的最底层）。
+ * data-glass-custom-bg 生效时把采样出的背景色垫在最底（自定义背景是整个窗口的最底层）。
  */
 function compositeBackground(el: Element): RGBA {
   const rect = el.getBoundingClientRect();
@@ -432,7 +435,7 @@ function clearAllVerdicts(): void {
 function applyVerdicts(): void {
   if (!enabled) return;
   const theme = document.documentElement.getAttribute('data-theme');
-  // 门禁：非 glass/liquid 主题移除全部属性后早退（观察器保持存活以响应换主题）
+  // 门禁：非 glass/aura 主题移除全部属性后早退（观察器保持存活以响应换主题）
   if (!theme || !WATCHED_THEMES.has(theme)) {
     clearAllVerdicts();
     return;
@@ -489,7 +492,7 @@ function startObservers(): void {
   rootAttrObserver = new MutationObserver(() => scheduleApply());
   rootAttrObserver.observe(document.documentElement, {
     attributes: true,
-    attributeFilter: ['data-theme', 'data-liquid-flow', 'data-liquid-custom-bg', 'style'],
+    attributeFilter: ['data-theme', 'data-glass-custom-bg', 'style'],
   });
   // 2) body 子树挂载：捕捉菜单/弹窗 portal 的动态挂载
   bodyObserver = new MutationObserver(() => scheduleApply());

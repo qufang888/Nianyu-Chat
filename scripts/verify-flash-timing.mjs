@@ -195,7 +195,7 @@ function ringCheckPasses(v) {
 
 // 各主题：flash-bg(=primary) 对 面板/聊天 面的可感知性（≥3:1）
 const { contrastRatio, parseCssColor, compositeOver, rgbToHex, parseCssColorWithAlpha, computePrimarySurfaces } = await import(
-  new URL('../src/utils/dominantColor.ts', import.meta.url).href
+  new URL('./lib/dominantColor.ts', import.meta.url).href
 );
 const varsOf = (body) => {
   const g = (p) => { const m = body.match(new RegExp('--' + p + '\\s*:\\s*([^;]*);')); return m ? m[1].trim() : null; };

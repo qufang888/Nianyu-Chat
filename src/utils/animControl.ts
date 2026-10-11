@@ -323,29 +323,9 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.event-modal',
       '.event-option',
       '.event-close-top',
-      // v2.3.97（液态玻璃 liquid 主题）：背景「液态流动」动画。
-      // 载体是 .app-root（主窗）与 .mini-shell（小窗）的 background-position 位移，
-      // 36s linear 往返（keyframes liquid-flow-drift）。放theme 组而非新建组，理由：
-      //   ① 它就是「主题外观」的一部分，与 .theme-card / body 同族，语义一致；
-      //   ② 新建分组会给设置页再添一个开关，而本主题另有独立的「液态流动」开关
-      //      （settings.liquidFlow → html[data-liquid-flow="off"]），两者正交：
-      //      本登记负责「三档总开关 / 自定义档」这一维度，独立开关负责「只关流动」。
-      // 关掉后的兜底是安全的：animation:none 会让元素退回基态，而基态
-      // background-position 就是 0% 0%（= keyframes 的 0% 声明值），
-      // 即「静止的完整背景」，不会退回透明/不可见 —— 这是选 background-position
-      // 位移（而非 opacity/transform 显隐类动画）的原因。
-      //
-      // ⚠️ 这里**只能登记裸类名**，不能写成 `[data-theme="liquid"] .app-root`：
-      // buildGateCss 生成的规则是 `html[data-anim-off~="theme"] <登记的选择器>`，
-      // 中间是**后代组合器**。而 data-theme 是设在 documentElement（即 <html>）上的，
-      // 若登记成 `[data-theme="liquid"] .app-root`，拼出来就是
-      // `html[...] [data-theme="liquid"] .app-root` —— 要求 html 的**后代**里有个
-      // 带 data-theme 的元素，而 data-theme 就在 html 自己身上，永远匹配不上，
-      // 结果是「自定义档关掉 theme 组，流动动画照样播」（静默失效）。
-      // 裸类名即可：只有 liquid 主题给这两个元素加了 animation，
-      // 其余主题下它们没有 animation/transition，被 kill 也不影响任何东西。
-      '.app-root',
-      '.mini-shell',
+      // v2.3.108：原 v2.3.97 liquid「液态流动」登记（.app-root / .mini-shell 裸类名）
+      // 已随 liquid 主题整体删除而移除 —— index.css 已无任何作用于这两个元素的
+      // animation/transition，keyframes liquid-flow-drift 也已删除，登记成为死配置。
       // v2.3.97：拖拽导入「预检确认弹窗」的文件列表行。
       // 这一条是**功能性必需**，与 .msg-action-bar 同理：.qip-item 的基态是
       // `opacity:0`（靠 transition 插值到 .is-in 的 opacity:1），

@@ -83,39 +83,23 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // `html[data-anim-off~="<id>"]` 并由自动生成的 <style> 精确关掉对应分组；
     // 'custom' 档永不挂 `.anim-off`，以保证仍开启的分组动画与「流式豁免」不被误杀。
     applyAnimControl(document, settings, 'main');
-    // v2.3.97：液态玻璃「背景流动」开关（仅 liquid 主题消费，其他主题挂了也无副作用，
-    // 因为 CSS 侧的选择器是 [data-theme='liquid'][data-liquid-flow='off']）。
-    // 语义：缺省 / true = 流动；false = 完全静止（animation:none，而非暂停在首帧）。
-    // 注意与 animControl 的正交关系：三档「全部关闭」已经能停掉流动，这里管的是
-    // 「其他动效照常播放、唯独背景不流动」这一档，故需要独立属性。
-    // v2.3.107 需求 7：liquid 主题已删除，老数据在 electron/db.ts 读盘层已单向迁移为 glass；
-    // 此分支仅作历史兜底（正常情况下 settings.theme 不会是 'liquid'）。
-    if (settings && settings.liquidFlow === false) {
-      root.setAttribute('data-liquid-flow', 'off');
-    } else {
-      root.removeAttribute('data-liquid-flow');
-    }
-    // 毛玻璃主题背景（仅 glass/frost/liquid 主题生效）：自定义背景色或图片，磨砂效果由主题 CSS 的 backdrop-filter 保留
-    // v2.3.97：liquid 加入判断 —— 液态玻璃同为半透明家族，同样支持自定义背景图。
-    // v2.3.107 需求 7：liquid 主题已删除；此处 'liquid' 仅作历史兜底（老数据已在读盘层迁移为 glass）。
-    const isGlass = theme === 'glass' || theme === 'frost' || theme === 'liquid';
+    // 玻璃家族主题背景（仅 glass/frost/aura 主题生效）：自定义背景色或图片，磨砂效果由主题 CSS 的 backdrop-filter 保留
+    // v2.3.108：aura（琉璃幻境）加入玻璃家族；前代 liquid 主题已在 v2.3.107 整体删除。
+    const isGlass = theme === 'glass' || theme === 'frost' || theme === 'aura';
     const glassBg = settings.glassBgImage
       ? `url("${settings.glassBgImage}") center/cover no-repeat`
       : settings.glassBgColor || '';
     if (isGlass && glassBg) {
       root.style.setProperty('--app-bg', glassBg);
-      // v2.3.97：液态玻璃的「流动」是 background-position 位移，**只在主题自带渐变上成立**。
-      // 用户自定义了背景色/图之后，--app-bg 变成 `url(...) center/cover no-repeat`，
-      // 此时若继续跑位移动画，等于让用户的照片在窗口里缓慢漂移（观感是 bug 不是特效）。
-      // 故挂一个标记属性，让 index.css 的 liquid 段停掉动画并改用 --app-bg 原样显示。
-      // 标记放在 data-liquid-custom-bg 上，与 data-liquid-flow 是两个正交维度：
-      // 前者「有没有自定义背景」，后者「要不要流动」。
-      root.setAttribute('data-liquid-custom-bg', 'on');
+      // 用户自定义了背景色/图之后挂标记属性，供 autoContrast 看门狗把采样出的
+      // 自定义背景色垫在最底参与对比度求解（属性名 v2.3.108 起由 data-liquid-custom-bg
+      // 更名为 data-glass-custom-bg，旧名随 liquid 主题一并退役）。
+      root.setAttribute('data-glass-custom-bg', 'on');
     } else {
       root.style.removeProperty('--app-bg');
-      root.removeAttribute('data-liquid-custom-bg');
+      root.removeAttribute('data-glass-custom-bg');
     }
-    // 毛玻璃主题：聊天界面颜色覆盖（仅 glass/frost 生效），解决自定义背景后字体/边框与背景融合看不清
+    // 玻璃家族主题：聊天界面颜色覆盖（仅 glass/frost/aura 生效），解决自定义背景后字体/边框与背景融合看不清
     const setGlassVar = (name: string, val?: string) => {
       if (isGlass && val) root.style.setProperty(name, val);
       else root.style.removeProperty(name);
@@ -125,8 +109,8 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setGlassVar('--glass-bubble-user-fg', settings.glassBubbleUserText);
     setGlassVar('--glass-bubble-ai-fg', settings.glassBubbleAiText);
     setGlassVar('--glass-bubble-border', settings.glassBubbleBorder);
-    // v2.3.105：毛玻璃 / 液态玻璃专属细化 —— 色调 + 不透明度 + 模糊度。
-    // 仅 glass / frost / liquid 主题生效；其余主题清除内联覆盖，回退变量默认值。
+    // 玻璃家族专属细化（v2.3.105 引入，v2.3.108 扩展到 aura）—— 色调 + 不透明度 + 模糊度。
+    // 仅 glass / frost / aura 主题生效；其余主题清除内联覆盖，回退变量默认值。
     // 不透明度按「白底基准 alpha 0.20」的比例同步缩放到 chat-bg(0.45×) / input-bg(0.95×)，
     // 使三者随滑块等比增减，观感一致。色调缺省近白（#ffffff），即当前默认玻璃观感。
     if (isGlass) {

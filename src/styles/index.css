@@ -692,9 +692,10 @@ input[type='range']::-moz-range-thumb {
   color: var(--color-text-secondary);
   margin-bottom: 4px;
 }
-/* 毛玻璃/frost：气泡边框色覆盖（默认透明，不影响非玻璃主题布局） */
+/* 毛玻璃/frost/琉璃幻境：气泡边框色覆盖（默认透明，不影响非玻璃主题布局） */
 [data-theme='glass'] .bubble,
-[data-theme='frost'] .bubble {
+[data-theme='frost'] .bubble,
+[data-theme='aura'] .bubble {
   border: 1px solid var(--glass-bubble-border, transparent);
 }
 /* 旁白分隔：（）与 “” 内文字斜体+灰字，定界符不显示 */
@@ -1171,6 +1172,12 @@ input[type='range']::-moz-range-thumb {
 [data-theme='glass'] .scene-image-bar {
   background: color-mix(in srgb, var(--color-primary, #7c83ff) 8%, #3b3070);
   border-color: color-mix(in srgb, var(--color-primary, #7c83ff) 42%, transparent);
+}
+/* 琉璃幻境（aura）同款兜底：--color-panel 半透明白叠在深海靛渐变上仍偏透，
+   单独把底色提纯为不透明，保证深底浅字始终达标。 */
+[data-theme='aura'] .scene-image-bar {
+  background: color-mix(in srgb, var(--color-primary, #45e0c8) 8%, #0d2338);
+  border-color: color-mix(in srgb, var(--color-primary, #45e0c8) 42%, transparent);
 }
 
 .msg-meta {
@@ -5017,6 +5024,54 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.10);
 }
 
+/* ===== 琉璃幻境（aura / Liquid Aura）浮层面板统一加深：同 glass 族范式 =====
+   这些面板/抽屉/下拉在 aura 主题中 --color-panel 太透（14% 白叠深海靛渐变），
+   直接换成深色高不透明度底，保证菜单文字、思考过程、错误提示等清晰可读。
+   Apple Liquid Glass 的「边缘镜面高光」用静态 inset 高光模拟（不新增动画）。 */
+[data-theme='aura'] .more-dropdown,
+[data-theme='aura'] .mention-pop,
+[data-theme='aura'] .mini-drawer,
+[data-theme='aura'] .modal-card,
+[data-theme='aura'] .modal,
+[data-theme='aura'] .error-bubble,
+[data-theme='aura'] .reasoning-block,
+[data-theme='aura'] .qps-queue,
+[data-theme='aura'] .mini-toast,
+[data-theme='aura'] .hint-tip,
+[data-theme='aura'] .chat-model-picker,
+[data-theme='aura'] .update-banner,
+[data-theme='aura'] .queue-dock-handle,
+[data-theme='aura'] .queue-dock-panel,
+[data-theme='aura'] .api-params-panel,
+[data-theme='aura'] .chat-model-picker-results {
+  background: rgba(9, 21, 40, 0.88) !important;
+  border-color: rgba(160, 220, 235, 0.20);
+  box-shadow: inset 0 1px 0 rgba(220, 246, 255, 0.22), 0 8px 32px rgba(2, 12, 28, 0.45);
+}
+[data-theme='aura'] .chat-model-picker-input {
+  background: rgba(255, 255, 255, 0.10) !important;
+  border-color: rgba(160, 220, 235, 0.24);
+  color: #eef7fb;
+}
+[data-theme='aura'] .chat-model-picker-input::placeholder {
+  color: rgba(238, 247, 251, 0.55);
+}
+[data-theme='aura'] .chat-model-picker-empty {
+  color: rgba(238, 247, 251, 0.6);
+}
+[data-theme='aura'] .reasoning-block {
+  color: rgba(238, 247, 251, 0.85);
+}
+[data-theme='aura'] .reasoning-body {
+  color: rgba(238, 247, 251, 0.78);
+}
+[data-theme='aura'] .mention-pop .item:hover,
+[data-theme='aura'] .more-dropdown .tool-btn:hover,
+[data-theme='aura'] .mini-drawer-item:hover,
+[data-theme='aura'] .qps-queue .qps-cancel:hover {
+  background: rgba(125, 240, 220, 0.12);
+}
+
 /* ===== 剧情节点横幅（v2.3.37）：1s 弹入 → 停留 3.5s → 0.6s 渐隐 =====
    由 NodeBanner 组件驱动 phase 类切换；展示剧情节点名称，弹出时播 achievement-unlock 音效。 */
 .node-banner {
@@ -7070,6 +7125,16 @@ html[data-anim-off~='panel'] .msg-action-divider {
   background-image: none !important;
   color: var(--auto-contrast-flip-text) !important;
 }
+/* aura（琉璃幻境）主题同构一份（v2.3.108 新增主题加入玻璃家族看门狗）；
+   令牌在 variables.css 的 [data-theme='aura'] 块，契约与 glass 完全一致。 */
+[data-theme='aura'] [data-auto-contrast='boost'] {
+  background-image: linear-gradient(var(--auto-contrast-scrim), var(--auto-contrast-scrim)) !important;
+}
+[data-theme='aura'] [data-auto-contrast='flip'] {
+  background-color: var(--auto-contrast-flip-bg) !important;
+  background-image: none !important;
+  color: var(--auto-contrast-flip-text) !important;
+}
 
 /* ---------- v2.3.101：「最喜爱的人物」6 个资料字段（职业/性格/爱好/国籍/学历/菜） ---------- */
 /* 编辑界面：单行输入框（视觉对齐既有的 .stats-fav-signature textarea） */
@@ -7109,41 +7174,4 @@ html[data-anim-off~='panel'] .msg-action-divider {
 .stats-fav-info-item .v {
   color: var(--color-text);
   word-break: break-word;
-}
-
-/* ===== 有聊天背景时的液态玻璃磨砂层（v2.3.101）=====
-   类名 has-chat-bg 由 ChatWindow 在「背景取色染色激活」时挂到滚动区外层容器
-   （.messages / .mini-messages 即 CustomScrollArea 的外层，内联已有 position:relative;overflow:hidden，
-   聊天背景图以内联 backgroundImage 打在该外层上；内层 .custom-scroll-content 负责滚动）。
-   故 ::before 覆盖整个可视区、不随内容滚动；backdrop-filter 模糊其后的背景图形成磨砂玻璃质感，
-   内容 .scroll-content 抬到 z-index:1 保证文字清晰。 */
-.messages.has-chat-bg,
-.mini-messages.has-chat-bg {
-  position: relative;
-}
-/* v2.3.101 无障碍修复：原遮罩用 color-mix(--color-chat-bg 22%, transparent)，
-   而 --color-chat-bg 自身 alpha 极低（0.09~0.10），叠加后实际 alpha≈0.02 ≈ 无遮罩，
-   主题文字色直接压在背景图上的对比度最低仅 ≈1.05:1（win 不到 4.5:1）。
-   改为：① 提高模糊半径 6px→14px（更均匀打散背景图高频细节，磨砂质感更强，仍可见图像轮廓）；
-   ② 叠加 --color-chat-scrim（主题背景色 ~70% 不透明度的实色遮罩），把「文字承载面」拉回
-      接近主题背景色，使主题文字色（--color-text）无论背景图是纯白还是纯黑都 ≥4.5:1。
-   实测估算（α=0.70）：
-     · 浅色主题 wechat（浅底 / 深字）：最坏纯黑背景图 → 合成中灰，对比 ≈7.1:1；
-     · 深色主题 dark（深底 / 浅字）：最坏纯白背景图 → 合成中深灰，对比 ≈5.9:1。
-   70% 遮罩保留 30% 背景图 + 14px 模糊，背景图仍可感知，不糊成纯色。 */
-.messages.has-chat-bg::before,
-.mini-messages.has-chat-bg::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  backdrop-filter: blur(14px) saturate(1.15);
-  -webkit-backdrop-filter: blur(14px) saturate(1.15);
-  background: var(--color-chat-scrim);
-}
-.messages.has-chat-bg .scroll-content,
-.mini-messages.has-chat-bg .scroll-content {
-  position: relative;
-  z-index: 1;
 }

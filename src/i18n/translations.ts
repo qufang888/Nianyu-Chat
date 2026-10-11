@@ -825,10 +825,10 @@ export const translations: Record<Lang, Dict> = {
     'settings.glassBubbleBorder': '气泡边框颜色',
     'settings.glassColorReset': '重置颜色',
     'settings.autoContrast': '自动对比度调节',
-    'settings.autoContrastTip': '玻璃与毛玻璃主题下，自动加深背景或翻转文字颜色以保证可读',
+    'settings.autoContrastTip': '玻璃家族主题（毛玻璃 / 琉璃幻境）下，自动加深背景或翻转文字颜色以保证可读',
     // v2.3.105：毛玻璃专属细化设置
     'settings.glassTint': '玻璃色调',
-    'settings.glassTintDesc': '为毛玻璃的半透明面板染色，可选贴合你喜好的色调。',
+    'settings.glassTintDesc': '为毛玻璃 / 琉璃幻境的半透明面板染色，可选贴合你喜好的色调。',
     'settings.glassOpacity': '玻璃不透明度',
     'settings.glassOpacityDesc': '调节毛玻璃面板与气泡的透明程度，数值越小越通透。',
     'settings.glassBlur': '磨砂模糊度',
@@ -1099,6 +1099,8 @@ export const translations: Record<Lang, Dict> = {
     'theme.graphite': '石墨极简灰',
     'theme.indigo': '深海靛蓝',
     'theme.sand': '暖米浅棕',
+    // v2.3.108：琉璃幻境（aura / Liquid Aura，第 15 套主题，玻璃家族）
+    'theme.aura': '琉璃幻境',
 
     'model.needName': '请填写显示名称',
     'model.needBaseUrl': '请填写 API Base URL',
@@ -2619,10 +2621,10 @@ export const translations: Record<Lang, Dict> = {
     'settings.glassBubbleBorder': 'Bubble border color',
     'settings.glassColorReset': 'Reset colors',
     'settings.autoContrast': 'Auto contrast adjustment',
-    'settings.autoContrastTip': 'Automatically darkens glass backgrounds or flips text color to keep text readable in Glass themes.',
+    'settings.autoContrastTip': 'Automatically darkens glass backgrounds or flips text color to keep text readable in Glass family themes (Glass / Liquid Aura).',
     // v2.3.105：毛玻璃（glass）专属细化设置
     'settings.glassTint': 'Glass tint',
-    'settings.glassTintDesc': 'Tints the translucent panels of Glass themes with a color of your choice.',
+    'settings.glassTintDesc': 'Tints the translucent panels of Glass / Liquid Aura themes with a color of your choice.',
     'settings.glassOpacity': 'Glass opacity',
     'settings.glassOpacityDesc': 'Adjusts how opaque the frosted panels and bubbles are; lower means more see-through.',
     'settings.glassBlur': 'Frost blur',
@@ -2912,6 +2914,8 @@ export const translations: Record<Lang, Dict> = {
     'theme.graphite': 'Graphite Gray',
     'theme.indigo': 'Deep Indigo',
     'theme.sand': 'Warm Sand',
+    // v2.3.108: Liquid Aura (aura, 15th theme, glass family)
+    'theme.aura': 'Liquid Aura',
 
     'model.needName': 'Please enter a display name',
     'model.needBaseUrl': 'Please enter API Base URL',

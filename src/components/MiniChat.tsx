@@ -54,14 +54,7 @@ import { BondPanel } from './BondPanel';
 import { TranslateModal } from './TranslateModal';
 // v2.3.102 需求 1：小窗复用主窗的「打断后重发」锚点判定，避免两份逻辑分叉（单向依赖，无循环引用）
 import { computeInterruptedAnchorId, ENTER_BATCH, ENTER_STAGGER_MS } from './ChatWindow';
-// v2.3.101：主题色取自聊天背景主体色（小窗跟随其聊天背景）
-import {
-  extractDominantColor,
-  deriveAccent,
-  deriveInkForSurfaces,
-  computePrimarySurfaces,
-  computeSecondarySurfaces,
-} from '../utils/dominantColor';
+// v2.3.108：原 dominantColor 取色染色子系统已随 liquid 主题删除而整体移除（v2.3.101-105 功能）。
 
 // 快捷聊天小窗（独立无边框窗口，#mini 路由渲染）
 // 交互逻辑与 ChatWindow 主界面保持一致：图片发送/预览、语音输入、TTS、回到底部、重发、@提及、群聊转单聊提示等。
@@ -426,68 +419,8 @@ export const MiniChat: React.FC = () => {
   // 观察者私密小窗标记：以 obs:<groupId>:<roleId> 打开时为 true，强制显示思维链
   const [observerPrivate, setObserverPrivate] = useState(false);
   const [chatBg, setChatBg] = useState<string | null>(null);
-  // v2.3.101：主题色取自聊天背景主体色（小窗跟随其当前聊天）。dyeSeqRef 保护异步取色竞态
-  // v2.3.105：背景取色染色改为「液态玻璃(liquid)专属」——仅 liquid 主题生效，其余主题回退主题默认主色。
-  const dyeSeqRef = useRef(0);
-  const dyeActive = settings?.theme === 'liquid' && settings?.dyeFromBackground !== false && !!chatBg;
-
-  // 有背景且未关染色 → 提取主体色作为内联主题主色（小窗是独立 document，须挂到自己的 documentElement）。
-  // 无背景 / 关闭开关 / 切主题 → 清除内联覆盖，回退主题默认色。
-  useEffect(() => {
-    const root = document.documentElement;
-    const seq = ++dyeSeqRef.current;
-    const clear = () => {
-      root.style.removeProperty('--color-primary');
-      root.style.removeProperty('--color-primary-text');
-      root.style.removeProperty('--color-primary-ink');
-    };
-    if (settings?.theme !== 'liquid' || settings?.dyeFromBackground === false || !chatBg) {
-      clear();
-      return;
-    }
-    extractDominantColor(chatBg).then((hex) => {
-      if (seq !== dyeSeqRef.current) return; // 切聊天/切主题后旧结果作废
-      if (!hex) {
-        clear();
-        return;
-      }
-      const { primary, primaryText } = deriveAccent(hex);
-      root.style.setProperty('--color-primary', primary);
-      root.style.setProperty('--color-primary-text', primaryText);
-      // v2.3.101 无障碍：与主窗对称。--color-primary-ink 作为**文字色**压在「面板」与「聊天
-      // 磨砂面」上，glass/liquid 的 --color-bg 是渐变、面板半透明，故按多重承载面求解。
-      // 小窗是独立 document，读/写均针对自身 documentElement。
-      const cs = getComputedStyle(root);
-      const primarySurfaces = computePrimarySurfaces(
-        cs.getPropertyValue('--color-panel').trim(),
-        cs.getPropertyValue('--color-bg').trim(),
-        cs.getPropertyValue('--color-hover').trim()
-      );
-      const secondarySurfaces = computeSecondarySurfaces(
-        cs.getPropertyValue('--color-chat-scrim').trim(),
-        cs.getPropertyValue('--color-bg').trim()
-      );
-      root.style.setProperty(
-        '--color-primary-ink',
-        deriveInkForSurfaces(primary, primarySurfaces, secondarySurfaces)
-      );
-      // ⚠️ 已知可达上限（与主窗同源，**非 bug**）：glass 主题 6 个承载面跨度 #505996~#b66cb2，
-      // 任何单一 ink 上界仅 3.64:1（已穷举复核）。根因是 --color-panel 的白色叠加把
-      // 深蓝紫渐变抬进中紫区间；该主题自身的 --color-text(#f4f4ff) 在最亮面更差（3.33:1）。
-      // 详见 ChatWindow.tsx 同名注释。
-    });
-  }, [chatBg, settings?.theme, settings?.dyeFromBackground]);
-
-  // 卸载时清除内联覆盖，避免残留染色影响后续主题
-  useEffect(
-    () => () => {
-      const root = document.documentElement;
-      root.style.removeProperty('--color-primary');
-      root.style.removeProperty('--color-primary-text');
-      root.style.removeProperty('--color-primary-ink');
-    },
-    []
-  );
+  // v2.3.108：原「背景取色染色」子系统已整体移除（v2.3.105 起 liquid 专属，
+  // liquid 主题删除后不可达）。旧「has-chat-bg 玻璃滚动区类」随之退役。
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // v2.3.44：卸载 / 切换聊天时停止播报并清空状态（避免音频跨聊天继续播放）
@@ -1040,12 +973,8 @@ export const MiniChat: React.FC = () => {
       // 高级动画控制（v2.3.90）：总控 / 单控互斥。小窗是独立 document，
       // 有自己的 <html>，故必须对自己的 document 调用（主窗口 ThemeContext 只管主窗）。
       applyAnimControl(document, settings, 'main');
-      // v2.3.97：液态玻璃「背景流动」开关（与 ThemeContext 同款逻辑）。
-      // 小窗是独立 document，主窗挂的 data-liquid-flow **不会**传播过来，
-      // 故必须在这里对自己的 documentElement 重挂一次，否则用户在主窗关掉流动后，
-      // 小窗（.mini-shell 同样带 liquid-flow-drift 动画）仍在流动，开关形同虚设。
-      if (settings.liquidFlow === false) root.setAttribute('data-liquid-flow', 'off');
-      else root.removeAttribute('data-liquid-flow');
+      // v2.3.108：原 liquid「背景流动」开关的小窗同步（data-liquid-flow 重挂）已随
+      // liquid 主题整体删除而移除。
       // 全局开关统一重派生
       setHideReasoning(settings.hideReasoning !== false);
       // v2.3.44：全局 TTS 开关（主窗/设置页切换后小窗立即同步）
@@ -2450,7 +2379,7 @@ export const MiniChat: React.FC = () => {
       )}
 
       {/* 消息列表（最近 10 条） */}
-      <CustomScrollArea className={dyeActive ? 'mini-messages has-chat-bg' : 'mini-messages'} scrollRef={scrollRef} style={chatBg ? {
+      <CustomScrollArea className="mini-messages" scrollRef={scrollRef} style={chatBg ? {
         flex: 1,
         backgroundImage: `url(${chatBg})`,
         backgroundSize: 'cover',

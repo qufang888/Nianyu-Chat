@@ -70,15 +70,7 @@ import { startCompanionTimer } from '../utils/companionTimer';
 
 import { resolveWantStream, resolveStreamInfo, persistStreamToggle, type StreamPref } from '../utils/chatStream';
 
-// v2.3.101：主题色取自聊天背景主体色（无背景/关开关时回退主题默认）
-import { useTheme } from '../theme/ThemeContext';
-import {
-  extractDominantColor,
-  deriveAccent,
-  deriveInkForSurfaces,
-  computePrimarySurfaces,
-  computeSecondarySurfaces,
-} from '../utils/dominantColor';
+// v2.3.108：原 dominantColor 取色染色子系统已随 liquid 主题删除而整体移除（v2.3.101-105 功能）。
 
 import { usePseudoReveal, markPseudoPending, isPseudoPending, clearPseudoPending } from '../utils/pseudoStream';
 
@@ -641,78 +633,9 @@ export const ChatWindow: React.FC<{
 
   const [chatBg, setChatBg] = useState<string | null>(null);
 
-  // v2.3.101：主题色取自聊天背景主体色。dyeSeqRef 保护异步取色竞态；dyeActive 控制滚动区玻璃类
-  // v2.3.105：背景取色染色改为「液态玻璃(liquid)专属」——仅 liquid 主题生效，其余主题回退主题默认主色。
-  const { settings: themeSettings } = useTheme();
-  const dyeSeqRef = useRef(0);
-  const dyeActive =
-    themeSettings?.theme === 'liquid' && themeSettings?.dyeFromBackground !== false && !!chatBg;
-
-  // 有背景且未关染色 → 提取主体色作为内联主题主色（渐变过渡由 variables.css 的 @property/transition 完成）。
-  // 无背景 / 关闭开关 → 清除内联覆盖，回退主题默认色（即口径上的「无背景主体色为白」）。
-  // 切主题（settings.theme 变化）也在此重算/清除，避免内联旧色盖住新主题主色。
-  useEffect(() => {
-    const root = document.documentElement;
-    const seq = ++dyeSeqRef.current;
-    const clear = () => {
-      root.style.removeProperty('--color-primary');
-      root.style.removeProperty('--color-primary-text');
-      root.style.removeProperty('--color-primary-ink');
-    };
-    if (themeSettings?.theme !== 'liquid' || themeSettings?.dyeFromBackground === false || !chatBg) {
-      clear();
-      return;
-    }
-    extractDominantColor(chatBg).then((hex) => {
-      if (seq !== dyeSeqRef.current) return; // 切聊天/切主题后旧结果作废
-      if (!hex) {
-        clear();
-        return;
-      }
-      const { primary, primaryText } = deriveAccent(hex);
-      root.style.setProperty('--color-primary', primary);
-      root.style.setProperty('--color-primary-text', primaryText);
-      // v2.3.101 无障碍：--color-primary-ink 作为**文字色**，实际压在「面板」（设置页/弹窗/
-      // 编辑器）与「聊天磨砂面」上。glass/liquid 的 --color-bg 是渐变、面板是半透明，故不能只取
-      // 单一表面色（否则退化为纯白 → 推出深色 ink → 压在半透明面板叠亮渐变上对比度崩塌）。
-      // 这里按「面板合成到每个渐变色标」构造主要承载面集合，再以磨砂遮罩面为次要目标一并求解。
-      const cs = getComputedStyle(root);
-      const primarySurfaces = computePrimarySurfaces(
-        cs.getPropertyValue('--color-panel').trim(),
-        cs.getPropertyValue('--color-bg').trim(),
-        cs.getPropertyValue('--color-hover').trim()
-      );
-      const secondarySurfaces = computeSecondarySurfaces(
-        cs.getPropertyValue('--color-chat-scrim').trim(),
-        cs.getPropertyValue('--color-bg').trim()
-      );
-      root.style.setProperty(
-        '--color-primary-ink',
-        deriveInkForSurfaces(primary, primarySurfaces, secondarySurfaces)
-      );
-      // ⚠️ 已知可达上限（**非本功能回归，请勿按「bug」去修**）：
-      // glass 主题下 6 个承载面（3 色标 × {panel, hover}）从 #505996 跨到 #b66cb2，
-      // 任何**单一** ink 的可达上界仅 3.64:1 —— 已穷举 32³ RGB 网格 + 精确黑白复核，
-      // 确认无更优解（纯黑反而只有 2.58，因最亮面偏亮）。
-      // 根因：--color-panel = rgba(255,255,255,0.22) 这层**白色叠加**把深蓝紫渐变
-      // 抬进中紫区间，而黑白两端都够不到 4.5。若面板透明，白字可达 5.56~12.67。
-      // 这是 glass 主题**自身**的既有性质，与染色无关：其 --color-text(#f4f4ff) 压在
-      // 同一最亮面上也只有 3.33:1，比本 ink 更差。染色反而把该位从染色前的 ~1.3:1
-      // 提升到 3.64:1。要根治需重做 glass 的面板/底色（会改变该主题全部观感），
-      // 不在本批次范围内。
-    });
-  }, [chatBg, themeSettings?.theme, themeSettings?.dyeFromBackground]);
-
-  // 卸载时清除内联覆盖，避免残留染色影响后续主题
-  useEffect(
-    () => () => {
-      const root = document.documentElement;
-      root.style.removeProperty('--color-primary');
-      root.style.removeProperty('--color-primary-text');
-      root.style.removeProperty('--color-primary-ink');
-    },
-    []
-  );
+  // v2.3.108：原「背景取色染色」子系统已整体移除 —— 该功能在 v2.3.105 被改为
+  // 液态玻璃（liquid）专属，v2.3.107 liquid 主题删除后即成为不可达死代码
+  // （theme==='liquid' 在类型层已不存在）。旧「has-chat-bg 玻璃滚动区类」随之退役。
 
   const [showScrollBtn, setShowScrollBtn] = useState(false);
 
@@ -5844,7 +5767,7 @@ export const ChatWindow: React.FC<{
 
 
 
-      <CustomScrollArea className={dyeActive ? 'messages has-chat-bg' : 'messages'} scrollRef={scrollRef} style={chatBg ? { backgroundImage: `url(${chatBg})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}>
+      <CustomScrollArea className="messages" scrollRef={scrollRef} style={chatBg ? { backgroundImage: `url(${chatBg})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}>
 
         {/* v2.3.81：异步场景生图「正在生图中…」状态条（仅当前会话进行中时出现，完成/失败即消失）*/}
         <SceneImageStatusBar

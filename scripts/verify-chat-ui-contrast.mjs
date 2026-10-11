@@ -20,7 +20,7 @@
  *   两门都用同一份真实实现，避免「平行影子 oracle」。
  *
  * ── 方法（不猜、不写死）──────────────────────────────────────────────────────
- *   · 对比度 / 合成 / 渐变抽色标 一律 **import 真实实现** src/utils/dominantColor.ts（Node 22 type-stripping）。
+ *   · 对比度 / 合成 / 渐变抽色标 一律 **import 测试 oracle** scripts/lib/dominantColor.ts（v2.3.108 起原实现移入 scripts/lib/，算法不变）（Node 22 type-stripping）。
  *   · 控件的**配色令牌**（--color-text / --color-panel / --color-hover / --color-text-muted）从
  *     **真实 src/styles/index.css** 解析后按主题求值 —— 实现者再改配色，本门自动跟随并重新判定，
  *     不会因为「令牌换了但门还写死旧值」而给出假绿。
@@ -60,7 +60,7 @@ const {
   rgbToHex,
   computePrimarySurfaces,
   computeSecondarySurfaces,
-} = await import(new URL('../src/utils/dominantColor.ts', import.meta.url).href);
+} = await import(new URL('./lib/dominantColor.ts', import.meta.url).href);
 
 const BREAK = process.env.NY_QA_CONTRAST_BREAK === '1';
 const AA = 4.5;
@@ -285,9 +285,10 @@ check(
 // ---------- 8. C7 时间戳棘轮（既有性质，如实记录，不放宽）----------
 // 基线 = v2.3.102 复核时各主题的实测 time-muted 值（--color-text-muted 压聊天面）。
 // 这是**本版之前就存在**的性质（令牌与承载面均非本次引入）；本版不改，但棘轮住不许变差。
+// v2.3.108：liquid 条目随主题删除移除；新增 aura 基线（实测 1.19，与 glass 同族性质）。
 const X5_BASELINE = {
   wechat: 3.03, glass: 1.24, dark: 4.28, vibrant: 3.12, azure: 5.9, galaxy: 5.35, pine: 6.15,
-  ember: 5.6, frost: 3.43, rose: 5.57, cyber: 6.28, graphite: 5.11, indigo: 5.27, sand: 4.94, liquid: 1.26,
+  ember: 5.6, frost: 3.43, rose: 5.57, cyber: 6.28, graphite: 5.11, indigo: 5.27, sand: 4.94, aura: 1.19,
 };
 console.log('\n=== C7 时间戳 --color-text-muted 棘轮（不劣于基线；基线为既有性质，待下一版处理）===');
 const ratchetMiss = [];

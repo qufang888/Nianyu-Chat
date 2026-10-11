@@ -9,50 +9,46 @@ const CARD_W = 340;
 const CARD_H = 96;
 
 /** 深色系主题列表（其余为浅色系） */
-// v2.3.97：新增 'liquid'（液态玻璃）。它的底色是深蓝紫多色渐变，
+// v2.3.108：新增 'aura'（琉璃幻境）。它的底色是深海靛极光渐变，
 // 若漏登记，通知卡片会按「浅色主题」生成（浅底 + 深字），叠在深色软件窗口上会突兀。
-// v2.3.107 需求 7：liquid 主题已删除；此处保留 'liquid' 仅作历史兜底
-// （老数据已在 electron/db.ts 读盘层单向迁移为 glass，正常情况下不会走到该分支）。
-const DARK_THEMES = new Set(['dark', 'glass', 'galaxy', 'cyber', 'ember', 'liquid']);
+//（前代 'liquid' 已随 v2.3.107 整体删除。）
+const DARK_THEMES = new Set(['dark', 'glass', 'galaxy', 'cyber', 'ember', 'aura']);
 
 /** 根据主题名判断是否深色 */
 function isDarkTheme(theme?: string): boolean {
   return !!theme && DARK_THEMES.has(theme);
 }
 
-/** 生成主题适配的卡片 CSS（liquid 走独立分支，其余按深/浅二值） */
+/** 生成主题适配的卡片 CSS（aura 走独立分支，其余按深/浅二值） */
 function cardCSS(theme?: string): string {
-  // 液态玻璃（v2.3.101）：独立透明窗口不加载 variables.css，故此处硬编码与主界面一致的
-  // 深蓝紫磨砂卡；结构（尺寸/起手位移/过渡/子元素）与深/浅分支严格一致，仅换色，
+  // 琉璃幻境（v2.3.108）：独立透明窗口不加载 variables.css，故此处硬编码与主界面一致的
+  // 深海靛磨砂卡（Apple Liquid Glass：顶部 1px 镜面高光 inset + saturate 增强）；
+  // 结构（尺寸/起手位移/过渡/子元素）与深/浅分支严格一致，仅换色，
   // 保证通知卡观感与主界面（含小窗）统一。
-  // v2.3.107 需求 7：liquid 主题已删除，此分支仅作历史兜底（读盘层已迁移为 glass）。
-  if (theme === 'liquid') {
+  if (theme === 'aura') {
     return `
     .ny-card{position:absolute;right:0;bottom:0;width:${CARD_W}px;height:${CARD_H}px;box-sizing:border-box;
-      background:linear-gradient(135deg,rgba(12,42,68,.94),rgba(52,34,96,.94));
-      /* v2.3.104：backdrop 补 saturate(1.6)（Apple 要素3，与主界面 --liquid-backdrop 对齐）+
-         顶部 1px 镜面高光 inset（要素2，与主界面 --liquid-specular 对齐）。
-         本窗为独立透明窗口、不加载 variables.css，故沿用本文件既有的字面量写法。 */
+      background:linear-gradient(135deg,rgba(8,38,52,.94),rgba(20,36,84,.94));
       backdrop-filter:blur(20px) saturate(1.6);-webkit-backdrop-filter:blur(20px) saturate(1.6);
-      border:1px solid rgba(190,220,255,.22);border-radius:14px;
-      box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 8px 32px rgba(2,10,26,.42),0 2px 8px rgba(2,10,26,.28);
-      color:#eef4ff;padding:12px 14px 12px 12px;
+      border:1px solid rgba(160,220,235,.24);border-radius:14px;
+      box-shadow:inset 0 1px 0 rgba(220,246,255,.35),0 8px 32px rgba(2,12,28,.45),0 2px 8px rgba(2,12,28,.30);
+      color:#eef7fb;padding:12px 14px 12px 12px;
       display:flex;flex-direction:row;align-items:center;gap:12px;cursor:pointer;
       transform:translateX(380px);opacity:0;
       transition:transform calc(.42s * var(--anim-speed, 1)) cubic-bezier(.22,.61,.36,1),opacity calc(.42s * var(--anim-speed, 1)) linear;}
     .ny-card.show{transform:translateX(0);opacity:1;}
     .ny-card.hide{transform:translateX(380px);opacity:0;}
     .ny-avatar{flex:0 0 auto;width:46px;height:46px;border-radius:50%;
-      background:linear-gradient(135deg,#5ad1f5,#3f6fd0);display:flex;align-items:center;justify-content:center;
-      font-size:20px;font-weight:700;color:#04222e;box-shadow:0 2px 8px rgba(2,10,26,.28);}
+      background:linear-gradient(135deg,#45e0c8,#3f7fd6);display:flex;align-items:center;justify-content:center;
+      font-size:20px;font-weight:700;color:#06222a;box-shadow:0 2px 8px rgba(2,12,28,.30);}
     .ny-body{position:relative;flex:1 1 auto;min-width:0;display:flex;flex-direction:column;
       justify-content:center;gap:3px;}
-    .ny-label{font-size:10px;letter-spacing:.8px;color:#5ad1f5;text-transform:uppercase;}
-    .ny-name{font-size:14px;font-weight:600;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#eef4ff;}
-    .ny-content{font-size:12.5px;color:rgba(238,244,255,.82);line-height:1.35;overflow:hidden;
+    .ny-label{font-size:10px;letter-spacing:.8px;color:#7df0dc;text-transform:uppercase;}
+    .ny-name{font-size:14px;font-weight:600;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#eef7fb;}
+    .ny-content{font-size:12.5px;color:rgba(238,247,251,.82);line-height:1.35;overflow:hidden;
       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
     .ny-close{position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;
-      background:rgba(255,255,255,.10);color:rgba(238,244,255,.75);font-size:15px;line-height:22px;text-align:center;
+      background:rgba(255,255,255,.10);color:rgba(238,247,251,.75);font-size:15px;line-height:22px;text-align:center;
       z-index:3;cursor:pointer;transition:background calc(.15s * var(--anim-speed, 1));}
     .ny-close::after{content:'';position:absolute;inset:-10px;}
     .ny-close:hover{background:rgba(255,255,255,.22);}`;

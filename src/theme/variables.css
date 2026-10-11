@@ -659,28 +659,76 @@
 }
 
 /* ============================================================================
-   液态玻璃（liquid）· v2.3.97 新增（第 15 套主题）
+   琉璃幻境（aura / Liquid Aura）· v2.3.108 新增（第 15 套主题）
    ----------------------------------------------------------------------------
-   设计目标：多色柔和渐变 + 缓慢流动的背景，模拟流体折射。
+   设计目标：Apple Liquid Glass 视觉语言 —— 通透玻璃材质、边缘镜面高光、
+   柔和折射感、悬浮层次。前代「液态玻璃（liquid）」主题已在 v2.3.107 整体删除，
+   本主题是按同一设计语言的全新实现（静态光影、零新增动画、无 background 流动）。
 
-   【为什么 --color-bg 的一串渐变里 alpha 都很低（0.55~0.62）】
-   WCAG 的对比度是「相对亮度」之比，而 backdrop-filter: blur() **只模糊、不改变
-   亮度关系**。这意味着一块高饱和亮色斑（哪怕被模糊成柔光）仍然会以它自己的
-   亮度参与合成 —— 底下有亮斑时，上面的浅色文字照样看不清。项目已有实测印证：
-   index.css:971 记录 glass 主题主文案仅 3.33:1（不达 AA 4.5:1）。
-   故本主题的渐变各色标 alpha 压到 0.55~0.62：既保留「透出桌面」的液态观感，
-   又把最亮合成面的亮度锁在文字可读的范围内。**这是本主题最重要的可访问性决策。**
+   【为什么 --color-bg 的渐变各色标 alpha 压低（--app-bg 0.78）】
+   WCAG 对比度是「相对亮度」之比，backdrop-filter 只模糊、不改变亮度关系：
+   底下有亮斑时，上面的浅色文字照样看不清（index.css 曾实测 glass 主文案仅 3.33:1）。
+   故 --app-bg 渐变整体压暗、alpha 0.78：既保留「透出桌面」的通透观感，
+   又把最亮合成面的亮度锁在文字可读范围内。**这是本主题最重要的可访问性决策。**
 
-   【为什么 --blur 定 30px（glass 是 35px）】
-   --blur 被 8 处消费，其中 index.css:1478 是 `.modal-mask`（全屏遮罩）。
-   值越大 → 所有弹窗遮罩重度模糊（既糊又吃 GPU），值太小 → 面板失去磨砂感。
-   30px 是实测兼顾点：面板磨砂明显（与 glass 的 35px 仅差 5px，肉眼几乎同级），
-   而全屏遮罩比 glass 轻 5px，长时间开设置窗/角色编辑器不会明显发糊。
-   另配 --window-bg-blur: 34px（根容器，透出桌面）与 --titlebar-blur: 26px。
+   【为什么 --blur 定 34px（glass 是 35px）】
+   --blur 会被 .modal-mask（全屏遮罩）等 8 处消费：值越大弹窗遮罩越糊越吃 GPU，
+   值太小面板失去磨砂感。34px 与 glass 同级，保证玻璃家族三套主题观感一致
+   （玻璃家族设置面板的「模糊度」滑块可在 4~60px 内统一调节）。
+   另配 --window-bg-blur: 36px（根容器，透出桌面）与 --titlebar-blur: 28px。
 
-   【文字承载面一律不用 --color-text-secondary】
-   半透明底上的浅灰 secondary（wechat 是 #888）在合成后普遍只有 3.0~4.4:1。
-   故本主题 secondary 本身给到 0.82 不透明度的高亮色，并在 index.css 的
-   主题段里把 .msg-meta / .scene-image-sub 等小字改回
-   --color-text + 字号/字重区分层级（沿用项目 v2.3.81 已定的方案）。
+   【文字承载面不用 --color-text-secondary 压深底】
+   半透明底上的低不透明度 secondary 合成后普遍只有 3.0~4.4:1。
+   故 secondary 给到 0.72 不透明度的亮青白，另在 index.css 的 aura 主题段
+   把 .msg-meta 等小字保持 --color-text-secondary 但自带高不透明度，层级靠字号区分。
+
+   【auto-contrast 看门狗数据契约】与 glass 块同构一份（属性/令牌名是
+   src/utils/autoContrast.ts 与 index.css 消费端的两端契约，勿单方改动），
+   值按 aura 深海靛底定：boost 叠深色 scrim、flip 翻转为浅底深字。
    ============================================================================ */
+[data-theme='aura'] {
+  --color-primary: #45e0c8;
+  --color-primary-text: #06222a;
+  --color-bg: linear-gradient(150deg, #062e38 0%, #0b2f55 38%, #1c2a68 68%, #2c1e5e 100%);
+  --color-panel: rgba(255, 255, 255, 0.14);
+  --color-panel-alt: rgba(255, 255, 255, 0.10);
+  --color-chat-bg: rgba(255, 255, 255, 0.07);
+  /* 文字为浅色，--color-bg 是深海靛渐变（无法用作 scrim），
+     显式给深色遮罩，保证聊天背景图上浅字仍 ≥4.5:1。 */
+  --color-chat-scrim: rgba(6, 20, 34, 0.72);
+  --color-nav-bg: rgba(8, 18, 34, 0.50);
+  --color-nav-icon: rgba(255, 255, 255, 0.72);
+  --color-nav-active: #7df0dc;
+  --color-text: #eef7fb;
+  --color-text-secondary: rgba(226, 242, 248, 0.72);
+  --color-border: rgba(160, 220, 235, 0.22);
+  --color-bubble-user: linear-gradient(135deg, #2bb3a3, #3f7fd6);
+  --color-bubble-user-text: #ffffff;
+  --color-bubble-ai: rgba(255, 255, 255, 0.16);
+  --color-bubble-ai-text: #eef7fb;
+  --color-input-bg: rgba(255, 255, 255, 0.16);
+  --color-hover: rgba(125, 240, 220, 0.12);
+  --shadow-panel: 0 8px 32px rgba(2, 12, 28, 0.42), 0 2px 8px rgba(2, 12, 28, 0.30);
+  --blur: 34px;
+  --color-system-msg: rgba(190, 230, 240, 0.75);
+  --color-select-bg: #0e2438;
+  --color-select-text: #eef7fb;
+  --color-text-muted: rgba(220, 240, 248, 0.85);
+  /* 琉璃幻境：标题栏半透明 + 磨砂；根容器半透明可透出桌面（同 glass 族范式） */
+  --app-bg: linear-gradient(150deg, rgba(6, 46, 56, 0.82) 0%, rgba(11, 47, 85, 0.80) 38%, rgba(28, 42, 104, 0.80) 68%, rgba(44, 30, 94, 0.80) 100%);
+  --window-bg-blur: 36px;
+  --titlebar-bg: rgba(10, 24, 40, 0.42);
+  --titlebar-text: #eef7fb;
+  --titlebar-icon: rgba(255, 255, 255, 0.85);
+  --titlebar-btn-hover: rgba(125, 240, 220, 0.16);
+  --titlebar-close-hover-bg: #ff5c5c;
+  --titlebar-close-hover-icon: #ffffff;
+  --titlebar-border: rgba(160, 220, 235, 0.14);
+  --titlebar-blur: 28px;
+  /* auto-contrast 看门狗数据契约（与 glass 块同构；消费端 index.css [data-theme='aura'] 规则，
+     JS 侧读取方为 src/utils/autoContrast.ts）。 */
+  --auto-contrast-base: rgba(8, 26, 44, 1);
+  --auto-contrast-scrim: rgba(4, 12, 24, 0.55);
+  --auto-contrast-flip-bg: rgba(238, 248, 252, 0.95);
+  --auto-contrast-flip-text: #0a1826;
+}

@@ -5,15 +5,20 @@
 //   · THEMES 不再收录 → 不可选；
 //   · variables.css / index.css 的 [data-theme='liquid'] 段落已删；
 //   · 关联设置（liquidFlow / dyeFromBackground 等）UI 一并移除；
-//   · 读盘层（electron/db.ts）对老数据 theme==='liquid' 单向迁移为 glass 落盘。
+//   · 读盘层（electron/db.ts）对老数据 theme==='liquid' 单向迁移落盘。
 //
-// 【本脚本现在的职责】把原「验证 liquid 可读性」闸门改为「验证 liquid 已彻底删净」护栏，
+// 【v2.3.108 更新】aura（琉璃幻境 / Liquid Aura）作为同设计语言继任主题加入玻璃家族：
+//   · 迁移目标由 glass 改为 aura；
+//   · ThemeContext isGlass = glass/frost/aura（不再含 liquid）；
+//   · THEMES 收录 aura、variables.css 提供 [data-theme='aura'] 令牌块。
+//
+// 【本脚本现在的职责】「验证 liquid 已彻底删净 + aura 已就位」双护栏，
 // 防止后续改动让 liquid 死灰复燃（漏删的 CSS 规则块 / 重新进 THEMES / 漏迁移老数据）。
 //   A. variables.css 不存在任何 [data-theme='liquid'] 规则块；
 //   B. index.css 不存在任何 [data-theme='liquid'] 规则块；
-//   C. src/components/Settings.tsx 的 THEMES 不含 key: 'liquid'（不可选）；
-//   D. electron/db.ts 对 theme==='liquid' 有单向迁移为 glass 的兜底（loadSettings + reloadAll）；
-//   E. ThemeContext 的 isGlass 仍把 liquid 当作历史兜底（不报错即可，运行时已不可达）。
+//   C. src/components/Settings.tsx 的 THEMES 不含 key: 'liquid'（不可选），且含 'aura'；
+//   D. electron/db.ts 对 theme==='liquid' 有单向迁移为 aura 的兜底（loadSettings + reloadAll）；
+//   E. ThemeContext 的 isGlass = glass/frost/aura（liquid 已彻底退出，不残留兜底）。
 //
 // 运行：node scripts/verify-liquid-glass.mjs
 
@@ -59,21 +64,27 @@ check('C2 THEMES 不含 key: \'liquid\'', !!themesBlock && !/key:\s*'liquid'/.te
   themesBlock ? (themesBlock[0].match(/key:\s*'(\w+)'/g) || []).join(', ') : '');
 
 console.log('\n=== D. 老数据单向迁移兜底（db.ts）===');
-check('D1 db.ts 对 theme===\'liquid\' 有迁移为 glass 的兜底',
-  /this\.settings\.theme\s*===\s*'liquid'/.test(db) && /saveSettings\(\{\s*theme:\s*'glass'\s*\}\)/.test(db));
+check('D1 db.ts 对 theme===\'liquid\' 有迁移为 aura 的兜底',
+  /this\.settings\.theme(?:\s+as\s+string)?\s*\)?\s*===\s*'liquid'/.test(db) && /saveSettings\(\{\s*theme:\s*'aura'\s*\}\)/.test(db));
 check('D2 db.ts reloadAll 同样兜底备份残留的 liquid',
   /reloadAll[\s\S]{0,400}?theme\s*===\s*'liquid'/.test(db));
 
-console.log('\n=== E. liquid 仅作历史兜底，不报错 ===');
-check('E1 ThemeContext 仍把 liquid 纳入 isGlass 兜底（运行时不可达即可）',
-  /const isGlass\s*=\s*theme\s*===\s*'glass'\s*\|\|\s*theme\s*===\s*'frost'\s*\|\|\s*theme\s*===\s*'liquid'/.test(themeCtx));
+console.log('\n=== E. 玻璃家族 = glass/frost/aura，liquid 已彻底退出 ===');
+check('E1 ThemeContext isGlass 含 aura（v2.3.108 玻璃家族新成员）',
+  /const isGlass\s*=\s*theme\s*===\s*'glass'\s*\|\|\s*theme\s*===\s*'frost'\s*\|\|\s*theme\s*===\s*'aura'/.test(themeCtx));
+check('E2 ThemeContext isGlass 不再含 liquid（死灰复燃护栏）',
+  !/const isGlass\s*=[^\n]*'liquid'/.test(themeCtx));
+console.log('\n=== F. aura 主题令牌就位 ===');
+check('F1 variables.css 存在 [data-theme=\'aura\'] 规则块', /\[data-theme=['"]aura['"]\]\s*\{/.test(vars));
+check('F2 aura 块含 auto-contrast 看门狗契约令牌',
+  /\[data-theme=['"]aura['"]\]\s*\{[\s\S]*?--auto-contrast-base[\s\S]*?--auto-contrast-flip-text/.test(vars));
 
 console.log('\n' + '='.repeat(64));
 console.log(`断言：${pass} 通过 / ${fail} 失败`);
 if (fail > 0) {
   console.log('\n失败明细：');
   for (const f of failures) console.log('  ✗ ' + f);
-  console.log('❌ 液态玻璃未彻底删净');
+  console.log('❌ liquid 未彻底删净或 aura 未就位');
   process.exit(1);
 }
-console.log('✅ 液态玻璃主题已彻底删净（无残留 CSS 规则块 / 不可选 / 老数据已迁移）');
+console.log('✅ 液态玻璃已彻底删净 + 琉璃幻境（aura）已就位（无残留规则块 / 不可选 / 老数据迁移 aura / 玻璃家族含 aura）');

@@ -364,10 +364,13 @@ class DataManager {
     this.settings = this.loadSettings();
     // v2.3.107 需求 7：液态玻璃（liquid）主题已整体删除（THEMES 不再收录、
     // variables.css 的 [data-theme='liquid'] 段已删）。老用户若曾持久化 theme==='liquid'，
-    // 界面会因缺少主题令牌而「花掉」。单向迁移为最接近的存活主题 glass 并落盘，保证老数据不崩。
+    // 界面会因缺少主题令牌而「花掉」。v2.3.108 起单向迁移为同设计语言的继任主题
+    // aura（琉璃幻境 / Liquid Aura）并落盘，保证老数据不崩且观感平滑接续。
     // 幂等：仅当确为 'liquid' 时回写，正常用户文件不被无谓改动。
-    if (this.settings.theme === 'liquid') {
-      this.saveSettings({ theme: 'glass' });
+    // 注意：settings.theme 的静态类型已不含 'liquid'（v2.3.108 起），但**磁盘老数据**
+    // 仍可能是 'liquid'，故此处按字符串比较（类型断言），这是有意为之的迁移守卫。
+    if ((this.settings.theme as string) === 'liquid') {
+      this.saveSettings({ theme: 'aura' });
     }
     this.migrate();
   }
@@ -376,9 +379,11 @@ class DataManager {
   reloadAll(): void {
     this.store = this.loadStore();
     this.settings = this.loadSettings();
-    // v2.3.107 需求 7：备份里若残留 theme==='liquid'，同样迁移为 glass 并落盘。
-    if (this.settings.theme === 'liquid') {
-      this.saveSettings({ theme: 'glass' });
+    // v2.3.107 需求 7：备份里若残留 theme==='liquid'，同样迁移为 aura 并落盘。
+    // 注意：settings.theme 的静态类型已不含 'liquid'（v2.3.108 起），但**磁盘老数据**
+    // 仍可能是 'liquid'，故此处按字符串比较（类型断言），这是有意为之的迁移守卫。
+    if ((this.settings.theme as string) === 'liquid') {
+      this.saveSettings({ theme: 'aura' });
     }
   }
 

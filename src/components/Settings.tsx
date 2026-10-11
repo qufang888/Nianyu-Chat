@@ -92,9 +92,10 @@ export const THEMES: { key: ThemeName; nameKey: string; swatch: string }[] = [
   { key: 'graphite', nameKey: 'theme.graphite', swatch: 'linear-gradient(135deg,#7a869a,#a0abc0)' },
   { key: 'indigo', nameKey: 'theme.indigo', swatch: 'linear-gradient(135deg,#255b9c,#3d78c2)' },
   { key: 'sand', nameKey: 'theme.sand', swatch: 'linear-gradient(135deg,#a16f49,#c89468)' },
-  // v2.3.107 需求 7：液态玻璃（liquid）主题已按用户要求**整体删除**
-  //（THEMES 不再收录 → 不可选；index.css / variables.css 的 liquid 段落已删除；
-  //  液态流动 liquidFlow 等相关设置一并移除）。
+  // v2.3.108：琉璃幻境（aura / Liquid Aura，第 15 套主题）—— Apple Liquid Glass 视觉语言，
+  // 玻璃家族（glass/frost/aura）成员：通透玻璃材质、边缘镜面高光、深海靛极光渐变。
+  // 前代「液态玻璃（liquid）」主题已在 v2.3.107 整体删除，本主题是同设计语言的全新实现。
+  { key: 'aura', nameKey: 'theme.aura', swatch: 'linear-gradient(135deg,#062e38,#1c2a68 55%,#45e0c8)' },
 ];
 
 // 设置分类区块（左侧导航 + 右侧分组），顺序即展示顺序
@@ -246,17 +247,17 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-inputappearance', key: 'settings.inputAppearance', kw: ['输入框', 'input', '输入栏', '外观'] },
   { id: 'sec-cursor', key: 'settings.cursor', kw: ['光标', 'cursor', '鼠标指针', '自定义光标'] },
   // v2.3.97 移除 `sec-glassbg`（毛玻璃背景）的静态条目。
-  // 根因：该区块**只在 glass / frost 两套主题下渲染**（见下方 theme==='glass'||'frost' 守卫），
-  // 但旧静态表无条件收录它 —— 于是在其余 12 套主题下搜「毛玻璃」能搜到，点下去
+  // 根因：该区块**只在玻璃家族（glass / frost / aura）主题下渲染**（见下方守卫），
+  // 但旧静态表无条件收录它 —— 于是在其余主题下搜「毛玻璃」能搜到，点下去
   // document.getElementById 返回 null，表现为「搜到了但点了没反应」，且无任何提示（静默失败）。
   // 现在改为**完全交给动态索引规则⑤（.section-title[id]）**：条件为真时它自然出现在候选里，
   // 条件为假时索引里根本没有这条，不会再产生死条目。
-  // v2.3.105：毛玻璃（glass）/ frost 专属细化控件（带稳定 id，条件渲染仅 glass/frost 主题出现）。
+  // v2.3.105：玻璃家族专属细化控件（带稳定 id，条件渲染仅 glass/frost/aura 主题出现）。
   // 静态登记 + 关键词，确保「色调 / 不透明度 / 模糊度」可被中英文搜到；非对应主题下 DOM 不存在，
   // 由 buildDynamicIndex 的 staticAlive 过滤自动剔除，不会产生死条目。
-  { id: 'sec-glass-tint', key: 'settings.glassTint', kw: ['色调', '色相', '染色', '玻璃色调', '液态玻璃色调', '毛玻璃色调', 'tint', 'hue', 'glass tint'] },
+  { id: 'sec-glass-tint', key: 'settings.glassTint', kw: ['色调', '色相', '染色', '玻璃色调', '毛玻璃色调', '琉璃幻境色调', 'tint', 'hue', 'glass tint'] },
   { id: 'sec-glass-opacity', key: 'settings.glassOpacity', kw: ['不透明度', '透明度', '玻璃透明度', '面板透明度', 'opacity', 'glass opacity'] },
-  { id: 'sec-glass-blur', key: 'settings.glassBlur', kw: ['模糊', '模糊度', '磨砂', '毛玻璃模糊', 'blur', 'frost blur', '磨砂模糊度'] },
+  { id: 'sec-glass-blur', key: 'settings.glassBlur', kw: ['模糊', '模糊度', '磨砂', '毛玻璃模糊', '琉璃幻境模糊', 'blur', 'frost blur', 'aura blur', '磨砂模糊度'] },
   { id: 'sec-debug', key: 'settings.debugMode', kw: ['调试', '测试', 'debug', '快照', '错误报告', '手动触发', '触发'] },
   { id: 'sec-sceneimage', key: 'settings.sceneImage', kw: ['场景图', 'scene', '配图'] },
   // v2.3.107 需求 5：原 `sec-mediastub`（「语音与生图服务」跳转卡）已被删除，
@@ -2582,11 +2583,12 @@ export const Settings: React.FC<{
           )}
         </div>
 
-        {/* ===== 毛玻璃主题背景（仅 glass/frost 主题生效，未开启时隐藏） =====
+        {/* ===== 玻璃家族主题背景（仅 glass/frost/aura 主题生效，未开启时隐藏） =====
             v2.3.97：glass / frost 同属「半透明 + 磨砂」家族，需要「自定义背景色/图」
             与聊天区文字色覆盖，故开放该面板。
-            v2.3.107 需求 7：液态玻璃（liquid）主题已整体删除，相关开关（液态流动 / 背景取色染色）一并移除。 */}
-        {(theme === 'glass' || theme === 'frost') && (
+            v2.3.108：aura（琉璃幻境 / Liquid Aura）加入玻璃家族，共用本面板
+            （色调 / 不透明度 / 模糊度 / 自定义背景 / Token 与气泡配色 / 自动对比度）。 */}
+        {(theme === 'glass' || theme === 'frost' || theme === 'aura') && (
           <>
             <div id="sec-glassbg" className="section-title" style={{ marginTop: 16 }}>{t('settings.glassBg')}<Hint text={t('settings.glassBgDesc')} /></div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
@@ -2708,12 +2710,12 @@ export const Settings: React.FC<{
                   onClick={() => patch({ glassTokenText: '', glassTokenBorder: '', glassBubbleUserText: '', glassBubbleAiText: '', glassBubbleBorder: '' })}
                 >{t('settings.glassColorReset')}</button>
               </div>
-              {/* v2.3.104：「自动对比度调节」开关（仅 glass 主题生效）。
-                  可读性兜底功能（非动画）：看门狗（src/utils/autoContrast.ts）在 glass 主题的
+              {/* v2.3.104：「自动对比度调节」开关（glass / aura 主题生效，v2.3.108 扩展到 aura）。
+                  可读性兜底功能（非动画）：看门狗（src/utils/autoContrast.ts）在玻璃主题的
                   玻璃承载面上检测文字对比度 < 4.5:1 时，自动加深背景（boost）或
                   翻转为浅底深字（flip）。与「高级动画控制」三档正交——anim-off 不影响它，
                   故需要独立开关。缺省视为开启（settings.autoContrast !== false）。 */}
-              {(theme === 'glass') && (
+              {(theme === 'glass' || theme === 'aura') && (
                 <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
                     <input

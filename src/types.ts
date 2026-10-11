@@ -736,27 +736,20 @@ export interface AppSettings {
   // ===== 输入框外观（自定义文字色 / 内部背景色，防止文字与背景相近看不清）=====
   inputTextColor?: string; // 输入框文字颜色（CSS 颜色），空=跟随主题
   inputBgColor?: string; // 输入框内部背景色（CSS 颜色），空=跟随主题（默认浅灰/白）
-  // ===== 毛玻璃主题背景（仅 glass/frost 主题生效；设置毛玻璃专属，未开启毛玻璃主题时隐藏）=====
+  // ===== 毛玻璃主题背景（仅 glass/frost/aura 主题生效；设置玻璃家族专属，未开启玻璃主题时隐藏）=====
   glassBgColor?: string; // 毛玻璃主题自定义背景色（CSS 颜色），空=跟随主题默认渐变
   glassBgImage?: string; // 毛玻璃主题自定义背景图（data URL），空=无；设置后毛玻璃磨砂效果仍保留
-  dyeFromBackground?: boolean; // 有聊天背景时：用背景主体色染色界面主题色（默认 true）；无背景=不染色
   glassTokenText?: string; // 毛玻璃主题：Token 栏字体色（空=跟随主题主色）
   glassTokenBorder?: string; // 毛玻璃主题：Token 栏边框色/椭圆（空=跟随主题主色）
   glassBubbleUserText?: string; // 毛玻璃主题：用户气泡文字色（空=跟随主题）
   glassBubbleAiText?: string; // 毛玻璃主题：AI 气泡文字色（空=跟随主题）
   glassBubbleBorder?: string; // 毛玻璃主题：气泡边框色（空=透明/无）
-  // ===== 毛玻璃 / 液态玻璃专属细化设置（v2.3.105）=====
-  // 以下三项由「毛玻璃 / 液态玻璃」专属设置面板统一控制，仅 glass / frost / liquid 主题生效。
+  // ===== 玻璃家族专属细化设置（v2.3.105 引入，v2.3.108 扩展到 aura）=====
+  // 以下三项由「毛玻璃 / 琉璃幻境」专属设置面板统一控制，仅 glass / frost / aura 主题生效。
   // 应用逻辑见 ThemeContext（写入 --color-panel / --color-chat-bg / --color-input-bg / --blur）。
   glassTint?: string; // 色调：玻璃承载面染色（CSS 颜色），空=近白（#ffffff）；与下方不透明度合成半透明面板
   glassOpacity?: number; // 不透明度：玻璃面板透明度（0~100，百分比），空/缺省=20（与 variables.css 默认 --color-panel alpha 一致）
   glassBlur?: number; // 模糊度：毛玻璃 backdrop-filter 模糊半径（px），空/缺省=30（与 variables.css 默认 --blur 一致）
-  // ===== 液态玻璃主题（liquid）专属（v2.3.97，v2.3.107 起仅作兼容残留）=====
-  // 背景缓慢流动动画开关。留空 / true = 流动（默认）；false = 静止。
-  // 实现见 ThemeContext（挂 html[data-liquid-flow="off"]）与 index.css 的 liquid-flow-drift。
-  // v2.3.107 需求 7：液态玻璃主题已删除、对应 UI 开关已移除；此字段仅保留以兼容老持久化数据
-  // （读盘层会按 theme 迁移处理，UI 不再渲染该开关）。
-  liquidFlow?: boolean;
   enableRandomEvents: boolean; // 随机事件：开启后聊天过程中会自动弹出随机事件（关闭则仅手动触发）
   // ===== 空闲主动回复 =====
   idleEnabled: boolean; // 全局主开关：关闭时所有按聊天的主动消息都失效（默认开）
@@ -899,11 +892,11 @@ export type ThemeName =
   | 'graphite'
   | 'indigo'
   | 'sand'
-  // v2.3.97：液态玻璃（第 15 套主题）。半透明 + 多色渐变，背景带缓慢流动动画。
-  // v2.3.107 需求 7：该主题已整体删除（THEMES 不再收录、variables.css 的 [data-theme='liquid'] 段已删）。
-  // 此处仅保留 'liquid' 作为类型兼容残留：老用户持久化数据可能仍带 theme==='liquid'，
-  // 读盘层（electron/db.ts loadSettings）已单向迁移为 'glass' 并落盘，故运行时不会真正进入该分支。
-  | 'liquid';
+  // v2.3.108：琉璃幻境（aura / Liquid Aura，第 15 套主题）。玻璃家族（glass/frost/aura）：
+  // Apple Liquid Glass 视觉语言 —— 通透玻璃材质、边缘镜面高光、深海靛极光渐变。
+  // 前代「液态玻璃（liquid）」主题已在 v2.3.107 整体删除；老数据在读盘层（electron/db.ts
+  // loadSettings）单向迁移为 'aura' 并落盘。
+  | 'aura';
 
 // v2.3.44：model 一律留空（不预填模型名，由用户手填或从「刷新模型列表」选取）；
 // 仅 baseUrl 对固定官方端点的提供商预填（openai/deepseek/anthropic/gemini），兼容类留空手填。
@@ -1247,18 +1240,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
   inputBgColor: '',
   glassBgColor: '',
   glassBgImage: '',
-  dyeFromBackground: true,
   glassTokenText: '',
   glassTokenBorder: '',
   glassBubbleUserText: '',
   glassBubbleAiText: '',
   glassBubbleBorder: '',
-  // v2.3.105：毛玻璃 / 液态玻璃专属细化默认（与 variables.css 默认 --color-panel/--blur 一致）
+  // v2.3.105：玻璃家族专属细化默认（与 variables.css 默认 --color-panel/--blur 一致）
   glassTint: '#ffffff',
   glassOpacity: 20,
   glassBlur: 30,
-  // v2.3.97：液态玻璃默认开启背景流动（用户可在毛玻璃面板里关掉）
-  liquidFlow: true,
   enableRandomEvents: true,
   idleEnabled: true,
   chatIdleEnabled: {},
