@@ -142,13 +142,9 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.error-bubble',
       '.msg-collapse-bar',
       '.reasoning-arrow',
-      // v2.3.98：消息行入场动画（index.css 里 `.msg-row.anim-enter .avatar` 渐显、
-      // `.msg-row.anim-enter .bubble` 弹出）。登记「后代」形式（不含 .anim-enter），
-      // 使该动画同时受本组开关与分组速度控制：
-      //   - 门禁：`html[data-anim-off~="bubble"] .msg-row .avatar` 覆盖到该元素；
-      //   - 速度：`--anim-speed` 直接写在 .avatar / .bubble 元素上，被入场动画读取。
-      '.msg-row .avatar',
-      '.msg-row .bubble',
+      // v2.3.110 需求 2：原 v2.3.98 登记的 `.msg-row .avatar` / `.msg-row .bubble`
+      // （消息行入场动画的载体）已随入场动画整体删除（用户要求删除，被测对象不复存在），
+      // 仅移除这两条登记；组内其余成员（按钮 / 引用角标 / 错误气泡 / 折叠条 / 推理箭头）保留。
     ],
   },
   {
@@ -642,7 +638,7 @@ export function selectorsForGroup(group: AnimGroupDef, kind: AnimDocKind): strin
  * 因此「跟随全局」的分组无需任何额外处理。
  *
  * ⚠️ 关于 theme 组含 `body`：它是兜底组，规则会命中 body 并把组速度沿继承链扩散。
- * 这是刻意接受的 —— 更具体分组（如 `.msg-row .bubble`）的规则特异性更高，会在
+ * 这是刻意接受的 —— 更具体分组（如 `.error-bubble`）的规则特异性更高，会在
  * 目标元素上覆盖 body 继承而来的值，故各分组的独立速度仍然精确生效。
  */
 function buildSpeedCss(kind: AnimDocKind): string {

@@ -55,7 +55,7 @@ import { useMenuRelocate } from '../hooks/useMenuRelocate';
 
 import { previewSound, playSoundSync } from '../utils/sound';
 
-import { animMs } from '../utils/animControl';
+// v2.3.110 需求 2：入场动画删除后，本文件不再消费 animControl 的时长换算，import 已移除。
 
 import { useVoiceInput } from '../hooks/useVoiceInput';
 
@@ -118,11 +118,8 @@ export function computeInterruptedAnchorId(msgs: ChatMessage[]): number | null {
 
 const IMAGE_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp)$/i;
 
-// v2.3.107 需求 2：打开聊天界面时的「气泡入场」参数。
-// 为免长历史一次性齐闪，只对**末尾 ENTER_BATCH 条**做自上而下错峰入场；
-// 错峰步长经 CSS 变量 --msg-enter-stagger 下发，并随 --anim-speed 一起缩放（总时长有界）。
-export const ENTER_BATCH = 12;
-export const ENTER_STAGGER_MS = 45;
+// v2.3.110 需求 2：v2.3.101/107/109 引入的「消息气泡入场动画」参数
+// （ENTER_BATCH / ENTER_STAGGER_MS / --msg-enter-stagger）已随整套入场动画删除。
 
 
 
@@ -469,78 +466,9 @@ export const ChatWindow: React.FC<{
 
   const chatKey = `${chatType}:${chatId}`;
 
-  // ===== v2.3.101 消息气泡入场动画（v2.3.107 需求 2：打开聊天时也播）=====
-  // 目标：消息行 → 头像先渐显，气泡再从头像一侧（AI 头像在左 → 气泡从其**右侧**弹出；
-  // 用户头像在右 → 从其左侧弹出）向中间弹出（CSS 见 index.css 的 .msg-row.anim-enter）。
-  // v2.3.107：**打开聊天界面时也播放**（此前刻意「切聊天一律不播」，用户实测要求打开时也要有）。
-  //   为免长历史一次性齐闪，只对**末尾 ENTER_BATCH 条**做自上而下错峰入场（延迟走
-  //   --msg-enter-stagger，并随 --anim-speed 缩放），总时长有界。
-  //   判定「新追加」仍靠「末尾消息 id 相对上一帧是否变化」，避开「切聊天后消息异步加载」的误判。
-  const [entering, setEntering] = useState<Record<number, number> | null>(null);
-  // v2.3.109 需求 3（闪跳修复）：基线从 useRef 升级为 state（enterSnap），入场标记整体
-  // 改在 **render 阶段派生**。旧实现在 layout effect 里挂类：新行先以「无 anim-enter」
-  // 的 DOM 提交、effect 里 setState 再重打标记 —— 依赖 React 的同步重渲染抢在绘制前，
-  // 一旦调度插入间隙（并发渲染/批量更新边界），首帧就会闪现终态气泡再从头播动画。
-  // 改为 render 阶段计算后，首个**提交**的 DOM 就已带 anim-enter（React 对 render 期间
-  // 的 setState 会丢弃当前输出、立即重跑渲染函数再提交），不存在「先见终态」的帧。
-  const [enterSnap, setEnterSnap] = useState<{ chat: string; id: number | null; valid: boolean }>({
-    chat: '',
-    id: null,
-    valid: false,
-  });
-  // v2.3.101：真实流式收尾时落库的消息 id —— 其正文已在占位气泡里实时显示过，
-  // 完成瞬间不应再重播「气泡从透明弹出」的入场动画（否则会闪一下）。
-  const suppressEnterIdRef = useRef<number | null>(null);
-
-  // ---- render 阶段派生（v2.3.109 闪跳修复，见上）----
-  const enterLastMsg = messages.length ? messages[messages.length - 1] : null;
-  const enterLastBelongs = !!enterLastMsg && enterLastMsg.chat_id === chatId;
-  const enterLastId = enterLastMsg ? (enterLastMsg.id as number) : null;
-  const enterNextSnap = {
-    chat: chatKey,
-    id: enterLastBelongs ? enterLastId : null,
-    valid: enterLastBelongs && enterLastId !== null,
-  };
-  // 仅在基线真正变化时 setState（否则每帧新建对象会触发无限重渲染）
-  if (enterSnap.chat !== enterNextSnap.chat || enterSnap.id !== enterNextSnap.id || enterSnap.valid !== enterNextSnap.valid) {
-    const enteringChat = enterSnap.chat !== chatKey || !enterSnap.valid;
-    if (enterNextSnap.valid && enterLastId !== null) {
-      if (enteringChat) {
-        // ---- 打开聊天：末尾 ENTER_BATCH 条自上而下错峰入场 ----
-        const n = Math.min(ENTER_BATCH, messages.length);
-        const start = messages.length - n;
-        const map: Record<number, number> = {};
-        for (let i = 0; i < n; i++) map[messages[start + i].id as number] = i;
-        setEntering(map);
-      } else if (
-        suppressEnterIdRef.current !== null && enterLastId === suppressEnterIdRef.current
-      ) {
-        // v2.3.101：真实流式收尾的消息（正文已实时显示过）→ 跳过入场动画，避免「闪一下再淡入」。
-        suppressEnterIdRef.current = null;
-      } else {
-        // ---- 同一聊天内新追加的消息 ----
-        setEntering({ [enterLastId]: 0 });
-      }
-      setEnterSnap(enterNextSnap);
-    } else {
-      // 本聊天消息尚未就绪（显示的还是上一个聊天的内容）：清掉并等下一帧
-      setEnterSnap(enterNextSnap);
-      if (enteringChat) setEntering(null);
-    }
-  }
-
-  // 清空 entering（摘掉 anim-enter）的时机与 CSS 动画时长同步缩放：单条 0.6s 基准；
-  // 整批按末条错峰延迟追加。摘类只是收尾 —— 动画早已播完，摘除不会重播。
-  useEffect(() => {
-    if (!entering) return;
-    const maxStagger = Math.max(0, ...Object.values(entering));
-    const hold =
-      maxStagger > 0
-        ? animMs(0.6 + maxStagger * (ENTER_STAGGER_MS / 1000))
-        : animMs(0.6);
-    const timer = window.setTimeout(() => setEntering((cur) => (cur === entering ? null : cur)), hold);
-    return () => window.clearTimeout(timer);
-  }, [entering]);
+  // v2.3.110 需求 2：v2.3.101/107/109 的「消息气泡入场动画」触发端整体删除
+  // （entering 批次 map / enterSnap 基线 / suppressEnterIdRef 流式收尾抑制）——
+  // 用户明确要求删除动画（不是关闭），消息行现在直接显示，无任何入场派生逻辑。
 
   const [eventState, setEventState] = useState<RandomEventData | null>(() => {
 
@@ -2116,10 +2044,7 @@ export const ChatWindow: React.FC<{
 
         }
 
-        // v2.3.101：真实流式（正文已实时输出）收尾落库 → 记录该消息 id，令入场检测跳过动画（避免闪一下）。
-        if (streamOnRef.current && data.message.id != null) {
-          suppressEnterIdRef.current = data.message.id;
-        }
+        // v2.3.110 需求 2：原 v2.3.101 的 suppressEnterIdRef 流式收尾抑制已随入场动画删除。
 
         setMessages((prev) => {
 
@@ -5915,10 +5840,6 @@ export const ChatWindow: React.FC<{
 
                 msg={m}
 
-                animEnter={entering !== null && entering[m.id] !== undefined}
-
-                enterDelayMs={entering ? (entering[m.id] ?? 0) * ENTER_STAGGER_MS : 0}
-
                 onImage={setPreview}
 
                 prevTimestamp={i > 0 ? allMessagesUnique[i - 1].timestamp : undefined}
@@ -7428,11 +7349,7 @@ const MessageRow: React.FC<{
 
   pseudoKey?: string; // 本条消息的待放出标记 key（chat_id:msg.id）
 
-  // v2.3.101：本条消息为「新追加」→ 播放「头像渐显 + 气泡弹出」入场动画
-  animEnter?: boolean;
-  // v2.3.107 需求 2：本条消息在「打开聊天错峰入场」中的延迟（毫秒，0=不延迟）。
-  // 由父级下发，经 CSS 变量 --msg-enter-stagger 传给关键帧，随 --anim-speed 一起缩放。
-  enterDelayMs?: number;
+  // v2.3.110 需求 2：原 animEnter / enterDelayMs 入场动画 props 已随入场动画删除。
 
   // v2.3.102 需求 1：若本条用户消息的 id 等于唯一锚点 id，则在其 .msg-body 内渲染「重发」按钮
   interruptedAnchorId?: number | null;
@@ -7445,7 +7362,7 @@ const MessageRow: React.FC<{
 
   onQuickMemory, onSaveImageMemory, onViewPrompt, onForward, onEdit, onRollback, onCopy, onTranslate, onMarkNode, onForkFromHere, onSelectCopy, onDeleteMsg, onAiAction, showAiActions, aiActionBusy, onToggleCollapse, allCollapsed, roleMood, searchResults, onOpenSearch,
 
-  pseudoOn, pseudoSpeed, pseudoKey, animEnter, enterDelayMs, interruptedAnchorId, onResendInterrupted,
+  pseudoOn, pseudoSpeed, pseudoKey, interruptedAnchorId, onResendInterrupted,
 
 }) => {
 
@@ -7796,7 +7713,7 @@ const MessageRow: React.FC<{
 
   return (
 
-    <div className={`msg-row ${isUser ? 'user' : 'ai'}${animEnter ? ' anim-enter' : ''}`} data-mid={msg.id} style={{ position: 'relative', '--msg-enter-stagger': `${enterDelayMs ?? 0}ms` } as React.CSSProperties} onContextMenu={handleContextMenu}>
+    <div className={`msg-row ${isUser ? 'user' : 'ai'}`} data-mid={msg.id} style={{ position: 'relative' } as React.CSSProperties} onContextMenu={handleContextMenu}>
 
       {/* v2.3.102 需求 2：头像 + 时间合成一个固定 44px 的竖列（.msg-avatar-col），
           时间恒在头像正下方；.msg-row.user 的 row-reverse 只翻转行方向，列内是 column，

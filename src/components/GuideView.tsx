@@ -671,6 +671,7 @@ const GUIDE: GuideSection[] = [
         <ul>
           <li>新消息入场：<b>头像先渐显，气泡再从头像方向向中间弹出</b>（线性）。AI 的气泡从左侧、你的从右侧。</li>
           <li>主界面与小窗一致，随全局动效速度缩放；关掉动画后消息仍正常可见。</li>
+          <li><b>※ v2.3.110 起本动画已按用户要求整体删除</b>：消息直接显示，不再播放任何入场动画。</li>
         </ul>
 
         <p style={{ marginTop: 10, fontWeight: 600 }}>动画开关与独立调速</p>
@@ -711,8 +712,34 @@ const GUIDE: GuideSection[] = [
 
         <p style={{ marginTop: 10, fontWeight: 600 }}>本版新增的验证脚本</p>
         <ul>
-          <li><code>verify-bubble-anim.mjs</code>（气泡入场动画 33）· <code>verify-memory-cursor.mjs</code>（总结游标 16）· <code>verify-fav-fields.mjs</code>（6 字段 + i18n 41）· <code>verify-dye-contrast.mjs</code>（染色文字对比度 9）。</li>
+          <li><code>verify-bubble-anim.mjs</code>（气泡入场动画 33；<b>※ 该动画已于 v2.3.110 删除，此闸门随之移除</b>）· <code>verify-memory-cursor.mjs</code>（总结游标 16）· <code>verify-fav-fields.mjs</code>（6 字段 + i18n 41）· <code>verify-dye-contrast.mjs</code>（染色文字对比度 9）。</li>
           <li>其中 <code>verify-dye-contrast.mjs</code> 是<b>真 oracle</b>：直接加载真实源码（而非另抄一份公式），自动扫描全部 16 个主题 × 10 种典型背景主色 = <b>160 格</b>逐格验算；并支持注入故障自证有效：<code>NY_DYE_DROP_HOVER=1</code> / <code>NY_DYE_FORCE_BLACK=1</code> 均应使其失败（实测最小对比度会塌到 4.379）。</li>
+        </ul>
+      </>
+    ),
+  },
+  {
+    id: 'guide-v23110',
+    title: 'v2.3.110：玻璃透明度调回 + 删除气泡入场动画 + 悬浮球菜单跟随拖动 + 冰川素白对比度修复',
+    kw: ['玻璃','透明','太透','透明度','毛玻璃','glass','琉璃幻境','aura','气泡','入场动画','删除动画','消息直接显示','悬浮球','右键菜单','菜单跟随','拖动','拖拽','冰川素白','frost','设置页','看不清','深底深字','对比度','WCAG','可读性','普查','时间戳','系统消息','气泡颜色','v23110','v2.3.110'],
+    body: (
+      <>
+        <p style={{ marginTop: 10, fontWeight: 600 }}>玻璃家族透明度调回（毛玻璃 / 琉璃幻境）</p>
+        <ul style={{ paddingLeft: 18, lineHeight: 1.8 }}>
+          <li>v2.3.109 窗口真圆角改造后背景从「双层叠加」变「单层」，毛玻璃 / 琉璃幻境观感<b>变透</b>。本版把两主题背景渐变各色标透明度按合成公式调回，<b>恢复 v2.3.108 前的通透与遮蔽平衡</b>；对比度只会更好。</li>
+        </ul>
+        <p style={{ marginTop: 10, fontWeight: 600 }}>删除聊天气泡入场动画（按用户明确要求）</p>
+        <ul style={{ paddingLeft: 18, lineHeight: 1.8 }}>
+          <li>消息不再播放「头像渐显 + 气泡从头像侧展开 + 错峰入场」动画，<b>直接显示</b>。相关代码、动画分组登记与验证脚本已一并删除。</li>
+        </ul>
+        <p style={{ marginTop: 10, fontWeight: 600 }}>悬浮球右键菜单跟随拖动</p>
+        <ul style={{ paddingLeft: 18, lineHeight: 1.8 }}>
+          <li>弹出球右键菜单后<b>拖动悬浮球，菜单会跟着一起走</b>（与球同节奏、无跳动），拖动结束菜单保持在新位置。</li>
+        </ul>
+        <p style={{ marginTop: 10, fontWeight: 600 }}>冰川素白（frost）设置页看不清修复 + 全主题对比度普查</p>
+        <ul style={{ paddingLeft: 18, lineHeight: 1.8 }}>
+          <li>根因：玻璃家族细化把 frost 面板也改成了「白色半透明」，叠加自定义深色背景图 / 深色桌面后<b>深底深字几乎不可见</b>。本版把半透明细化收窄回毛玻璃 / 琉璃幻境，frost 恢复自带不透明白面板（自定义背景仍可用）。</li>
+          <li>新增「全主题 × 全界面」文字对比度普查闸门（verify-theme-surface-matrix.mjs）：15 主题 × 13 个界面格子逐一验算，修复了 31 格不达标（次要文字 / 时间戳 / 系统消息 / 用户气泡 / 标题栏与侧栏图标），全部达到 WCAG AA（正文 ≥4.5、图标 ≥3.0）；玻璃家族半透明面板的已知上界维持披露并棘轮锁死。</li>
         </ul>
       </>
     ),
@@ -736,7 +763,7 @@ const GUIDE: GuideSection[] = [
         </ul>
         <p style={{ marginTop: 10, fontWeight: 600 }}>气泡弹出动画提速 + 两个观感修复</p>
         <ul style={{ paddingLeft: 18, lineHeight: 1.8 }}>
-          <li>全程从约 0.48s 提速到 <b>0.26s</b>（头像 0.24s；气泡延迟 0.04s + 时长 0.22s），幅度不变、依然线性。</li>
+          <li>全程从约 0.48s 提速到 <b>0.26s</b>（头像 0.24s；气泡延迟 0.04s + 时长 0.22s），幅度不变、依然线性。<b>※ v2.3.110 起该动画已按用户要求整体删除（消息直接显示），本条仅作历史记录。</b></li>
           <li>展开前缘圆角全程与终态一致，不再「先方角、快结束突然变圆」。</li>
           <li>新消息<b>首帧即带动画</b>，不再先闪现终态再重播（主窗与小窗同修）。</li>
         </ul>
@@ -789,6 +816,7 @@ const GUIDE: GuideSection[] = [
         <p style={{ marginTop: 10, fontWeight: 600 }}>气泡从头像侧线性入场</p>
         <ul>
           <li>打开聊天时新气泡从头像一侧<b>线性</b>弹出，左 / 右两侧各自从自己的头像侧展开，方向正确。</li>
+          <li><b>※ v2.3.110 起本动画已按用户要求整体删除</b>：消息直接显示。</li>
         </ul>
 
         <p style={{ marginTop: 10, fontWeight: 600 }}>重写先删原消息</p>

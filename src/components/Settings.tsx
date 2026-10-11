@@ -2595,9 +2595,13 @@ export const Settings: React.FC<{
           <>
             <div id="sec-glassbg" className="section-title" style={{ marginTop: 16 }}>{t('settings.glassBg')}<Hint text={t('settings.glassBgDesc')} /></div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
-              {/* v2.3.105：毛玻璃 / 液态玻璃专属细化 —— 色调 / 不透明度 / 模糊度。
+              {/* v2.3.105：毛玻璃 / 琉璃幻境专属细化 —— 色调 / 不透明度 / 模糊度。
                   三项均带稳定 id（sec-glass-tint / sec-glass-opacity / sec-glass-blur），
-                  由设置搜索静态索引登记（含中英文关键词），见下方 SETTING_SEARCH_INDEX。 */}
+                  由设置搜索静态索引登记（含中英文关键词），见下方 SETTING_SEARCH_INDEX。
+                  v2.3.110 需求 4：frost（冰川素白）退出半透明细化（其面板恢复自带不透明白，
+                  深色自定义背景下深字才可读），色调/不透明度滑块对 frost 不再生效 →
+                  本组仅 glass/aura 渲染（搜索索引按 DOM 存在性过滤，frost 下不出现死条目）。 */}
+              {theme !== 'frost' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 12, borderBottom: '1px solid var(--color-border)' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
                   <span style={{ fontSize: 13 }}>{t('settings.glassTint')}</span>
@@ -2660,6 +2664,7 @@ export const Settings: React.FC<{
                   </label>
                 )}
               </div>
+              )}
               <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: 13 }}>{t('settings.glassBgColor')}</span>

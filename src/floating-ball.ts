@@ -5,7 +5,9 @@
 //   role=menu  → 菜单窗（180x140）：球右键应用菜单（退出/本次关闭/置顶），独立弹出/缩入动画
 // 交互区域：主进程对各窗 setIgnoreMouseEvents(true,{forward:true})，透明区穿透到下层窗口；
 // 本端在球体/面板/菜单上方时切回可交互（ballSetIgnore/panelIgnore/menuIgnore(false)），离开时恢复穿透。
-// 拖拽：主进程每 16ms 轮询系统光标直接 setPosition（球窗移动、面板窗跟随），渲染端仅发起止信号。
+// 拖拽：主进程每 16ms 轮询系统光标直接 setPosition（球窗移动、面板窗跟随），
+// v2.3.110 起菜单窗显示中也按同一 delta 跟随球窗（纯 setPosition 位移，无 CSS 动画），
+// 渲染端仅发起止信号。
 // 展开/收起决策全部在主进程 hover 状态机（160ms 防抖），本端只上报 hover 与播放动画。
 import './theme/variables.css';
 import { sortChats, togglePinnedChat, applyDragOrder } from './utils/chatOrdering';

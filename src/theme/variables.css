@@ -143,7 +143,7 @@
   --color-nav-icon: #9a9a9a;
   --color-nav-active: #07c160;
   --color-text: #1a1a1a;
-  --color-text-secondary: #888888;
+  --color-text-secondary: #6b6b6b;
   --color-border: #e3e3e3;
   --color-bubble-user: #95ec69;
   --color-bubble-user-text: #1a1a1a;
@@ -152,10 +152,10 @@
   --color-input-bg: #ffffff;
   --color-hover: #ececec;
   --shadow-panel: 0 1px 3px rgba(0, 0, 0, 0.06);
-  --color-system-msg: #999999;
+  --color-system-msg: #6b6b6b;
   --color-select-bg: #ffffff;
   --color-select-text: #1a1a1a;
-  --color-text-muted: #888888;
+  --color-text-muted: #6b6b6b;
   /* 经典微信：标题栏浅色，关闭悬停微信红 */
   --app-bg: #ededed;
   --titlebar-bg: #ededed;
@@ -197,8 +197,12 @@
   --color-select-bg: #241b45;
   --color-select-text: #f4f4ff;
   --color-text-muted: rgba(255, 255, 255, 0.85);
-  /* 毛玻璃：标题栏半透明 + 磨砂；根容器半透明可透出桌面 */
-  --app-bg: linear-gradient(135deg, rgba(30,42,120,0.55) 0%, rgba(106,58,168,0.55) 55%, rgba(161,66,156,0.55) 100%);
+  /* 毛玻璃：标题栏半透明 + 磨砂；根容器半透明可透出桌面
+     v2.3.110 需求 1：v2.3.109 起 body 透明化，「双层叠加 --app-bg」变「.app-root 单层」，
+     有效不透明度从双层合成 1-(1-0.55)²≈0.80 回落到单层 0.55 → 观感太透。
+     各色标 alpha 0.55 → 0.80（=1-(1-0.55)²），单层合成即恢复 v2.3.108 前的双层观感；
+     alpha 提高只会让底色更实，浅色文字对比度只增不减（verify-chat-ui-contrast 全绿）。 */
+  --app-bg: linear-gradient(135deg, rgba(30,42,120,0.80) 0%, rgba(106,58,168,0.80) 55%, rgba(161,66,156,0.80) 100%);
   --window-bg-blur: 40px;
   --titlebar-bg: rgba(255, 255, 255, 0.15);
   --titlebar-text: #ffffff;
@@ -231,17 +235,17 @@
   --color-text: #e6e6e6;
   --color-text-secondary: #8a8a8a;
   --color-border: #2e2e2e;
-  --color-bubble-user: #4a9eff;
+  --color-bubble-user: #3572b8;
   --color-bubble-user-text: #ffffff;
   --color-bubble-ai: #2d2d2d;
   --color-bubble-ai-text: #e0e0e0;
   --color-input-bg: #232323;
   --color-hover: #262626;
   --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.68);
-  --color-system-msg: #666666;
+  --color-system-msg: #808080;
   --color-select-bg: #1f1f1f;
   --color-select-text: #e6e6e6;
-  --color-text-muted: #777777;
+  --color-text-muted: #848484;
   /* 极简暗色：标题栏深色，关闭悬停红，按钮悬停亮 */
   --app-bg: #0d0d0d;
   --titlebar-bg: #1a1a1a;
@@ -266,13 +270,13 @@
      故显式给浅色遮罩，衬深字。 */
   --color-chat-scrim: rgba(255, 248, 252, 0.72);
   --color-nav-bg: linear-gradient(160deg, #ff8fb1, #ffb86c);
-  --color-nav-icon: rgba(255, 255, 255, 0.85);
+  --color-nav-icon: #4a2028;
   --color-nav-active: #ffffff;
   --color-text: #3a2b34;
-  --color-text-secondary: #9a7f8c;
+  --color-text-secondary: #6e5a64;
   --color-border: #ffd9e8;
   --color-bubble-user: #ff9aa2;
-  --color-bubble-user-text: #ffffff;
+  --color-bubble-user-text: #6b2430;
   --color-bubble-ai: #c7ceea;
   --color-bubble-ai-text: #2e2a3a;
   --color-input-bg: #ffffff;
@@ -280,15 +284,15 @@
   --shadow-panel: 0 6px 18px rgba(255, 143, 177, 0.25);
   --radius: 18px;
   --radius-sm: 12px;
-  --color-system-msg: #b08aa0;
+  --color-system-msg: #7a6570;
   --color-select-bg: #ffffff;
   --color-select-text: #3a2b34;
-  --color-text-muted: #a08090;
+  --color-text-muted: #7a6570;
   /* 活力多彩：标题栏粉橙渐变，关闭悬停白底红字 */
   --app-bg: linear-gradient(135deg, #ffd1e8 0%, #d6e4ff 100%);
   --titlebar-bg: linear-gradient(135deg, #ff8fb1, #ffb86c);
-  --titlebar-text: #ffffff;
-  --titlebar-icon: #ffffff;
+  --titlebar-text: #4a2028;
+  --titlebar-icon: #4a2028;
   --titlebar-btn-hover: rgba(255, 255, 255, 0.25);
   --titlebar-close-hover-bg: #ffffff;
   --titlebar-close-hover-icon: #e64340;
@@ -312,7 +316,7 @@
   --color-text: #f0f2f7;
   --color-text-secondary: #a3adbf;
   --color-border: #333a4a;
-  --color-bubble-user: #3688d8;
+  --color-bubble-user: #2d72b5;
   --color-bubble-user-text: #ffffff;
   --color-bubble-ai: #242a38;
   --color-bubble-ai-text: #f0f2f7;
@@ -348,7 +352,7 @@
   --color-text: #eae6f0;
   --color-text-secondary: #a8a1bc;
   --color-border: #39344a;
-  --color-bubble-user: #9376e0;
+  --color-bubble-user: #7a62ba;
   --color-bubble-user-text: #ffffff;
   --color-bubble-ai: #2a273b;
   --color-bubble-ai-text: #eae6f0;
@@ -384,7 +388,7 @@
   --color-text: #e6edeb;
   --color-text-secondary: #9bb3af;
   --color-border: #303f3c;
-  --color-bubble-user: #2a9d8f;
+  --color-bubble-user: #217c71;
   --color-bubble-user-text: #ffffff;
   --color-bubble-ai: #232f2d;
   --color-bubble-ai-text: #e6edeb;
@@ -420,7 +424,7 @@
   --color-text: #f3efeb;
   --color-text-secondary: #b4a99f;
   --color-border: #3f3934;
-  --color-bubble-user: #f27127;
+  --color-bubble-user: #b5551d;
   --color-bubble-user-text: #ffffff;
   --color-bubble-ai: #2e2a27;
   --color-bubble-ai-text: #f3efeb;
@@ -454,9 +458,9 @@
   --color-nav-icon: #64748b;
   --color-nav-active: #2478d0;
   --color-text: #1e293b;
-  --color-text-secondary: #64748b;
+  --color-text-secondary: #5d6b81;
   --color-border: #d1d9e3;
-  --color-bubble-user: #2478d0;
+  --color-bubble-user: #2271c4;
   --color-bubble-user-text: #ffffff;
   --color-bubble-ai: #ffffff;
   --color-bubble-ai-text: #1e293b;
@@ -466,7 +470,7 @@
   --color-system-msg: #64748b;
   --color-select-bg: #ffffff;
   --color-select-text: #1e293b;
-  --color-text-muted: #7a879a;
+  --color-text-muted: #64748b;
   --app-bg: #f7f8fa;
   --titlebar-bg: #edeff3;
   --titlebar-text: #1e293b;
@@ -492,7 +496,7 @@
   --color-text: #f3e9ec;
   --color-text-secondary: #bca4ab;
   --color-border: #443339;
-  --color-bubble-user: #c97386;
+  --color-bubble-user: #a15c6b;
   --color-bubble-user-text: #ffffff;
   --color-bubble-ai: #34282d;
   --color-bubble-ai-text: #f3e9ec;
@@ -564,7 +568,7 @@
   --color-text: #e5e7eb;
   --color-text-secondary: #9ca3af;
   --color-border: #373a40;
-  --color-bubble-user: #7a869a;
+  --color-bubble-user: #667181;
   --color-bubble-user-text: #ffffff;
   --color-bubble-ai: #27292d;
   --color-bubble-ai-text: #e5e7eb;
@@ -634,16 +638,16 @@
   --color-nav-icon: #8a7866;
   --color-nav-active: #a16f49;
   --color-text: #3e3228;
-  --color-text-secondary: #8a7866;
+  --color-text-secondary: #6e5c48;
   --color-border: #d9cfc0;
-  --color-bubble-user: #a16f49;
+  --color-bubble-user: #946643;
   --color-bubble-user-text: #ffffff;
   --color-bubble-ai: #fffcf7;
   --color-bubble-ai-text: #3e3228;
   --color-input-bg: #ffffff;
   --color-hover: #f1e9dc;
   --shadow-panel: 0 1px 3px rgba(0, 0, 0, 0.08);
-  --color-system-msg: #8a7866;
+  --color-system-msg: #6e5c48;
   --color-select-bg: #ffffff;
   --color-select-text: #3e3228;
   --color-text-muted: #746657;
@@ -666,10 +670,12 @@
    本主题是按同一设计语言的全新实现（v2.3.108 为静态光影；v2.3.109 起新增
    背景液体流动与浮层镜面扫光，均登记进 animControl theme 组，可被三档开关控制）。
 
-   【为什么 --color-bg 的渐变各色标 alpha 压低（--app-bg 0.78）】
+   【为什么 --app-bg 渐变整体压暗、alpha 拉高（v2.3.110 起各色标 0.96）】
    WCAG 对比度是「相对亮度」之比，backdrop-filter 只模糊、不改变亮度关系：
    底下有亮斑时，上面的浅色文字照样看不清（index.css 曾实测 glass 主文案仅 3.33:1）。
-   故 --app-bg 渐变整体压暗、alpha 0.78：既保留「透出桌面」的通透观感，
+   v2.3.109 body 透明化后「双层叠加 --app-bg」变「.app-root 单层」，有效不透明度
+   从双层合成 1-(1-0.80)²≈0.96 回落到单层 0.80~0.82、观感太透；v2.3.110 需求 1
+   把各色标 alpha 提到 0.96 补偿：既保留「透出桌面」的通透观感，
    又把最亮合成面的亮度锁在文字可读范围内。**这是本主题最重要的可访问性决策。**
 
    【为什么 --blur 定 34px（glass 是 35px）】
@@ -739,8 +745,12 @@
   --color-select-bg: #0e2438;
   --color-select-text: #eef7fb;
   --color-text-muted: rgba(220, 240, 248, 0.85);
-  /* 琉璃幻境：标题栏半透明 + 磨砂；根容器半透明可透出桌面（同 glass 族范式） */
-  --app-bg: linear-gradient(150deg, rgba(6, 46, 56, 0.82) 0%, rgba(11, 47, 85, 0.80) 38%, rgba(28, 42, 104, 0.80) 68%, rgba(44, 30, 94, 0.80) 100%);
+  /* 琉璃幻境：标题栏半透明 + 磨砂；根容器半透明可透出桌面（同 glass 族范式）
+     v2.3.110 需求 1：v2.3.109 起 body 透明化，「双层叠加 --app-bg」变「.app-root 单层」，
+     有效不透明度从双层合成 1-(1-0.80)²≈0.96 回落到单层 0.80~0.82 → 观感太透。
+     各色标 alpha 统一提到 0.96（=1-(1-0.80)²），单层合成即恢复双层观感；
+     alpha 提高只会让底色更实，浅色文字对比度只增不减。 */
+  --app-bg: linear-gradient(150deg, rgba(6, 46, 56, 0.96) 0%, rgba(11, 47, 85, 0.96) 38%, rgba(28, 42, 104, 0.96) 68%, rgba(44, 30, 94, 0.96) 100%);
   --window-bg-blur: 36px;
   --titlebar-bg: rgba(10, 24, 40, 0.42);
   --titlebar-text: #eef7fb;

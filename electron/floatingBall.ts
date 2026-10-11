@@ -60,6 +60,10 @@ let dragStartX = 0;
 let dragStartY = 0;
 let dragMaxDisp = 0;
 let dragLostTicks = 0; // 光标连续在球窗矩形外的 tick 数（mouseup 丢失自愈计数）
+// v2.3.110 需求 3：拖拽开始时菜单窗的位置基线（menuVisible 时记录）。拖动球的过程中，
+// 菜单窗按「球窗相对拖拽起点的位移」同步平移（同一 16ms tick、同一位移，与球窗贴合无跳动），
+// 拖拽结束后菜单保持在新位置。纯 setPosition 位移、无 CSS 动画/过渡，无需登记 animControl。
+let menuDragBase: { x: number; y: number } | null = null;
 
 let ballWindow: BrowserWindow | null = null;
 let panelWindow: BrowserWindow | null = null;
@@ -793,6 +797,11 @@ export function registerBallIPC(): void {
     dragStartY = ballY;
     dragMaxDisp = 0;
     dragLostTicks = 0;
+    // v2.3.110 需求 3：菜单显示中开始拖球 → 记录菜单窗当前位置，之后每个 tick 随球平移
+    //（多显示器坐标与 DPI：ballX/ballY 与 BrowserWindow bounds/setPosition 同为 DIP 逻辑
+    // 坐标，同一坐标系直接加减即可，与既有球窗/面板窗移动逻辑一致）。
+    menuDragBase =
+      menuVisible && menuWindow && !menuWindow.isDestroyed() ? menuWindow.getBounds() : null;
     if (dragTimer) clearInterval(dragTimer);
     const primary = screen.getPrimaryDisplay().workArea;
     dragTimer = setInterval(() => {
@@ -825,6 +834,14 @@ export function registerBallIPC(): void {
           Math.round(nx + panelOffsetX(panelDir)),
           Math.round(ny + panelOffsetY(panelVDir))
         );
+      }
+      // v2.3.110 需求 3：菜单窗跟随 —— 与球窗同一个 16ms tick、按同一 delta 平移，
+      // 保持菜单与球的相对位置不变（即时无跳动）。拖到屏幕边缘时菜单钳制在工作区内
+      // （与 calcMenuRect 同口径），避免菜单被拖出屏幕；拖拽结束菜单保持在新位置。
+      if (menuDragBase && menuWindow && !menuWindow.isDestroyed()) {
+        const mx = Math.max(primary.x + 4, Math.min(menuDragBase.x + (nx - dragStartX), primary.x + primary.width - MENU_W - 4));
+        const my = Math.max(primary.y + 4, Math.min(menuDragBase.y + (ny - dragStartY), primary.y + primary.height - MENU_H - 4));
+        menuWindow.setPosition(Math.round(mx), Math.round(my));
       }
       dragMaxDisp = Math.max(dragMaxDisp, Math.abs(nx - dragStartX) + Math.abs(ny - dragStartY));
       // ===== 拖动中面板出界检测（两阶段换向）=====
@@ -886,6 +903,7 @@ export function registerBallIPC(): void {
     }
     flipping = false;
     dragLostTicks = 0;
+    menuDragBase = null; // v2.3.110 需求 3：拖拽结束，菜单跟随停止（菜单保持在新位置）
     if (panelVisible && panelWindow && !panelWindow.isDestroyed()) {
       panelWindow.setBounds({
         x: Math.round(ballX + panelOffsetX(panelDir)),

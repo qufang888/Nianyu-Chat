@@ -86,7 +86,16 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     applyAnimControl(document, settings, 'main');
     // 玻璃家族主题背景（仅 glass/frost/aura 主题生效）：自定义背景色或图片，磨砂效果由主题 CSS 的 backdrop-filter 保留
     // v2.3.108：aura（琉璃幻境）加入玻璃家族；前代 liquid 主题已在 v2.3.107 整体删除。
+    // v2.3.110 需求 4：frost（冰川素白）保留在玻璃家族里（自定义玻璃背景 / Token 配色继续可用），
+    // 但**退出半透明面板细化**（见 glassTintScope）——frost 的面板/聊天区本就是不透明白，
+    // 深色自定义背景图也不再能把文字底压暗，深底深字不可读的根因即此。
     const isGlass = theme === 'glass' || theme === 'frost' || theme === 'aura';
+    // v2.3.110 需求 4：半透明面板细化（glassTint/glassOpacity/glassBlur → --color-panel /
+    // --color-chat-bg / --color-input-bg / --blur 覆写）收窄到 glass / aura。
+    // frost 是浅色不透明主题（--color-panel #ffffff 等全部实色），不需要也不应该被
+    // 「白 20% 半透明」覆写：覆写后深色自定义背景下面板变成深底、配 #1e293b 深字 → 不可读
+    // （用户截图实测 bug）。frost 的自定义玻璃背景仍由上面的 isGlass 分支照常下发。
+    const glassTintScope = theme === 'glass' || theme === 'aura';
     const glassBg = settings.glassBgImage
       ? `url("${settings.glassBgImage}") center/cover no-repeat`
       : settings.glassBgColor || '';
@@ -129,11 +138,13 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setGlassVar('--glass-bubble-user-fg', settings.glassBubbleUserText);
     setGlassVar('--glass-bubble-ai-fg', settings.glassBubbleAiText);
     setGlassVar('--glass-bubble-border', settings.glassBubbleBorder);
-    // 玻璃家族专属细化（v2.3.105 引入，v2.3.108 扩展到 aura）—— 色调 + 不透明度 + 模糊度。
-    // 仅 glass / frost / aura 主题生效；其余主题清除内联覆盖，回退变量默认值。
+    // 玻璃家族专属细化（v2.3.105 引入，v2.3.108 扩展到 aura；v2.3.110 需求 4 收窄回 glass/aura）
+    // —— 色调 + 不透明度 + 模糊度。仅 glass / aura 主题生效（frost 为不透明浅色主题，
+    // 不参与半透明细化，面板保持 variables.css 自带的实色白，深色自定义背景下深字仍可读）；
+    // 其余主题清除内联覆盖，回退变量默认值。
     // 不透明度按「白底基准 alpha 0.20」的比例同步缩放到 chat-bg(0.45×) / input-bg(0.95×)，
     // 使三者随滑块等比增减，观感一致。色调缺省近白（#ffffff），即当前默认玻璃观感。
-    if (isGlass) {
+    if (glassTintScope) {
       const tint = settings.glassTint || '#ffffff';
       const rawOp = Number(settings.glassOpacity);
       const op = Number.isFinite(rawOp) && rawOp >= 0 && rawOp <= 100 ? rawOp : 20;

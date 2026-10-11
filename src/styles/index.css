@@ -28,7 +28,9 @@ body {
      · 非玻璃主题 .app-root 不透明底 → 观感不变；玻璃家族 .app-root 半透明底照常透底；
      · 弹窗遮罩/滚动条等全部自带底色或挂在 .app-root 内，均不依赖 body 底色（已逐处核查）。
      注意：玻璃家族此前 body + .app-root 双层叠加 --app-bg，现只剩 .app-root 单层，
-     透明度略升 —— 这正是 variables.css 注释里「alpha 压低保留通透观感」的设计本意。 */
+     有效不透明度会按 1-(1-a)² 公式从双层合成的 a 回落到单层的 a（v2.3.110 需求 1：
+     glass/aura 的 --app-bg 各色标 alpha 已按该公式上调补偿，恢复 v2.3.108 前观感，
+     见 variables.css glass / aura 块注释）。 */
   background: transparent;
   overflow: hidden;
   transition: background var(--transition), color var(--transition);
@@ -724,96 +726,17 @@ input[type='range']::-moz-range-thumb {
   opacity: 0.92;
 }
 
-/* ===== 消息入场动画（v2.3.101）=====
-   需求：新追加的消息行——先「头像渐显」，再「气泡从头像一侧向中间弹出」。
-   关键约束（见本文件 5198-5206 的血泪教训）：
-     · 元素**基态必须保持可见**——绝不能把 opacity:0 写在 .msg-row/.avatar/.bubble 的基态上；
-       否则一旦被「动效总开关」的 `animation:none !important`（.anim-off *）抹掉动画，
-       元素会永久不可见。
-     · 这里只在带 `anim-enter` 时才挂关键帧，关键帧 from 为 opacity:0、配 animation-fill-mode:both；
-       animation 被抹掉后元素退回**可见基态**，开/关两档表现一致（不存在「关了动画就消失」）。
-     · 时长统一 `calc(<原值> * var(--anim-speed, 1))`，由「动画速度」总控统一缩放。
-   方向：AI 头像在左 → 气泡从左侧（-8px）弹向中间；用户头像在右 → 气泡从右侧（+8px）弹向中间。
-   落点：主窗 / 小窗的 .avatar / .bubble / .msg-body 类名同构，故本套规则两窗天然同时生效。 */
-/* v2.3.107 需求 2（用户二次明确）：气泡入场要**从左往右「展开」**，不是放大。
-   故彻底去掉 scale —— 头像只做淡入，气泡只做「自头像一侧向另一侧平移 + 淡入」。
-   为什么不用 clip-path 做真正的横向展开：clip-path 会把气泡的 box-shadow 一起裁掉
-   （inset(0) 的参考框是 border-box，外扩阴影必被裁），且 animation-fill-mode:both 会把
-   这个「无阴影」的终态永久保留，等于悄悄改掉了气泡观感。
-   为什么也不用 scaleX + transform-origin:left：横向缩放会把文字一起压扁/拉长，观感更差。
-   平移方案既无副作用，方向（--msg-enter-dx 负 → 0）本身就是「从左往右」。 */
-@keyframes msgAvatarIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-/* 单边固定、另一边展开（用户第二次明确：「左边不动，右边展开，或者右边不动，左边展开，
-   而不是整个气泡平移」）：
-     起点用 clip-path 把气泡完全裁掉、只在**固定的那一侧**留 0 宽度，
-     终点裁到 inset(0) —— 于是可见区域从固定边向另一侧「长出来」，气泡本体位置不动。
-       · AI（头像在左）→ 左边不动、右边向右展开：inset(0 100% 0 0 …)
-       · 用户（头像在右）→ 右边不动、左边向左展开：inset(0 0 0 100% …)
-   为什么用 clip-path 而不是 scaleX：scaleX 会把文字一起横向压扁/拉长，观感很差；
-   clip-path 只裁切，内容不变形。
-   round 参数取与 .bubble 相同的圆角变量，保证展开过程中圆角不被切成直角。
-   ⚠️ fill-mode 必须是 backwards、不能是 both：clip-path 的参考框是 border-box，
-   若在终态永久保留 inset(0)，气泡外扩的 box-shadow 会被一起裁掉；backwards 只在
-   animation-delay 期间应用起点、动画结束后回到元素自身样式（阴影恢复）。 */
-/* v2.3.109 需求 3（方角→圆角跳变修复）：
-   旧 from 态 inset(0 100% 0 0 round R) 在展开初期可见区是一条比 2R 还窄的细条，
-   CSS 规范会在相邻边相向重叠时**按比例压缩圆角半径** → 前缘被压成近似直角，
-   展开到后半程半径才恢复 R，终态突然「变圆」，实测肉眼可见一次跳变。
-   修复：from 态直接保留**最小可视宽度 2R** 的完整圆角 ——
-     inset(0 calc(100% - 2 * R) 0 0 round R)
-   即起点就是一枚「宽 2R 的完整圆角小药丸」（左端圆角与终态一致、右端前缘也是 R），
-   全程可见宽度恒 ≥ 2R，圆角半径**从头到尾都是 R**，展开前缘与终态观感完全一致、无突变。
-   起点瞬间以 opacity:0 起步（原方案本就如此），小药丸不会突兀出现。
-   ⚠️ fill-mode 仍必须 backwards、不能是 both：clip-path 的参考框是 border-box，
-   若在终态永久保留 inset(0)，气泡外扩的 box-shadow 会被一起裁掉；backwards 只在
-   animation-delay 期间应用起点、动画结束后回到元素自身样式（阴影恢复）。 */
-@keyframes msgBubbleIn {
-  from {
-    opacity: 0;
-    clip-path: var(
-      --bubble-clip-from,
-      inset(0 calc(100% - (2 * var(--bubble-radius, var(--radius)))) 0 0 round var(--bubble-radius, var(--radius)))
-    );
-  }
-  to {
-    opacity: var(--bubble-opacity, 1);
-    clip-path: inset(0 0 0 0 round var(--bubble-radius, var(--radius)));
-  }
-}
-/* 头像先渐显（无延迟）。
-   v2.3.109 需求 3 提速：0.30s → 0.24s（气泡全程 0.04s 延迟 + 0.22s 时长 = 0.26s，
-   明显快于 0.5s；幅度/缩放参数不变，只动时序）。 */
-.msg-row.anim-enter .avatar {
-  animation: msgAvatarIn calc(0.24s * var(--anim-speed, 1)) linear both;
-  /* v2.3.107 需求 2：打开聊天时末尾若干条自上而下错峰入场。
-     错峰量由父级经 --msg-enter-stagger 下发，与动画时长同样随 --anim-speed 缩放；
-     单条新消息时该变量为 0ms（行为与旧版完全一致）。 */
-  animation-delay: calc(var(--msg-enter-stagger, 0s) * var(--anim-speed, 1));
-}
-/* 气泡随后弹出（v2.3.109 需求 3 提速：基础延迟 0.08s → 0.04s、时长 0.40s → 0.22s）。
-   方向变量 --bubble-clip-from 在下方按 AI(左锚)/用户(右锚) 设定，确保从各自头像一侧展开。 */
-.msg-row.anim-enter .bubble {
-  /* backwards（不是 both）：终态不保留，动画结束后回到 .bubble 自身样式 → box-shadow 不被裁 */
-  animation: msgBubbleIn calc(0.22s * var(--anim-speed, 1)) linear backwards;
-  animation-delay: calc((0.04s + var(--msg-enter-stagger, 0s)) * var(--anim-speed, 1));
-}
-/* 展开锚点：气泡哪一边固定不动（另一边向对侧展开）。
-   AI 头像在左 → 气泡**左边不动、右边向右展开**；用户头像在右 → **右边不动、左边向左展开**。
-   即：始终从「离头像最近的那一侧」开始展开，气泡整体不平移。
-   from 宽度给足 2R 最小可视宽度（见 @keyframes msgBubbleIn 处的跳变修复说明）。 */
-.msg-row.ai.anim-enter {
-  --bubble-clip-from: inset(
-    0 calc(100% - (2 * var(--bubble-radius, var(--radius)))) 0 0 round var(--bubble-radius, var(--radius))
-  );
-}
-.msg-row.user.anim-enter {
-  --bubble-clip-from: inset(
-    0 0 0 calc(100% - (2 * var(--bubble-radius, var(--radius)))) round var(--bubble-radius, var(--radius))
-  );
-}
+/* ===== 消息入场动画（v2.3.101，已于 v2.3.110 需求 2 整体删除）=====
+   v2.3.110 按用户明确要求把「头像渐显 + 气泡从头像一侧展开 + 错峰入场」整套
+   消息入场动画删除（不是关闭）：消息行现在直接显示。已删净的内容：
+     · @keyframes msgAvatarIn / msgBubbleIn（含 --bubble-clip-from 方向变量与
+       「最小可视宽度 2R 药丸」展开锚点）；
+     · .msg-row.anim-enter 的 avatar/bubble 动画规则；
+     · ChatWindow.tsx / MiniChat.tsx 的 entering / enterSnap 派生 state、
+       ENTER_BATCH / ENTER_STAGGER_MS 常量与 --msg-enter-stagger 下发；
+     · animControl.ts bubble 组的 .msg-row .avatar / .msg-row .bubble 登记；
+     · scripts/verify-bubble-anim.mjs 闸门（被测对象不复存在）。
+   基态可见铁律自动满足：动画不存在后，.avatar / .bubble 的基态本就是完全可见。 */
 
 /* ===== 流式逐字渐显（v2.3.19） =====
    每个新输出的字固定 0.3s 渐显，速度不随模型输出快慢变化；
