@@ -2,6 +2,41 @@ import { api, setBeforeConfirm } from '../ipc';
 
 export type SoundType = 'error' | 'click' | 'notification' | 'popup' | 'miniPopup' | 'messageSend';
 
+/**
+ * 音效主题（v2.3.111）。
+ *
+ * `default` = 既有经典音效（public/sounds/*.wav，v2.3.97 程序合成）；
+ * 其余 5 套为程序合成的主题包（public/sounds/themes/<id>/*.wav），
+ * 每套覆盖全部 6 类音效，由 scripts/gen-builtin-sounds.mjs 生成。
+ *
+ * 解析优先级（resolveSoundUrl）：角色自定义 > 该类型用户自定义（nysound://）
+ * > 主题音效文件 > 内置 default 兜底。
+ */
+export type SoundTheme = 'default' | 'aurora' | 'crystal' | 'wood' | 'bubble' | 'chime';
+
+/** 全部内置主题 id（出厂顺序即设置页展示顺序；default 必须是第一项） */
+export const SOUND_THEMES: SoundTheme[] = ['default', 'aurora', 'crystal', 'wood', 'bubble', 'chime'];
+
+/** 主题名 i18n 键（设置页主题选择器用） */
+export const SOUND_THEME_LABEL_KEYS: Record<SoundTheme, string> = {
+  default: 'settings.soundThemeDefault',
+  aurora: 'settings.soundThemeAurora',
+  crystal: 'settings.soundThemeCrystal',
+  wood: 'settings.soundThemeWood',
+  bubble: 'settings.soundThemeBubble',
+  chime: 'settings.soundThemeChime',
+};
+
+/** 6 类音效的文件名（不含目录；与 BUILTIN 的键一一对应） */
+const SOUND_FILE_NAMES: Record<SoundType, string> = {
+  error: 'error.wav',
+  click: 'click.wav',
+  notification: 'notification.wav',
+  popup: 'popup.wav',
+  miniPopup: 'miniPopup.wav',
+  messageSend: 'messageSend.wav',
+};
+
 // 内置音效：使用相对路径，同时兼容生产环境（file:// 加载 dist/index.html）
 // 与开发环境（vite dev server http://localhost:5173）两种加载方式。
 //
@@ -42,6 +77,8 @@ interface SoundSettings {
   volume: number;
   custom: SoundCustom;
   silent: boolean;
+  /** v2.3.111：音效主题（出厂 'default'；老 settings / 脏数据由 isSoundTheme 回退） */
+  theme: SoundTheme;
 }
 
 let cached: SoundSettings | null = null;
@@ -62,19 +99,27 @@ async function getSettings(): Promise<SoundSettings> {
       volume: Math.max(0, Math.min(1, s.sound?.volume ?? 0.7)),
       custom: { ...defaultCustom(), ...(s.sound?.custom || {}) },
       silent: s.silent === true,
+      theme: isSoundTheme(s.sound?.theme) ? (s.sound?.theme as SoundTheme) : 'default',
     };
   } catch {
-    cached = { enabled: true, volume: 0.7, custom: defaultCustom(), silent: false };
+    cached = { enabled: true, volume: 0.7, custom: defaultCustom(), silent: false, theme: 'default' };
   }
   cacheAt = now;
   return cached;
+}
+
+/** 主题 id 合法性校验（老 settings / 脏数据一律回退 'default'） */
+function isSoundTheme(v: unknown): v is SoundTheme {
+  return typeof v === 'string' && (SOUND_THEMES as string[]).includes(v);
 }
 
 export function invalidateSoundCache(): void {
   cached = null;
 }
 
-function pickBuiltin(type: SoundType): string {
+function pickBuiltin(type: SoundType, theme: SoundTheme = 'default'): string {
+  // v2.3.111：主题音效文件（default 主题没有独立目录，直接用根下的经典音效）
+  if (theme !== 'default') return `sounds/themes/${theme}/${SOUND_FILE_NAMES[type]}`;
   const files = BUILTIN[type];
   if (Array.isArray(files)) return files[Math.floor(Math.random() * files.length)];
   return files;
@@ -84,33 +129,39 @@ function pickBuiltin(type: SoundType): string {
  * 解析最终播放 URL：
  * 1) 角色自定义消息音效（characterSound）最高优先
  * 2) 设置中该类型的全局自定义音效
- * 3) 内置默认音效
+ * 3) 主题音效文件（v2.3.111；非 default 主题）
+ * 4) 内置默认音效（兜底）
+ *
+ * @param opts.theme 主题覆盖（试听指定主题用）；缺省读设置里的当前主题
  */
 export async function resolveSoundUrl(
   type: SoundType,
-  characterSound?: string | null
+  characterSound?: string | null,
+  opts?: { theme?: SoundTheme }
 ): Promise<string> {
   const s = await getSettings();
   if (characterSound) return NY_SCHEME + characterSound;
   const custom = s.custom?.[type];
   if (custom) return NY_SCHEME + custom;
-  return pickBuiltin(type);
+  const theme = opts?.theme ?? s.theme;
+  return pickBuiltin(type, theme);
 }
 
 /**
  * 播放音效。
  * @param opts.characterSound 角色级自定义消息音效文件名（仅 notification 类型有意义）
  * @param opts.force 为 true 时忽略「音效总开关」（用于试听）
+ * @param opts.theme 主题覆盖（试听指定主题用）；缺省用设置里的当前主题
  */
 export async function playSound(
   type: SoundType,
-  opts?: { characterSound?: string | null; force?: boolean }
+  opts?: { characterSound?: string | null; force?: boolean; theme?: SoundTheme }
 ): Promise<void> {
   const s = await getSettings();
   if (!opts?.force && (!s.enabled || s.volume <= 0)) return;
   // 静默模式：仅暂停消息提示音；点击音、报错音等仍正常播放（force 试听不受静默影响）
   if (type === 'notification' && s.silent && !opts?.force) return;
-  const url = await resolveSoundUrl(type, opts?.characterSound);
+  const url = await resolveSoundUrl(type, opts?.characterSound, { theme: opts?.theme });
   const audio = new Audio(url);
   audio.volume = s.volume;
   try {
@@ -140,11 +191,40 @@ export async function playNodeBannerSound(): Promise<void> {
   }
 }
 
-/** 试听：忽略「音效总开关」，但尊重音量设置（设置页 / 角色页预览用） */
-export async function previewSound(type: SoundType, characterSound?: string | null): Promise<void> {
+/**
+ * 试听：忽略「音效总开关」，但尊重音量设置（设置页 / 角色页预览用）。
+ * @param theme 试听指定主题的音效（v2.3.111 主题选择器用）；缺省 = 当前设置的主题
+ */
+export async function previewSound(
+  type: SoundType,
+  characterSound?: string | null,
+  theme?: SoundTheme
+): Promise<void> {
   const s = await getSettings();
-  const url = await resolveSoundUrl(type, characterSound);
+  const url = await resolveSoundUrl(type, characterSound, { theme });
   const audio = new Audio(url);
+  audio.volume = s.volume > 0 ? s.volume : 0.7;
+  try {
+    await audio.play();
+  } catch {
+    // 试听失败静默
+  }
+}
+
+/**
+ * 直接试听某个**主题包**自带的音效（v2.3.111 主题选择器用）。
+ *
+ * 与 {@link previewSound} 的区别：**绕过**自定义音效与角色音效的解析，
+ * 只播主题包文件本身 —— 用户要听的是「这套主题的声音」，而不是
+ * 「应用了自定义文件之后的效果」。主题文件缺失时 play() 失败静默
+ * （浏览器对 404 音频不抛异常，只是不出声）。
+ */
+export async function previewThemeSound(
+  theme: SoundTheme,
+  type: SoundType = 'messageSend'
+): Promise<void> {
+  const s = await getSettings();
+  const audio = new Audio(pickBuiltin(type, theme));
   audio.volume = s.volume > 0 ? s.volume : 0.7;
   try {
     await audio.play();

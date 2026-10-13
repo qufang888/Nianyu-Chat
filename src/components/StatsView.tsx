@@ -18,6 +18,7 @@ import {
 } from '../utils/statsChart';
 import {
   buildPieSlices,
+  pieFingerprint,
   sortByTokensDesc,
   sortRows,
   OTHER_THRESHOLD,
@@ -189,10 +190,28 @@ export const StatsView: React.FC = () => {
     return out;
   }, [stats, roles, companionByRole]);
 
-  const slices: PieSlice[] = useMemo(() => {
+  // v2.3.111：refresh 每 3 秒重建 roles map → rows → slices 全新引用（内容常不变）。
+  // ① slicesRaw 照常从最新数据计算（廉价）；
+  // ② slices 按**内容指纹**稳定引用：内容不变时跨 refresh 保持同一个数组，
+  //    饼图展开动画 effect 不再因引用变化而重播（见 PieChart），
+  //    TokenRankList / BondRankList 等下游 useMemo 也不会无谓重算。
+  const slicesRaw: PieSlice[] = useMemo(() => {
     const list = buildPieSlices(rows, palette, t('stats.other'));
     return list.map((s) => (s.isOther ? { ...s, color: otherSliceColor() } : s));
   }, [rows, palette, t]);
+
+  /** 内容指纹：key + 名称 + token 数 + 占比。内容真变（token 数变了）才会换 */
+  const slicesFingerprint = useMemo(() => pieFingerprint(slicesRaw), [slicesRaw]);
+
+  const slices = useMemo(
+    () => slicesRaw,
+    // 指纹不变就沿用上一次的数组引用（React 官方推荐的「按另一个值缓存」模式）。
+    // ⚠️ palette 也必须进依赖：换主题时调色板换新、slicesRaw 的颜色会变，
+    // 若只按内容指纹稳定，饼图会留着旧主题的配色直到 token 内容变化。
+    // palette 变 → 引用换（颜色即时更新），但动画指纹（内容）不变 → 不重播。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [slicesFingerprint, palette]
+  );
 
   /** 板块二主界面只粗略展示前五 */
   const bondTop5 = useMemo(() => sortRows(rows, rankMode).slice(0, 5), [rows, rankMode]);
@@ -631,7 +650,14 @@ const PieChart: React.FC<{
     speedRef.current = animSpeed;
   }, [animSpeed]);
 
-  // 数据或动效开关变化时重播动画
+  // v2.3.111：展开动画的触发条件改为**内容指纹**而非 slices 数组引用。
+  // 背景：外层每 3 秒 refresh 一次数据，`buildPieSlices` 每次产出全新数组引用
+  // （内容常一致）→ 旧代码 `[animOn, slices]` 依赖引用变化，每 3 秒就把
+  // 「从圆心拉开」重播一遍（用户反馈「莫名其妙固定时间重新打开」）。
+  // 现在内容不变（指纹相同）不重播；内容真变（token 数变了）才重播。
+  const slicesFingerprint = useMemo(() => pieFingerprint(slices), [slices]);
+
+  // 数据内容或动效开关变化时重播动画
   useEffect(() => {
     if (!animOn) {
       setProgress(1);
@@ -653,7 +679,7 @@ const PieChart: React.FC<{
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     };
-  }, [animOn, slices]);
+  }, [animOn, slicesFingerprint]);
 
   // 各扇区的起止角（12 点为 0，顺时针）
   //

@@ -382,6 +382,25 @@ const FilePickerModal: React.FC<FilePickerModalProps> = ({
 
   if (!shown) return null;
 
+  /**
+   * 位置栏条目显示名（v2.3.111 需求 7 修复「磁盘名显示原始 i18n key」）。
+   *
+   * 根因：主进程给的 key 是 `drive-C` / `root` 这类**每台机器动态生成**的 id，
+   * 字典里只登记了 data/documents/downloads/desktop/pictures/home，
+   * 于是 Windows 下左栏直接裸露 `filepicker.place.drive-C` 原始键名。
+   * 修法（两条并行，任一条都足以兜底）：
+   *   ① `drive-*` 用通用格式键 `filepicker.place.driveFormat`（本地磁盘 {letter}）；
+   *   ② 其余 key 若 t() 回退结果与 key 相同（= 缺键），回退显示主进程给的
+   *      label（如「C:」「/」），不再裸露键名。
+   */
+  const placeLabel = (pl: DirPlace): string => {
+    if (pl.key.startsWith('drive-')) {
+      return t('filepicker.place.driveFormat', { letter: pl.label });
+    }
+    const s = t(`filepicker.place.${pl.key}`);
+    return s === `filepicker.place.${pl.key}` ? pl.label : s;
+  };
+
   const titleText = title || t('filepicker.title');
   const errText =
     listing?.error === 'TRAVERSAL_DENIED'
@@ -430,7 +449,7 @@ const FilePickerModal: React.FC<FilePickerModalProps> = ({
                 disabled={leaving}
                 title={pl.path}
               >
-                {t(`filepicker.place.${pl.key}`)}
+                {placeLabel(pl)}
               </button>
             ))}
           </nav>

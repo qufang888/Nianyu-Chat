@@ -6,7 +6,8 @@ import type { Role, Group } from '../types';
 
 export const GroupEditor: React.FC<{
   onClose: () => void;
-  onSaved?: () => void;
+  /** v2.3.111：保存回调；传入 singleRole 表示「只勾了 1 位成员 → 建/进单聊」（不建群） */
+  onSaved?: (singleRole?: Role) => void;
   onUpdated?: () => void;
   group?: Group; // 传入则为「编辑群成员」模式
 }> = ({ onClose, onSaved, onUpdated, group }) => {
@@ -80,8 +81,17 @@ export const GroupEditor: React.FC<{
   };
 
   const save = async () => {
-    if (!name.trim()) return showToast(t('group.needName'), { error: true });
     if (selected.size < 1) return showToast(t('group.needMember'), { error: true });
+    // v2.3.111 需求 5：新建模式下勾选且仅勾选 1 位成员 → 创建/进入单聊（不建群）。
+    // 用户原话：「加号新建，单选=单聊，多选=群聊」。单聊无需群名，直接回调上层
+    // 走与通讯录「聊天」按钮相同的进入路径（chat 记录按 role 派生，无需预建）。
+    if (!isEdit && selected.size === 1) {
+      const role = roles.find((r) => selected.has(r.id));
+      if (!role) return showToast(t('group.needMember'), { error: true });
+      onSaved?.(role);
+      return;
+    }
+    if (!name.trim()) return showToast(t('group.needName'), { error: true });
     // 编辑模式下若重新凑齐 ≥2 人，清除「保持群聊」忽略标记，使其后若再减回 1 人可重新提示
     const existing = group ? await api.getGroup(group.group_id) : undefined;
     const g: Group = {
@@ -97,6 +107,9 @@ export const GroupEditor: React.FC<{
     else onSaved?.();
   };
 
+  // v2.3.111：新建模式下恰好勾选 1 位成员 = 单聊模式（群名输入隐藏、按钮变「创建单聊」）
+  const singleMode = !isEdit && selected.size === 1;
+
   return (
     <div className="modal-mask">
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -107,11 +120,21 @@ export const GroupEditor: React.FC<{
           </span>
         </div>
         <div className="modal-body">
-          <div className="field full" style={{ marginBottom: 16 }}>
-            <label>{t('group.name')}</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('group.namePh')} />
-          </div>
+          {/* 单聊模式隐藏群名输入（单聊名 = 角色名，填群名没有意义） */}
+          {!singleMode && (
+            <div className="field full" style={{ marginBottom: 16 }}>
+              <label>{t('group.name')}</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('group.namePh')} />
+            </div>
+          )}
           <div className="section-title">{t('group.selectMembers')}</div>
+          {/* v2.3.111 需求 5：明示「单选=单聊 / 多选=群聊」的门槛规则 */}
+          {!isEdit && (
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 8 }}>
+              {t('group.singleModeHint')}
+              {singleMode ? `（${t('group.createSingle')}）` : ''}
+            </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {roles.map((r) => (
               <label
@@ -231,7 +254,7 @@ export const GroupEditor: React.FC<{
           )}
           <div className="row-actions">
             <button className="btn-primary" onClick={save}>
-              {isEdit ? t('group.update') : t('group.create')}
+              {isEdit ? t('group.update') : singleMode ? t('group.createSingle') : t('group.create')}
             </button>
             <button className="btn-ghost" onClick={onClose}>
               {t('common.cancel')}

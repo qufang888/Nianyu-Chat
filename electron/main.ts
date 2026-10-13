@@ -576,7 +576,18 @@ function createWindow(opts?: { coldStart?: boolean }): void {
     },
   });
 
-  const splashQuery = coldStart ? '' : '?nosplash=1';
+  // v2.3.111 需求 6：仅进程冷启动播放开屏；窗口被销毁后由 showMainWindow 重建时
+  // （托盘/悬浮球唤出）带 ?nosplash=1，不重播。**新增**：用户关掉「开屏欢迎语」
+  // 动画组（总控全关 / 自定义档关掉该项）时，冷启动也直接进主页——主进程在读盘后
+  // 同步判定（比渲染层异步拿 settings 更早，杜绝「关掉开屏仍闪一下」）。
+  // 判定口径与 src/utils/animControl.ts 的 isGroupEnabled(settings,'splash') 一致：
+  //   all-on → 开；all-off → 关；custom → animGroups.splash !== false。
+  // （dm.getSettings() 已按 db.ts 的迁移规则补好 animMode，无需再映射旧字段；
+  //   渲染层 App.tsx 另有一道同口径兜底。）
+  const splashGroupOff =
+    saved.animMode === 'all-off' ||
+    (saved.animMode === 'custom' && saved.animGroups?.splash === false);
+  const splashQuery = !coldStart || splashGroupOff ? '?nosplash=1' : '';
   if (process.env.NIANYU_DEV === '1') {
     mainWindow.loadURL(`${DEV_SERVER}${splashQuery}`);
   } else {

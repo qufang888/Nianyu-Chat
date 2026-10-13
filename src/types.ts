@@ -796,6 +796,8 @@ export interface AppSettings {
   sound: {
     enabled: boolean; // 全局音效开关
     volume: number; // 音量 0~1
+    // v2.3.111：音效主题（出厂 'default' = 经典音效；其余为主题包，见 utils/sound.ts）
+    theme?: 'default' | 'aurora' | 'crystal' | 'wood' | 'bubble' | 'chime';
     // 各类型音效的自定义文件（userData/custom-sounds 下的文件名）；null=使用内置默认音效
     custom: {
       error: string | null;
@@ -1284,6 +1286,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sound: {
     enabled: true,
     volume: 0.7,
+    theme: 'default',
     custom: {
       error: null,
       click: null,

@@ -455,12 +455,95 @@ function highlightName(text: string, query: string): React.ReactNode {
   );
 }
 
+/**
+ * v2.3.111：头像 dataURL 的**模块级缓存**（path → dataURL）。
+ *
+ * 为什么需要：切聊天时头像「先黑/空一帧再突然显示」——根因是每个 AvatarImg
+ * 实例各自 `api.getImage(path)` 异步拉取，拉取期间 src 为 null → 黑/空帧；
+ * 切回已看过的聊天又要重拉一遍。模块级缓存让「第二次起就是即时显示」。
+ * 缓存无上限（头像数量有限、单张几百 KB），桌面端可接受。
+ */
+const avatarDataCache = new Map<string, string>();
+
+/** 同 path 的并发加载去重（同一帧内多个组件挂同一个头像只拉一次） */
+const avatarInflight = new Map<string, Promise<string | null>>();
+
+/** 读取头像 dataURL：缓存 → 并发去重 → getImage（失败返回 null，不抛出） */
+function loadAvatarData(path: string): Promise<string | null> {
+  const hit = avatarDataCache.get(path);
+  if (hit !== undefined) return Promise.resolve(hit);
+  const running = avatarInflight.get(path);
+  if (running) return running;
+  const p = api
+    .getImage(path)
+    .then((d) => {
+      avatarInflight.delete(path);
+      if (d) avatarDataCache.set(path, d);
+      return d;
+    })
+    .catch(() => {
+      avatarInflight.delete(path);
+      return null;
+    });
+  avatarInflight.set(path, p);
+  return p;
+}
+
+/**
+ * 头像图片（共用组件：ChatList / ChatWindow / MiniChat / CustomTitleBar / StatsView 等）。
+ *
+ * v2.3.111 修三个实测问题（用户截图：「切聊天头像黑闪」「个别人物全黑」）：
+ *   ① path→dataURL 模块级缓存：切换回来即时显示，零黑闪；
+ *   ② 新头像加载期间**保持显示旧头像**（不置空 src），加载完再原子替换；
+ *   ③ 加载失败（文件不存在 / 读取异常，getImage 返回 null）时渲染默认
+ *      头像占位（👤），绝不让头像区域全黑/全空。
+ */
 export const AvatarImg: React.FC<{ path: string }> = ({ path }) => {
-  const [src, setSrc] = useState<string | null>(null);
+  // 初始值直接取缓存：已加载过的头像首帧就是图，无黑闪
+  const [src, setSrc] = useState<string | null>(() => (path ? avatarDataCache.get(path) ?? null : null));
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
-    if (!path) return;
-    api.getImage(path).then(setSrc);
+    if (!path) {
+      setSrc(null);
+      setFailed(false);
+      return;
+    }
+    let alive = true;
+    void loadAvatarData(path).then((d) => {
+      if (!alive) return;
+      if (d) {
+        setSrc(d);
+        setFailed(false);
+      } else {
+        // 失败：**不清空**已显示的旧 src（保持旧头像不闪）；仅当本来无可显示
+        // 内容时（首次加载就失败）交给下方 failed 兜底渲染占位图。
+        setFailed(true);
+      }
+    });
+    return () => {
+      alive = false;
+    };
   }, [path]);
-  if (!src) return null;
-  return <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
+  if (src) return <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
+  if (failed) {
+    return (
+      <span
+        className="avatar-fallback"
+        aria-hidden="true"
+        style={{
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '62%',
+          lineHeight: 1,
+          userSelect: 'none',
+        }}
+      >
+        👤
+      </span>
+    );
+  }
+  return null;
 };

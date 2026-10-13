@@ -30,6 +30,7 @@ import ErrorBubble from './components/ErrorBubble';
 import QueueDock from './components/QueueDock';
 import { UpdatePopup } from './components/UpdatePopup';
 import { TutorialOverlay } from './components/TutorialOverlay';
+import { isGroupEnabled } from './utils/animControl';
 import type { Role, QuickImportResult, QuickImportPreviewItem } from './types';
 
 type View = 'chats' | 'contacts' | 'compare' | 'settings' | 'stats' | 'library' | 'moments';
@@ -49,6 +50,9 @@ export default function App() {
   const [showGroup, setShowGroup] = useState(false);
   // 开屏动画：仅「进程冷启动」（双击 exe / 开始菜单 / 命令行）播放一次；
   // 从托盘或悬浮球唤出已隐藏窗口时，主进程会带 ?nosplash=1 重建渲染进程，不再重播。
+  // v2.3.111 需求 6：主进程在创建窗口时还会按「开屏欢迎语」动画组的开关补
+  // ?nosplash=1（关闭时冷启动也直接进主页）；这里再加一道渲染层兜底——
+  // settings 异步到达后若发现开屏组被关，立刻标记完成，绝不播放开屏。
   // hasShownSplash 仅作历史记录，不参与展示判定。
   const [showSplash, setShowSplash] = useState<boolean>(
     () => !new URLSearchParams(window.location.search).has('nosplash')
@@ -238,6 +242,13 @@ export default function App() {
     if (!showSplash && settings && (!settings.firstRunDone || !settings.models?.length)) setShowOnboarding(true);
   }, [showSplash, settings]);
 
+  // v2.3.111 需求 6（渲染层兜底）：设置异步到达后若「开屏欢迎语」动画组被关
+  // （总控全关 / 自定义档关掉该项），立刻结束开屏——与主进程创建窗口时的
+  // ?nosplash=1 判定双保险，保证「关掉开屏 → 直接进主页」不放任何一帧开屏。
+  useEffect(() => {
+    if (showSplash && settings && !isGroupEnabled(settings, 'splash')) setShowSplash(false);
+  }, [showSplash, settings]);
+
   // ===== 新手引导（v2.3.90，可跳过）=====
   // 与上面的初始设置向导严格互斥：仅当 firstRunDone === true（初始设置已走完）且
   // 初始设置向导当前没有展示时，才可能挂载 TutorialOverlay。
@@ -359,9 +370,14 @@ export default function App() {
     setSelected({ type: 'single', id: role.id, name: role.name, members: [] });
   };
 
-  // 群聊创建后跳入
-  const onGroupSaved = () => {
+  // 群聊创建后跳入；v2.3.111 需求 5：只勾 1 位成员时 GroupEditor 传回 singleRole → 进单聊
+  const onGroupSaved = (singleRole?: Role) => {
     setShowGroup(false);
+    if (singleRole) {
+      setView('chats');
+      setSelected({ type: 'single', id: singleRole.id, name: singleRole.name, members: [] });
+      return;
+    }
     api.getGroups().then((gs) => {
       const g = gs[0];
       if (g) openChat('group', g.group_id, g.group_name);
@@ -562,7 +578,12 @@ export default function App() {
       {showGroup && (
         <GroupEditor onClose={() => setShowGroup(false)} onSaved={onGroupSaved} />
       )}
-      {showSplash && <SplashScreen onDone={() => setShowSplash(false)} />}
+      {/* v2.3.111 需求 6：splashVisible 在 settings 到达后按动画组开关收敛——
+          关掉「开屏欢迎语」时连一帧都不渲染（主进程 ?nosplash=1 是第一道，
+          这里是渲染层第二道）；?nosplash=1 既有逻辑不受影响。 */}
+      {showSplash && (settings ? isGroupEnabled(settings, 'splash') : true) && (
+        <SplashScreen onDone={() => setShowSplash(false)} />
+      )}
       {aboutOpen && <AboutModal onClose={() => setAboutOpen(false)} />}
       {showOnboarding && (
         <OnboardingWizard

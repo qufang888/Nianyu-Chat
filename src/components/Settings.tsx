@@ -73,7 +73,15 @@ import {
   INACTIVE_DAYS_MIN,
   clampInactiveDays,
 } from '../utils/inactiveChats';
-import { invalidateSoundCache, previewSound, type SoundType } from '../utils/sound';
+import {
+  invalidateSoundCache,
+  previewSound,
+  previewThemeSound,
+  SOUND_THEMES,
+  SOUND_THEME_LABEL_KEYS,
+  type SoundTheme,
+  type SoundType,
+} from '../utils/sound';
 import { compareVersions } from '../utils/versionCompare';
 import cursorPngUrl from '../assets/cursor/cursor.png';
 
@@ -293,6 +301,19 @@ const SOUND_ROWS: { type: SoundType; labelKey: string }[] = [
   { type: 'miniPopup', labelKey: 'settings.soundMiniPopup' },
   { type: 'messageSend', labelKey: 'settings.soundMessageSend' },
 ];
+
+/** v2.3.111 需求 1：玻璃色调预设色板（契合毛玻璃深蓝紫底 / aura 深海靛底的通透感）。
+ *  色值为硬编码，已登记《硬编码清单》v2.3.111 章节。 */
+const GLASS_TINT_PRESETS: { color: string; labelKey: string }[] = [
+  { color: '#ffffff', labelKey: 'settings.glassTintPresetCloud' },   // 云雾白
+  { color: '#ffd9c7', labelKey: 'settings.glassTintPresetCoral' },   // 暖珊瑚
+  { color: '#c9f2e4', labelKey: 'settings.glassTintPresetMint' },    // 薄荷绿
+  { color: '#d9ccff', labelKey: 'settings.glassTintPresetLavender' }, // 薰衣草紫
+  { color: '#ffc9dd', labelKey: 'settings.glassTintPresetPeach' },   // 蜜桃粉
+  { color: '#c7e8ff', labelKey: 'settings.glassTintPresetSky' },     // 天青
+];
+/** 玻璃色调出厂默认值（重置回填它；与 ThemeContext 的缺省口径一致） */
+const GLASS_TINT_DEFAULT = '#ffffff';
 
 // 光标热点预览（拖动红点设置）
 // hotspot 值是相对图像左上角的像素偏移，存储在「基础尺寸 28」坐标系下，
@@ -2608,12 +2629,52 @@ export const Settings: React.FC<{
                   <input
                     id="sec-glass-tint"
                     type="color"
-                    value={draft.glassTint || '#ffffff'}
+                    value={draft.glassTint || GLASS_TINT_DEFAULT}
                     onChange={(e) => patch({ glassTint: e.target.value })}
                     style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
                   />
                   <Hint text={t('settings.glassTintDesc')} />
+                  {/* v2.3.111 需求 1：一键重置回出厂默认色（已是默认色时禁用，无需确认） */}
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => patch({ glassTint: GLASS_TINT_DEFAULT })}
+                    disabled={(draft.glassTint || GLASS_TINT_DEFAULT).toLowerCase() === GLASS_TINT_DEFAULT}
+                  >
+                    {t('settings.glassTintReset')}
+                  </button>
                 </label>
+                {/* v2.3.111 需求 1：预设色板（一行小色块，点击即写入 draft.glassTint）。
+                    作为 sec-glass-tint 区块内控件呈现，不新增静态搜索条目——
+                    条件渲染区块由设置搜索动态索引按 DOM 存在性收录。 */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                    {t('settings.glassTintPresets')}
+                  </span>
+                  {GLASS_TINT_PRESETS.map((p) => {
+                    const active = (draft.glassTint || '').toLowerCase() === p.color;
+                    return (
+                      <button
+                        key={p.color}
+                        type="button"
+                        className="btn-ghost"
+                        title={t(p.labelKey)}
+                        aria-label={t(p.labelKey)}
+                        aria-pressed={active}
+                        onClick={() => patch({ glassTint: p.color })}
+                        style={{
+                          width: 26,
+                          height: 26,
+                          padding: 0,
+                          borderRadius: 8,
+                          background: p.color,
+                          border: `2px solid ${active ? 'var(--color-primary)' : 'var(--color-border)'}`,
+                          cursor: 'pointer',
+                        }}
+                      />
+                    );
+                  })}
+                </div>
                 <div>
                   <div style={{ fontSize: 13, marginBottom: 4 }}>{t('settings.glassOpacity')}：{draft.glassOpacity ?? 20}%</div>
                   <input
@@ -5221,6 +5282,47 @@ export const Settings: React.FC<{
 
         {/* 各音效自定义（MP3 / WAV） */}
         <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 560 }}>
+          {/* v2.3.111 需求 3：音效主题选择器（6 套内置主题，每套覆盖全部 6 类音效）。
+              选择即落盘 + 即时生效（invalidateSoundCache）+ 即时试听代表音；
+              每类下方的「导入外部音效」保留，优先级仍高于主题（见 sound.ts 解析链）。 */}
+          <div style={{ borderTop: '1px solid var(--color-border, rgba(128,128,128,0.18))', paddingTop: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('settings.soundTheme')}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 8 }}>
+              {t('settings.soundThemeDesc')}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {SOUND_THEMES.map((th: SoundTheme) => {
+                const active = (sound.theme || 'default') === th;
+                return (
+                  <span key={th} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <button
+                      type="button"
+                      className={active ? 'btn-primary' : 'btn-ghost'}
+                      aria-pressed={active}
+                      onClick={() => {
+                        patchSound({ theme: th });
+                        api.saveSettings({ sound: { ...sound, theme: th } }).then(reloadSettings);
+                        invalidateSoundCache();
+                        // 选择即时预览：播该主题的代表音（messageSend）
+                        void previewThemeSound(th);
+                      }}
+                    >
+                      {t(SOUND_THEME_LABEL_KEYS[th])}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      title={`${t('settings.soundPreview')} · ${t(SOUND_THEME_LABEL_KEYS[th])}`}
+                      aria-label={`${t('settings.soundPreview')} · ${t(SOUND_THEME_LABEL_KEYS[th])}`}
+                      onClick={() => void previewThemeSound(th)}
+                    >
+                      ▶
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          </div>
           {SOUND_ROWS.map((row) => {
             const customVal = (sound.custom || ({} as any))[row.type] || null;
             return (
@@ -5233,7 +5335,9 @@ export const Settings: React.FC<{
               >
                 <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t(row.labelKey)}</div>
                 <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 8 }}>
-                  {t('settings.soundCurrent')}：{customVal ? customVal : t('settings.soundDefault')}
+                  {/* v2.3.111：无自定义文件时显示当前主题名（而非笼统的「内置默认」），
+                      让用户明确知道这行音效正跟随哪套主题 */}
+                  {t('settings.soundCurrent')}：{customVal ? customVal : t(SOUND_THEME_LABEL_KEYS[sound.theme || 'default'])}
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button className="btn-ghost" onClick={() => pickSound(row.type)}>

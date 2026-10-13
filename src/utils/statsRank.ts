@@ -107,6 +107,24 @@ export interface PieSlice {
 export const OTHER_THRESHOLD = 0.1;
 
 /**
+ * 饼图扇区序列的**内容指纹**（v2.3.111）。
+ *
+ * 为什么需要它：StatsView 每 3 秒 refresh 一次，`buildPieSlices` 每次都会
+ * 产出**全新的数组与对象引用**（内容完全一致）。饼图的展开动画 effect 若
+ * 直接依赖 `slices` 数组引用，就会每次 refresh 都重播一遍「从圆心拉开」——
+ * 用户观感即「饼图莫名其妙固定时间重新打开」。
+ *
+ * 改用本指纹做依赖：**内容不变（key + 占比 + 名称均相同）则不重播**，
+ * 只有内容真的变了（有人产生了新的 Token、占比变化、增删人物）才重播。
+ *
+ * 取值说明：ratio 用 toFixed(10) 吸收浮点尾差（同一份数据重复计算可能产生
+ * 1e-16 级差异，但那不构成「内容变化」）；name 计入指纹（改名也要重播）。
+ */
+export function pieFingerprint(slices: readonly PieSlice[]): string {
+  return slices.map((s) => `${s.key}|${s.name}|${s.tokens}|${s.ratio.toFixed(10)}`).join(';');
+}
+
+/**
  * 由排行数据生成饼图扇区序列。
  *
  * 规则：
