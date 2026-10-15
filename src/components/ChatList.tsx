@@ -11,7 +11,9 @@ import {
   moveChatToInactive,
   partitionByInactive,
 } from '../utils/inactiveChats';
-import { MAX_SUGGESTIONS } from '../utils/fuzzySearch';
+// v2.3.112 F8：候选项高亮改走唯一真源 highlightParts（与 rankCandidates 共用归一化
+// 口径，保证「能搜到就高亮」），删除本文件第二套高亮实现 highlightName
+import { MAX_SUGGESTIONS, highlightParts } from '../utils/fuzzySearch';
 import SearchSuggest from './SearchSuggest';
 import { useRetract } from '../hooks/useRetract';
 import { useToast, ToastView } from './Toast';
@@ -186,7 +188,8 @@ export const ChatList: React.FC<{
     window.setTimeout(() => {
       const el = document.getElementById(`chat-item-${key}`);
       if (!el) return;
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // v2.3.112 F6：跳转落点改为页面最上方（目标在可滚动内容末尾时浏览器会翻到最底部）
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
       // v2.3.102 需求 4：统一走 flashElement（时长/去抖/清类都在工具里），删除本地重复的 FLASH_MS 常量
       flashElement(el);
     }, 120);
@@ -384,7 +387,14 @@ export const ChatList: React.FC<{
           return (
             <span className="list-search-rowline">
               <span className="list-search-name">
-                {highlightName(label, ctx.query)}
+                {/* v2.3.112 F8：与 SearchSuggest 默认渲染同款高亮（highlightParts） */}
+                {highlightParts(label, ctx.query).map((p, k) =>
+                  p.hit ? (
+                    <mark key={k} className="search-hl">{p.text}</mark>
+                  ) : (
+                    <React.Fragment key={k}>{p.text}</React.Fragment>
+                  )
+                )}
               </span>
               {inFolder && (
                 <span className="list-search-badge" title={t('chats.inactiveFolder')}>
@@ -435,25 +445,6 @@ export const ChatList: React.FC<{
     </div>
   );
 };
-
-/** 候选文本的关键词高亮（与 Settings 的 renderSearchHL 同一套 `<mark class="search-hl">` 样式） */
-function highlightName(text: string, query: string): React.ReactNode {
-  const q = query.trim().toLowerCase();
-  if (!q) return text;
-  const tokens = q.split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return text;
-  const escaped = tokens.map((tk) => tk.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const re = new RegExp(`(${escaped.join('|')})`, 'gi');
-  return text.split(re).map((part, i) =>
-    tokens.includes(part.toLowerCase()) ? (
-      <mark key={i} className="search-hl">
-        {part}
-      </mark>
-    ) : (
-      <span key={i}>{part}</span>
-    )
-  );
-}
 
 /**
  * v2.3.111：头像 dataURL 的**模块级缓存**（path → dataURL）。

@@ -126,7 +126,7 @@ function hitTier(q: string, t: string): { tier: number; skip: number } {
 
   const skip = subsequenceSkip(q, t);
   if (skip >= 0) {
-    // 子序列：跳字越少越好 → 降一档用 skip 拉开距离
+    // 子序列：仍落在 600 档内，仅按 skip 施加惩罚（≤3/-0、≤8/-20、>8/-50）与同档其它项拉开距离
     const penalty = skip <= 3 ? 0 : skip <= 8 ? 20 : 50;
     return { tier: 600 - penalty, skip };
   }
@@ -258,18 +258,52 @@ export function suggestWithCount<T>(
 /**
  * 把文本按查询词切成 [普通, 命中, 普通, 命中…]，供 <mark> 高亮。
  * 与 {@link rankCandidates} 共用归一化口径，避免「能搜到却不高亮」。
+ *
+ * v2.3.113 ②：多词查询（如 "new chat"）现在会**高亮全部命中的词**，
+ * 而非只高亮首个命中词——逐词收集命中区间后合并返回，提升搜索结果可读性。
  */
 export function highlightParts(text: string, query: string): Array<{ text: string; hit: boolean }> {
   const original = text || '';
   const q = normalizeText(query);
   if (!q) return original ? [{ text: original, hit: false }] : [];
 
-  // 优先按「完整查询词」高亮；命中不了再按空格分词逐个高亮
-  const tries = [q, ...q.split(/\s+/).filter((w) => w.length > 0)].sort((a, b) => b.length - a.length);
-  for (const needle of tries) {
-    const parts = highlightByNeedle(original, needle);
-    if (parts.some((p) => p.hit)) return parts;
+  // 候选命中词：完整查询词 + 按空格拆出的每个词（去重，长词优先用于连续子串高亮）
+  const needles = Array.from(new Set([q, ...q.split(/\s+/).filter((w) => w.length > 0)]))
+    .sort((a, b) => b.length - a.length);
+
+  // 收集所有 needle 在原文中的（不区分大小写）命中区间
+  const ranges: Array<[number, number]> = [];
+  const lower = original.toLowerCase();
+  for (const needle of needles) {
+    let i = 0;
+    while (i < original.length) {
+      const idx = lower.indexOf(needle, i);
+      if (idx < 0) break;
+      ranges.push([idx, idx + needle.length]);
+      i = idx + needle.length;
+    }
   }
+
+  if (ranges.length > 0) {
+    ranges.sort((a, b) => a[0] - b[0]);
+    // 合并重叠 / 相接区间，避免同一段被多个 needle 重复标记
+    const merged: Array<[number, number]> = [];
+    for (const r of ranges) {
+      const last = merged[merged.length - 1];
+      if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]);
+      else merged.push([r[0], r[1]]);
+    }
+    const out: Array<{ text: string; hit: boolean }> = [];
+    let cur = 0;
+    for (const [s, e] of merged) {
+      if (s > cur) out.push({ text: original.slice(cur, s), hit: false });
+      out.push({ text: original.slice(s, e), hit: true });
+      cur = e;
+    }
+    if (cur < original.length) out.push({ text: original.slice(cur), hit: false });
+    return out.filter((p) => p.text.length > 0);
+  }
+
   // 字符级兜底：rankCandidates 已命中（如反向子序列 / 无序子集，见 134-144 行），
   // 但连续子串高亮兜不住。这里按字符做「子集覆盖」近似，保证「能搜到就高亮」。
   // 对中文而言，命中查询里的字符即视为该字命中——即「明小」命中「王小明」时，
@@ -277,22 +311,6 @@ export function highlightParts(text: string, query: string): Array<{ text: strin
   const byChars = highlightByChars(original, q);
   if (byChars.some((p) => p.hit)) return byChars;
   return [{ text: original, hit: false }];
-}
-
-function highlightByNeedle(text: string, needle: string): Array<{ text: string; hit: boolean }> {
-  const lower = text.toLowerCase();
-  const out: Array<{ text: string; hit: boolean }> = [];
-  let i = 0;
-  let found = false;
-  while (i < text.length) {
-    const idx = lower.indexOf(needle, i);
-    if (idx < 0) { out.push({ text: text.slice(i), hit: false }); break; }
-    if (idx > i) out.push({ text: text.slice(i, idx), hit: false });
-    out.push({ text: text.slice(idx, idx + needle.length), hit: true });
-    found = true;
-    i = idx + needle.length;
-  }
-  return found ? out.filter((p) => p.text.length > 0) : [];
 }
 
 /**

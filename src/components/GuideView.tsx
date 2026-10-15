@@ -3,8 +3,11 @@
 // 更新《使用说明.md》时，请同步更新这里的 GUIDE 数组；反之亦然。
 // 指南内搜索逻辑与「设置页搜索框」一致：百度建议式候选、最多 5 条按关联度排序、
 // 命中高亮、点击跳转后闪动 5 秒。
+// v2.3.112 F7：搜索改走全局唯一真源 fuzzySearch（rankCandidates 排序 +
+// highlightParts 高亮），删除本文件自建的 100/80/50/70/40 分档打分与 renderHL。
 import React, { useMemo, useState } from 'react';
 import { flashElement } from '../utils/flash';
+import { MAX_SUGGESTIONS, highlightParts, rankCandidates } from '../utils/fuzzySearch';
 
 type GuideSection = {
   id: string;
@@ -1020,6 +1023,32 @@ const GUIDE: GuideSection[] = [
       </>
     ),
   },
+  {
+    id: 'guide-v23112',
+    title: 'v2.3.112：搜索候选项准确性修复 + 跳转闪动与置顶',
+    kw: ['搜索','候选项','候选','准确性','准确','错误名称','多余符号','感叹号','状态词','开','关','重复','去重','模型名','分隔符','跳转','闪动','置顶','顶部','滚动','高亮','统一','真源','v23112','v2.3.112'],
+    body: (
+      <>
+        <p style={{ marginTop: 10, fontWeight: 600 }}>① 候选项名称准确性（核心修复）</p>
+        <ul style={{ paddingLeft: 18, lineHeight: 1.8 }}>
+          <li><b>剔除多余符号</b>：设置项旁的「!」说明图标不再被算进候选名——修复「开机自启动!」「群聊自动接话!」「毛玻璃背景!」等候选名带感叹号的问题。</li>
+          <li><b>修复错误名称</b>：「启用流式输出」等字段的复选框 label 内是「开 / 关」状态词，旧实现把状态词当成选项名（还随勾选变化）；现在回退取字段标题（如「启用流式输出」），并把过长的拼接文本拦截掉。div 包裹的复选框行（如「等你回复才发下一条」「频率自适应」）旧实现会错拿同区域第一个控件的标题而被去重吞掉（搜不到），现在每行只取自己的标题。</li>
+          <li><b>去重</b>：静态索引里重复登记的「圆角」条目已删除，搜「圆角」只出现一个候选。</li>
+          <li><b>模型候选名</b>：设置页模型搜索与聊天模型选择器的候选只显示模型名，不再带「· 提供方 · 模型 ID」分隔符（完整信息仍在悬停提示与可搜索关键词里）。</li>
+        </ul>
+        <p style={{ marginTop: 10, fontWeight: 600 }}>② 所有搜索框统一唯一真源</p>
+        <ul style={{ paddingLeft: 18, lineHeight: 1.8 }}>
+          <li>模糊搜索 / 关联度排序 / 高亮全部收敛到 <code>src/utils/fuzzySearch.ts</code>：使用指南搜索、聊天模型选择器搜索改为 <code>rankCandidates</code>；聊天列表、记忆面板、消息查找结果的高亮改为 <code>highlightParts</code>——同一查询在各处「搜得到」与「高亮」口径完全一致。</li>
+          <li>候选项仍遵循<b>最多 5 条 + 滚动条看其余</b>：聊天模型选择器结果区底部在候选超过可见行数时提示「还有 N 项」。</li>
+        </ul>
+        <p style={{ marginTop: 10, fontWeight: 600 }}>③ 跳转体验：落点置顶 + 闪动提醒</p>
+        <ul style={{ paddingLeft: 18, lineHeight: 1.8 }}>
+          <li>所有候选项跳转（设置 / 模型 / 聊天列表 / 记忆 / 消息查找）落点统一为<b>页面最上方</b>：目标在可滚动内容末尾时，页面会翻到最底部，保证目标完整可见。</li>
+          <li>跳转后目标项<b>闪烁高亮 5 秒</b>定位；消息查找（主窗与小窗）此前跳转不闪动，本版补齐。</li>
+        </ul>
+      </>
+    ),
+  },
 ];
 
 export function GuideView({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -1027,40 +1056,13 @@ export function GuideView({ open, onClose }: { open: boolean; onClose: () => voi
   const [showSuggest, setShowSuggest] = useState(false);
 
   const results = useMemo<GuideSection[]>(() => {
-    const raw = q.toLowerCase().trim();
-    if (!raw) return [];
-    const tokens = raw.split(/\s+/).filter(Boolean);
-    const scored = GUIDE.map((s) => {
-      const label = s.title.toLowerCase();
-      const hay = label + ' ' + s.kw.join(' ').toLowerCase();
-      let score = -1;
-      if (label.startsWith(raw)) score = 100;
-      else if (label.includes(raw)) score = 80;
-      else if (hay.includes(raw)) score = 50;
-      if (score < 0 && tokens.length > 0) {
-        const allHit = tokens.every((tk) => hay.includes(tk));
-        if (allHit) score = tokens.every((tk) => label.includes(tk)) ? 70 : 40;
-      }
-      return { s, score };
-    })
-      .filter((x) => x.score >= 0)
-      .sort((a, b) => b.score - a.score || a.s.title.length - b.s.title.length);
-    return scored.slice(0, 5).map((x) => x.s);
+    // v2.3.112 F7：改走唯一真源 rankCandidates（模糊匹配 + 关联度排序）；
+    // 空查询仍返回 []（保持既有行为：搜索框空着不弹候选）。
+    if (!q.trim()) return [];
+    return rankCandidates(q, GUIDE, (s) => ({ label: s.title, keywords: s.kw }))
+      .slice(0, MAX_SUGGESTIONS)
+      .map((r) => r.item);
   }, [q]);
-
-  const renderHL = (label: string): React.ReactNode => {
-    const tokens = q.toLowerCase().trim().split(/\s+/).filter(Boolean);
-    if (tokens.length === 0) return label;
-    const escaped = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    const re = new RegExp(`(${escaped.join('|')})`, 'gi');
-    return label.split(re).map((part, i) =>
-      tokens.includes(part.toLowerCase()) ? (
-        <mark key={i} className="search-hl">{part}</mark>
-      ) : (
-        <span key={i}>{part}</span>
-      )
-    );
-  };
 
   const goTo = (id: string) => {
     const el = document.getElementById(id);
@@ -1117,7 +1119,14 @@ export function GuideView({ open, onClose }: { open: boolean; onClose: () => voi
                     goTo(r.id);
                   }}
                 >
-                  {renderHL(r.title)}
+                  {/* v2.3.112 F7：候选项高亮改走唯一真源 highlightParts（删除 renderHL） */}
+                  {highlightParts(r.title, q).map((p, k) =>
+                    p.hit ? (
+                      <mark key={k} className="search-hl">{p.text}</mark>
+                    ) : (
+                      <React.Fragment key={k}>{p.text}</React.Fragment>
+                    )
+                  )}
                 </div>
               ))}
             </div>

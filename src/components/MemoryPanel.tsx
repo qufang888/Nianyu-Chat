@@ -4,7 +4,8 @@ import { useI18n } from '../i18n/I18nContext';
 import { useTheme } from '../theme/ThemeContext';
 import type { MemoryEntry, ChatListItem } from '../types';
 import { useToast, ToastView } from './Toast';
-import { rankCandidates } from '../utils/fuzzySearch';
+// v2.3.112 F9：高亮改走唯一真源 highlightParts（与 rankCandidates 共用归一化口径）
+import { rankCandidates, highlightParts } from '../utils/fuzzySearch';
 import { flashElement } from '../utils/flash';
 
 // 记忆面板：展示并手动编辑某角色的记忆（AI 自动提炼的记忆也会出现在列表中，可手动修改/删除）
@@ -107,7 +108,8 @@ export const MemoryPanel: React.FC<{ roleId: string }> = ({ roleId }) => {
     const m = matches[next];
     const el = document.getElementById('mem-' + m.id);
     if (el) {
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      // v2.3.112 F6：跳转落点改为页面最上方（目标在可滚动内容末尾时浏览器会翻到最底部）
+      el.scrollIntoView({ block: 'start', behavior: 'smooth' });
       // v2.3.102 需求 4：统一走 flashElement —— 旧实现在此只 add 类、且完全没有移除定时器，
       // 导致类永久残留，第二次跳到同一项不会再闪。flashElement 内含去抖 + 5000ms 后清类。
       flashElement(el);
@@ -116,21 +118,19 @@ export const MemoryPanel: React.FC<{ roleId: string }> = ({ roleId }) => {
   };
 
   // 高亮命中子串：按查询词拆分成段，命中段用 <mark> 包裹
-  const highlight = (text: string): React.ReactNode => {
-    if (!ql) return text;
-    const escaped = ql.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp('(' + escaped + ')', 'ig');
-    const segments = text.split(re);
-    return segments.map((part, i) =>
-      i % 2 === 1 ? (
+  // v2.3.112 F9：改用唯一真源 highlightParts（与 rankCandidates 共用归一化口径，
+  // 保证「能搜到就高亮」；未命中时原样返回文本）。本函数被用于记忆内容、来源徽章、
+  // 聊天名、日期等多处，替换后行为完全兼容。
+  const highlight = (text: string): React.ReactNode =>
+    highlightParts(text, ql).map((p, i) =>
+      p.hit ? (
         <mark className="search-hl" key={i}>
-          {part}
+          {p.text}
         </mark>
       ) : (
-        <React.Fragment key={i}>{part}</React.Fragment>
+        <React.Fragment key={i}>{p.text}</React.Fragment>
       ),
     );
-  };
 
   return (
     <div>

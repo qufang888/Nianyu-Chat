@@ -7,6 +7,8 @@ import { PROVIDER_DEFAULTS } from '../types';
 // v2.3.90：面板缩入（关闭）动画
 import { useRetract } from '../hooks/useRetract';
 import { flashElement } from '../utils/flash';
+// v2.3.112 F5：搜索改走全局唯一真源（模糊匹配 + 关联度排序），删除自建打分
+import { rankCandidates } from '../utils/fuzzySearch';
 
 // 聊天模型切换（v2.3.41，仅单聊）：
 // 人物编辑中绑定的模型 = 该人物聊天的默认模型；其他操作菜单可勾选「跟随人物（或默认）模型」——
@@ -88,25 +90,16 @@ export const ChatModelPicker: React.FC<{ chatType: string; chatId: string }> = (
     setOpen(true);
   };
 
-  // 模糊搜索：多词 AND，前缀命中 > 包含命中 > 全词组命中；大小写不敏感。
-  // 匹配 API 配置名称（name）与模型名称（model），另附提供方名（与设置页模型搜索同口径）。
+  // v2.3.112 F5：删除自建打分过滤（100/80/60 分档 + slice(0,8)），改走唯一真源
+  // rankCandidates —— 与设置页 / 聊天列表 / 指南搜索同一套模糊匹配与关联度排序。
+  // 模型 ID 与提供方名进 keywords：仍可被搜到，但权重低于名称命中（不喧宾夺主）。
+  // 结果区不截断（列表小，全部渲染），可见行数由结果区 maxHeight 控制。
   const results = (() => {
-    const raw = q.toLowerCase().trim();
-    if (!raw) return [];
-    const tokens = raw.split(/\s+/).filter(Boolean);
-    return list
-      .map((m) => {
-        const hay = [m.name, m.model, providerLabel(m.provider)].join(' ').toLowerCase();
-        let score = -1;
-        if (m.name.toLowerCase().startsWith(raw)) score = 100;
-        else if (hay.includes(raw)) score = 80;
-        if (score < 0 && tokens.every((tk) => hay.includes(tk))) score = 60;
-        return { m, score };
-      })
-      .filter((x) => x.score >= 0)
-      .sort((a, b) => b.score - a.score || a.m.name.localeCompare(b.m.name))
-      .slice(0, 8)
-      .map((x) => x.m);
+    if (!q.trim()) return [];
+    return rankCandidates(q, list, (m) => ({
+      label: m.name,
+      keywords: [m.model, providerLabel(m.provider)],
+    })).map((r) => r.item);
   })();
 
   // 与设置内搜索一致：点击搜索结果 → 关闭搜索、列表滚动到对应模型并高亮闪动（需求 4：统一 1s×5=5s）
@@ -115,7 +108,8 @@ export const ChatModelPicker: React.FC<{ chatType: string; chatId: string }> = (
     requestAnimationFrame(() => {
       const el = document.getElementById(`chat-model-item-${id}`);
       if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        // v2.3.112 F6：跳转落点改为页面最上方（nearest → start）
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         // v2.3.102 需求 4：统一走 flashElement('model-flash')；时长由 3200ms 回归到 5000ms（1s×5）
         flashElement(el, 'model-flash');
       }
@@ -173,27 +167,41 @@ export const ChatModelPicker: React.FC<{ chatType: string; chatId: string }> = (
                 }}
               />
               {q.trim() && (
-                <div
-                  className="chat-model-picker-results"
-                  style={{ maxHeight: 150, overflowY: 'auto', marginBottom: 6 }}
-                >
-                  {results.map((m) => (
+                <>
+                  <div
+                    className="chat-model-picker-results"
+                    style={{ maxHeight: 150, overflowY: 'auto', marginBottom: 6 }}
+                  >
+                    {results.map((m) => (
+                      <div
+                        key={m.id}
+                        className="ctx-menu-item chat-model-picker-item"
+                        style={{ fontSize: 12, padding: '5px 8px', cursor: 'pointer' }}
+                        onClick={() => jumpTo(m.id)}
+                        title={`${m.name} · ${providerLabel(m.provider)} · ${m.model}`}
+                      >
+                        {/* v2.3.112 F4：只渲染模型名 ——「· 模型ID」是与选项名称无关的
+                            多余符号；完整信息保留在 title 悬停提示里 */}
+                        <b>{m.name}</b>
+                      </div>
+                    ))}
+                    {results.length === 0 && (
+                      <div className="chat-model-picker-empty" style={{ fontSize: 12, padding: '6px 8px' }}>
+                        {t('chat.noMatchModel')}
+                      </div>
+                    )}
+                  </div>
+                  {/* v2.3.113 ⑤：「还有 N 项」移出结果滚动区，常驻可见（之前需滚到
+                      结果区底部才能看到）；口径与 MessageSearch 一致 */}
+                  {results.length > 5 && (
                     <div
-                      key={m.id}
-                      className="ctx-menu-item chat-model-picker-item"
-                      style={{ fontSize: 12, padding: '5px 8px', cursor: 'pointer' }}
-                      onClick={() => jumpTo(m.id)}
-                      title={`${m.name} · ${providerLabel(m.provider)} · ${m.model}`}
+                      className="chat-model-picker-more"
+                      style={{ fontSize: 12, padding: '6px 8px', marginBottom: 6, color: 'var(--color-text-muted)' }}
                     >
-                      <b>{m.name}</b> <span className="chat-model-picker-sub">· {m.model}</span>
-                    </div>
-                  ))}
-                  {results.length === 0 && (
-                    <div className="chat-model-picker-empty" style={{ fontSize: 12, padding: '6px 8px' }}>
-                      {t('chat.noMatchModel')}
+                      {t('search.moreItems', { n: results.length - 5 })}
                     </div>
                   )}
-                </div>
+                </>
               )}
               <div style={{ overflowY: 'auto', maxHeight: 220 }}>
                 {list.map((m) => (

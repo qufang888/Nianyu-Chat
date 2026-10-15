@@ -1,7 +1,8 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useMemo, useState, useEffect, useRef, Fragment } from 'react';
 import { useI18n } from '../i18n/I18nContext';
 import type { ChatMessage } from '../types';
-import { MAX_SUGGESTIONS, rankCandidates } from '../utils/fuzzySearch';
+// v2.3.112 F10：结果项 snippet 也走唯一真源 highlightParts 高亮
+import { MAX_SUGGESTIONS, rankCandidates, highlightParts } from '../utils/fuzzySearch';
 
 // 消息查找：主窗与小窗共用的搜索条。
 // 需求 12：改走 fuzzySearch —— 模糊匹配 + 按关联程度排序（相关度高的排前面），
@@ -114,7 +115,16 @@ export function MessageSearch({
                 <span className="msg-search-sender">{m.sender_name || (m.sender_type === 'user' ? t('chat.me') : '')}</span>
                 <span className="msg-search-time">{fmt(m.timestamp)}</span>
               </div>
-              <div className="msg-search-snip">{snippet(m.content || '')}</div>
+              <div className="msg-search-snip">
+                {/* v2.3.112 F10：snippet 用 highlightParts 包裹渲染，命中段高亮 */}
+                {highlightParts(snippet(m.content || ''), q).map((p, k) =>
+                  p.hit ? (
+                    <mark key={k} className="search-hl">{p.text}</mark>
+                  ) : (
+                    <Fragment key={k}>{p.text}</Fragment>
+                  )
+                )}
+              </div>
             </div>
           ))}
           {total > matches.length && (

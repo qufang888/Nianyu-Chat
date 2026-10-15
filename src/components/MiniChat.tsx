@@ -13,6 +13,8 @@ interface SearchResultItem {
 }
 import { renderMarkdown } from '../utils/markdown';
 import { filterSpeechText } from '../utils/speechScope';
+// v2.3.112 F6：消息查找跳转补上统一闪动（与设置/聊天列表/记忆同一入口）
+import { flashElement } from '../utils/flash';
 // v2.3.90：菜单/抽屉缩入（关闭）动画通用 Hook
 import { useRetract } from '../hooks/useRetract';
 import { useMenuRelocate } from '../hooks/useMenuRelocate';
@@ -2328,7 +2330,12 @@ export const MiniChat: React.FC = () => {
           onClose={() => setSearchOpen(false)}
           onJump={(msgId) => {
             const el = document.querySelector(`[data-mid="${msgId}"]`);
-            if (el) (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+            if (el) {
+              // v2.3.112 F6：跳转落点改为页面最上方（目标在可滚动内容末尾时会翻到最底部），
+              // 并补上闪烁高亮 5 秒（此前消息跳转不闪动）
+              (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'start' });
+              flashElement(el as HTMLElement);
+            }
           }}
         />
       )}

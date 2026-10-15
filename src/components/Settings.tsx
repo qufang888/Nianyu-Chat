@@ -244,7 +244,6 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-theme', key: 'settings.theme', kw: ['主题', 'theme', '配色', '皮肤'] },
   { id: 'sec-models', key: 'settings.modelManage', kw: ['模型管理', '进入模型', '模型设置', 'model management', 'open models'] },
   { id: 'sec-radius', key: 'settings.radius', kw: ['圆角', 'radius', '边角'] },
-  { id: 'sec-radius', key: 'settings.radius', kw: ['圆角', 'radius', '边角'] },
   { id: 'sec-uizoom', key: 'settings.uiZoom', kw: ['缩放', 'zoom', '等比', '基准尺寸', '上下限'] },
   // v2.3.97 补：外观分类里三个「多配置」区块的入口（旧静态表漏收）。
   { id: 'sec-ttsplay', key: 'settings.mcfg.ttsPlayTitle', kw: ['自动播报', '朗读行为', '朗读范围', 'tts play', 'auto speak', '播报缓存'] },
@@ -292,6 +291,16 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
  *  1) 预置 seen，避免同一个标题被静态表和动态规则重复收录（候选列表出现两项同名）；
  *  2) 合并去重时跳过，避免动态条目覆盖静态条目（静态条目带手写关键词，搜索质量更高）。 */
 const STATIC_ID_SET = new Set<string>(SETTING_SEARCH_INDEX.map((i) => i.id));
+
+// v2.3.112 F2：表单控件「最近 label 文本」的状态词集合（忽略大小写）。
+// 为什么需要：诸如「启用流式输出」字段，复选框自己的 label 内是
+// `<span>{draft.enableStreaming ? t('model.streamOn') : t('model.streamOff')}</span>`，
+// 直接用 textContent 取名会得到「开」/「关」——既是状态词（与选项名称无关），
+// 又随勾选状态变化。nameOf 取到这些词（或长度 ≤1）时按回退链改取更可信的来源。
+const STATE_WORDS = new Set<string>([
+  '开', '关', '开启', '关闭', '启用', '禁用', '是', '否', '有', '无',
+  'on', 'off', 'yes', 'no', 'true', 'false',
+]);
 
 const SOUND_ROWS: { type: SoundType; labelKey: string }[] = [
   { type: 'error', labelKey: 'settings.soundError' },
@@ -777,12 +786,22 @@ export const Settings: React.FC<{
     const dyn: SettingSearchItem[] = [];
     const seen = new Set<string>();
     const clean = (s: string) => s.replace(/\s+/g, ' ').trim();
+    // v2.3.112 F1：候选取名专用文本提取。Hint 图标（.hint-icon）里渲染的是字面量「!」，
+    // 直接用 textContent 会把「开机自启动!」「毛玻璃背景!」这种与选项名称无关的多余符号
+    // 带进候选名。这里克隆节点 → 剔除 .hint-icon → 再走 clean 的口径（折叠空白 + trim）。
+    // 静态条目预填 seen、nameOf / nameOfSelect、规则⑥ 全部改走它，保证同一控件只有一种
+    // 口径（否则「圆角!」与「圆角」不一致会导致去重失效）。
+    const cleanText = (el: HTMLElement): string => {
+      const clone = el.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll('.hint-icon').forEach((n) => n.remove());
+      return clean(clone.textContent || '');
+    };
     // 预置「已由静态表收录」的标题文本，避免同一个分区标题在候选里出现两次
     // （例如「语言」既有静态条目 sec-language、又被规则⑤的 SelectMenu 再收录一次）。
     for (const root of roots) {
       root.querySelectorAll<HTMLElement>('[id]').forEach((el) => {
         if (!STATIC_ID_SET.has(el.id)) return;
-        const s = clean(el.textContent || '').toLowerCase();
+        const s = cleanText(el).toLowerCase();
         if (s) seen.add(s);
       });
     }
@@ -794,44 +813,78 @@ export const Settings: React.FC<{
       for (let i = 0; i < label.length; i++) h = ((h << 5) + h + label.charCodeAt(i)) >>> 0;
       return `${prefix}-${h.toString(36)}`;
     };
-    // 取「设置名」：优先直接 label → .field 内 label → 父容器内首个 fontSize:13 标题 div → 父容器文本
+    // 取「设置名」：优先直接 label → .field 内 label → 13px 标题 div → 前驱 .section-title
+    //           → 父容器文本
+    // v2.3.112 F2：复选框/滑块/下拉等表单控件（add() 前三条规则）的「最近 label 文本」
+    // 可能是**状态词**（如「启用流式输出」字段 label 内的 开/关）或长度 ≤1 —— 那是控件
+    // 当前值而非设置名，且会随勾选状态变化。此时按上述回退链继续找更可信的来源。
+    // 附加护栏：任一来源长度 >40 视为「把多个控件的文本拼在一起了」，同样继续回退；
+    // 全部来源都不可信时返回 ''（add 会跳过登记，不让长串错误名称进入候选）。
+    // 正常模式 `<label><input/><span>设置名</span></label>` 的 textContent 就是设置名，
+    // 不受影响，不要破坏。
+    // v2.3.112 D13-1（QA 回归发现）：13px 标题的查找必须**先搜登记元素自己的子树、
+    // 再回落父容器级**。原来只做容器级搜索（按文档序取整个父容器的第一个 13px div），
+    // div 包裹的复选框行（规则①）会拿到同一容器里**第一个控件**的标题——例如
+    // 「等你回复才发下一条」「主动消息写入记忆」两行都误得「全局主动消息」、
+    // 「频率自适应」误得「勿扰窗口」，随即被 add() 的 seen 去重吞掉 → 这三项搜不到。
+    // 子树优先保证每行取到自己的标题；子树内没有 13px div 时（如 MCP/技能行的标题是
+    // <strong>）自动回落原逻辑，行为与修复前完全一致。
     const nameOf = (el: HTMLElement): string => {
-      const lbl = el.closest('label');
+      // 状态词（忽略大小写）或长度 ≤1：控件当前值，不是设置名
+      const isStateWord = (s: string) => s.length <= 1 || STATE_WORDS.has(s.toLowerCase());
+      // 名称过长 = 多个控件的文本被拼在一起，不可信
+      const tooLong = (s: string) => s.length > 40;
+      // 13px 标题 div 判定（与 add() 规则④同口径）
+      const isTitleDiv = (d: HTMLElement) => /font-size:\s*13px/i.test(d.getAttribute('style') || '');
+      const lbl = el.closest('label') as HTMLElement | null;
       if (lbl) {
-        const t = clean(lbl.textContent || '');
-        if (t) return t;
+        const t = cleanText(lbl);
+        // 只有「最近 label」需要过状态词闸门（其余来源本就是标题类文本）
+        if (t && !isStateWord(t) && !tooLong(t)) return t;
       }
       const field = el.closest('.field');
       if (field) {
         const fl = field.querySelector('label');
         if (fl) {
-          const t = clean(fl.textContent || '');
-          if (t) return t;
+          const t = cleanText(fl);
+          if (t && !tooLong(t)) return t;
         }
       }
       const p = el.parentElement;
       if (p) {
-        const titleDiv = Array.from(p.querySelectorAll('div')).find((d) =>
-          /font-size:\s*13px/i.test(d.getAttribute('style') || '')
-        );
+        // D13-1：先自己的子树（每行各自的标题），再父容器（保持旧行为兜底）
+        const titleDiv =
+          Array.from(el.querySelectorAll<HTMLElement>('div')).find(isTitleDiv) ||
+          Array.from(p.querySelectorAll<HTMLElement>('div')).find(isTitleDiv);
         if (titleDiv) {
-          const t = clean(titleDiv.textContent || '');
-          if (t) return t;
+          const t = cleanText(titleDiv);
+          if (t && !tooLong(t)) return t;
         }
-        const t = clean(p.textContent || '');
-        if (t) return t;
+        // 前驱 .section-title（F2 回退链新增的一级）：向上找最近的分区标题
+        let prev = p.previousElementSibling as HTMLElement | null;
+        while (prev) {
+          if (prev.classList.contains('section-title')) {
+            const t = cleanText(prev);
+            if (t && !tooLong(t)) return t;
+            break;
+          }
+          prev = prev.previousElementSibling as HTMLElement | null;
+        }
+        const t = cleanText(p);
+        if (t && !tooLong(t)) return t;
       }
       return '';
     };
     // SelectMenu 专用取名：它渲染的是 <button class="select-menu-trigger">，
     // 既不在 <label> 里、也不在 .field 内 label 旁（触发器与 label 是兄弟），
     // 故 nameOf 拿不到名字。这里向上找最近的前序 .section-title / fontSize:13 标题。
+    // v2.3.112 F1：全部文本提取改走 cleanText（剔除 Hint 的「!」图标文本）。
     const nameOfSelect = (el: HTMLElement): string => {
       const field = el.closest('.field');
       if (field) {
         const fl = field.querySelector('label');
         if (fl) {
-          const t = clean(fl.textContent || '');
+          const t = cleanText(fl);
           if (t) return t;
         }
       }
@@ -840,7 +893,7 @@ export const Settings: React.FC<{
         let prev = node.previousElementSibling as HTMLElement | null;
         while (prev) {
           if (prev.classList.contains('section-title') || /font-size:\s*13px/i.test(prev.getAttribute('style') || '')) {
-            const t = clean(prev.textContent || '');
+            const t = cleanText(prev);
             if (t) return t;
           }
           prev = prev.previousElementSibling as HTMLElement | null;
@@ -848,8 +901,10 @@ export const Settings: React.FC<{
         node = node.parentElement;
       }
       // 兜底：用触发器当前显示值（如「简体中文」），总比没有名字强
+      // v2.3.112：与 F1「全部提取走 cleanText」的声明一致（该处只可能是选项 label
+      // 纯文本，无实际「!」污染风险，但口径统一避免将来 dropdown 内嵌图标时复发）
       const v = el.querySelector('.select-menu-value');
-      const t = clean(v?.textContent || '');
+      const t = v ? cleanText(v as HTMLElement) : '';
       return t;
     };
     const add = (el: HTMLElement, prefix: string, explicitName?: string) => {
@@ -919,7 +974,9 @@ export const Settings: React.FC<{
       // 条件为真时它自然进索引，条件为假时索引里根本没有这条。
       // 这样「静态表收录了但 DOM 不存在 → 搜得到点了没反应」这类死条目从结构上不再可能产生。
       root.querySelectorAll<HTMLElement>('.section-title[id]').forEach((el) => {
-        const label = clean(el.textContent || '');
+        // v2.3.112 F1：走 cleanText —— 否则标题内嵌的 Hint「!」会污染候选名
+        // （如「毛玻璃背景!」；sec-glassbg 无静态条目，动态候选名就直接是它）。
+        const label = cleanText(el);
         const norm = label.toLowerCase();
         if (!label || seen.has(norm)) return;
         seen.add(norm);
@@ -1033,7 +1090,8 @@ export const Settings: React.FC<{
         ? secEl.getAttribute('data-open') !== 'true'
         : !!sectionId && draft?.advSections?.[sectionId] !== true;
       const reveal = () => {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // v2.3.112 F6：跳转落点改为页面最上方（目标在可滚动内容末尾时浏览器会翻到最底部）
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         // v2.3.102 需求 4：统一走 flashElement（1s×5，5000ms 后自动移除类，含去抖）。
         flashElement(el);
       };
@@ -1122,7 +1180,8 @@ export const Settings: React.FC<{
     setModelSearchQ('');
     const el = document.getElementById(`model-card-${id}`);
     if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // v2.3.112 F6：跳转落点改为页面最上方（目标在可滚动内容末尾时浏览器会翻到最底部）
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
       flashElement(el, 'model-flash');
     }
   };
@@ -1762,9 +1821,10 @@ export const Settings: React.FC<{
               itemKey={(m) => m.id}
               // v2.3.107：显式 getText（模型对象无 label 字段，不传则 0 命中 —— 与设置搜索同一根因）
               getText={modelText}
-              renderItem={(m, ctx) =>
-                renderSearchHL(`${m.name} · ${providerLabel(m.provider)} · ${m.model}`, ctx.query)
-              }
+              // v2.3.112 F4：候选只渲染模型名 —— 旧写法把 `name · provider · model`
+              // 整串当候选名，「·」是与选项名称无关的多余符号；provider / 模型 ID
+              // 仍保留在 modelText 的 keywords 里可搜，不变。
+              renderItem={(m, ctx) => renderSearchHL(m.name, ctx.query)}
               onPick={(m) => goToModel(m.id)}
               onClose={() => setModelSuggestOpen(false)}
             />
