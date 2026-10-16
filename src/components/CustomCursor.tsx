@@ -690,20 +690,33 @@ const CustomCursor: React.FC = () => {
 
     // 进入/离开本窗口的显隐控制（核心：用「鼠标是否真正在窗内」驱动，
     // 而非窗口焦点，避免多窗口同时打开时焦点不随鼠标切换导致光标不显示或双光标）
-    const ensureVisible = () => {
+    // crisp=true：鼠标进入窗口 —— 一步到位全显并吸附到指针（不做淡入），
+    //   避免「边缘光标消失 / 与原生光标双现」；crisp=false：窗口聚焦（alt-tab）丝滑淡入。
+    const ensureVisible = (crisp = false) => {
       cancelIdleHide();
       lastMoveTimeRef.current = performance.now();
+      // 离屏吸附：渲染位置处于离屏哨兵（上次是即时隐藏收尾）时，直接落到当前指针，
+      // 不从上次离开的陈旧位置缓动追过来（v2.3.115 修进入边缘双光标/无光标）。
+      if (renderXRef.current < OFFSCREEN && mouseXRef.current > OFFSCREEN) {
+        renderXRef.current = mouseXRef.current;
+        renderYRef.current = mouseYRef.current;
+      }
       if (hiddenRef.current) {
         hiddenRef.current = false;
         document.body.classList.add('cursor-hidden');
-        // 从透明开始淡入，丝滑浮现；动效关闭时直接给终值 1（配合下面的 Infinity 门控，
-        // 下一帧也会立刻饱和到 1 —— 此处提前赋值是为了不留下任何一帧 opacity:0）
-        opacityRef.current = animOnRef.current ? 0 : 1;
-        fadeStateRef.current = 'in';
-        fadeStartRef.current = performance.now();
+        if (crisp) {
+          // 鼠标进入：立即全显，杜绝淡入期间的「自定义未现 + 原生滞后」双光标窗口
+          opacityRef.current = 1;
+          fadeStateRef.current = 'none';
+        } else {
+          // 从透明开始淡入，丝滑浮现；动效关闭时直接给终值 1
+          opacityRef.current = animOnRef.current ? 0 : 1;
+          fadeStateRef.current = 'in';
+          fadeStartRef.current = performance.now();
+        }
       } else if (fadeStateRef.current === 'out') {
-        fadeStateRef.current = 'in';
-        fadeStartRef.current = performance.now();
+        if (crisp) { opacityRef.current = 1; fadeStateRef.current = 'none'; }
+        else { fadeStateRef.current = 'in'; fadeStartRef.current = performance.now(); }
       }
       if (!runningRef.current) startLoop();
     };
@@ -726,7 +739,12 @@ const CustomCursor: React.FC = () => {
     const hideCursorImmediate = () => {
       cancelIdleHide();
       fadeStateRef.current = 'none';                   // 取消任何进行中的淡入 / 淡出
-      opacityRef.current = 1;                          // 复位透明度（下次进入由 ensureVisible 从 0 淡入）
+      opacityRef.current = 1;                          // 复位透明度
+      // v2.3.115：把渲染位置打回离屏哨兵。下次鼠标进入时由 onMouseMove 的
+      // 「离屏吸附」把自定义光标直接落到指针处 —— 否则会从上次离开的陈旧位置
+      // 缓动追过来，造成「边缘无光标 / 要挪一大段才出现 / 快进入时与原生双光标」。
+      renderXRef.current = OFFSCREEN;
+      renderYRef.current = OFFSCREEN;
       hiddenRef.current = true;
       document.body.classList.remove('cursor-hidden'); // 立即恢复原生光标
       prevDirtyRectsRef.current = [];
@@ -753,7 +771,7 @@ const CustomCursor: React.FC = () => {
 
       // 鼠标在本窗口内移动 → 标记在窗内并（必要时）淡入显示
       mouseInsideRef.current = true;
-      ensureVisible();
+      ensureVisible(true); // v2.3.115：鼠标进入走「一步到位全显 + 吸附指针」，不做淡入
 
       // 启动循环（如果因空闲停止了）
       if (!runningRef.current) startLoop();

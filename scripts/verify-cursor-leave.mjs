@@ -26,7 +26,7 @@ console.log('=== A. 即时隐藏函数存在且行为正确 ===');
 ok(/const hideCursorImmediate\s*=\s*\(\)\s*=>/.test(cur), 'hideCursorImmediate 已定义');
 ok(/hideCursorImmediate[\s\S]{0,500}?classList\.remove\('cursor-hidden'\)/.test(cur),
   'hideCursorImmediate 移除 cursor-hidden（立即恢复原生光标）');
-ok(/hideCursorImmediate[\s\S]{0,700}?stopLoop\(\)/.test(cur), 'hideCursorImmediate 停止 rAF 循环');
+ok(/hideCursorImmediate[\s\S]{0,1000}?stopLoop\(\)/.test(cur), 'hideCursorImmediate 停止 rAF 循环');
 ok(/hideCursorImmediate[\s\S]{0,700}?clearRect/.test(cur), 'hideCursorImmediate 清空画布（无残留光标）');
 
 console.log('=== B. 鼠标移出窗口走即时隐藏（而非淡出）===');
@@ -55,6 +55,18 @@ for (const [f, label] of [
 ]) {
   ok(/CustomCursor/.test(read(f)), `${label}（${f}）挂载 CustomCursor`);
 }
+
+console.log('=== E. 进入吸附指针 + 一步到位全显（v2.3.115 修边缘无光标 / 双光标）===');
+ok(/hideCursorImmediate[\s\S]{0,900}?renderXRef\.current = OFFSCREEN/.test(cur) &&
+   /hideCursorImmediate[\s\S]{0,960}?renderYRef\.current = OFFSCREEN/.test(cur),
+  'hideCursorImmediate 把渲染位置打回离屏哨兵（下次进入吸附到指针，不再从陈旧位置缓动）');
+ok(/const ensureVisible = \(crisp = false\)/.test(cur), 'ensureVisible 支持 crisp 参数');
+ok(/if \(crisp\) \{[\s\S]{0,160}?opacityRef\.current = 1;[\s\S]{0,80}?fadeStateRef\.current = 'none';/.test(cur),
+  'crisp 分支：鼠标进入即全显、不淡入（杜绝双光标窗口）');
+ok(/renderXRef\.current < OFFSCREEN && mouseXRef\.current > OFFSCREEN/.test(cur),
+  'ensureVisible 离屏吸附：渲染位置离屏时落到当前指针');
+ok(/ensureVisible\(true\)/.test(cur) && !/onFocus[\s\S]{0,240}?ensureVisible\(true\)/.test(cur),
+  '鼠标进入（onMouseMove）走 crisp；窗口聚焦（onFocus）保留淡入');
 
 console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
 if (fail > 0) process.exit(1);
