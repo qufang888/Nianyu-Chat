@@ -709,10 +709,33 @@ const CustomCursor: React.FC = () => {
     };
 
     const hideCursor = () => {
+      // 已完全隐藏（含「移出窗口瞬时隐藏」收尾）时不再重复触发淡出：
+      // 否则切窗口时紧随其后的 blur / visibilitychange 兜底会把已隐藏的光标
+      // 又拉回 rAF 循环空转。淡入进行中（fadeState==='in'）不拦，允许即时改为淡出。
+      if (hiddenRef.current && fadeStateRef.current !== 'in') return;
       cancelIdleHide();
       fadeStateRef.current = 'out';
       fadeStartRef.current = performance.now();
       if (!runningRef.current) startLoop();
+    };
+
+    // v2.3.114：鼠标移出本窗口 → 立即隐藏自定义光标并恢复系统原生光标（不再淡出）。
+    // 用户诉求：光标移开软件后应立刻变回原生光标，不能有「残留再淡出消失」的停留感。
+    // 淡出仅保留给「窗口被覆盖 / 切后台」等窗口级切换的丝滑过渡；鼠标真正离开
+    // 窗口（到桌面或其他窗口）必须一步到位，native 光标即时回归。
+    const hideCursorImmediate = () => {
+      cancelIdleHide();
+      fadeStateRef.current = 'none';                   // 取消任何进行中的淡入 / 淡出
+      opacityRef.current = 1;                          // 复位透明度（下次进入由 ensureVisible 从 0 淡入）
+      hiddenRef.current = true;
+      document.body.classList.remove('cursor-hidden'); // 立即恢复原生光标
+      prevDirtyRectsRef.current = [];
+      const c = canvasRef.current;
+      if (c) {
+        const ctx = c.getContext('2d');
+        if (ctx) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, c.width, c.height); }
+      }
+      stopLoop();
     };
 
     const onMouseMove = (e: MouseEvent) => {
@@ -744,13 +767,13 @@ const CustomCursor: React.FC = () => {
       }
     };
 
-    // 鼠标离开本窗口（进入桌面或其他窗口）：淡出隐藏
+    // 鼠标离开本窗口（进入桌面或其他窗口）：立即隐藏并恢复原生光标（v2.3.114 不再淡出，消除残留停留感）
     const onMouseLeaveDoc = () => {
       if (!mouseInsideRef.current) return;
       // 拖动滑块时鼠标可能短暂离开 document（range input 内部捕获），不隐藏
       if (document.querySelector(':active')) return;
       mouseInsideRef.current = false;
-      hideCursor();
+      hideCursorImmediate();
     };
     const onMouseOut = (e: MouseEvent) => {
       // relatedTarget 为空 = 指针离开文档（到窗口外或另一个窗口）
@@ -758,7 +781,7 @@ const CustomCursor: React.FC = () => {
         // 拖动滑块时鼠标可能短暂离开 document（range input 内部捕获），不隐藏
         if (document.querySelector(':active')) return;
         mouseInsideRef.current = false;
-        hideCursor();
+        hideCursorImmediate();
       }
     };
 
