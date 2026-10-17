@@ -472,6 +472,9 @@ export interface NianyuAPI {
   // 主进程推送：球窗拖拽中（true=拖动开始 / false=拖动结束）。面板窗据此在拖拽期间
   // 压制自身动态光标，确保「整机只有一个光标」（拖球时球窗独占，面板不亮第二个光标）。
   onBallDragging: (cb: (dragging: boolean) => void) => () => void;
+  // v2.3.119：主进程推送：悬浮球右键菜单弹出。球窗/面板窗据此立即隐藏自身动态光标
+  // （菜单窗独占光标），避免鼠标划向菜单时出现两个光标。
+  onBallMenuOpen: (cb: () => void) => () => void;
   ballActivate: () => void;
   ballQuit: () => void;
   ballSetEnabled: (enabled: boolean) => void;
@@ -1052,6 +1055,11 @@ const api: NianyuAPI = {
     const listener = (_e: any, dragging: boolean) => cb(dragging);
     ipcRenderer.on('ball:dragging', listener);
     return () => ipcRenderer.removeListener('ball:dragging', listener);
+  },
+  onBallMenuOpen: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('ball:menu-open', listener);
+    return () => ipcRenderer.removeListener('ball:menu-open', listener);
   },
   offBallBlur: () => {},
   onBallCursorWindow: (cb) => {

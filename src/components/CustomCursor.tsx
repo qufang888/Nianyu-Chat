@@ -99,6 +99,7 @@ const CustomCursor: React.FC = () => {
   const mouseInsideRef = useRef(false);      // 鼠标是否真正位于本窗口内（多窗口协调核心）
   const cfgRef = useRef<{ [k: string]: number | boolean }>({});
   const hideTimerRef = useRef<number>(0);   // 空闲隐藏定时器
+  const canvasDprRef = useRef(1);           // 建画布时的 DPR（clearRectClamped 用它换算边界，防 DPR 变化后清不掉旧帧）
 
   // ===== 淡入淡出状态（窗口切换丝滑过渡）=====
   type FadeState = 'none' | 'in' | 'out';
@@ -359,7 +360,10 @@ const CustomCursor: React.FC = () => {
     rects: { x: number; y: number; w: number; h: number }[]
   ) => {
     const c = ctx.canvas;
-    const dpr = window.devicePixelRatio || 1;
+    // v2.3.119：用「建画布时的 DPR」(canvasDprRef) 而非当前 window.devicePixelRatio 换算边界。
+    // 若全屏 / 换显示器导致 DPR 变化而 resize 未触发，当前 DPR 与 backing store 的 DPR 不一致，
+    // 用错 DPR 会算错 CSS 边界 → 旧帧清不掉 → 光标叠成一片（曾现于全屏 + 模型编辑界面）。
+    const dpr = canvasDprRef.current || 1;
     // setTransform(dpr,...) 之后所有坐标都是 CSS 像素，c.width/c.height 是物理像素，
     // 必须除以 dpr 才能得到合法的 CSS 像素边界。否则高 DPR 或缩放时右/下边缘清不干净。
     const maxW = c.width / dpr;
@@ -664,6 +668,7 @@ const CustomCursor: React.FC = () => {
       const c = canvasRef.current;
       if (!c) return;
       const dpr = window.devicePixelRatio || 1;
+      canvasDprRef.current = dpr; // 记录建画布时的 DPR，供 clearRectClamped 换算边界
       // 重置前先清整屏，避免旧内容在尺寸变化后残留在扩展出来的边缘
       const ctx = c.getContext('2d');
       if (ctx) {
@@ -882,6 +887,25 @@ const CustomCursor: React.FC = () => {
       resizeObserver = null;
     }
 
+    // v2.3.119：DPR 变化（全屏 / 换显示器 / 显示缩放）重设画布。这类场景可能只变 DPR、
+    // CSS 尺寸不变，resize 与 ResizeObserver 都不触发；不重设会让 backing store 与显示 DPR
+    // 不一致（光标尺寸/位置错、旧帧清不掉叠成一片）。matchMedia 的 resolution 查询按当前 DPR
+    // 定向，故每次变化后需重新监听。
+    let dprMql: MediaQueryList | null = null;
+    const onDprChange = () => {
+      setupCanvas();
+      prevDirtyRectsRef.current = [];
+      rearmDprWatch();
+    };
+    const rearmDprWatch = () => {
+      try {
+        if (dprMql) dprMql.removeEventListener('change', onDprChange);
+        dprMql = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+        dprMql.addEventListener('change', onDprChange);
+      } catch { /* matchMedia 不可用时忽略 */ }
+    };
+    rearmDprWatch();
+
     // 可见性变化处理
     const onVisibilityChange = () => {
       if (document.hidden) hideCursor();
@@ -917,6 +941,7 @@ const CustomCursor: React.FC = () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
       if (interactionCheckTimer) clearTimeout(interactionCheckTimer);
       if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
+      if (dprMql) { try { dprMql.removeEventListener('change', onDprChange); } catch { /* ignore */ } dprMql = null; }
       cancelIdleHide();
       stopLoop();
       document.body.classList.remove('cursor-hidden');

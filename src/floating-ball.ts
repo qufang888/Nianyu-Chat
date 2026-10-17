@@ -354,6 +354,15 @@ function mountBall(): void {
       setInteractive(false);
     });
   }
+  // v2.3.119：右键菜单弹出 → 立即隐藏球窗动态光标（不等 120ms 防抖 + 200ms 轮询），
+  // 否则鼠标划向菜单时球窗光标仍在，与菜单窗光标双现（整机两个光标）。
+  if (api && api.onBallMenuOpen) {
+    api.onBallMenuOpen(() => {
+      setInteractive(false);
+      document.body.classList.add('cursor-gate-off');
+      document.dispatchEvent(new MouseEvent('mouseout'));
+    });
+  }
   // 失焦（点击球唤出主窗等）：恢复穿透与光标门控；面板收起由主进程 blur 链路统一处理
   if (api && api.onBallBlur) api.onBallBlur(() => setInteractive(false));
 
@@ -464,6 +473,10 @@ function mountPanel(): void {
     api.onPanelCursorWindow((owns: boolean) => {
       if (!owns) suppressPanelCursor();
     });
+  }
+  // v2.3.119：右键菜单弹出 → 面板窗也立即隐藏自身动态光标（菜单窗独占光标，杜绝双光标）
+  if (api && api.onBallMenuOpen) {
+    api.onBallMenuOpen(() => suppressPanelCursor());
   }
 
   // ===== 聊天列表数据（置顶/手动顺序与主界面一致）=====

@@ -12,7 +12,6 @@ import {
 } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
-import { exec } from 'node:child_process';
 import { getDataManager, defaultDataDirPath, resolveMediaConfig } from './db';
 import {
   setUpdateBroadcaster,
@@ -558,10 +557,6 @@ let firstWindowEver = true;
 // 二次启动唤出都不经过 whenReady，故不出现启动界面。主界面 ready-to-show 即关闭，
 // 随后交给主窗口内的开屏动画（若冷启动且开屏组开启）。启动界面失败绝不阻塞主流程。
 let launchWindow: BrowserWindow | null = null;
-let launchShownAt = 0; // 启动界面实际显示的時刻（ready-to-show），用于最短展示时长判定
-// v2.3.117：启动界面最短展示时长（毫秒）。冷启动若主界面很快 ready，启动界面也至少展示这么久，
-// 避免「闪一下就没了」——用户明确要求启动界面要正常显示，而非贴近主界面才闪一下。
-const LAUNCH_MIN_MS = 900;
 
 // 启动界面状态文案（10 语言，与 TRAY_LABELS 同源口径）。应用名「念语」为品牌固定，不走翻译。
 const LAUNCH_I18N: Record<string, { starting: string; loading: string }> = {
@@ -578,9 +573,6 @@ const LAUNCH_I18N: Record<string, { starting: string; loading: string }> = {
 };
 
 function showLaunchWindow(): void {
-  // v2.3.118：bat / vbs 启动时由 bat 经 Edge 打开启动界面（带 NIANYU_LAUNCHER=1），
-  // 覆盖「构建 + 启动」整段等待；此时不再重复弹 Electron 启动窗，避免双启动界面。
-  if (process.env.NIANYU_LAUNCHER === '1') return;
   try {
     const html = path.join(__dirname, '../../dist/launch.html');
     if (!fs.existsSync(html)) return; // 无构建产物（如纯 dev 未 build）时跳过，绝不阻塞启动
@@ -605,7 +597,6 @@ function showLaunchWindow(): void {
     // v2.3.118：启动界面随当前主题适配（launch.html 依据 ?theme= 应用 15 套主题关键色）
     launchWindow.loadFile(html, { search: '?theme=' + encodeURIComponent(theme) });
     launchWindow.once('ready-to-show', () => {
-      launchShownAt = Date.now();
       launchWindow?.show();
       const tx = LAUNCH_I18N[getAppLang()] || LAUNCH_I18N.zh;
       pushLaunch(tx.starting, 12);
@@ -613,30 +604,6 @@ function showLaunchWindow(): void {
   } catch {
     launchWindow = null; // 启动界面异常绝不影响主流程
   }
-}
-
-// bat 经 Edge 打开启动界面时用的独立 profile 目录名（唯一，供按命令行精准关闭）
-const LAUNCHER_PROFILE = 'nianyu-launch-profile';
-
-// 把当前主题 key 写到项目根 `.launch-theme`，供 bat 下次冷启动时读取并传给 Edge 启动界面。
-// 首启（无此文件）时 bat 用默认主题，之后即跟随。
-function writeLaunchThemeFile(): void {
-  try {
-    const theme = (dm.getSettings().theme as string) || 'wechat';
-    fs.writeFileSync(path.join(__dirname, '../../.launch-theme'), theme, 'utf8');
-  } catch { /* 只读目录等场景忽略，不影响启动 */ }
-}
-
-// 关闭 bat 经 Edge（独立 profile）打开的启动界面。按命令行里的唯一 profile 名匹配，
-// 只结束启动界面那个 Edge 实例，绝不影响用户其它 Edge 窗口 / 标签。
-function closeBatLaunchScreen(): void {
-  if (process.env.NIANYU_LAUNCHER !== '1') return;
-  try {
-    exec(
-      `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name='msedge.exe'\\" | Where-Object { $_.CommandLine -like '*${LAUNCHER_PROFILE}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"`,
-      () => { /* fire-and-forget */ }
-    );
-  } catch { /* ignore */ }
 }
 
 function pushLaunch(text: string, pct: number): void {
@@ -651,13 +618,7 @@ function pushLaunch(text: string, pct: number): void {
 function closeLaunchWindow(): void {
   if (!launchWindow) return;
   if (launchWindow.isDestroyed()) { launchWindow = null; return; }
-  // v2.3.117：至少展示 LAUNCH_MIN_MS；主界面比这更早 ready 时，把关闭推迟到时长达标，
-  // 避免启动界面「闪一下」就没了（主界面本就透明，晚一刻出现无白屏风险）。
-  const remain = LAUNCH_MIN_MS - (Date.now() - launchShownAt);
-  if (remain > 0) {
-    setTimeout(closeLaunchWindow, remain);
-    return;
-  }
+  // v2.3.119：主界面首帧就绪即立即关闭启动界面，二者绝不共存（不再有最短展示延迟）。
   try { launchWindow.close(); } catch { /* ignore */ }
   launchWindow = null;
 }
@@ -832,8 +793,7 @@ function createWindow(opts?: { coldStart?: boolean }): void {
 
   // 还原最大化状态
   mainWindow.once('ready-to-show', () => {
-    closeLaunchWindow(); // v2.3.116：主界面首帧就绪 → 关闭冷启动启动界面，交接给主窗（含开屏动画）
-    closeBatLaunchScreen(); // v2.3.118：关闭 bat 经 Edge 打开的启动界面（若有），随后主窗亮相
+    closeLaunchWindow(); // v2.3.119：主界面首帧就绪 → 立即关闭启动界面，二者不共存
     if (b.isMaximized) mainWindow?.maximize();
   });
   // 首次加载完成后推送初始窗口状态（最大化/还原图标同步）
@@ -7828,7 +7788,6 @@ app.whenReady().then(() => {
     }
   });
   registerIPC();
-  writeLaunchThemeFile(); // v2.3.118：把当前主题 key 写给 bat，供下次冷启动的 Edge 启动界面跟随主题
   if (firstWindowEver) showLaunchWindow(); // v2.3.116：冷启动启动界面（覆盖启动空白期）
   createWindow();
   // 启动界面第二阶段文案：略作延迟，确保启动窗已就绪、文案能落地

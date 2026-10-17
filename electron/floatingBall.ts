@@ -993,6 +993,10 @@ export function registerBallIPC(): void {
     menuVisible = true;
     menuHidePending = false; // 重入：作废进行中的隐藏（渲染端同步作废缩入定时器）
     menuOffTicks = 0;
+    // v2.3.119：菜单弹出即令球窗/面板窗立即隐藏自身动态光标（菜单窗独占光标）——
+    // 否则鼠标划向菜单时，球窗光标还在（120ms 防抖 + 200ms 轮询未完）会与菜单光标双现。
+    if (ballWindow && !ballWindow.isDestroyed()) ballWindow.webContents.send('ball:menu-open');
+    if (panelWindow && !panelWindow.isDestroyed()) panelWindow.webContents.send('ball:menu-open');
     menuWindow.webContents.send('menu:show');
   });
 

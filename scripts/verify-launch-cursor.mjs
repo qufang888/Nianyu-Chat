@@ -50,7 +50,7 @@ ok(/ballWindow\.webContents\.send\('ball:cursor-window', owner === 'ball'\);/.te
   '球窗 cursor-window 每轮 level 推送（不再仅 edge，快速掠过也强制隐藏）');
 ok(/prevOwner !== owner && panelWindow/.test(fbMain), '面板窗仍 edge 推送（仅所有权变化时）');
 
-console.log('=== B. 冷启动启动界面 ===');
+console.log('=== B. 冷启动启动界面（Electron 无边框主题化窗口）===');
 ok(existsSync(join(root, 'public/launch.html')), 'public/launch.html 存在');
 const launchHtml = existsSync(join(root, 'public/launch.html')) ? read('public/launch.html') : '';
 ok(/window\.__setLaunch\s*=/.test(launchHtml), 'launch.html 暴露 window.__setLaunch(text,pct)');
@@ -59,24 +59,31 @@ ok(/var THEMES = \{/.test(launchHtml) && /params\.get\('theme'\)/.test(launchHtm
   `launch.html 主题适配（THEMES 覆盖 15 套，实测 ${themeCount} 个 primary）`);
 ok(/function showLaunchWindow\(\)/.test(main) && /function closeLaunchWindow\(\)/.test(main), '主进程 showLaunchWindow/closeLaunchWindow 存在');
 ok(/if \(firstWindowEver\) showLaunchWindow\(\);/.test(main), 'whenReady 仅冷启动（firstWindowEver）建启动界面');
-ok(/closeLaunchWindow\(\); \/\/ v2\.3\.116/.test(main), '主界面 ready-to-show 关闭启动界面');
+ok(/loadFile\(html, \{ search: '\?theme='/.test(main), '启动窗按当前主题加载（?theme=，适配 15 主题）');
+ok(/closeLaunchWindow\(\); \/\/ v2\.3\.119/.test(main), '主界面首帧就绪即关启动界面（v2.3.119 立即关、不共存）');
+ok(/try \{ launchWindow\.close\(\); \} catch/.test(main) && !/LAUNCH_MIN_MS/.test(main) && !/NIANYU_LAUNCHER/.test(main),
+  'closeLaunchWindow 直接关（无最短展示延迟 / 无 Edge 外挂，主界面与启动界面不共存）');
 ok(/LAUNCH_I18N/.test(main) && /getAppLang\(\)/.test(main), '启动文案按应用语言本地化（LAUNCH_I18N + getAppLang）');
 ok(/dist\/launch\.html/.test(main), '启动界面加载 dist/launch.html');
-ok(/const LAUNCH_MIN_MS = \d+;/.test(main) && /LAUNCH_MIN_MS - \(Date\.now\(\) - launchShownAt\)/.test(main),
-  '启动界面最短展示时长（LAUNCH_MIN_MS），避免「闪一下就没了」');
-ok(/launchShownAt = Date\.now\(\);/.test(main), '启动界面显示时记录时刻（用于最短展示判定）');
-
-console.log('=== C. bat/vbs 启动界面 + GPU 修复（v2.3.118）===');
-ok(/loadFile\(html, \{ search: '\?theme='/.test(main), 'Electron 启动窗按当前主题加载（?theme=）');
-ok(/if \(process\.env\.NIANYU_LAUNCHER === '1'\) return;/.test(main), 'bat 启动（NIANYU_LAUNCHER=1）时跳过 Electron 启动窗，避免双启动界面');
-ok(/function writeLaunchThemeFile\(\)/.test(main) && /\.launch-theme/.test(main), '主进程把当前主题写 .launch-theme 供 bat 读取');
-ok(/function closeBatLaunchScreen\(\)/.test(main) && /closeBatLaunchScreen\(\); \/\/ v2\.3\.118/.test(main),
-  '主界面就绪时关闭 bat 的 Edge 启动界面（closeBatLaunchScreen）');
-ok(/nianyu-launch-profile/.test(main), '按独立 profile 名精准结束 Edge 启动界面实例（不影响其它 Edge 窗口）');
-ok(/appendSwitch\('disable-gpu-rasterization'\)/.test(main), '关闭 GPU 光栅化（修 command_buffer_proxy_impl GPU state invalid）');
 const bat = existsSync(join(root, '启动念语.bat')) ? read('启动念语.bat') : '';
-ok(/msedge/.test(bat) && /launch\.html\?src=bat&theme=/.test(bat), 'bat 打开 Edge 启动界面并传主题');
-ok(/set "NIANYU_LAUNCHER=1"/.test(bat) && /nianyu-launch-profile/.test(bat), 'bat 设 NIANYU_LAUNCHER 并用独立 profile');
+ok(/if not exist "dist\\index\.html"/.test(bat) && !/msedge/.test(bat) && !/NIANYU_LAUNCHER/.test(bat),
+  'bat 直接跑已构建版本（仅缺 dist 才构建；无 Edge 外挂启动界面）');
+
+console.log('=== C. 悬浮球右键菜单单光标（v2.3.119 修菜单弹出双光标）===');
+ok(/onBallMenuOpen: \(cb: \(\) => void\)/.test(preload), 'preload 类型声明 onBallMenuOpen');
+ok(/ipcRenderer\.on\('ball:menu-open'/.test(preload), 'preload 监听 ball:menu-open');
+ok(/ballWindow\.webContents\.send\('ball:menu-open'\)/.test(fbMain) && /panelWindow\.webContents\.send\('ball:menu-open'\)/.test(fbMain),
+  '主进程菜单弹出即广播 ball:menu-open 给球窗/面板窗');
+ok(/api\.onBallMenuOpen\(/.test(fbRender), '球窗/面板窗渲染端订阅 onBallMenuOpen');
+ok(/onBallMenuOpen\(\(\) => \{[\s\S]{0,240}?dispatchEvent\(new MouseEvent\('mouseout'\)\)/.test(fbRender),
+  '球窗收到即 gate-off + 合成 mouseout 立即隐藏自身光标（不等 120ms 防抖）');
+ok(/onBallMenuOpen\(\(\) => suppressPanelCursor\(\)\)/.test(fbRender), '面板窗收到即 suppressPanelCursor 隐藏自身光标');
+
+console.log('=== D. GPU 报错修复 + 光标叠片防护（v2.3.118/119）===');
+ok(/appendSwitch\('disable-gpu-rasterization'\)/.test(main), '关闭 GPU 光栅化（修 command_buffer_proxy_impl GPU state invalid）');
+const cur = read('src/components/CustomCursor.tsx');
+ok(/canvasDprRef\.current \|\| 1/.test(cur), 'clearRectClamped 用建画布时的 DPR 换算边界（防 DPR 变化后旧帧清不掉→光标叠片）');
+ok(/matchMedia\(`\(resolution: /.test(cur) && /onDprChange/.test(cur), 'DPR 变化（全屏/换显示器/缩放）重设画布');
 
 console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
 if (fail > 0) process.exit(1);
