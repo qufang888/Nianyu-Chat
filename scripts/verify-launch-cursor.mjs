@@ -43,10 +43,20 @@ ok(/panelWindow\.webContents\.send\('panel:cursor-window', owner === 'panel'\)/.
 ok(/api\.onPanelCursorWindow\(/.test(fbRender) && /if \(!owns\) suppressPanelCursor\(\);/.test(fbRender),
   '面板非 owner 时立即隐藏自身动态光标');
 
+console.log('=== A3. 球窗光标所有权 level 推送（v2.3.118 修快速掠过光标静止残留）===');
+ok(/const prevOwner = lastCursorOwner;/.test(fbMain), '轮询记录上一帧 owner（prevOwner）');
+ok(/ballWindow\.webContents\.send\('ball:cursor-window', owner === 'ball'\);/.test(fbMain) &&
+   !/if \(owner !== lastCursorOwner\) \{[\s\S]{0,200}?ballWindow\.webContents\.send\('ball:cursor-window'/.test(fbMain),
+  '球窗 cursor-window 每轮 level 推送（不再仅 edge，快速掠过也强制隐藏）');
+ok(/prevOwner !== owner && panelWindow/.test(fbMain), '面板窗仍 edge 推送（仅所有权变化时）');
+
 console.log('=== B. 冷启动启动界面 ===');
 ok(existsSync(join(root, 'public/launch.html')), 'public/launch.html 存在');
 const launchHtml = existsSync(join(root, 'public/launch.html')) ? read('public/launch.html') : '';
 ok(/window\.__setLaunch\s*=/.test(launchHtml), 'launch.html 暴露 window.__setLaunch(text,pct)');
+const themeCount = (launchHtml.match(/primary:/g) || []).length;
+ok(/var THEMES = \{/.test(launchHtml) && /params\.get\('theme'\)/.test(launchHtml) && themeCount >= 15,
+  `launch.html 主题适配（THEMES 覆盖 15 套，实测 ${themeCount} 个 primary）`);
 ok(/function showLaunchWindow\(\)/.test(main) && /function closeLaunchWindow\(\)/.test(main), '主进程 showLaunchWindow/closeLaunchWindow 存在');
 ok(/if \(firstWindowEver\) showLaunchWindow\(\);/.test(main), 'whenReady 仅冷启动（firstWindowEver）建启动界面');
 ok(/closeLaunchWindow\(\); \/\/ v2\.3\.116/.test(main), '主界面 ready-to-show 关闭启动界面');
@@ -55,6 +65,18 @@ ok(/dist\/launch\.html/.test(main), '启动界面加载 dist/launch.html');
 ok(/const LAUNCH_MIN_MS = \d+;/.test(main) && /LAUNCH_MIN_MS - \(Date\.now\(\) - launchShownAt\)/.test(main),
   '启动界面最短展示时长（LAUNCH_MIN_MS），避免「闪一下就没了」');
 ok(/launchShownAt = Date\.now\(\);/.test(main), '启动界面显示时记录时刻（用于最短展示判定）');
+
+console.log('=== C. bat/vbs 启动界面 + GPU 修复（v2.3.118）===');
+ok(/loadFile\(html, \{ search: '\?theme='/.test(main), 'Electron 启动窗按当前主题加载（?theme=）');
+ok(/if \(process\.env\.NIANYU_LAUNCHER === '1'\) return;/.test(main), 'bat 启动（NIANYU_LAUNCHER=1）时跳过 Electron 启动窗，避免双启动界面');
+ok(/function writeLaunchThemeFile\(\)/.test(main) && /\.launch-theme/.test(main), '主进程把当前主题写 .launch-theme 供 bat 读取');
+ok(/function closeBatLaunchScreen\(\)/.test(main) && /closeBatLaunchScreen\(\); \/\/ v2\.3\.118/.test(main),
+  '主界面就绪时关闭 bat 的 Edge 启动界面（closeBatLaunchScreen）');
+ok(/nianyu-launch-profile/.test(main), '按独立 profile 名精准结束 Edge 启动界面实例（不影响其它 Edge 窗口）');
+ok(/appendSwitch\('disable-gpu-rasterization'\)/.test(main), '关闭 GPU 光栅化（修 command_buffer_proxy_impl GPU state invalid）');
+const bat = existsSync(join(root, '启动念语.bat')) ? read('启动念语.bat') : '';
+ok(/msedge/.test(bat) && /launch\.html\?src=bat&theme=/.test(bat), 'bat 打开 Edge 启动界面并传主题');
+ok(/set "NIANYU_LAUNCHER=1"/.test(bat) && /nianyu-launch-profile/.test(bat), 'bat 设 NIANYU_LAUNCHER 并用独立 profile');
 
 console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
 if (fail > 0) process.exit(1);

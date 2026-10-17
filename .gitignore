@@ -20,5 +20,8 @@ ehthumbs.db
 # electron-builder 增量产物
 *.blockmap
 
+# 启动界面主题缓存（bat 冷启动时读取，运行时由主进程写入）
+.launch-theme
+
 # Git 凭据（本地私有，勿提交）
 .git/nianyu/

@@ -350,10 +350,20 @@ function startCursorPoll(): void {
         : inPanel
         ? 'panel'
         : null;
-      if (owner !== lastCursorOwner) {
-        lastCursorOwner = owner;
-        if (ballWindow && !ballWindow.isDestroyed()) ballWindow.webContents.send('ball:cursor-window', owner === 'ball');
-        if (panelWindow && !panelWindow.isDestroyed()) panelWindow.webContents.send('panel:cursor-window', owner === 'panel');
+      const prevOwner = lastCursorOwner;
+      lastCursorOwner = owner;
+      // v2.3.118：球窗光标所有权「level」推送（每轮都推当前值）。快速掠过悬浮球时，球窗自身
+      // mouseleave 可能因「穿透↔可交互」切换时序而不触发，动态光标会卡成静止残留（鼠标已离开
+      // 仍留在球上）。level 推送保证光标一离开球窗（≤一个轮询周期）即被强制隐藏；球窗
+      // setInteractive(false) 的 120ms 防抖会被下次 mouseenter 的 setInteractive(true) 清除，
+      // 故不会误伤「移入球窗正常显示」。
+      if (ballWindow && !ballWindow.isDestroyed()) {
+        ballWindow.webContents.send('ball:cursor-window', owner === 'ball');
+      }
+      // 面板窗保持「edge」推送：面板 suppressPanelCursor 是即时隐藏、无防抖，level 推会在
+      // 「移入面板的轮询滞后窗口」误隐藏且 true 是 no-op 无法自恢复，故仅所有权变化时推。
+      if (prevOwner !== owner && panelWindow && !panelWindow.isDestroyed()) {
+        panelWindow.webContents.send('panel:cursor-window', owner === 'panel');
       }
       // 拖拽活动期间跳过 hover 降级（P0-1）：贴边钳制时光标可能越出球窗矩形，
       // 此刻降级会让窗外 mouseup 穿透丢失；拖拽期间球窗可交互恒由 drag-start 设置，轮询不干预。

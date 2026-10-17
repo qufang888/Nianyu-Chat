@@ -12,6 +12,7 @@ import {
 } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
+import { exec } from 'node:child_process';
 import { getDataManager, defaultDataDirPath, resolveMediaConfig } from './db';
 import {
   setUpdateBroadcaster,
@@ -217,6 +218,11 @@ app.commandLine.appendSwitch(
 // (cache_util_win.cc:20 Unable to move the cache + gpu_disk_cache.cc:713 Gpu Cache Creation failed)
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 app.commandLine.appendSwitch('disk-cache-dir', path.join(app.getPath('userData'), 'Cache'));
+// v2.3.118：关闭 GPU 光栅化（改 CPU 光栅）。修 Windows 上偶发的
+// [ERROR:command_buffer_proxy_impl.cc] GPU state invalid after WaitForGetOffsetInRange
+// （自定义光标 Canvas 等 GPU 光栅操作触发命令缓冲状态非法）。保留 GPU 合成，
+// 不影响毛玻璃 / 透明 / 圆角等合成层效果。
+app.commandLine.appendSwitch('disable-gpu-rasterization');
 
 let mainWindow: BrowserWindow | null = null;
 let miniWindow: BrowserWindow | null = null;
@@ -572,9 +578,13 @@ const LAUNCH_I18N: Record<string, { starting: string; loading: string }> = {
 };
 
 function showLaunchWindow(): void {
+  // v2.3.118：bat / vbs 启动时由 bat 经 Edge 打开启动界面（带 NIANYU_LAUNCHER=1），
+  // 覆盖「构建 + 启动」整段等待；此时不再重复弹 Electron 启动窗，避免双启动界面。
+  if (process.env.NIANYU_LAUNCHER === '1') return;
   try {
     const html = path.join(__dirname, '../../dist/launch.html');
     if (!fs.existsSync(html)) return; // 无构建产物（如纯 dev 未 build）时跳过，绝不阻塞启动
+    const theme = (dm.getSettings().theme as string) || 'wechat';
     launchWindow = new BrowserWindow({
       width: 380,
       height: 460,
@@ -592,7 +602,8 @@ function showLaunchWindow(): void {
       webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     launchWindow.on('closed', () => { launchWindow = null; });
-    launchWindow.loadFile(html);
+    // v2.3.118：启动界面随当前主题适配（launch.html 依据 ?theme= 应用 15 套主题关键色）
+    launchWindow.loadFile(html, { search: '?theme=' + encodeURIComponent(theme) });
     launchWindow.once('ready-to-show', () => {
       launchShownAt = Date.now();
       launchWindow?.show();
@@ -602,6 +613,30 @@ function showLaunchWindow(): void {
   } catch {
     launchWindow = null; // 启动界面异常绝不影响主流程
   }
+}
+
+// bat 经 Edge 打开启动界面时用的独立 profile 目录名（唯一，供按命令行精准关闭）
+const LAUNCHER_PROFILE = 'nianyu-launch-profile';
+
+// 把当前主题 key 写到项目根 `.launch-theme`，供 bat 下次冷启动时读取并传给 Edge 启动界面。
+// 首启（无此文件）时 bat 用默认主题，之后即跟随。
+function writeLaunchThemeFile(): void {
+  try {
+    const theme = (dm.getSettings().theme as string) || 'wechat';
+    fs.writeFileSync(path.join(__dirname, '../../.launch-theme'), theme, 'utf8');
+  } catch { /* 只读目录等场景忽略，不影响启动 */ }
+}
+
+// 关闭 bat 经 Edge（独立 profile）打开的启动界面。按命令行里的唯一 profile 名匹配，
+// 只结束启动界面那个 Edge 实例，绝不影响用户其它 Edge 窗口 / 标签。
+function closeBatLaunchScreen(): void {
+  if (process.env.NIANYU_LAUNCHER !== '1') return;
+  try {
+    exec(
+      `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name='msedge.exe'\\" | Where-Object { $_.CommandLine -like '*${LAUNCHER_PROFILE}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"`,
+      () => { /* fire-and-forget */ }
+    );
+  } catch { /* ignore */ }
 }
 
 function pushLaunch(text: string, pct: number): void {
@@ -798,6 +833,7 @@ function createWindow(opts?: { coldStart?: boolean }): void {
   // 还原最大化状态
   mainWindow.once('ready-to-show', () => {
     closeLaunchWindow(); // v2.3.116：主界面首帧就绪 → 关闭冷启动启动界面，交接给主窗（含开屏动画）
+    closeBatLaunchScreen(); // v2.3.118：关闭 bat 经 Edge 打开的启动界面（若有），随后主窗亮相
     if (b.isMaximized) mainWindow?.maximize();
   });
   // 首次加载完成后推送初始窗口状态（最大化/还原图标同步）
@@ -7792,6 +7828,7 @@ app.whenReady().then(() => {
     }
   });
   registerIPC();
+  writeLaunchThemeFile(); // v2.3.118：把当前主题 key 写给 bat，供下次冷启动的 Edge 启动界面跟随主题
   if (firstWindowEver) showLaunchWindow(); // v2.3.116：冷启动启动界面（覆盖启动空白期）
   createWindow();
   // 启动界面第二阶段文案：略作延迟，确保启动窗已就绪、文案能落地

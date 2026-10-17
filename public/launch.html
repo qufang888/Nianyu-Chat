@@ -3,15 +3,15 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>念语</title>
+<title>NianYu</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     width: 100%; height: 100%; overflow: hidden;
     font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
-    /* 固定品牌启动外观（不随 14 主题切换）：深色渐变 + 主色点缀 */
-    background: radial-gradient(120% 120% at 50% 0%, #1c2740 0%, #0e1526 55%, #070b14 100%);
-    color: #e8eef7;
+    /* 主题由 JS 依据 ?theme= 应用到 CSS 变量（见底部脚本），此处仅兜底默认（wechat 浅色）*/
+    background: var(--lp-bg, #ededed);
+    color: var(--lp-text, #191919);
     -webkit-user-select: none; user-select: none;
   }
   .wrap {
@@ -23,35 +23,36 @@
     width: 76px; height: 76px;
     display: grid; place-items: center;
     border-radius: 20px;
-    background: linear-gradient(145deg, rgba(88,166,255,0.22), rgba(88,166,255,0.06));
-    box-shadow: 0 0 0 1px rgba(120,180,255,0.28), 0 8px 30px rgba(60,130,220,0.28);
+    background: color-mix(in srgb, var(--lp-primary) 20%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--lp-primary) 45%, transparent),
+                0 8px 30px color-mix(in srgb, var(--lp-primary) 30%, transparent);
     animation: breathe 2.4s ease-in-out infinite;
   }
-  .logo svg { width: 42px; height: 42px; color: #7db6ff; }
+  .logo svg { width: 42px; height: 42px; color: var(--lp-primary); }
   @keyframes breathe {
-    0%, 100% { transform: scale(1); box-shadow: 0 0 0 1px rgba(120,180,255,0.28), 0 8px 30px rgba(60,130,220,0.22); }
-    50% { transform: scale(1.06); box-shadow: 0 0 0 1px rgba(140,195,255,0.5), 0 10px 42px rgba(70,145,235,0.42); }
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.06); }
   }
-  .name { font-size: 22px; font-weight: 700; letter-spacing: 2px; }
-  .sub { font-size: 12px; color: #8aa0bd; letter-spacing: 3px; margin-top: -14px; text-transform: uppercase; }
+  .name { font-size: 22px; font-weight: 700; letter-spacing: 2px; color: var(--lp-text); }
+  .sub { font-size: 12px; color: color-mix(in srgb, var(--lp-text) 55%, transparent); letter-spacing: 3px; margin-top: -14px; text-transform: uppercase; }
   .bar {
     width: 220px; height: 4px; border-radius: 999px;
-    background: rgba(255,255,255,0.10); overflow: hidden; position: relative;
+    background: color-mix(in srgb, var(--lp-text) 12%, transparent);
+    overflow: hidden; position: relative;
   }
   .bar .fill {
     position: absolute; left: 0; top: 0; bottom: 0; width: 8%;
     border-radius: 999px;
-    background: linear-gradient(90deg, #4f9dff, #7db6ff);
+    background: linear-gradient(90deg, color-mix(in srgb, var(--lp-primary) 70%, transparent), var(--lp-primary));
     transition: width 0.4s ease;
   }
-  /* 不确定态微光：进度条上覆一层来回扫过的高光，加载中也「有动画」 */
   .bar .shine {
     position: absolute; top: 0; bottom: 0; width: 40%;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--lp-text) 22%, transparent), transparent);
     animation: sweep 1.4s linear infinite;
   }
   @keyframes sweep { from { left: -40%; } to { left: 100%; } }
-  .text { font-size: 13px; color: #a9bcd6; min-height: 18px; letter-spacing: 0.5px; }
+  .text { font-size: 13px; color: color-mix(in srgb, var(--lp-text) 68%, transparent); min-height: 18px; letter-spacing: 0.5px; }
   .fade { animation: fadein 0.35s ease both; }
   @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
 </style>
@@ -62,9 +63,9 @@
       <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M4 5.5C4 4.67 4.67 4 5.5 4h13c.83 0 1.5.67 1.5 1.5v9c0 .83-.67 1.5-1.5 1.5H9l-4 3.5v-3.5H5.5C4.67 16 4 15.33 4 14.5v-9Z"
               fill="currentColor" opacity="0.9"/>
-        <circle cx="8.5" cy="9" r="1.1" fill="#0e1526"/>
-        <circle cx="12" cy="9" r="1.1" fill="#0e1526"/>
-        <circle cx="15.5" cy="9" r="1.1" fill="#0e1526"/>
+        <circle cx="8.5" cy="9" r="1.1" fill="var(--lp-bg)"/>
+        <circle cx="12" cy="9" r="1.1" fill="var(--lp-bg)"/>
+        <circle cx="15.5" cy="9" r="1.1" fill="var(--lp-bg)"/>
       </svg>
     </div>
     <div class="name">念语</div>
@@ -73,7 +74,47 @@
     <div class="text" id="lp-text">正在启动…</div>
   </div>
   <script>
-    // 主进程通过 executeJavaScript 调用：window.__setLaunch('正在加载界面…', 60)
+    // 15 套主题关键色（bg / primary / text），与 src/theme/variables.css 对齐。
+    // bg 为渐变的主题（glass/vibrant/aura）用渐变，其余用实色；text 按主题明暗取浅/深。
+    var THEMES = {
+      wechat:   { bg: '#ededed', primary: '#07c160', text: '#191919' },
+      glass:    { bg: 'linear-gradient(135deg,#1e2a78,#6a3aa8,#a1429c)', primary: '#7c83ff', text: '#ffffff' },
+      dark:     { bg: '#0d0d0d', primary: '#4a9eff', text: '#eaeaea' },
+      vibrant:  { bg: 'linear-gradient(135deg,#ffd1e8,#d6e4ff)', primary: '#ff6fa5', text: '#2a2a3a' },
+      azure:    { bg: '#151923', primary: '#3688d8', text: '#e6ebf2' },
+      galaxy:   { bg: '#191724', primary: '#9376e0', text: '#e8e4f0' },
+      pine:     { bg: '#141c1b', primary: '#2a9d8f', text: '#e2ece9' },
+      ember:    { bg: '#1a1817', primary: '#f27127', text: '#f0e8e4' },
+      frost:    { bg: '#f7f8fa', primary: '#2478d0', text: '#1a1d22' },
+      rose:     { bg: '#20191c', primary: '#c97386', text: '#f0e6ea' },
+      cyber:    { bg: '#0f1412', primary: '#39ff99', text: '#d9f5e6' },
+      graphite: { bg: '#17181a', primary: '#7a869a', text: '#e4e7ea' },
+      indigo:   { bg: '#101620', primary: '#255b9c', text: '#e3e9f2' },
+      sand:     { bg: '#f6f1e9', primary: '#a16f49', text: '#2a2620' },
+      aura:     { bg: 'linear-gradient(150deg,#001a28,#06204b,#181a60,#2a1257)', primary: '#45e0c8', text: '#eafaf6' }
+    };
+    (function () {
+      try {
+        var params = new URLSearchParams(location.search);
+        var th = THEMES[params.get('theme')] || THEMES.wechat;
+        var r = document.documentElement.style;
+        r.setProperty('--lp-bg', th.bg);
+        r.setProperty('--lp-primary', th.primary);
+        r.setProperty('--lp-text', th.text);
+        // src=bat：bat 经 Edge 无边框窗口打开的启动界面，用专属标题供主进程按标题关闭；
+        // 其余（Electron 启动窗）标题为 NianYu，避免被误关。
+        document.title = params.get('src') === 'bat' ? 'NianYu-Launcher' : 'NianYu';
+        // src=bat：Edge 无边框窗口默认尺寸不可控，尽量缩到设计尺寸并居中（被浏览器策略拦截时忽略，
+        // 内容本身居中，观感不受影响）。
+        if (params.get('src') === 'bat') {
+          try {
+            window.moveTo(Math.max(0, (screen.width - 380) / 2), Math.max(0, (screen.height - 460) / 2));
+            window.resizeTo(380, 460);
+          } catch (e) {}
+        }
+      } catch (e) {}
+    })();
+    // 主进程 / bat 通过 executeJavaScript 调用：window.__setLaunch('正在加载界面…', 60)
     window.__setLaunch = function (text, pct) {
       try {
         var t = document.getElementById('lp-text');
