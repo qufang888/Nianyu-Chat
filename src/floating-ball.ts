@@ -435,6 +435,29 @@ function mountPanel(): void {
 
   const setInteractive = makeInteractive(api?.panelIgnore);
 
+  // ===== v2.3.116：拖球期间面板压制自身动态光标（整机只有一个光标）=====
+  // 快速往面板方向拖球时，主进程会转发 mousemove 到面板窗，且 120ms 防抖来不及收，
+  // 面板的动态光标会被误激活 → 与球窗光标同时出现（两个光标）。拖拽期间球窗独占光标，
+  // 面板收到 ball:dragging=true 立即门控 + 隐藏自身光标、并拒绝 hover 激活；结束后按悬停恢复。
+  let ballDragging = false;
+  const suppressPanelCursor = () => {
+    // 立即门控 + 合成 mouseout → CustomCursor 走隐藏链路（清画布 / 恢复原生光标）
+    document.body.classList.add('cursor-gate-off');
+    document.dispatchEvent(new MouseEvent('mouseout'));
+  };
+  if (api && api.onBallDragging) {
+    api.onBallDragging((d: boolean) => {
+      if (d === ballDragging) return;
+      ballDragging = d;
+      if (d) {
+        suppressPanelCursor();
+      } else {
+        // 拖拽结束：按当前是否悬停面板恢复（true→下次 mousemove 显光标；false→走防抖 gate-off）
+        setInteractive(!!(panel && panel.matches(':hover')));
+      }
+    });
+  }
+
   // ===== 聊天列表数据（置顶/手动顺序与主界面一致）=====
   let pinnedChats: string[] = [];
   let chatOrder: string[] = [];
@@ -657,12 +680,14 @@ function mountPanel(): void {
   // 面板窗内任意 mousemove（含 forward 转发的透明内边距区移动）都视为悬停面板：
   // 覆盖球→面板跨窗时 14px 内边距过渡带，杜绝 160ms 防抖窗口内的误收起（100ms 节流）。
   document.addEventListener('mousemove', () => {
+    if (ballDragging) return; // v2.3.116：拖球期间不上报 hover、不激活面板光标（球窗独占）
     const now = Date.now();
     if (now - lastMoveReport < 100) return;
     lastMoveReport = now;
     if (api?.panelHoverPanel) api.panelHoverPanel(true);
   });
   panel.addEventListener('mouseenter', () => {
+    if (ballDragging) return; // v2.3.116：拖球期间面板不激活动态光标
     setInteractive(true);
     if (api?.panelHoverPanel) api.panelHoverPanel(true);
   });

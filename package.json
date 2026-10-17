@@ -1,6 +1,6 @@
 {
   "name": "nianyu-client",
-  "version": "2.3.115",
+  "version": "2.3.116",
   "description": "念语 - AI 数字人聊天客户端 (Electron + React + TypeScript)",
   "main": "dist-electron/electron/main.js",
   "author": "前方",
@@ -16,6 +16,7 @@
     "verify:resend-interrupted": "node scripts/verify-resend-interrupted.mjs",
     "verify:flash-unify": "node scripts/verify-flash-unify.mjs",
     "verify:cursor-leave": "node scripts/verify-cursor-leave.mjs",
+    "verify:launch-cursor": "node scripts/verify-launch-cursor.mjs",
     "dist": "electron-builder --win"
   },
   "dependencies": {

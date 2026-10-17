@@ -469,6 +469,9 @@ export interface NianyuAPI {
   // 主进程推送：拖拽中 mouseup 丢失自愈（球贴边钳制时窗外 mouseup 穿透丢失），
   // 渲染端据此复位拖拽状态（dragging=false、移除 .dragging、解绑 window mouseup）
   onBallDragForceEnd: (cb: () => void) => () => void;
+  // 主进程推送：球窗拖拽中（true=拖动开始 / false=拖动结束）。面板窗据此在拖拽期间
+  // 压制自身动态光标，确保「整机只有一个光标」（拖球时球窗独占，面板不亮第二个光标）。
+  onBallDragging: (cb: (dragging: boolean) => void) => () => void;
   ballActivate: () => void;
   ballQuit: () => void;
   ballSetEnabled: (enabled: boolean) => void;
@@ -1041,6 +1044,11 @@ const api: NianyuAPI = {
     const listener = () => cb();
     ipcRenderer.on('ball:blur', listener);
     return () => ipcRenderer.removeListener('ball:blur', listener);
+  },
+  onBallDragging: (cb) => {
+    const listener = (_e: any, dragging: boolean) => cb(dragging);
+    ipcRenderer.on('ball:dragging', listener);
+    return () => ipcRenderer.removeListener('ball:dragging', listener);
   },
   offBallBlur: () => {},
   onBallCursorWindow: (cb) => {

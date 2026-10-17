@@ -68,5 +68,12 @@ ok(/renderXRef\.current < OFFSCREEN && mouseXRef\.current > OFFSCREEN/.test(cur)
 ok(/ensureVisible\(true\)/.test(cur) && !/onFocus[\s\S]{0,240}?ensureVisible\(true\)/.test(cur),
   '鼠标进入（onMouseMove）走 crisp；窗口聚焦（onFocus）保留淡入');
 
+console.log('=== F. 失焦淡出也复位渲染位 + 进入transition吸附（v2.3.116 修飞入）===');
+ok(/hiddenRef\.current = true;\s*\/\/ v2\.3\.116：失焦淡出收尾[\s\S]{0,140}?renderXRef\.current = OFFSCREEN/.test(cur),
+  '失焦淡出完成也把 renderX 打回离屏哨兵（下次进入吸附，不失灵）');
+ok(/const wasInside = mouseInsideRef\.current;/.test(cur) &&
+   /!wasInside \|\| renderXRef\.current < OFFSCREEN/.test(cur),
+  'onMouseMove 进入transition吸附：鼠标从窗外进入即落到指针，不飞入');
+
 console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
 if (fail > 0) process.exit(1);

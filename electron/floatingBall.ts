@@ -791,6 +791,9 @@ export function registerBallIPC(): void {
     if (!ballWindow || ballWindow.isDestroyed()) return;
     // 拖拽期间整窗可交互，确保持续接收鼠标事件（窗口始终贴合光标，指针不会移出边界）
     ballWindow.setIgnoreMouseEvents(false);
+    // v2.3.116：拖球期间球窗独占光标 —— 通知面板窗压制自身动态光标，杜绝「快速往面板
+    // 方向拖球时面板多亮一个动态光标 / 整机两个光标」。
+    if (panelWindow && !panelWindow.isDestroyed()) panelWindow.webContents.send('ball:dragging', true);
     dragOffsetX = gx;
     dragOffsetY = gy;
     dragStartX = ballX;
@@ -895,6 +898,8 @@ export function registerBallIPC(): void {
       clearInterval(dragTimer);
       dragTimer = null;
     }
+    // v2.3.116：拖拽结束 → 通知面板窗恢复自身动态光标判定（按当前是否悬停面板）。
+    if (panelWindow && !panelWindow.isDestroyed()) panelWindow.webContents.send('ball:dragging', false);
     // 拖拽结束时作废未完成的换向：面板收回动画可能已开始，重播弹出动画保持面板可见
     // （与旧行为一致：拖拽结束后面板保持展开，交由 hover 离开后防抖收起）
     if (reflipTimer) {

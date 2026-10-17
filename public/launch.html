@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>念语</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    /* 固定品牌启动外观（不随 14 主题切换）：深色渐变 + 主色点缀 */
+    background: radial-gradient(120% 120% at 50% 0%, #1c2740 0%, #0e1526 55%, #070b14 100%);
+    color: #e8eef7;
+    -webkit-user-select: none; user-select: none;
+  }
+  .wrap {
+    width: 100%; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 22px;
+  }
+  .logo {
+    width: 76px; height: 76px;
+    display: grid; place-items: center;
+    border-radius: 20px;
+    background: linear-gradient(145deg, rgba(88,166,255,0.22), rgba(88,166,255,0.06));
+    box-shadow: 0 0 0 1px rgba(120,180,255,0.28), 0 8px 30px rgba(60,130,220,0.28);
+    animation: breathe 2.4s ease-in-out infinite;
+  }
+  .logo svg { width: 42px; height: 42px; color: #7db6ff; }
+  @keyframes breathe {
+    0%, 100% { transform: scale(1); box-shadow: 0 0 0 1px rgba(120,180,255,0.28), 0 8px 30px rgba(60,130,220,0.22); }
+    50% { transform: scale(1.06); box-shadow: 0 0 0 1px rgba(140,195,255,0.5), 0 10px 42px rgba(70,145,235,0.42); }
+  }
+  .name { font-size: 22px; font-weight: 700; letter-spacing: 2px; }
+  .sub { font-size: 12px; color: #8aa0bd; letter-spacing: 3px; margin-top: -14px; text-transform: uppercase; }
+  .bar {
+    width: 220px; height: 4px; border-radius: 999px;
+    background: rgba(255,255,255,0.10); overflow: hidden; position: relative;
+  }
+  .bar .fill {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 8%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #4f9dff, #7db6ff);
+    transition: width 0.4s ease;
+  }
+  /* 不确定态微光：进度条上覆一层来回扫过的高光，加载中也「有动画」 */
+  .bar .shine {
+    position: absolute; top: 0; bottom: 0; width: 40%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+    animation: sweep 1.4s linear infinite;
+  }
+  @keyframes sweep { from { left: -40%; } to { left: 100%; } }
+  .text { font-size: 13px; color: #a9bcd6; min-height: 18px; letter-spacing: 0.5px; }
+  .fade { animation: fadein 0.35s ease both; }
+  @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+</style>
+</head>
+<body>
+  <div class="wrap fade">
+    <div class="logo">
+      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M4 5.5C4 4.67 4.67 4 5.5 4h13c.83 0 1.5.67 1.5 1.5v9c0 .83-.67 1.5-1.5 1.5H9l-4 3.5v-3.5H5.5C4.67 16 4 15.33 4 14.5v-9Z"
+              fill="currentColor" opacity="0.9"/>
+        <circle cx="8.5" cy="9" r="1.1" fill="#0e1526"/>
+        <circle cx="12" cy="9" r="1.1" fill="#0e1526"/>
+        <circle cx="15.5" cy="9" r="1.1" fill="#0e1526"/>
+      </svg>
+    </div>
+    <div class="name">念语</div>
+    <div class="sub">NianYu</div>
+    <div class="bar"><div class="fill" id="lp-fill"></div><div class="shine"></div></div>
+    <div class="text" id="lp-text">正在启动…</div>
+  </div>
+  <script>
+    // 主进程通过 executeJavaScript 调用：window.__setLaunch('正在加载界面…', 60)
+    window.__setLaunch = function (text, pct) {
+      try {
+        var t = document.getElementById('lp-text');
+        var f = document.getElementById('lp-fill');
+        if (t && typeof text === 'string' && text) t.textContent = text;
+        if (f && typeof pct === 'number') f.style.width = Math.max(0, Math.min(100, pct)) + '%';
+      } catch (e) {}
+    };
+  </script>
+</body>
+</html>

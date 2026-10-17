@@ -525,6 +525,10 @@ const CustomCursor: React.FC = () => {
           fadeStateRef.current = 'none';
           // 淡出完成：正式进入隐藏态
           hiddenRef.current = true;
+          // v2.3.116：失焦淡出收尾时一并把渲染位置打回离屏哨兵，
+          // 下次鼠标进入由 onMouseMove 吸附到指针，不从陈旧位置飞入。
+          renderXRef.current = OFFSCREEN;
+          renderYRef.current = OFFSCREEN;
           document.body.classList.remove('cursor-hidden');
           prevDirtyRectsRef.current = [];
           const c = canvasRef.current;
@@ -760,8 +764,10 @@ const CustomCursor: React.FC = () => {
       // 门控（悬浮球窗口专用）：body 带 cursor-gate-off 类时表示鼠标位于穿透区（球/面板之外），
       // 忽略 mousemove —— 穿透模式下窗口收不到 mouseleave，靠门控阻止光标在透明区显示/残留
       if (document.body.classList.contains('cursor-gate-off')) return;
-      // 首次移动直接吸附到目标，避免从离屏位置长距离缓动
-      if (renderXRef.current < OFFSCREEN) {
+      // v2.3.116：进入窗口这一跳（上次鼠标在窗外 / 渲染位离屏）直接把自定义光标落到指针，
+      // 绝不由「上次离开的陈旧位置」缓动飞入 —— 无论上次是即时隐藏 / 失焦淡出 / 空闲 / 从未显示收尾。
+      const wasInside = mouseInsideRef.current;
+      if (!wasInside || renderXRef.current < OFFSCREEN) {
         renderXRef.current = e.clientX;
         renderYRef.current = e.clientY;
       }
