@@ -457,6 +457,14 @@ function mountPanel(): void {
       }
     });
   }
+  // v2.3.117：单光标所有权——面板窗非当前光标 owner（光标在球/菜单/窗外）时立即隐藏自身
+  // 动态光标，与球窗的所有权信号互斥，保证「整机只有一个光标」（修悬浮球与面板同时各亮一个）。
+  // owns=true 时不干预：面板由自身 hover 逻辑正常显示。
+  if (api && api.onPanelCursorWindow) {
+    api.onPanelCursorWindow((owns: boolean) => {
+      if (!owns) suppressPanelCursor();
+    });
+  }
 
   // ===== 聊天列表数据（置顶/手动顺序与主界面一致）=====
   let pinnedChats: string[] = [];

@@ -552,6 +552,10 @@ let firstWindowEver = true;
 // 二次启动唤出都不经过 whenReady，故不出现启动界面。主界面 ready-to-show 即关闭，
 // 随后交给主窗口内的开屏动画（若冷启动且开屏组开启）。启动界面失败绝不阻塞主流程。
 let launchWindow: BrowserWindow | null = null;
+let launchShownAt = 0; // 启动界面实际显示的時刻（ready-to-show），用于最短展示时长判定
+// v2.3.117：启动界面最短展示时长（毫秒）。冷启动若主界面很快 ready，启动界面也至少展示这么久，
+// 避免「闪一下就没了」——用户明确要求启动界面要正常显示，而非贴近主界面才闪一下。
+const LAUNCH_MIN_MS = 900;
 
 // 启动界面状态文案（10 语言，与 TRAY_LABELS 同源口径）。应用名「念语」为品牌固定，不走翻译。
 const LAUNCH_I18N: Record<string, { starting: string; loading: string }> = {
@@ -590,6 +594,7 @@ function showLaunchWindow(): void {
     launchWindow.on('closed', () => { launchWindow = null; });
     launchWindow.loadFile(html);
     launchWindow.once('ready-to-show', () => {
+      launchShownAt = Date.now();
       launchWindow?.show();
       const tx = LAUNCH_I18N[getAppLang()] || LAUNCH_I18N.zh;
       pushLaunch(tx.starting, 12);
@@ -609,9 +614,16 @@ function pushLaunch(text: string, pct: number): void {
 }
 
 function closeLaunchWindow(): void {
-  if (launchWindow && !launchWindow.isDestroyed()) {
-    try { launchWindow.close(); } catch { /* ignore */ }
+  if (!launchWindow) return;
+  if (launchWindow.isDestroyed()) { launchWindow = null; return; }
+  // v2.3.117：至少展示 LAUNCH_MIN_MS；主界面比这更早 ready 时，把关闭推迟到时长达标，
+  // 避免启动界面「闪一下」就没了（主界面本就透明，晚一刻出现无白屏风险）。
+  const remain = LAUNCH_MIN_MS - (Date.now() - launchShownAt);
+  if (remain > 0) {
+    setTimeout(closeLaunchWindow, remain);
+    return;
   }
+  try { launchWindow.close(); } catch { /* ignore */ }
   launchWindow = null;
 }
 

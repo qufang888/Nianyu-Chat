@@ -75,5 +75,10 @@ ok(/const wasInside = mouseInsideRef\.current;/.test(cur) &&
    /!wasInside \|\| renderXRef\.current < OFFSCREEN/.test(cur),
   'onMouseMove 进入transition吸附：鼠标从窗外进入即落到指针，不飞入');
 
+console.log('=== G. 光标本体紧贴指针（v2.3.117 修「指 A 点 B」）===');
+ok(/const CURSOR_SNAP_PX = \d+;/.test(cur), 'CURSOR_SNAP_PX 常量存在（光标本体最大允许滞后像素）');
+ok(/dynamicSpeed = dist > CURSOR_SNAP_PX \? 1 :/.test(cur),
+  '滞后超过阈值即一步贴合指针（杜绝快速移动+点击时视觉光标与命中判定错位）');
+
 console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
 if (fail > 0) process.exit(1);

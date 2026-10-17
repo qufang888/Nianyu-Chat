@@ -315,7 +315,9 @@ function calcPanelDir(): { h: 'right' | 'left'; v: 'down' | 'up' } {
 // 2) hover 电平兜底：轮询结果与渲染端 mouseenter/leave 上报融合（同一入口 setHoverBall/
 //    setHoverPanel），覆盖「跨窗间隙内 DOM 事件时序抖动」导致的漏报。
 let cursorPollTimer: ReturnType<typeof setInterval> | null = null;
-let lastCursorInside = true; // 初始视为在窗内，避免启动瞬间多发一次 false
+// v2.3.117：单光标所有权（'ball' | 'panel' | 'menu' | null）。取代旧的 lastCursorInside，
+// 只有 owner 窗显示动态光标，其余窗隐藏——保证整机只有一个光标。
+let lastCursorOwner: 'ball' | 'panel' | 'menu' | null = null;
 function pointInRect(px: number, py: number, b: Electron.Rectangle): boolean {
   return px >= b.x && px < b.x + b.width && py >= b.y && py < b.y + b.height;
 }
@@ -332,9 +334,29 @@ function startCursorPoll(): void {
         !!menuWindow &&
         !menuWindow.isDestroyed() &&
         pointInRect(p.x, p.y, menuWindow.getBounds());
-      // 拖拽活动期间跳过球窗离窗推送与 hover 降级（P0-1）：贴边钳制时光标可能越出球窗矩形，
-      // 此刻推送 cursor-window=false 会让渲染端 setInteractive(false)→ignore(true)，
-      // 窗外 mouseup 穿透丢失；拖拽期间球窗可交互恒由 drag-start 设置，轮询不干预。
+      // v2.3.117：单光标所有权——光标所在最上层窗口独占动态光标（整机一个光标）。
+      // 拖拽中球窗恒独占（同时保住 P0-1：不因贴边越界给球窗推 false）；否则 菜单 > 球 > 面板
+      // （球为锚点，重叠时球优先）。只有 owner 收 cursor-window=true，其余窗收 false 立即隐藏，
+      // 杜绝「悬浮球与快捷面板同时各亮一个动态光标」。
+      const inPanel =
+        panelVisible && !!panelWindow && !panelWindow.isDestroyed() &&
+        pointInRect(p.x, p.y, panelWindow.getBounds());
+      const owner: 'ball' | 'panel' | 'menu' | null = dragTimer
+        ? 'ball'
+        : inMenu
+        ? 'menu'
+        : inBall
+        ? 'ball'
+        : inPanel
+        ? 'panel'
+        : null;
+      if (owner !== lastCursorOwner) {
+        lastCursorOwner = owner;
+        if (ballWindow && !ballWindow.isDestroyed()) ballWindow.webContents.send('ball:cursor-window', owner === 'ball');
+        if (panelWindow && !panelWindow.isDestroyed()) panelWindow.webContents.send('panel:cursor-window', owner === 'panel');
+      }
+      // 拖拽活动期间跳过 hover 降级（P0-1）：贴边钳制时光标可能越出球窗矩形，
+      // 此刻降级会让窗外 mouseup 穿透丢失；拖拽期间球窗可交互恒由 drag-start 设置，轮询不干预。
       if (!dragTimer) {
         if (inMenu) {
           menuOffTicks = 0;
@@ -352,14 +374,10 @@ function startCursorPoll(): void {
         } else {
           if (cursorInMenu) cursorInMenu = false; // 光标已离开菜单窗：复位电平
           setHoverBall(inBall, false); // 轮询只维护电平，不触发展开
-          if (inBall !== lastCursorInside) {
-            lastCursorInside = inBall;
-            ballWindow.webContents.send('ball:cursor-window', inBall);
-          }
         }
       }
       if (!inMenu && panelVisible && panelWindow && !panelWindow.isDestroyed()) {
-        setHoverPanel(pointInRect(p.x, p.y, panelWindow.getBounds()));
+        setHoverPanel(inPanel);
       }
       // 菜单自动关闭：光标不在菜单窗、球窗、面板窗（panelVisible 时）任一矩形内，
       // 连续 MENU_OFF_TICKS 次采样（200ms × 2 = 400ms）→ 推 menu:hide 走缩入动画。
@@ -714,7 +732,7 @@ export function destroyFloatingBall(): void {
   if (cursorPollTimer) {
     clearInterval(cursorPollTimer);
     cursorPollTimer = null;
-    lastCursorInside = true; // 重建窗口后重新从「在窗内」状态起步
+    lastCursorOwner = null; // 重建窗口后重新判定光标所有权
   }
   if (collapseTimer) {
     clearTimeout(collapseTimer);

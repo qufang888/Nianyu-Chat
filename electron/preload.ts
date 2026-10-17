@@ -489,6 +489,9 @@ export interface NianyuAPI {
   onBallBlur: (cb: () => void) => () => void;
   // 系统光标是否在悬浮球窗口内（主进程轮询推送；false=已移出窗口，渲染端据此隐去动态光标）
   onBallCursorWindow: (cb: (inside: boolean) => void) => () => void;
+  // v2.3.117：单光标所有权——面板窗是否为当前光标 owner（主进程轮询推送）。
+  // false=光标在球/菜单/窗外，面板窗据此立即隐藏自身动态光标（保证整机只有一个光标）。
+  onPanelCursorWindow: (cb: (owns: boolean) => void) => () => void;
   onBallVideoProgress: (cb: (data: { percent: number; statusText: string }) => void) => () => void;
   offBallBlur: (cb: () => void) => void;
 
@@ -1055,6 +1058,11 @@ const api: NianyuAPI = {
     const listener = (_e: any, inside: boolean) => cb(inside);
     ipcRenderer.on('ball:cursor-window', listener);
     return () => ipcRenderer.removeListener('ball:cursor-window', listener);
+  },
+  onPanelCursorWindow: (cb) => {
+    const listener = (_e: any, owns: boolean) => cb(owns);
+    ipcRenderer.on('panel:cursor-window', listener);
+    return () => ipcRenderer.removeListener('panel:cursor-window', listener);
   },
 
   // ===== 世界书 =====

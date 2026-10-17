@@ -33,6 +33,16 @@ ok(/suppressPanelCursor/.test(fbRender) && /dispatchEvent\(new MouseEvent\('mous
   '拖球期间面板立即门控 + 合成 mouseout 隐藏自身光标');
 ok(/if \(ballDragging\) return;/.test(fbRender), '面板 mouseenter/mousemove 拖拽期直接 return（不激活光标）');
 
+console.log('=== A2. 单光标所有权（v2.3.117 修悬浮球+面板同时亮光标）===');
+ok(/onPanelCursorWindow: \(cb: \(owns: boolean\) => void\)/.test(preload), 'preload 类型声明 onPanelCursorWindow');
+ok(/ipcRenderer\.on\('panel:cursor-window'/.test(preload), 'preload 监听 panel:cursor-window');
+ok(/lastCursorOwner/.test(fbMain) && /owner === 'ball'/.test(fbMain) && /owner === 'panel'/.test(fbMain),
+  '主进程轮询计算光标所有权并推送 ball/panel cursor-window');
+ok(/panelWindow\.webContents\.send\('panel:cursor-window', owner === 'panel'\)/.test(fbMain),
+  '主进程向面板窗推送 cursor-window=是否为 owner');
+ok(/api\.onPanelCursorWindow\(/.test(fbRender) && /if \(!owns\) suppressPanelCursor\(\);/.test(fbRender),
+  '面板非 owner 时立即隐藏自身动态光标');
+
 console.log('=== B. 冷启动启动界面 ===');
 ok(existsSync(join(root, 'public/launch.html')), 'public/launch.html 存在');
 const launchHtml = existsSync(join(root, 'public/launch.html')) ? read('public/launch.html') : '';
@@ -42,6 +52,9 @@ ok(/if \(firstWindowEver\) showLaunchWindow\(\);/.test(main), 'whenReady 仅冷�
 ok(/closeLaunchWindow\(\); \/\/ v2\.3\.116/.test(main), '主界面 ready-to-show 关闭启动界面');
 ok(/LAUNCH_I18N/.test(main) && /getAppLang\(\)/.test(main), '启动文案按应用语言本地化（LAUNCH_I18N + getAppLang）');
 ok(/dist\/launch\.html/.test(main), '启动界面加载 dist/launch.html');
+ok(/const LAUNCH_MIN_MS = \d+;/.test(main) && /LAUNCH_MIN_MS - \(Date\.now\(\) - launchShownAt\)/.test(main),
+  '启动界面最短展示时长（LAUNCH_MIN_MS），避免「闪一下就没了」');
+ok(/launchShownAt = Date\.now\(\);/.test(main), '启动界面显示时记录时刻（用于最短展示判定）');
 
 console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
 if (fail > 0) process.exit(1);
