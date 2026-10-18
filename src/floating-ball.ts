@@ -361,6 +361,10 @@ function mountBall(): void {
       setInteractive(false);
       document.body.classList.add('cursor-gate-off');
       document.dispatchEvent(new MouseEvent('mouseout'));
+      // v2.3.120：合成 mouseout 会触发 CustomCursor 隐藏链路并摘掉 cursor-hidden（露出原生
+      // 光标）。菜单弹出期间不应出现原生光标（菜单窗独占动态光标），故补回 cursor-hidden；
+      // 光标移回球窗时 setInteractive(true) 会移除 gate-off，CustomCursor 正常恢复。
+      document.body.classList.add('cursor-hidden');
     });
   }
   // 失焦（点击球唤出主窗等）：恢复穿透与光标门控；面板收起由主进程 blur 链路统一处理
@@ -476,7 +480,10 @@ function mountPanel(): void {
   }
   // v2.3.119：右键菜单弹出 → 面板窗也立即隐藏自身动态光标（菜单窗独占光标，杜绝双光标）
   if (api && api.onBallMenuOpen) {
-    api.onBallMenuOpen(() => suppressPanelCursor());
+    api.onBallMenuOpen(() => {
+      suppressPanelCursor();
+      document.body.classList.add('cursor-hidden'); // v2.3.120：不露原生光标（菜单窗独占动态光标）
+    });
   }
 
   // ===== 聊天列表数据（置顶/手动顺序与主界面一致）=====

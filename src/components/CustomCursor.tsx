@@ -65,10 +65,6 @@ const FPS_CHECK_INTERVAL = 60;      // 每 60 帧检查一次 FPS
 const INTERACTION_CHECK_THROTTLE_MS = 80; // 元素交互检测节流间隔
 const DIRTY_MARGIN = 44;            // 脏区域扩展边距（像素）
 const OFFSCREEN = -9000;            // 初始离屏哨兵值
-// v2.3.117：光标本体与真实指针的最大允许滞后（像素）。超过即「一步贴合」指针，
-// 杜绝「动态光标指 A、实际点 B」的错位（快速移动 + 立即点击时最明显）。
-// 液态手感由拖尾（trail）承担，光标本体必须紧贴指针；仅 ≤ 此值的极小位移保留 lerp 平滑。
-const CURSOR_SNAP_PX = 6;
 // 淡入淡出常量（窗口切换时光标丝滑过渡，避免突然弹出/消失的割裂感）
 // v2.3.97：这两个是**基准**时长（1× 速度下），实际时长 = 基准 / 速度倍率（见下方 speedRef）。
 const FADE_IN_MS = 200;             // 聚焦时淡入时长（毫秒）
@@ -552,8 +548,8 @@ const CustomCursor: React.FC = () => {
     const fading = fadeStateRef.current !== 'none';
     const idleMs = now - lastMoveTimeRef.current;
     if (idleMs > IDLE_STOP_MS && !hiddenRef.current && !fading && renderXRef.current > OFFSCREEN) {
-      renderXRef.current = lerp(renderXRef.current, mouseXRef.current, cfg.lerpSpeed as number);
-      renderYRef.current = lerp(renderYRef.current, mouseYRef.current, cfg.lerpSpeed as number);
+      renderXRef.current = mouseXRef.current; // v2.3.120：空闲静态帧也一步贴合指针
+      renderYRef.current = mouseYRef.current;
       clearAndDraw(ctx, now, true); // 静态帧：仅画光标，清掉残留特效
       runningRef.current = false;
       scheduleIdleHideRef.current();
@@ -561,17 +557,14 @@ const CustomCursor: React.FC = () => {
     }
 
     // ---- 更新位置 ----
-    // v2.3.117：点击必须精准。光标滞后真实指针超过 CURSOR_SNAP_PX 直接一步贴合，
-    // 不再用 lerp 缓动追（缓动追导致「指 A 点 B」：视觉光标在 A、命中判定在 B）。
-    // 仅极小位移（≤ 阈值）保留 lerp 平滑；拖尾仍提供液态观感。
-    const speed = cfg.lerpSpeed as number;
+    // v2.3.120：光标本体一步贴合指针（无 lerp 滞后）。用户反馈「动态光标显示位置与真实点击
+    // 位置有偏移、要往右移一点才点得到」——lerp 缓动追使光标滞后于真实指针，而点击命中走
+    // 真实指针，二者错位。液态手感由拖尾承担，光标本体始终贴指针。
     const dx = mouseXRef.current - renderXRef.current;
     const dy = mouseYRef.current - renderYRef.current;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    const dynamicSpeed = dist > CURSOR_SNAP_PX ? 1 : Math.min(0.5, speed);
-
-    renderXRef.current = lerp(renderXRef.current, mouseXRef.current, dynamicSpeed);
-    renderYRef.current = lerp(renderYRef.current, mouseYRef.current, dynamicSpeed);
+    renderXRef.current = mouseXRef.current;
+    renderYRef.current = mouseYRef.current;
+    const dynamicSpeed = 1; // 拖尾速度用满位移
 
     const cx = renderXRef.current;
     const cy = renderYRef.current;

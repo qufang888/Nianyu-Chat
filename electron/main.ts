@@ -217,11 +217,10 @@ app.commandLine.appendSwitch(
 // (cache_util_win.cc:20 Unable to move the cache + gpu_disk_cache.cc:713 Gpu Cache Creation failed)
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 app.commandLine.appendSwitch('disk-cache-dir', path.join(app.getPath('userData'), 'Cache'));
-// v2.3.118：关闭 GPU 光栅化（改 CPU 光栅）。修 Windows 上偶发的
-// [ERROR:command_buffer_proxy_impl.cc] GPU state invalid after WaitForGetOffsetInRange
-// （自定义光标 Canvas 等 GPU 光栅操作触发命令缓冲状态非法）。保留 GPU 合成，
-// 不影响毛玻璃 / 透明 / 圆角等合成层效果。
-app.commandLine.appendSwitch('disable-gpu-rasterization');
+// v2.3.120：撤销 v2.3.118 的 disable-gpu-rasterization——它让整窗（含动态光标 Canvas /
+// 毛玻璃）全部走 CPU 光栅，拖动悬浮球 / 主界面 / 小窗严重卡顿。GPU 报错
+// (command_buffer_proxy_impl.cc GPU state invalid) 多为瞬态、Chromium 会自愈，可接受；
+// 若后续要规避，应做「关闭硬件加速」设置项按需开启，而非全局默认关光栅化。
 
 let mainWindow: BrowserWindow | null = null;
 let miniWindow: BrowserWindow | null = null;
@@ -552,76 +551,9 @@ function scheduleWindowZoom(win: BrowserWindow | null, isMini: boolean): void {
 // 仅进程冷启动播放开屏；窗口被销毁后由 showMainWindow 重建时（托盘/悬浮球唤出）带 ?nosplash=1，不重播。
 let firstWindowEver = true;
 
-// ===== v2.3.116：冷启动启动界面（覆盖「进程起到主界面首帧」之间的空白期）=====
-// 仅进程冷启动显示（app.whenReady 内 firstWindowEver 仍为 true 时创建）；托盘 / 悬浮球 /
-// 二次启动唤出都不经过 whenReady，故不出现启动界面。主界面 ready-to-show 即关闭，
-// 随后交给主窗口内的开屏动画（若冷启动且开屏组开启）。启动界面失败绝不阻塞主流程。
-let launchWindow: BrowserWindow | null = null;
-
-// 启动界面状态文案（10 语言，与 TRAY_LABELS 同源口径）。应用名「念语」为品牌固定，不走翻译。
-const LAUNCH_I18N: Record<string, { starting: string; loading: string }> = {
-  zh: { starting: '正在启动念语…', loading: '正在加载界面…' },
-  en: { starting: 'Starting NianYu…', loading: 'Loading the interface…' },
-  fr: { starting: 'Démarrage de NianYu…', loading: "Chargement de l'interface…" },
-  de: { starting: 'NianYu wird gestartet…', loading: 'Oberfläche wird geladen…' },
-  ja: { starting: '念語を起動中…', loading: '界面を読み込み中…' },
-  ko: { starting: '니안Yu 시작 중…', loading: '인터페이스 불러오는 중…' },
-  es: { starting: 'Iniciando NianYu…', loading: 'Cargando la interfaz…' },
-  pt: { starting: 'Iniciando o NianYu…', loading: 'Carregando a interface…' },
-  ru: { starting: 'Запуск NianYu…', loading: 'Загрузка интерфейса…' },
-  'zh-Hant': { starting: '正在啟動念語…', loading: '正在載入介面…' },
-};
-
-function showLaunchWindow(): void {
-  try {
-    const html = path.join(__dirname, '../../dist/launch.html');
-    if (!fs.existsSync(html)) return; // 无构建产物（如纯 dev 未 build）时跳过，绝不阻塞启动
-    const theme = (dm.getSettings().theme as string) || 'wechat';
-    launchWindow = new BrowserWindow({
-      width: 380,
-      height: 460,
-      frame: false,
-      resizable: false,
-      movable: false,
-      minimizable: false,
-      maximizable: false,
-      skipTaskbar: true,
-      center: true,
-      show: false,
-      transparent: false,
-      backgroundColor: '#0e1526',
-      icon: getAppIcon(),
-      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
-    });
-    launchWindow.on('closed', () => { launchWindow = null; });
-    // v2.3.118：启动界面随当前主题适配（launch.html 依据 ?theme= 应用 15 套主题关键色）
-    launchWindow.loadFile(html, { search: '?theme=' + encodeURIComponent(theme) });
-    launchWindow.once('ready-to-show', () => {
-      launchWindow?.show();
-      const tx = LAUNCH_I18N[getAppLang()] || LAUNCH_I18N.zh;
-      pushLaunch(tx.starting, 12);
-    });
-  } catch {
-    launchWindow = null; // 启动界面异常绝不影响主流程
-  }
-}
-
-function pushLaunch(text: string, pct: number): void {
-  if (!launchWindow || launchWindow.isDestroyed()) return;
-  try {
-    launchWindow.webContents.executeJavaScript(
-      `window.__setLaunch && window.__setLaunch(${JSON.stringify(text)}, ${pct})`
-    );
-  } catch { /* 启动窗未就绪时静默跳过 */ }
-}
-
-function closeLaunchWindow(): void {
-  if (!launchWindow) return;
-  if (launchWindow.isDestroyed()) { launchWindow = null; return; }
-  // v2.3.119：主界面首帧就绪即立即关闭启动界面，二者绝不共存（不再有最短展示延迟）。
-  try { launchWindow.close(); } catch { /* ignore */ }
-  launchWindow = null;
-}
+// v2.3.120：删除冷启动「启动界面」。v2.3.119 起 bat 改为直接跑已构建版本（不再每次
+// rebuild），冷启动已从十几秒降到约 1 秒，启动界面失去意义，故整体移除（含 launch.html）。
+// 需要覆盖启动空白期的话，日后再做「关闭硬件加速」等按需设置，不再默认加外挂启动窗。
 
 function createWindow(opts?: { coldStart?: boolean }): void {
   const coldStart = opts?.coldStart ?? firstWindowEver;
@@ -793,7 +725,6 @@ function createWindow(opts?: { coldStart?: boolean }): void {
 
   // 还原最大化状态
   mainWindow.once('ready-to-show', () => {
-    closeLaunchWindow(); // v2.3.119：主界面首帧就绪 → 立即关闭启动界面，二者不共存
     if (b.isMaximized) mainWindow?.maximize();
   });
   // 首次加载完成后推送初始窗口状态（最大化/还原图标同步）
@@ -7788,13 +7719,7 @@ app.whenReady().then(() => {
     }
   });
   registerIPC();
-  if (firstWindowEver) showLaunchWindow(); // v2.3.116：冷启动启动界面（覆盖启动空白期）
   createWindow();
-  // 启动界面第二阶段文案：略作延迟，确保启动窗已就绪、文案能落地
-  setTimeout(() => {
-    const tx = LAUNCH_I18N[getAppLang()] || LAUNCH_I18N.zh;
-    pushLaunch(tx.loading, 60);
-  }, 300);
   createTray();
   applyMiniSettings();
   // MCP：注入设置提供器（ai.ts 请求构造时读取 mcpServers）；应用退出时断开全部连接

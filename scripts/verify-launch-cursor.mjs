@@ -50,38 +50,29 @@ ok(/ballWindow\.webContents\.send\('ball:cursor-window', owner === 'ball'\);/.te
   '球窗 cursor-window 每轮 level 推送（不再仅 edge，快速掠过也强制隐藏）');
 ok(/prevOwner !== owner && panelWindow/.test(fbMain), '面板窗仍 edge 推送（仅所有权变化时）');
 
-console.log('=== B. 冷启动启动界面（Electron 无边框主题化窗口）===');
-ok(existsSync(join(root, 'public/launch.html')), 'public/launch.html 存在');
-const launchHtml = existsSync(join(root, 'public/launch.html')) ? read('public/launch.html') : '';
-ok(/window\.__setLaunch\s*=/.test(launchHtml), 'launch.html 暴露 window.__setLaunch(text,pct)');
-const themeCount = (launchHtml.match(/primary:/g) || []).length;
-ok(/var THEMES = \{/.test(launchHtml) && /params\.get\('theme'\)/.test(launchHtml) && themeCount >= 15,
-  `launch.html 主题适配（THEMES 覆盖 15 套，实测 ${themeCount} 个 primary）`);
-ok(/function showLaunchWindow\(\)/.test(main) && /function closeLaunchWindow\(\)/.test(main), '主进程 showLaunchWindow/closeLaunchWindow 存在');
-ok(/if \(firstWindowEver\) showLaunchWindow\(\);/.test(main), 'whenReady 仅冷启动（firstWindowEver）建启动界面');
-ok(/loadFile\(html, \{ search: '\?theme='/.test(main), '启动窗按当前主题加载（?theme=，适配 15 主题）');
-ok(/closeLaunchWindow\(\); \/\/ v2\.3\.119/.test(main), '主界面首帧就绪即关启动界面（v2.3.119 立即关、不共存）');
-ok(/try \{ launchWindow\.close\(\); \} catch/.test(main) && !/LAUNCH_MIN_MS/.test(main) && !/NIANYU_LAUNCHER/.test(main),
-  'closeLaunchWindow 直接关（无最短展示延迟 / 无 Edge 外挂，主界面与启动界面不共存）');
-ok(/LAUNCH_I18N/.test(main) && /getAppLang\(\)/.test(main), '启动文案按应用语言本地化（LAUNCH_I18N + getAppLang）');
-ok(/dist\/launch\.html/.test(main), '启动界面加载 dist/launch.html');
+console.log('=== B. 冷启动启动界面已移除（v2.3.120）===');
+ok(!existsSync(join(root, 'public/launch.html')), 'public/launch.html 已删除');
+ok(!/showLaunchWindow|LAUNCH_I18N|launchWindow/.test(main), '主进程启动界面代码已移除');
+ok(!/appendSwitch\('disable-gpu-rasterization'\)/.test(main), '已撤销 disable-gpu-rasterization（修整窗 CPU 光栅导致的拖动卡顿）');
 const bat = existsSync(join(root, '启动念语.bat')) ? read('启动念语.bat') : '';
 ok(/if not exist "dist\\index\.html"/.test(bat) && !/msedge/.test(bat) && !/NIANYU_LAUNCHER/.test(bat),
-  'bat 直接跑已构建版本（仅缺 dist 才构建；无 Edge 外挂启动界面）');
+  'bat 直接跑已构建版本（仅缺 dist 才构建；无外挂启动界面）');
 
-console.log('=== C. 悬浮球右键菜单单光标（v2.3.119 修菜单弹出双光标）===');
+console.log('=== C. 悬浮球右键菜单单光标（v2.3.119/120）===');
 ok(/onBallMenuOpen: \(cb: \(\) => void\)/.test(preload), 'preload 类型声明 onBallMenuOpen');
 ok(/ipcRenderer\.on\('ball:menu-open'/.test(preload), 'preload 监听 ball:menu-open');
 ok(/ballWindow\.webContents\.send\('ball:menu-open'\)/.test(fbMain) && /panelWindow\.webContents\.send\('ball:menu-open'\)/.test(fbMain),
   '主进程菜单弹出即广播 ball:menu-open 给球窗/面板窗');
 ok(/api\.onBallMenuOpen\(/.test(fbRender), '球窗/面板窗渲染端订阅 onBallMenuOpen');
-ok(/onBallMenuOpen\(\(\) => \{[\s\S]{0,240}?dispatchEvent\(new MouseEvent\('mouseout'\)\)/.test(fbRender),
-  '球窗收到即 gate-off + 合成 mouseout 立即隐藏自身光标（不等 120ms 防抖）');
-ok(/onBallMenuOpen\(\(\) => suppressPanelCursor\(\)\)/.test(fbRender), '面板窗收到即 suppressPanelCursor 隐藏自身光标');
+ok(/onBallMenuOpen\(\(\) => \{[\s\S]{0,300}?dispatchEvent\(new MouseEvent\('mouseout'\)\)[\s\S]{0,300}?classList\.add\('cursor-hidden'\)/.test(fbRender),
+  '球窗收到即隐藏自身光标并补回 cursor-hidden（不露原生光标，杜绝双光标）');
+ok(/onBallMenuOpen\(\(\) => \{[\s\S]{0,90}?suppressPanelCursor\(\)[\s\S]{0,140}?classList\.add\('cursor-hidden'\)/.test(fbRender),
+  '面板窗收到即 suppressPanelCursor + 补回 cursor-hidden（不露原生光标）');
 
-console.log('=== D. GPU 报错修复 + 光标叠片防护（v2.3.118/119）===');
-ok(/appendSwitch\('disable-gpu-rasterization'\)/.test(main), '关闭 GPU 光栅化（修 command_buffer_proxy_impl GPU state invalid）');
+console.log('=== D. 光标贴指针 + DPR 叠片防护（v2.3.120）===');
 const cur = read('src/components/CustomCursor.tsx');
+ok(/renderXRef\.current = mouseXRef\.current;/.test(cur) && !/CURSOR_SNAP_PX/.test(cur) && !/lerp\(renderXRef/.test(cur),
+  '光标本体一步贴合指针（无 lerp 滞后，修「显示位置与点击位置偏移」）');
 ok(/canvasDprRef\.current \|\| 1/.test(cur), 'clearRectClamped 用建画布时的 DPR 换算边界（防 DPR 变化后旧帧清不掉→光标叠片）');
 ok(/matchMedia\(`\(resolution: /.test(cur) && /onDprChange/.test(cur), 'DPR 变化（全屏/换显示器/缩放）重设画布');
 
