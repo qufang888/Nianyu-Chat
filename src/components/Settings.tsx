@@ -151,7 +151,6 @@ const ADVANCED_ANCHORS: Record<string, string> = {
   'sec-debug': 'adv-window',
   'sec-datapath': 'adv-window',
   'sec-errorlog': 'adv-window',
-  'sec-backup': 'adv-window',
   'sec-reset': 'adv-window',
 };
 
@@ -5387,7 +5386,50 @@ export const Settings: React.FC<{
           </button>
         </div>
 
-        {/* 高级设置折叠区（v2.3.102 需求 3）：调试模式 / 数据路径 / 错误日志 / 备份 / 重置 —— 技术性项收进此处。 */}
+        {/* ===== 数据备份与还原 ===== */}
+        <div id="sec-backup" className="section-title" style={{ marginTop: 24 }}>{t('settings.backup')}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, maxWidth: 560 }}>
+          <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>{t('settings.backupDir')}</span>
+          <input
+            type="text"
+            readOnly
+            value={draft.backupDir || t('settings.backupDirUnset')}
+            style={{ flex: 1, fontSize: 12, color: draft.backupDir ? undefined : 'var(--color-text-secondary)' }}
+          />
+          <button className="btn-ghost" onClick={chooseBackupDir} disabled={busy}>
+            {t('settings.backupDirPick')}
+          </button>
+          {draft.backupDir && (
+            <button className="btn-ghost" onClick={clearBackupDir} disabled={busy}>
+              {t('settings.backupDirClear')}
+            </button>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button className="btn-primary" onClick={backup} disabled={busy}>
+            {t('settings.backupBtn')}
+          </button>
+          {draft.backupDir && (
+            <button className="btn-primary" onClick={exportBackup} disabled={busy}>
+              {t('settings.exportBtn')}
+            </button>
+          )}
+          <button className="btn-ghost" onClick={restore} disabled={busy} style={{ color: 'var(--color-danger, #e06c75)' }}>
+            {t('settings.restoreBtn')}
+          </button>
+        </div>
+        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--color-text-secondary)' }}>
+          {t('settings.backupDesc')}
+          {draft.lastBackupTime && (
+            <>
+              {' '}
+              {t('settings.lastBackup', { time: new Date(draft.lastBackupTime).toLocaleString(loc) })}
+            </>
+          )}
+        </div>
+
+        {/* 高级设置折叠区（v2.3.102 需求 3）：调试模式 / 数据路径 / 错误日志 / 重置 —— 技术性项收进此处。
+           v2.3.123：备份与还原已移出折叠区（备份是常用功能，不该埋在高级设置里），见上方直接可见区。 */}
         <AdvancedSection
           sectionId="adv-window"
           open={draft?.advSections?.['adv-window'] === true}
@@ -5545,48 +5587,6 @@ export const Settings: React.FC<{
             <span style={{ marginLeft: 6, color: 'var(--color-danger, #e06c75)' }}>({errorLog.length})</span>
           )}
         </button>
-
-        {/* ===== 数据备份与还原 ===== */}
-        <div id="sec-backup" className="section-title" style={{ marginTop: 24 }}>{t('settings.backup')}</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, maxWidth: 560 }}>
-          <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>{t('settings.backupDir')}</span>
-          <input
-            type="text"
-            readOnly
-            value={draft.backupDir || t('settings.backupDirUnset')}
-            style={{ flex: 1, fontSize: 12, color: draft.backupDir ? undefined : 'var(--color-text-secondary)' }}
-          />
-          <button className="btn-ghost" onClick={chooseBackupDir} disabled={busy}>
-            {t('settings.backupDirPick')}
-          </button>
-          {draft.backupDir && (
-            <button className="btn-ghost" onClick={clearBackupDir} disabled={busy}>
-              {t('settings.backupDirClear')}
-            </button>
-          )}
-        </div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <button className="btn-primary" onClick={backup} disabled={busy}>
-            {t('settings.backupBtn')}
-          </button>
-          {draft.backupDir && (
-            <button className="btn-primary" onClick={exportBackup} disabled={busy}>
-              {t('settings.exportBtn')}
-            </button>
-          )}
-          <button className="btn-ghost" onClick={restore} disabled={busy} style={{ color: 'var(--color-danger, #e06c75)' }}>
-            {t('settings.restoreBtn')}
-          </button>
-        </div>
-        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--color-text-secondary)' }}>
-          {t('settings.backupDesc')}
-          {draft.lastBackupTime && (
-            <>
-              {' '}
-              {t('settings.lastBackup', { time: new Date(draft.lastBackupTime).toLocaleString(loc) })}
-            </>
-          )}
-        </div>
 
         {/* ===== 一键恢复初始设置 ===== */}
         <div id="sec-reset" className="section-title" style={{ marginTop: 24 }}>{t('settings.resetSettings')}</div>
