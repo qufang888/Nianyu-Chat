@@ -428,24 +428,52 @@ export const Settings: React.FC<{
   const panelRef = useRef<HTMLDivElement>(null);
   const catRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [activeCat, setActiveCat] = useState(SETTING_CATS[0].id);
+  // v2.3.121：程序化跳转期间抑制 scroll-spy 的毫秒时间戳。平滑滚动逐帧触发 scroll，
+  // spy 会经过中间分类、把点击设置的高亮覆盖掉；对最后一个分类（cat-window，高度可能
+  // 小于视口、永远滚不到距顶 90px 内）更会永久高亮错误 —— 即「点窗口与系统不亮、要点两下」。
+  const suppressSpyUntilRef = useRef(0);
   const scrollToCat = (id: string) => {
     // v2.3.97 清理死代码：原先这里有 `if (id === 'cat-models') { setSub('models'); return; }`，
     // 但模型管理早已独立为二级页（sub='models'），SETTING_CATS 里**没有** cat-models 项，
     // 该分支永不可达 —— 留着只会让人误以为左侧还有第 9 个分类。
     catRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     setActiveCat(id);
+    suppressSpyUntilRef.current = Date.now() + 800; // 800ms > 平滑滚动时长，期间不让 spy 覆盖点击高亮
   };
   const onPanelScroll = () => {
     const panel = panelRef.current;
     if (!panel) return;
+    if (Date.now() < suppressSpyUntilRef.current) return; // 程序化跳转中：保留点击的高亮
     const top = panel.getBoundingClientRect().top;
+    // v2.3.121：滚到底部时改判「可见的最后一个分类」。末位分类（cat-window）内容高度可能
+    // 小于面板视口，scrollIntoView 被最大滚动距钳制、其顶部永远到不了距顶 90px，旧规则
+    // 会把高亮永久停在前一个分类上。
+    const atBottom = panel.scrollTop >= panel.scrollHeight - panel.clientHeight - 2;
     let current = SETTING_CATS[0].id;
     for (const c of SETTING_CATS) {
       const el = catRefs.current[c.id];
-      if (el && el.getBoundingClientRect().top - top <= 90) current = c.id;
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (atBottom) {
+        if (rect.bottom > top + 1) current = c.id; // 底部可见的最后一个分类
+      } else if (rect.top - top <= 90) {
+        current = c.id;
+      }
     }
     setActiveCat(current);
   };
+  // v2.3.121：用户主动滚动（滚轮/触摸）立即解除跳转抑制，让 scroll-spy 恢复实时跟随
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const clearSuppress = () => { suppressSpyUntilRef.current = 0; };
+    panel.addEventListener('wheel', clearSuppress, { passive: true });
+    panel.addEventListener('touchmove', clearSuppress, { passive: true });
+    return () => {
+      panel.removeEventListener('wheel', clearSuppress);
+      panel.removeEventListener('touchmove', clearSuppress);
+    };
+  }, []);
   // v2.3.97：包裹 `<input type="file">` 的自绘引导弹窗（导入毛玻璃背景图）
   const [glassBgGuideOpen, setGlassBgGuideOpen] = useState(false);
   const glassBgInputRef = useRef<HTMLInputElement | null>(null);

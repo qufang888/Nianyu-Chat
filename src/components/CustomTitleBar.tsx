@@ -118,16 +118,38 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
   useEffect(() => {
     const title = titleRef.current;
     if (!title) return;
+    // v2.3.121：rAF 合帧拖动。高轮询鼠标快速拖动时 mousemove 事件率远超 60fps，原先每个事件
+    // 都发一次 IPC + 主进程一次原生 setPosition（透明+阴影+圆角分层窗，每次移动都触发 DWM
+    // 重合成）→ 「快速拖动高延迟/卡」。现每帧只发最后一次坐标（末位合并），与屏幕刷新对齐。
+    let rafId = 0;
+    let pendingX = 0;
+    let pendingY = 0;
+    let hasPending = false;
+    const flush = () => {
+      rafId = 0;
+      if (!hasPending) return;
+      hasPending = false;
+      api.windowDragTo!(pendingX, pendingY);
+    };
     const onMouseMove = (e: MouseEvent) => {
       if (!dragRef.current) return;
-      api.windowDragTo(e.screenX - dragOffRef.current.x, e.screenY - dragOffRef.current.y);
+      pendingX = e.screenX - dragOffRef.current.x;
+      pendingY = e.screenY - dragOffRef.current.y;
+      hasPending = true;
+      if (!rafId) rafId = requestAnimationFrame(flush);
     };
-    const onMouseUp = () => { dragRef.current = false; };
+    const onMouseUp = () => {
+      dragRef.current = false;
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      // 松手前把最后位置补发，避免末尾一帧被合帧丢弃
+      if (hasPending) { hasPending = false; api.windowDragTo!(pendingX, pendingY); }
+    };
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
     return () => {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
+      if (rafId) cancelAnimationFrame(rafId);
     };
   }, [isMini, isMax]);
 

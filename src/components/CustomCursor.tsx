@@ -96,6 +96,7 @@ const CustomCursor: React.FC = () => {
   const cfgRef = useRef<{ [k: string]: number | boolean }>({});
   const hideTimerRef = useRef<number>(0);   // 空闲隐藏定时器
   const canvasDprRef = useRef(1);           // 建画布时的 DPR（clearRectClamped 用它换算边界，防 DPR 变化后清不掉旧帧）
+  const ctxRef = useRef<CanvasRenderingContext2D | null>(null); // 缓存的 2D 上下文（避免每帧 getContext）
 
   // ===== 淡入淡出状态（窗口切换丝滑过渡）=====
   type FadeState = 'none' | 'in' | 'out';
@@ -204,14 +205,13 @@ const CustomCursor: React.FC = () => {
     const el = document.elementFromPoint(mouseXRef.current, mouseYRef.current);
     if (!el) return 'normal';
 
-    // 拖拽状态检测
-    const cs = getComputedStyle(el);
-    if (cs.cursor === 'grabbing' || cs.cursor === 'move' ||
-        el.hasAttribute('data-dragging')) {
-      return 'grabbing';
-    }
+    // 拖拽状态检测：各拖拽实现统一以 data-dragging 属性标记（廉价，先行）
+    if (el.hasAttribute('data-dragging')) return 'grabbing';
 
-    // 可交互元素检测
+    // v2.3.121：廉价判定优先（标签/角色/tabindex/类名/closest，不触发样式重算）。
+    // getComputedStyle 会强制整棵文档树样式重算，在消息流这类大型 DOM 上每次数毫秒；
+    // 80ms 节流的交互检测是「开启动态光标后点击延迟/卡顿」的主因之一，故绝大多数
+    // 悬停目标（按钮/链接/输入框等）走廉价分支，不再付 getComputedStyle 代价。
     const tag = el.tagName.toLowerCase();
     const isInteractive =
       tag === 'button' || tag === 'a' || tag === 'input' || tag === 'textarea' ||
@@ -219,12 +219,16 @@ const CustomCursor: React.FC = () => {
       el.getAttribute('role') === 'button' || el.getAttribute('role') === 'slider' ||
       el.getAttribute('role') === 'option' || el.getAttribute('role') === 'listbox' ||
       el.getAttribute('tabindex') !== null ||
-      cs.cursor === 'pointer' || cs.cursor === 'grab' ||
       el.classList.contains('btn-primary') || el.classList.contains('btn-ghost') ||
       el.classList.contains('custom-titlebar') || el.classList.contains('mini-titlebar') ||
       el.closest('button, a, [role="button"], [role="option"], [role="listbox"], .custom-titlebar, .mini-titlebar, input, textarea, select, [tabindex], .btn-primary, .btn-ghost');
+    if (isInteractive) return 'hover';
 
-    return isInteractive ? 'hover' : 'normal';
+    // 兜底：仅廉价判定未命中时才读计算样式（cursor:grabbing/move → 拖拽中；pointer/grab → 可交互）
+    const cs = getComputedStyle(el);
+    if (cs.cursor === 'grabbing' || cs.cursor === 'move') return 'grabbing';
+    if (cs.cursor === 'pointer' || cs.cursor === 'grab') return 'hover';
+    return 'normal';
   }, []);
 
   // ===== 轨迹管理 =====
@@ -598,7 +602,12 @@ const CustomCursor: React.FC = () => {
   const loop = useCallback((now: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d', { alpha: true });
+    // v2.3.121：缓存 2D 上下文（原先每帧都 getContext，属无谓开销）
+    let ctx = ctxRef.current;
+    if (!ctx) {
+      ctx = canvas.getContext('2d', { alpha: true });
+      ctxRef.current = ctx;
+    }
     if (!ctx) return;
 
     drawFrame(ctx, now);
@@ -905,8 +914,10 @@ const CustomCursor: React.FC = () => {
       else if (mouseInsideRef.current) ensureVisible();
     };
 
+    // v2.3.121：只挂 mousemove。原先 mousemove + pointermove 双监听同一 handler，鼠标每次
+    // 物理移动都会触发两遍（双倍 ensureVisible/检测调度），是输入卡顿的来源之一。
+    // 鼠标移动必然伴随 mousemove；纯触屏设备不显示鼠标光标，无需 pointermove。
     document.addEventListener('mousemove', onMouseMove, { capture: true, passive: true });
-    document.addEventListener('pointermove', onMouseMove, { capture: true, passive: true });
     document.addEventListener('mouseleave', onMouseLeaveDoc, { passive: true });
     document.addEventListener('mouseout', onMouseOut, { passive: true });
     document.addEventListener('mousedown', onMouseDown, { passive: true });
@@ -922,7 +933,6 @@ const CustomCursor: React.FC = () => {
 
     return () => {
       document.removeEventListener('mousemove', onMouseMove, true);
-      document.removeEventListener('pointermove', onMouseMove, true);
       document.removeEventListener('mouseleave', onMouseLeaveDoc);
       document.removeEventListener('mouseout', onMouseOut);
       document.removeEventListener('mousedown', onMouseDown);

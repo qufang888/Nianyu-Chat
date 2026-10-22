@@ -151,7 +151,7 @@ export const OnboardingWizard: React.FC<{ onDone: () => void }> = ({ onDone }) =
   return (
     <div className="modal-mask" style={{ alignItems: 'stretch', justifyContent: 'center' }}>
       <div
-        className="modal"
+        className="modal ob-modal"
         onClick={(e) => e.stopPropagation()}
         style={{ width: 720, maxWidth: '94vw', maxHeight: '92vh', display: 'flex', flexDirection: 'column' }}
       >

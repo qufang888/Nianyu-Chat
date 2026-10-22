@@ -565,10 +565,14 @@ export const MiniChat: React.FC = () => {
 
   // 闲置 5 分钟半透明；有交互恢复
   useEffect(() => {
+    // v2.3.121：本地镜像当前是否已不透明。原先每次 mousemove（含拖标题栏）都发一次
+    // mini:setOpacity invoke → 主进程一次原生 setOpacity（比 setPosition 更重的分层窗操作），
+    // 叠加拖动时的 setPosition 造成小窗拖动卡顿。现已不透明时不再发 IPC。
+    let opacityFull = true;
     const reset = () => {
-      api.miniSetOpacity(1);
+      if (!opacityFull) { api.miniSetOpacity(1); opacityFull = true; }
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
-      idleTimerRef.current = setTimeout(() => api.miniSetOpacity(0.8), 5 * 60 * 1000);
+      idleTimerRef.current = setTimeout(() => { api.miniSetOpacity(0.8); opacityFull = false; }, 5 * 60 * 1000);
     };
     reset();
     window.addEventListener('mousemove', reset);

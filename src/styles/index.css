@@ -1604,6 +1604,14 @@ input[type='range']::-moz-range-thumb {
   flex-direction: column;
   animation: popupLinearIn calc(0.16s * var(--anim-speed, 1)) linear;
 }
+/* v2.3.121：初次配置向导（.ob-modal）换肤也要丝滑——与主窗口一样随 data-theme 翻转做
+   0.3s 渐变，不再突然变色。.modal 已在 animControl 的 theme 组登记，动效总开关关闭时
+   该过渡会被统一 kill，无需额外登记。 */
+.ob-modal,
+.ob-modal .modal-body,
+.ob-modal .modal-body * {
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
 .modal-head {
   padding: 16px 20px;
   font-weight: 600;

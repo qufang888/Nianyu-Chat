@@ -881,7 +881,8 @@ export function registerBallIPC(): void {
       // 球窗全程不动 —— 换向期间球纹丝不动，这正是双窗架构的意义。
       if (panelVisible && !flipping && panelWindow && !panelWindow.isDestroyed()) {
         try {
-          const waNow = screen.getPrimaryDisplay().workArea;
+          // v2.3.121：复用 drag-start 时捕获的 workArea，不再每 tick（16ms）查一次显示器
+          const waNow = primary;
           const px = ballX + panelOffsetX(panelDir);
           const py = ballY + panelOffsetY(panelVDir);
           const out =
