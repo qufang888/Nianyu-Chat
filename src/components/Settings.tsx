@@ -61,8 +61,6 @@ import { FontSettings } from './FontSettings';
 import { GuideView } from './GuideView';
 import { SelfRoleSettings } from './SelfRoleSettings';
 import { useToast, ToastView } from './Toast';
-// v2.3.97：包裹 `<input type="file">` 的自绘引导弹窗（导入毛玻璃背景图）
-import ImagePickGuide from './ImagePickGuide';
 import SelectMenu from './SelectMenu';
 import ComboBox from './ComboBox';
 import SearchSuggest from './SearchSuggest';
@@ -87,7 +85,6 @@ import cursorPngUrl from '../assets/cursor/cursor.png';
 
 export const THEMES: { key: ThemeName; nameKey: string; swatch: string }[] = [
   { key: 'wechat', nameKey: 'theme.wechat', swatch: 'linear-gradient(135deg,#07c160,#2e2e2e)' },
-  { key: 'glass', nameKey: 'theme.glass', swatch: 'linear-gradient(135deg,#6a3aa8,#a1429c)' },
   { key: 'dark', nameKey: 'theme.dark', swatch: 'linear-gradient(135deg,#0d0d0d,#4a9eff)' },
   { key: 'vibrant', nameKey: 'theme.vibrant', swatch: 'linear-gradient(135deg,#ff8fb1,#ffb86c)' },
   { key: 'azure', nameKey: 'theme.azure', swatch: 'linear-gradient(135deg,#3688d8,#42b4e8)' },
@@ -100,9 +97,10 @@ export const THEMES: { key: ThemeName; nameKey: string; swatch: string }[] = [
   { key: 'graphite', nameKey: 'theme.graphite', swatch: 'linear-gradient(135deg,#7a869a,#a0abc0)' },
   { key: 'indigo', nameKey: 'theme.indigo', swatch: 'linear-gradient(135deg,#255b9c,#3d78c2)' },
   { key: 'sand', nameKey: 'theme.sand', swatch: 'linear-gradient(135deg,#a16f49,#c89468)' },
-  // v2.3.108：琉璃幻境（aura / Liquid Aura，第 15 套主题）—— Apple Liquid Glass 视觉语言，
-  // 玻璃家族（glass/frost/aura）成员：通透玻璃材质、边缘镜面高光、深海靛极光渐变。
-  // 前代「液态玻璃（liquid）」主题已在 v2.3.107 整体删除，本主题是同设计语言的全新实现。
+  // v2.3.108：琉璃幻境（aura / Liquid Aura，第 14 套主题）—— Apple Liquid Glass 视觉语言，
+  // 玻璃家族（frost/aura）成员：通透玻璃材质、边缘镜面高光、深海靛极光渐变。
+  // 前代「液态玻璃（liquid）」主题已在 v2.3.107 整体删除；「毛玻璃（glass）」主题已在
+  // v2.3.122 整体删除——其磨砂观感改为每主题开关（sec-glisseffect，所有主题可用）。
   { key: 'aura', nameKey: 'theme.aura', swatch: 'linear-gradient(135deg,#062e38,#1c2a68 55%,#45e0c8)' },
 ];
 
@@ -143,7 +141,8 @@ const ADVANCED_ANCHORS: Record<string, string> = {
   'sec-anim-control': 'adv-appearance',
   'sec-inputappearance': 'adv-appearance',
   'sec-cursor': 'adv-appearance',
-  'sec-glassbg': 'adv-appearance',
+  // v2.3.122：'sec-glassbg'（原毛玻璃主题专属面板）随主题删除；磨砂效果改为
+  // sec-glisseffect 开关，位于外观与动效分类的**直接可见区**（非折叠区），无需登记。
   // 扩展与工具
   'sec-translation': 'adv-extensions',
   // v2.3.107 需求 7：'sec-sound' 已移出折叠区、恢复为直接可见，故不再登记（否则 goToSetting
@@ -253,20 +252,13 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-proactive-engine', key: 'settings.proactiveEngine', kw: ['主动消息', '机制', '引擎', '触发方式', 'proactive', 'engine', '机制选择'] },
   { id: 'sec-inputappearance', key: 'settings.inputAppearance', kw: ['输入框', 'input', '输入栏', '外观'] },
   { id: 'sec-cursor', key: 'settings.cursor', kw: ['光标', 'cursor', '鼠标指针', '自定义光标'] },
-  // v2.3.97 移除 `sec-glassbg`（毛玻璃背景）的静态条目。
-  // 根因：该区块**只在玻璃家族（glass / frost / aura）主题下渲染**（见下方守卫），
-  // 但旧静态表无条件收录它 —— 于是在其余主题下搜「毛玻璃」能搜到，点下去
-  // document.getElementById 返回 null，表现为「搜到了但点了没反应」，且无任何提示（静默失败）。
-  // 现在改为**完全交给动态索引规则⑤（.section-title[id]）**：条件为真时它自然出现在候选里，
-  // 条件为假时索引里根本没有这条，不会再产生死条目。
-  // v2.3.105：玻璃家族专属细化控件（带稳定 id，条件渲染仅 glass/frost/aura 主题出现）。
-  // 静态登记 + 关键词，确保「色调 / 不透明度 / 模糊度」可被中英文搜到；非对应主题下 DOM 不存在，
-  // 由 buildDynamicIndex 的 staticAlive 过滤自动剔除，不会产生死条目。
-  { id: 'sec-glass-tint', key: 'settings.glassTint', kw: ['色调', '色相', '染色', '玻璃色调', '毛玻璃色调', '琉璃幻境色调', 'tint', 'hue', 'glass tint'] },
-  { id: 'sec-glass-opacity', key: 'settings.glassOpacity', kw: ['不透明度', '透明度', '玻璃透明度', '面板透明度', 'opacity', 'glass opacity'] },
-  { id: 'sec-glass-blur', key: 'settings.glassBlur', kw: ['模糊', '模糊度', '磨砂', '毛玻璃模糊', '琉璃幻境模糊', 'blur', 'frost blur', 'aura blur', '磨砂模糊度'] },
+  // v2.3.122：原「毛玻璃（glass）」主题删除，其色调/不透明度/模糊度三条静态索引条目
+  // （sec-glass-tint / sec-glass-opacity / sec-glass-blur）与对应设置项**同步删除**，
+  // 杜绝「设置删了但搜索还能搜到、点了没反应」的orphan 条目。磨砂效果改为
+  // sec-glisseffect 开关（所有主题可用，直接可见区，由动态索引规则⑤自然收录）。
+  { id: 'sec-glisseffect', key: 'settings.glassEffect', kw: ['毛玻璃', '磨砂', '玻璃效果', '磨砂效果', '半透明', '模糊', '玻璃', 'frosted', 'frosted glass', 'glass effect', 'blur', 'translucent'] },
   // v2.3.109 需求 2c：琉璃幻境主题色（仅 aura 主题渲染；非 aura 下 DOM 不存在，
-  // 由 buildDynamicIndex 的 staticAlive 过滤自动剔除，不会产生死条目 —— 同上三条的范式）。
+  // 由 buildDynamicIndex 的 staticAlive 过滤自动剔除，不会产生死条目）。
   { id: 'sec-aura-accent', key: 'settings.auraAccent', kw: ['主题色', '琉璃幻境主题色', '主题颜色', '强调色', '任意颜色', 'accent', 'aura accent', 'aura 主题色', 'aura color'] },
   { id: 'sec-debug', key: 'settings.debugMode', kw: ['调试', '测试', 'debug', '快照', '错误报告', '手动触发', '触发'] },
   { id: 'sec-sceneimage', key: 'settings.sceneImage', kw: ['场景图', 'scene', '配图'] },
@@ -310,19 +302,6 @@ const SOUND_ROWS: { type: SoundType; labelKey: string }[] = [
   { type: 'miniPopup', labelKey: 'settings.soundMiniPopup' },
   { type: 'messageSend', labelKey: 'settings.soundMessageSend' },
 ];
-
-/** v2.3.111 需求 1：玻璃色调预设色板（契合毛玻璃深蓝紫底 / aura 深海靛底的通透感）。
- *  色值为硬编码，已登记《硬编码清单》v2.3.111 章节。 */
-const GLASS_TINT_PRESETS: { color: string; labelKey: string }[] = [
-  { color: '#ffffff', labelKey: 'settings.glassTintPresetCloud' },   // 云雾白
-  { color: '#ffd9c7', labelKey: 'settings.glassTintPresetCoral' },   // 暖珊瑚
-  { color: '#c9f2e4', labelKey: 'settings.glassTintPresetMint' },    // 薄荷绿
-  { color: '#d9ccff', labelKey: 'settings.glassTintPresetLavender' }, // 薰衣草紫
-  { color: '#ffc9dd', labelKey: 'settings.glassTintPresetPeach' },   // 蜜桃粉
-  { color: '#c7e8ff', labelKey: 'settings.glassTintPresetSky' },     // 天青
-];
-/** 玻璃色调出厂默认值（重置回填它；与 ThemeContext 的缺省口径一致） */
-const GLASS_TINT_DEFAULT = '#ffffff';
 
 // 光标热点预览（拖动红点设置）
 // hotspot 值是相对图像左上角的像素偏移，存储在「基础尺寸 28」坐标系下，
@@ -474,13 +453,6 @@ export const Settings: React.FC<{
       panel.removeEventListener('touchmove', clearSuppress);
     };
   }, []);
-  // v2.3.97：包裹 `<input type="file">` 的自绘引导弹窗（导入毛玻璃背景图）
-  const [glassBgGuideOpen, setGlassBgGuideOpen] = useState(false);
-  const glassBgInputRef = useRef<HTMLInputElement | null>(null);
-  // 导入图片作为毛玻璃背景（读取为 data URL 存入设置）
-  // v2.3.97：改为先弹自绘引导弹窗，用户在弹窗里点「点击选择文件」才唤起系统文件框，
-  // 系统框只在最后一步闪现（原先一点按钮就直接弹白底黑字的系统框，与深色主题割裂）。
-  const triggerGlassBgInput = () => glassBgInputRef.current?.click();
   const [draft, setDraft] = useState<AppSettings | null>(settings);
   const [detectingAll, setDetectingAll] = useState(false);
   const [status, setStatus] = useState('');
@@ -936,7 +908,7 @@ export const Settings: React.FC<{
       return t;
     };
     const add = (el: HTMLElement, prefix: string, explicitName?: string) => {
-      // v2.3.105：已被静态索引登记的元素（如 sec-glass-tint / sec-glass-opacity / sec-glass-blur）
+      // 已被静态索引登记的元素（如 sec-aura-accent / sec-glisseffect）
       // 保留其稳定 id 与中文关键词，动态索引不再重复登记、也不覆盖其 id（否则跳转会落到错误控件）。
       if (el.id && STATIC_ID_SET.has(el.id)) return;
       const label = explicitName ?? nameOf(el);
@@ -997,13 +969,12 @@ export const Settings: React.FC<{
         add(el, 'set-sel', nameOfSelect(el));
       });
       // 6) 所有带 id 的分区标题（缺口 B 的根治点）
-      // 静态表只收「无条件渲染」的锚点；凡是**条件渲染**的分区（毛玻璃背景仅 glass/frost、
+      // 静态表只收「无条件渲染」的锚点；凡是**条件渲染**的分区（琉璃幻境主题色仅 aura、
       // 动效分组仅「自定义」档、错误日志明细仅非空……），一律交给本规则 ——
       // 条件为真时它自然进索引，条件为假时索引里根本没有这条。
       // 这样「静态表收录了但 DOM 不存在 → 搜得到点了没反应」这类死条目从结构上不再可能产生。
       root.querySelectorAll<HTMLElement>('.section-title[id]').forEach((el) => {
         // v2.3.112 F1：走 cleanText —— 否则标题内嵌的 Hint「!」会污染候选名
-        // （如「毛玻璃背景!」；sec-glassbg 无静态条目，动态候选名就直接是它）。
         const label = cleanText(el);
         const norm = label.toLowerCase();
         if (!label || seen.has(norm)) return;
@@ -2157,6 +2128,21 @@ export const Settings: React.FC<{
           ))}
         </div>
 
+        {/* ===== v2.3.122：毛玻璃效果开关（原「毛玻璃」主题的磨砂观感，现为每主题开关）=====
+            打开后：当前主题配色不变，仅给面板/承载面叠加半透明 + 背景模糊（frosted glass），
+            并适配各主题自身样式；普通↔毛玻璃、磨砂态下切换主题均有丝滑过渡。
+            开关与主题相互独立：切换主题不会重置它。全局生效（主窗 / 小窗 / 悬浮球）。 */}
+        <div id="sec-glisseffect" className="section-title">{t('settings.glassEffect')}<Hint text={t('settings.glassEffectDesc')} /></div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', maxWidth: 480 }}>
+          <input
+            type="checkbox"
+            checked={draft.glassEffect === true}
+            onChange={(e) => patch({ glassEffect: e.target.checked })}
+            style={{ width: 15, height: 15, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
+          />
+          <span style={{ fontSize: 13 }}>{t('settings.glassEffectToggle')}</span>
+        </label>
+
         {/* ===== UI 圆角 ===== */}
         <div id="sec-radius" className="section-title">{t('settings.radius')}<Hint text={t('settings.radiusDesc')} /></div>
         <div style={{ maxWidth: 420 }}>
@@ -2695,220 +2681,49 @@ export const Settings: React.FC<{
           )}
         </div>
 
-        {/* ===== 玻璃家族主题背景（仅 glass/frost/aura 主题生效，未开启时隐藏） =====
-            v2.3.97：glass / frost 同属「半透明 + 磨砂」家族，需要「自定义背景色/图」
-            与聊天区文字色覆盖，故开放该面板。
-            v2.3.108：aura（琉璃幻境 / Liquid Aura）加入玻璃家族，共用本面板
-            （色调 / 不透明度 / 模糊度 / 自定义背景 / Token 与气泡配色 / 自动对比度）。 */}
-        {(theme === 'glass' || theme === 'frost' || theme === 'aura') && (
+        {/* ===== v2.3.122：琉璃幻境（aura）专属 =====
+            原「玻璃家族」面板（毛玻璃自定义背景 / 色调 / 不透明度 / 模糊度 / Token 与气泡配色）
+            已随「毛玻璃（glass）」主题删除整体移除——磨砂效果改为全主题开关
+            sec-glisseffect（外观区直接可见，见上方）。此处仅保留 aura 专属的
+            「主题色」与「自动对比度调节」。 */}
+        {theme === 'aura' && (
           <>
-            <div id="sec-glassbg" className="section-title" style={{ marginTop: 16 }}>{t('settings.glassBg')}<Hint text={t('settings.glassBgDesc')} /></div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
-              {/* v2.3.105：毛玻璃 / 琉璃幻境专属细化 —— 色调 / 不透明度 / 模糊度。
-                  三项均带稳定 id（sec-glass-tint / sec-glass-opacity / sec-glass-blur），
-                  由设置搜索静态索引登记（含中英文关键词），见下方 SETTING_SEARCH_INDEX。
-                  v2.3.110 需求 4：frost（冰川素白）退出半透明细化（其面板恢复自带不透明白，
-                  深色自定义背景下深字才可读），色调/不透明度滑块对 frost 不再生效 →
-                  本组仅 glass/aura 渲染（搜索索引按 DOM 存在性过滤，frost 下不出现死条目）。 */}
-              {theme !== 'frost' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 12, borderBottom: '1px solid var(--color-border)' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                  <span style={{ fontSize: 13 }}>{t('settings.glassTint')}</span>
-                  <input
-                    id="sec-glass-tint"
-                    type="color"
-                    value={draft.glassTint || GLASS_TINT_DEFAULT}
-                    onChange={(e) => patch({ glassTint: e.target.value })}
-                    style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
-                  />
-                  <Hint text={t('settings.glassTintDesc')} />
-                  {/* v2.3.111 需求 1：一键重置回出厂默认色（已是默认色时禁用，无需确认） */}
-                  <button
-                    type="button"
-                    className="btn-ghost"
-                    onClick={() => patch({ glassTint: GLASS_TINT_DEFAULT })}
-                    disabled={(draft.glassTint || GLASS_TINT_DEFAULT).toLowerCase() === GLASS_TINT_DEFAULT}
-                  >
-                    {t('settings.glassTintReset')}
-                  </button>
-                </label>
-                {/* v2.3.111 需求 1：预设色板（一行小色块，点击即写入 draft.glassTint）。
-                    作为 sec-glass-tint 区块内控件呈现，不新增静态搜索条目——
-                    条件渲染区块由设置搜索动态索引按 DOM 存在性收录。 */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-                    {t('settings.glassTintPresets')}
-                  </span>
-                  {GLASS_TINT_PRESETS.map((p) => {
-                    const active = (draft.glassTint || '').toLowerCase() === p.color;
-                    return (
-                      <button
-                        key={p.color}
-                        type="button"
-                        className="btn-ghost"
-                        title={t(p.labelKey)}
-                        aria-label={t(p.labelKey)}
-                        aria-pressed={active}
-                        onClick={() => patch({ glassTint: p.color })}
-                        style={{
-                          width: 26,
-                          height: 26,
-                          padding: 0,
-                          borderRadius: 8,
-                          background: p.color,
-                          border: `2px solid ${active ? 'var(--color-primary)' : 'var(--color-border)'}`,
-                          cursor: 'pointer',
-                        }}
-                      />
-                    );
-                  })}
-                </div>
-                <div>
-                  <div style={{ fontSize: 13, marginBottom: 4 }}>{t('settings.glassOpacity')}：{draft.glassOpacity ?? 20}%</div>
-                  <input
-                    id="sec-glass-opacity"
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={draft.glassOpacity ?? 20}
-                    onChange={(e) => patch({ glassOpacity: Number(e.target.value) })}
-                    style={{ width: '100%', accentColor: 'var(--color-primary)' }}
-                  />
-                </div>
-                <div>
-                  <div style={{ fontSize: 13, marginBottom: 4 }}>{t('settings.glassBlur')}：{draft.glassBlur ?? 30}px</div>
-                  <input
-                    id="sec-glass-blur"
-                    type="range"
-                    min={4}
-                    max={60}
-                    step={1}
-                    value={draft.glassBlur ?? 30}
-                    onChange={(e) => patch({ glassBlur: Number(e.target.value) })}
-                    style={{ width: '100%', accentColor: 'var(--color-primary)' }}
-                  />
-                </div>
-                {/* v2.3.109 需求 2c：琉璃幻境主题色（仅 aura 主题渲染）。
-                    写入 draft.auraAccent（空 = 跟随主题默认 #45e0c8）；ThemeContext 据此
-                    派生 --aura-accent / --color-primary / --color-primary-text。 */}
-                {theme === 'aura' && (
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                    <span style={{ fontSize: 13 }}>{t('settings.auraAccent')}</span>
-                    <input
-                      id="sec-aura-accent"
-                      type="color"
-                      value={draft.auraAccent || '#45e0c8'}
-                      onChange={(e) => patch({ auraAccent: e.target.value })}
-                      style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
-                    />
-                    <Hint text={t('settings.auraAccentDesc')} />
-                    <button
-                      type="button"
-                      className="btn-ghost"
-                      onClick={() => patch({ auraAccent: '' })}
-                    >
-                      {t('settings.glassColorReset')}
-                    </button>
-                  </label>
-                )}
-              </div>
-              )}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 13 }}>{t('settings.glassBgColor')}</span>
-                  <input
-                    type="color"
-                    value={draft.glassBgColor || '#6a3aa8'}
-                    onChange={(e) => patch({ glassBgColor: e.target.value, glassBgImage: '' })}
-                    style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
-                  />
-                </label>
-                {/* v2.3.97：改为打开自绘引导弹窗，由弹窗里的按钮触发隐藏 input */}
-                <button type="button" className="btn-ghost" onClick={() => setGlassBgGuideOpen(true)}>{t('settings.glassBgImport')}</button>
-                <button type="button" className="btn-ghost" onClick={() => patch({ glassBgColor: '', glassBgImage: '' })}>{t('settings.glassBgReset')}</button>
-              </div>
-              {/* v2.3.97：隐藏的真实 file input（由 ImagePickGuide 触发 .click()）*/}
-              <input
-                ref={glassBgInputRef}
-                type="file"
-                accept="image/*"
-                style={{ display: 'none' }}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  e.target.value = '';
-                  if (!f) return;
-                  const reader = new FileReader();
-                  reader.onload = () => patch({ glassBgImage: String(reader.result), glassBgColor: '' });
-                  reader.readAsDataURL(f);
-                }}
-              />
-              {/* 预览：实时反映当前毛玻璃背景（颜色或图片） */}
-              <div
-                style={{
-                  marginTop: 4,
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  border: '1px solid var(--color-border)',
-                  background: draft.glassBgImage
-                    ? `center/cover no-repeat url("${draft.glassBgImage}")`
-                    : draft.glassBgColor || 'linear-gradient(135deg,#1e2a78,#6a3aa8,#a1429c)',
-                  fontSize: 13,
-                  lineHeight: 1.6,
-                  minHeight: 48,
-                }}
-              >
-                {t('settings.glassBgPreview')}
-              </div>
-              {/* 聊天界面颜色覆盖（仅玻璃/frost 生效）：防止自定义背景后字体/边框与背景融合看不清 */}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 12 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 13 }}>{t('settings.glassTokenText')}</span>
-                  <input type="color" value={draft.glassTokenText || '#ffffff'} onChange={(e) => patch({ glassTokenText: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 13 }}>{t('settings.glassTokenBorder')}</span>
-                  <input type="color" value={draft.glassTokenBorder || '#ffffff'} onChange={(e) => patch({ glassTokenBorder: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 13 }}>{t('settings.glassBubbleUserText')}</span>
-                  <input type="color" value={draft.glassBubbleUserText || '#ffffff'} onChange={(e) => patch({ glassBubbleUserText: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 13 }}>{t('settings.glassBubbleAiText')}</span>
-                  <input type="color" value={draft.glassBubbleAiText || '#ffffff'} onChange={(e) => patch({ glassBubbleAiText: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 13 }}>{t('settings.glassBubbleBorder')}</span>
-                  <input type="color" value={draft.glassBubbleBorder || '#ffffff'} onChange={(e) => patch({ glassBubbleBorder: e.target.value })} style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }} />
-                </label>
-              </div>
-              <div style={{ marginTop: 6 }}>
+            <div id="sec-aura-accent-wrap" style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <span style={{ fontSize: 13 }}>{t('settings.auraAccent')}</span>
+                <input
+                  id="sec-aura-accent"
+                  type="color"
+                  value={draft.auraAccent || '#45e0c8'}
+                  onChange={(e) => patch({ auraAccent: e.target.value })}
+                  style={{ width: 42, height: 28, border: 'none', background: 'transparent', cursor: 'pointer' }}
+                />
+                <Hint text={t('settings.auraAccentDesc')} />
                 <button
                   type="button"
                   className="btn-ghost"
-                  onClick={() => patch({ glassTokenText: '', glassTokenBorder: '', glassBubbleUserText: '', glassBubbleAiText: '', glassBubbleBorder: '' })}
-                >{t('settings.glassColorReset')}</button>
-              </div>
-              {/* v2.3.104：「自动对比度调节」开关（glass / aura 主题生效，v2.3.108 扩展到 aura）。
-                  可读性兜底功能（非动画）：看门狗（src/utils/autoContrast.ts）在玻璃主题的
-                  玻璃承载面上检测文字对比度 < 4.5:1 时，自动加深背景（boost）或
-                  翻转为浅底深字（flip）。与「高级动画控制」三档正交——anim-off 不影响它，
-                  故需要独立开关。缺省视为开启（settings.autoContrast !== false）。 */}
-              {(theme === 'glass' || theme === 'aura') && (
-                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={draft.autoContrast !== false}
-                      onChange={(e) => patch({ autoContrast: e.target.checked })}
-                      style={{ width: 15, height: 15, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
-                    />
-                    <span style={{ fontSize: 13 }}>{t('settings.autoContrast')}</span>
-                    <Hint text={t('settings.autoContrastTip')} />
-                  </label>
-                </div>
-              )}
+                  onClick={() => patch({ auraAccent: '' })}
+                >
+                  {t('settings.resetColor')}
+                </button>
+              </label>
+            </div>
+            {/* v2.3.104：「自动对比度调节」开关（aura 主题生效）。
+                可读性兜底功能（非动画）：看门狗（src/utils/autoContrast.ts）在 aura 的
+                半透明/渐变承载面上检测文字对比度 < 4.5:1 时，自动加深背景（boost）或
+                翻转为浅底深字（flip）。与「高级动画控制」三档正交——anim-off 不影响它，
+                故需要独立开关。缺省视为开启（settings.autoContrast !== false）。 */}
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={draft.autoContrast !== false}
+                  onChange={(e) => patch({ autoContrast: e.target.checked })}
+                  style={{ width: 15, height: 15, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
+                />
+                <span style={{ fontSize: 13 }}>{t('settings.autoContrast')}</span>
+                <Hint text={t('settings.autoContrastTip')} />
+              </label>
             </div>
           </>
         )}
@@ -5886,7 +5701,7 @@ export const Settings: React.FC<{
           但代价是：**14 套主题里13 套浅色主题下这是一个黑底白字的反向刺眼块**，
           与用户「所有弹窗不得调用系统样式，全部适配软件主题和风格」的要求冲突。
           现全部改走 --color-panel / --color-text / --color-border 等主题变量：
-            · 面板用 .modal（玻璃主题由既有 [data-theme='glass'] .modal 加深规则接管）；
+            · 面板用 .modal（毛玻璃效果下由既有 [data-glass='on'] .modal 加深规则接管）；
             · 面板/文字对比度由主题保证（正文 ≥ 4.5:1，WCAG AA）；
             · 按钮改用 .btn-danger（清空日志）/ .btn-ghost（关闭），随主题变色；
             · 分类标签底色改用语义令牌，不再是写死的 #d98a00 / #c0392b / #5a6b7b。 */}
@@ -5946,12 +5761,6 @@ export const Settings: React.FC<{
       )}
 
       <ToastView toast={toast} />
-      {/* v2.3.97：导入毛玻璃背景图的自绘引导弹窗（包裹隐藏的 file input）*/}
-      <ImagePickGuide
-        open={glassBgGuideOpen}
-        onTriggerInput={triggerGlassBgInput}
-        onClose={() => setGlassBgGuideOpen(false)}
-      />
       </div>
     </div>
   );

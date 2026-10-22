@@ -69,11 +69,18 @@ check('D1 db.ts 对 theme===\'liquid\' 有迁移为 aura 的兜底',
 check('D2 db.ts reloadAll 同样兜底备份残留的 liquid',
   /reloadAll[\s\S]{0,400}?theme\s*===\s*'liquid'/.test(db));
 
-console.log('\n=== E. 玻璃家族 = glass/frost/aura，liquid 已彻底退出 ===');
-check('E1 ThemeContext isGlass 含 aura（v2.3.108 玻璃家族新成员）',
-  /const isGlass\s*=\s*theme\s*===\s*'glass'\s*\|\|\s*theme\s*===\s*'frost'\s*\|\|\s*theme\s*===\s*'aura'/.test(themeCtx));
-check('E2 ThemeContext isGlass 不再含 liquid（死灰复燃护栏）',
-  !/const isGlass\s*=[^\n]*'liquid'/.test(themeCtx));
+console.log('\n=== E. 毛玻璃主题已删除，磨砂观感改为每主题开关 ===');
+check('E1 ThemeContext 玻璃开关机制就位（data-glass 由 settings.glassEffect 驱动）',
+  /if \(settings\.glassEffect\) root\.setAttribute\('data-glass', 'on'\);[\s\S]{0,80}?else root\.removeAttribute\('data-glass'\);/.test(themeCtx));
+check('E2 ThemeContext 不再有 glass 主题专属逻辑（isGlass/glassTintScope 已删）',
+  !/isGlass|glassTintScope|glassTint|glassBg/.test(themeCtx));
+check('E3 ThemeContext 不再引用已删除的 glass 主题', !/theme === 'glass'/.test(themeCtx));
+check('E4 variables.css 提供 [data-glass=\'on\'] 开关规则块（模糊令牌）',
+  /\[data-glass=['"]on['"]\]\s*\{[\s\S]*?--blur/.test(vars));
+check('E5 index.css 有 [data-glass=\'on\'] 半透明承载面规则（color-mix 派生）',
+  /\[data-glass='on'\] \.sidebar \{ background: color-mix/.test(css));
+check('E6 db.ts 老数据 theme===\'glass\' 迁移为 galaxy 且开 glassEffect',
+  /theme as string\) === 'glass'\)\s*\{\s*this\.saveSettings\(\{ theme: 'galaxy', glassEffect: true \}\)/.test(db));
 console.log('\n=== F. aura 主题令牌就位 ===');
 check('F1 variables.css 存在 [data-theme=\'aura\'] 规则块', /\[data-theme=['"]aura['"]\]\s*\{/.test(vars));
 check('F2 aura 块含 auto-contrast 看门狗契约令牌',

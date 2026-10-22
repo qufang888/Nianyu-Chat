@@ -163,6 +163,27 @@ input[type='range']::-moz-range-thumb {
   /* v2.3.101：换主题时根底色/文字/边框平滑渐变，不再生硬跳变 */
   transition: background var(--transition), color var(--transition), border-color var(--transition);
 }
+/* ===== v2.3.122：毛玻璃效果开关——半透明承载面（当前主题配色不变）=====
+   开关打开（html[data-glass='on']）时，下列承载面背景由各主题自身令牌经 color-mix
+   派生半透明值，使 backdrop-filter 的模糊「有内容可糊」——即毛玻璃观感。
+   · 不覆写 --color-panel 等自定义属性（自引用会成环失效），只在消费端覆写 background；
+   · 各面大多已带 transition: background，开关切换 / 磨砂态下切主题即丝滑渐变；
+   · color-mix 只降 alpha 不改色相，故「配色不变」，且适配每一套主题；
+   · 半透明后浮层对比度由下方 [data-glass='on'] 加深规则段兜底。 */
+[data-glass='on'] .sidebar { background: color-mix(in srgb, var(--color-nav-bg) 72%, transparent); }
+[data-glass='on'] .list-pane,
+[data-glass='on'] .chat-header,
+[data-glass='on'] .composer { background: color-mix(in srgb, var(--color-panel) 78%, transparent); }
+[data-glass='on'] .main-pane { background: color-mix(in srgb, var(--color-chat-bg) 72%, transparent); }
+/* 根容器：实色主题走通用规则；渐变背景主题（vibrant / aura）的 --app-bg 是渐变，
+   color-mix 遇渐变为非法值，故按主题显式给半透明渐变。 */
+[data-glass='on'] .app-root { background: color-mix(in srgb, var(--app-bg) 86%, transparent); }
+[data-glass='on'][data-theme='vibrant'] .app-root {
+  background: linear-gradient(135deg, rgba(255, 209, 232, 0.86), rgba(214, 228, 255, 0.86));
+}
+[data-glass='on'][data-theme='aura'] .app-root {
+  background: linear-gradient(150deg, rgba(0, 45, 66, 0.88), rgba(9, 49, 94, 0.88) 38%, rgba(38, 42, 111, 0.88) 68%, rgba(55, 28, 105, 0.88));
+}
 .app-shell {
   display: flex;
   flex: 1;
@@ -625,9 +646,9 @@ input[type='range']::-moz-range-thumb {
 }
 .token-bar {
   font-size: calc(12px * var(--font-scale));
-  color: var(--glass-token-fg, var(--color-primary));
+  color: var(--color-primary);
   padding: 2px 10px;
-  border: 1px solid var(--glass-token-border, var(--color-primary));
+  border: 1px solid var(--color-primary);
   border-radius: 20px;
 }
 
@@ -695,12 +716,12 @@ input[type='range']::-moz-range-thumb {
 }
 .msg-row.user .bubble {
   background: var(--color-bubble-user);
-  color: var(--glass-bubble-user-fg, var(--color-bubble-user-text));
+  color: var(--color-bubble-user-text);
   border-bottom-right-radius: 2px;
 }
 .msg-row.ai .bubble {
   background: var(--color-bubble-ai);
-  color: var(--glass-bubble-ai-fg, var(--color-bubble-ai-text));
+  color: var(--color-bubble-ai-text);
   border-bottom-left-radius: 2px;
 }
 .bubble .sender {
@@ -708,11 +729,11 @@ input[type='range']::-moz-range-thumb {
   color: var(--color-text-secondary);
   margin-bottom: 4px;
 }
-/* 毛玻璃/frost/琉璃幻境：气泡边框色覆盖（默认透明，不影响非玻璃主题布局） */
-[data-theme='glass'] .bubble,
+/* 冰川素白 / 琉璃幻境 / 毛玻璃效果开启时：气泡 1px 描边（默认透明，不影响其他主题布局） */
+[data-glass='on'] .bubble,
 [data-theme='frost'] .bubble,
 [data-theme='aura'] .bubble {
-  border: 1px solid var(--glass-bubble-border, transparent);
+  border: 1px solid var(--color-border);
 }
 /* 旁白分隔：（）与 “” 内文字斜体+灰字，定界符不显示 */
 .narration {
@@ -1125,10 +1146,10 @@ input[type='range']::-moz-range-thumb {
   gap: 6px;
   font-size: calc(11.5px * var(--font-scale));
 }
-/* v2.3.81 毛玻璃（glass）主题可访问性兜底：glass 的 --color-panel 仅 22% 白，叠加在深紫渐变背景上
-   仍偏透，直接做 color-mix 会把 --color-text(#f4f4ff) 的对比度压到 AA 以下。此处按项目既有
-   「glass deepening」思路，为该主题单独把底色提纯为不透明，保证深底浅字始终达标。 */
-[data-theme='glass'] .scene-image-bar {
+/* v2.3.81 可访问性兜底（v2.3.122 起随毛玻璃效果开关生效）：半透明磨砂下该条若直接做
+   color-mix 会把文字对比度压到 AA 以下。此处沿用「deepening」思路，把底色提纯为不透明，
+   保证深底浅字始终达标。 */
+[data-glass='on'] .scene-image-bar {
   background: color-mix(in srgb, var(--color-primary, #7c83ff) 8%, #3b3070);
   border-color: color-mix(in srgb, var(--color-primary, #7c83ff) 42%, transparent);
 }
@@ -1697,7 +1718,7 @@ input[type='range']::-moz-range-thumb {
 }
 /* 使用指南弹窗（GuideView）：在通用 .modal 之上覆盖尺寸 —— 它是**定高**的长文档面板，
    且沿用原来的毛玻璃观感。底色仍走 --color-panel（玻璃主题下由上方的
-   [data-theme='glass'] .modal 加深规则接管，14 套主题均可读）。 */
+   [data-glass='on'] .modal 加深规则接管，14 套主题均可读）。 */
 .modal-guide {
   width: min(760px, 92vw);
   height: min(82vh, 760px);
@@ -4942,47 +4963,47 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 /* ===== 毛玻璃主题下浮层面板统一加深：防止下方内容穿透导致文字重叠 ===== */
 /* 这些面板/抽屉/下拉在默认主题下可用半透明白底，但在 glass 主题中 --color-panel 太透，
    直接换成深色高不透明度底，保证菜单文字、思考过程、错误提示等清晰可读。 */
-[data-theme='glass'] .more-dropdown,
-[data-theme='glass'] .mention-pop,
-[data-theme='glass'] .mini-drawer,
-[data-theme='glass'] .modal-card,
-[data-theme='glass'] .modal,
-[data-theme='glass'] .error-bubble,
-[data-theme='glass'] .reasoning-block,
-[data-theme='glass'] .qps-queue,
-[data-theme='glass'] .mini-toast,
-[data-theme='glass'] .hint-tip,
-[data-theme='glass'] .chat-model-picker,
-[data-theme='glass'] .update-banner,
-[data-theme='glass'] .queue-dock-handle,
-[data-theme='glass'] .queue-dock-panel,
-[data-theme='glass'] .api-params-panel,
-[data-theme='glass'] .chat-model-picker-results {
+[data-glass='on'] .more-dropdown,
+[data-glass='on'] .mention-pop,
+[data-glass='on'] .mini-drawer,
+[data-glass='on'] .modal-card,
+[data-glass='on'] .modal,
+[data-glass='on'] .error-bubble,
+[data-glass='on'] .reasoning-block,
+[data-glass='on'] .qps-queue,
+[data-glass='on'] .mini-toast,
+[data-glass='on'] .hint-tip,
+[data-glass='on'] .chat-model-picker,
+[data-glass='on'] .update-banner,
+[data-glass='on'] .queue-dock-handle,
+[data-glass='on'] .queue-dock-panel,
+[data-glass='on'] .api-params-panel,
+[data-glass='on'] .chat-model-picker-results {
   background: rgba(18, 16, 38, 0.88) !important;
   border-color: rgba(255, 255, 255, 0.18);
 }
 /* 毛玻璃主题：选择器输入框/占位符改用低透明白底 + 亮字，避免亮字叠半透明白底看不清 */
-[data-theme='glass'] .chat-model-picker-input {
+[data-glass='on'] .chat-model-picker-input {
   background: rgba(255, 255, 255, 0.10) !important;
   border-color: rgba(255, 255, 255, 0.22);
   color: #f4f4ff;
 }
-[data-theme='glass'] .chat-model-picker-input::placeholder {
+[data-glass='on'] .chat-model-picker-input::placeholder {
   color: rgba(255, 255, 255, 0.55);
 }
-[data-theme='glass'] .chat-model-picker-empty {
+[data-glass='on'] .chat-model-picker-empty {
   color: rgba(255, 255, 255, 0.6);
 }
-[data-theme='glass'] .reasoning-block {
+[data-glass='on'] .reasoning-block {
   color: rgba(255, 255, 255, 0.85);
 }
-[data-theme='glass'] .reasoning-body {
+[data-glass='on'] .reasoning-body {
   color: rgba(255, 255, 255, 0.78);
 }
-[data-theme='glass'] .mention-pop .item:hover,
-[data-theme='glass'] .more-dropdown .tool-btn:hover,
-[data-theme='glass'] .mini-drawer-item:hover,
-[data-theme='glass'] .qps-queue .qps-cancel:hover {
+[data-glass='on'] .mention-pop .item:hover,
+[data-glass='on'] .more-dropdown .tool-btn:hover,
+[data-glass='on'] .mini-drawer-item:hover,
+[data-glass='on'] .qps-queue .qps-cancel:hover {
   background: rgba(255, 255, 255, 0.10);
 }
 
@@ -5248,13 +5269,13 @@ body.ny-drop-chat .quick-import-overlay {
   display: none;
 }
 /* 毛玻璃主题：拖放提示浮层同步加深，保证文字可读 */
-[data-theme='glass'] .drop-hint,
-[data-theme='glass'] .quick-import-card {
+[data-glass='on'] .drop-hint,
+[data-glass='on'] .quick-import-card {
   background: rgba(18, 16, 38, 0.88) !important;
   border-color: rgba(255, 255, 255, 0.35);
 }
-[data-theme='glass'] .drop-hint,
-[data-theme='glass'] .quick-import-card {
+[data-glass='on'] .drop-hint,
+[data-glass='on'] .quick-import-card {
   color: #f4f4ff;
 }
 
@@ -5677,7 +5698,7 @@ html[data-anim-off~='panel'] .msg-action-divider {
 
 /* v2.3.65：毛玻璃主题的隔断线——该主题面板是半透明白底且 secondary 为半透明白字（实测仅 1.00:1），
    故单列深色线条，保证隔断在玻璃主题下依然清晰可辨。 */
-[data-theme='glass'] .msg-action-divider {
+[data-glass='on'] .msg-action-divider {
   background: rgba(18, 16, 38, 0.55);
 }
 
@@ -6726,7 +6747,7 @@ html[data-anim-off~='panel'] .msg-action-divider {
       既有定义（含 modal-anim 同事统一加的入场动画与 animControl 门禁），此处只补
       「本组件特有」的类，不碰 `.modal` 本身，避免两处动画定义打架。
    2. **零硬编码色值** —— 全部走 CSS 变量，保证 14 套主题都可读。
-      （唯一例外是 `[data-theme='glass']` 的加深覆写，那里也只用 rgba 白/黑叠加，
+      （唯一例外是 `[data-glass='on']` 的加深覆写，那里也只用 rgba 白/黑叠加，
         与既有 glass deepening 段落同风格。）
    3. **只写按钮态/交互态过渡，不写入场关键帧** —— 入场由 `.modal` 统一负责。
    ============================================================================ */
@@ -7050,13 +7071,13 @@ html[data-anim-off~='panel'] .msg-action-divider {
 
 /* 毛玻璃主题：选择器是半透明大面板，参照既有 glass deepening 段落加深，
    否则下方聊天内容会穿透上来与文件名重叠 */
-[data-theme='glass'] .filepicker-places,
-[data-theme='glass'] .filepicker-namefield input {
+[data-glass='on'] .filepicker-places,
+[data-glass='on'] .filepicker-namefield input {
   background: rgba(255, 255, 255, 0.10) !important;
   border-color: rgba(255, 255, 255, 0.22);
   color: #f4f4ff;
 }
-[data-theme='glass'] .filepicker-namefield input::placeholder {
+[data-glass='on'] .filepicker-namefield input::placeholder {
   color: rgba(255, 255, 255, 0.55);
 }
 
@@ -7093,7 +7114,7 @@ html[data-anim-off~='panel'] .msg-action-divider {
   justify-content: flex-end;
   gap: 10px;
 }
-[data-theme='glass'] .imagepick-dropzone {
+[data-glass='on'] .imagepick-dropzone {
   background: rgba(255, 255, 255, 0.10) !important;
   border-color: rgba(255, 255, 255, 0.22);
 }
@@ -7168,7 +7189,7 @@ html[data-anim-off~='panel'] .msg-action-divider {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
-[data-theme='glass'] .filepicker-mkdir input {
+[data-glass='on'] .filepicker-mkdir input {
   background: rgba(255, 255, 255, 0.10) !important;
   border-color: rgba(255, 255, 255, 0.22);
   color: #f4f4ff;
@@ -7185,10 +7206,10 @@ html[data-anim-off~='panel'] .msg-action-divider {
    （同优先级下本组位置更后，且 flip 需要清掉 4f 的 ambient 图层）。 */
 /* glass 主题同构一份（用户原话：毛玻璃同样要自适应）；glass 基底色多样，
    boost 只叠 scrim 层、不动 background-color，保留各面原有底色。 */
-[data-theme='glass'] [data-auto-contrast='boost'] {
+[data-glass='on'] [data-auto-contrast='boost'] {
   background-image: linear-gradient(var(--auto-contrast-scrim), var(--auto-contrast-scrim)) !important;
 }
-[data-theme='glass'] [data-auto-contrast='flip'] {
+[data-glass='on'] [data-auto-contrast='flip'] {
   background-color: var(--auto-contrast-flip-bg) !important;
   background-image: none !important;
   color: var(--auto-contrast-flip-text) !important;

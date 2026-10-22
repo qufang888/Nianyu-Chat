@@ -372,6 +372,14 @@ class DataManager {
     if ((this.settings.theme as string) === 'liquid') {
       this.saveSettings({ theme: 'aura' });
     }
+    // v2.3.122：毛玻璃（glass）主题已整体删除（THEMES 不再收录、variables.css 的
+    // [data-theme='glass'] 段已删），其磨砂观感改为每主题开关 settings.glassEffect。
+    // 老用户若曾持久化 theme==='glass'，界面会因缺少主题令牌而「花掉」——单向迁移为
+    // 配色最接近的 galaxy，并自动开启 glassEffect，保证老数据不崩且磨砂观感接续。
+    // 幂等：仅当确为 'glass' 时回写，正常用户文件不被无谓改动。
+    if ((this.settings.theme as string) === 'glass') {
+      this.saveSettings({ theme: 'galaxy', glassEffect: true });
+    }
     this.migrate();
   }
 
@@ -384,6 +392,10 @@ class DataManager {
     // 仍可能是 'liquid'，故此处按字符串比较（类型断言），这是有意为之的迁移守卫。
     if ((this.settings.theme as string) === 'liquid') {
       this.saveSettings({ theme: 'aura' });
+    }
+    // v2.3.122：备份里若残留 theme==='glass'，同样迁移为 galaxy 并开启 glassEffect。
+    if ((this.settings.theme as string) === 'glass') {
+      this.saveSettings({ theme: 'galaxy', glassEffect: true });
     }
   }
 

@@ -313,10 +313,12 @@ console.log('\n【断言 8】新组件零硬编码色值（14 套主题可读）
   check('index.css 里有 v2.3.97 自绘弹窗段落', marker >= 0);
   if (marker >= 0) {
     const mine = css.slice(marker);
-    // 抽出 glass 覆写段（`[data-theme='glass']` 开头到下一个 `}` 结束）后单独判定：
-    // 那里允许 rgba 白/黑叠加，与既有 glass deepening 段落（index.css:4587+）同风格。
-    const glassBlocks = mine.match(/\[data-theme='glass'\][\s\S]*?\n\}/g) || [];
-    const withoutGlass = mine.replace(/\[data-theme='glass'\][\s\S]*?\n\}/g, '');
+    // 抽出毛玻璃覆写段（`[data-theme='glass']` 或 `[data-glass='on']` 开头到下一个 `}` 结束）
+    // 后单独判定：那里允许 rgba 白/黑叠加，与既有 glass deepening 段落同风格。
+    // v2.3.122：玻璃主题已删除，覆写段选择器统一为 [data-glass='on']（毛玻璃效果开关）。
+    const glassBlockRe = /\[data-(?:theme='glass'|glass='on')\][\s\S]*?\n\}/g;
+    const glassBlocks = mine.match(glassBlockRe) || [];
+    const withoutGlass = mine.replace(glassBlockRe, '');
     const cssHits = withoutGlass.match(colorRe) || [];
     check(
       `新增 CSS 除 ${glassBlocks.length} 处 glass 覆写外零硬编码色值`,

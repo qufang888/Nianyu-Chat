@@ -84,39 +84,18 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // `html[data-anim-off~="<id>"]` 并由自动生成的 <style> 精确关掉对应分组；
     // 'custom' 档永不挂 `.anim-off`，以保证仍开启的分组动画与「流式豁免」不被误杀。
     applyAnimControl(document, settings, 'main');
-    // 玻璃家族主题背景（仅 glass/frost/aura 主题生效）：自定义背景色或图片，磨砂效果由主题 CSS 的 backdrop-filter 保留
-    // v2.3.108：aura（琉璃幻境）加入玻璃家族；前代 liquid 主题已在 v2.3.107 整体删除。
-    // v2.3.110 需求 4：frost（冰川素白）保留在玻璃家族里（自定义玻璃背景 / Token 配色继续可用），
-    // 但**退出半透明面板细化**（见 glassTintScope）——frost 的面板/聊天区本就是不透明白，
-    // 深色自定义背景图也不再能把文字底压暗，深底深字不可读的根因即此。
-    const isGlass = theme === 'glass' || theme === 'frost' || theme === 'aura';
-    // v2.3.110 需求 4：半透明面板细化（glassTint/glassOpacity/glassBlur → --color-panel /
-    // --color-chat-bg / --color-input-bg / --blur 覆写）收窄到 glass / aura。
-    // frost 是浅色不透明主题（--color-panel #ffffff 等全部实色），不需要也不应该被
-    // 「白 20% 半透明」覆写：覆写后深色自定义背景下面板变成深底、配 #1e293b 深字 → 不可读
-    // （用户截图实测 bug）。frost 的自定义玻璃背景仍由上面的 isGlass 分支照常下发。
-    const glassTintScope = theme === 'glass' || theme === 'aura';
-    const glassBg = settings.glassBgImage
-      ? `url("${settings.glassBgImage}") center/cover no-repeat`
-      : settings.glassBgColor || '';
-    if (isGlass && glassBg) {
-      root.style.setProperty('--app-bg', glassBg);
-      // 用户自定义了背景色/图之后挂标记属性，供 autoContrast 看门狗把采样出的
-      // 自定义背景色垫在最底参与对比度求解（属性名 v2.3.108 起由 data-liquid-custom-bg
-      // 更名为 data-glass-custom-bg，旧名随 liquid 主题一并退役）。
-      // 该属性同时是 index.css「aura 背景流动」的停流开关：自定义背景 = 用户素材，
-      // 流动叠层会盖在素材上，故 ::before 整层隐藏（见 index.css auraFlowDrift 注释）。
-      root.setAttribute('data-glass-custom-bg', 'on');
-    } else {
-      root.style.removeProperty('--app-bg');
-      root.removeAttribute('data-glass-custom-bg');
-    }
+    // v2.3.122：毛玻璃效果开关（原「毛玻璃（glass）」主题已删除，其磨砂观感改为每主题开关）。
+    // 本处只负责在 <html> 上置/摘 data-glass='on'；半透明承载面 + 模糊令牌 + 丝滑过渡全部由
+    // CSS 的 [data-glass='on'] 规则承担（variables.css / index.css），**当前主题配色不变**。
+    // 开关与主题相互独立：切换主题不重置本开关；全局各窗（主窗 / 小窗 / 悬浮球）同步置位。
+    if (settings.glassEffect) root.setAttribute('data-glass', 'on');
+    else root.removeAttribute('data-glass');
     // 琉璃幻境主题色（v2.3.109 需求 2c）：仅 aura 主题生效，空/非法 = 跟随主题默认 #45e0c8。
     // 三件事：写 --aura-accent（variables.css 的 bg 渐变 / hover / nav-active / border 等
     // color-mix 链条的总开关）；派生 --color-primary（直接用该色）；按 WCAG 相对亮度派生
     // --color-primary-text（亮 accent 配深字 #06222a、暗 accent 配白字，见 utils/auraAccent.ts）。
     // 清空/切走主题时移除全部内联值，回退 variables.css 出厂默认。
-    // 注意作用域是 theme==='aura' 而非 isGlass：--color-primary 是全主题通用令牌，
+    // 注意作用域是 theme==='aura'（而非全玻璃家族）：--color-primary 是全主题通用令牌，
     // 若在 glass/frost 下也写入会把 aura 的主题色漏进玻璃家族其余成员。
     const auraAccent = isValidAuraAccent(settings.auraAccent) ? settings.auraAccent : '';
     if (theme === 'aura' && auraAccent) {
@@ -127,50 +106,6 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       root.style.removeProperty('--aura-accent');
       root.style.removeProperty('--color-primary');
       root.style.removeProperty('--color-primary-text');
-    }
-    // 玻璃家族主题：聊天界面颜色覆盖（仅 glass/frost/aura 生效），解决自定义背景后字体/边框与背景融合看不清
-    const setGlassVar = (name: string, val?: string) => {
-      if (isGlass && val) root.style.setProperty(name, val);
-      else root.style.removeProperty(name);
-    };
-    setGlassVar('--glass-token-fg', settings.glassTokenText);
-    setGlassVar('--glass-token-border', settings.glassTokenBorder);
-    setGlassVar('--glass-bubble-user-fg', settings.glassBubbleUserText);
-    setGlassVar('--glass-bubble-ai-fg', settings.glassBubbleAiText);
-    setGlassVar('--glass-bubble-border', settings.glassBubbleBorder);
-    // 玻璃家族专属细化（v2.3.105 引入，v2.3.108 扩展到 aura；v2.3.110 需求 4 收窄回 glass/aura）
-    // —— 色调 + 不透明度 + 模糊度。仅 glass / aura 主题生效（frost 为不透明浅色主题，
-    // 不参与半透明细化，面板保持 variables.css 自带的实色白，深色自定义背景下深字仍可读）；
-    // 其余主题清除内联覆盖，回退变量默认值。
-    // 不透明度按「白底基准 alpha 0.20」的比例同步缩放到 chat-bg(0.45×) / input-bg(0.95×)，
-    // 使三者随滑块等比增减，观感一致。色调缺省近白（#ffffff），即当前默认玻璃观感。
-    if (glassTintScope) {
-      const tint = settings.glassTint || '#ffffff';
-      const rawOp = Number(settings.glassOpacity);
-      const op = Number.isFinite(rawOp) && rawOp >= 0 && rawOp <= 100 ? rawOp : 20;
-      root.style.setProperty(
-        '--color-panel',
-        `color-mix(in srgb, ${tint} ${op}%, transparent)`
-      );
-      root.style.setProperty(
-        '--color-chat-bg',
-        `color-mix(in srgb, ${tint} ${Math.round(op * 0.45)}%, transparent)`
-      );
-      root.style.setProperty(
-        '--color-input-bg',
-        `color-mix(in srgb, ${tint} ${Math.round(op * 0.95)}%, transparent)`
-      );
-      const rawBlur = Number(settings.glassBlur);
-      if (Number.isFinite(rawBlur) && rawBlur > 0) {
-        root.style.setProperty('--blur', `${rawBlur}px`);
-      } else {
-        root.style.removeProperty('--blur');
-      }
-    } else {
-      root.style.removeProperty('--color-panel');
-      root.style.removeProperty('--color-chat-bg');
-      root.style.removeProperty('--color-input-bg');
-      root.style.removeProperty('--blur');
     }
   }, [settings, theme]);
 

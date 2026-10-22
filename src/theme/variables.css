@@ -38,6 +38,24 @@
   inherits: true;
   initial-value: rgba(127, 127, 127, 0.7);
 }
+/* v2.3.122：把三个模糊令牌注册为可动画 <length>。毛玻璃效果开关（data-glass='on'）点亮时
+   它们从 0px 过渡到目标值，配合 :root 上的 transition 实现「开关切换 / 磨砂下切主题」
+   的丝滑模糊渐变，而非生硬跳变。 */
+@property --blur {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+@property --window-bg-blur {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+@property --titlebar-blur {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
 
 :root {
   --radius: 10px;
@@ -51,10 +69,14 @@
   /* v2.3.97：跟随全局动画速度倍率（--anim-speed 由 animControl.applyAnimControl 写入各 document） */
   --transition: calc(0.3s * var(--anim-speed, 1)) ease;
   /* 主色/主色文字平滑过渡（配合上方 @property）；--anim-speed 缩放已内含；
-     挂在 :root 即被「主题」动画组总控覆盖（.anim-off / 门禁会关掉）。 */
+     挂在 :root 即被「主题」动画组总控覆盖（.anim-off / 门禁会关掉）。
+     v2.3.122：追加三个模糊令牌——毛玻璃开关切换 / 磨砂态下切主题时模糊半径平滑渐变。 */
   transition: --color-primary calc(0.4s * var(--anim-speed, 1)) ease,
     --color-primary-text calc(0.4s * var(--anim-speed, 1)) ease,
-    --color-primary-ink calc(0.4s * var(--anim-speed, 1)) ease;
+    --color-primary-ink calc(0.4s * var(--anim-speed, 1)) ease,
+    --blur calc(0.4s * var(--anim-speed, 1)) ease,
+    --window-bg-blur calc(0.4s * var(--anim-speed, 1)) ease,
+    --titlebar-blur calc(0.4s * var(--anim-speed, 1)) ease;
   /* v2.3.101：文字用主色默认 = 主色本身（未染色时渲染与旧版逐像素一致）。
      一旦 ChatWindow/MiniChat 依据背景主体色染色，会内联覆盖本变量为对比达标值；
      移除内联覆盖后自动回落到 var(--color-primary)，与 @property initial-value 一同兜底。 */
@@ -168,57 +190,18 @@
   --titlebar-blur: 0px;
 }
 
-/* 毛玻璃风格 */
-[data-theme='glass'] {
-  --color-primary: #7c83ff;
-  --color-primary-text: #ffffff;
-  --color-bg: linear-gradient(135deg, #1e2a78 0%, #6a3aa8 55%, #a1429c 100%);
-  --color-panel: rgba(255, 255, 255, 0.22);
-  --color-panel-alt: rgba(255, 255, 255, 0.15);
-  --color-chat-bg: rgba(255, 255, 255, 0.10);
-  /* 毛玻璃主题文字为浅色，--color-bg 是深蓝紫渐变（无法用作 scrim），
-     故显式给深色遮罩，保证浅字压在聊天背景图上仍 ≥4.5:1。 */
-  --color-chat-scrim: rgba(14, 20, 40, 0.72);
-  --color-nav-bg: rgba(20, 20, 40, 0.45);
-  --color-nav-icon: rgba(255, 255, 255, 0.7);
-  --color-nav-active: #ffffff;
-  --color-text: #f4f4ff;
-  --color-text-secondary: rgba(255, 255, 255, 0.65);
-  --color-border: rgba(255, 255, 255, 0.22);
-  --color-bubble-user: linear-gradient(135deg, #6ec6ff, #4a9eff);
-  --color-bubble-user-text: #ffffff;
-  --color-bubble-ai: rgba(255, 255, 255, 0.28);
-  --color-bubble-ai-text: #f4f4ff;
-  --color-input-bg: rgba(255, 255, 255, 0.22);
-  --color-hover: rgba(255, 255, 255, 0.15);
-  --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.3);
-  --blur: 35px;
-  --color-system-msg: rgba(255, 255, 255, 0.6);
-  --color-select-bg: #241b45;
-  --color-select-text: #f4f4ff;
-  --color-text-muted: rgba(255, 255, 255, 0.85);
-  /* 毛玻璃：标题栏半透明 + 磨砂；根容器半透明可透出桌面
-     v2.3.110 需求 1：v2.3.109 起 body 透明化，「双层叠加 --app-bg」变「.app-root 单层」，
-     有效不透明度从双层合成 1-(1-0.55)²≈0.80 回落到单层 0.55 → 观感太透。
-     各色标 alpha 0.55 → 0.80（=1-(1-0.55)²），单层合成即恢复 v2.3.108 前的双层观感；
-     alpha 提高只会让底色更实，浅色文字对比度只增不减（verify-chat-ui-contrast 全绿）。 */
-  --app-bg: linear-gradient(135deg, rgba(30,42,120,0.80) 0%, rgba(106,58,168,0.80) 55%, rgba(161,66,156,0.80) 100%);
-  --window-bg-blur: 40px;
-  --titlebar-bg: rgba(255, 255, 255, 0.15);
-  --titlebar-text: #ffffff;
-  --titlebar-icon: rgba(255, 255, 255, 0.85);
-  --titlebar-btn-hover: rgba(255, 255, 255, 0.18);
-  --titlebar-close-hover-bg: #ff5c5c;
-  --titlebar-close-hover-icon: #ffffff;
-  --titlebar-border: rgba(255, 255, 255, 0.12);
-  --titlebar-blur: 30px;
-  /* v2.3.104：auto-contrast 看门狗数据契约（与 liquid 块同构一份；值按 glass 深蓝紫底定。
-     消费端 CSS 在 index.css 的 [data-theme='glass'] [data-auto-contrast=...] 规则，
-     JS 侧读取方为 src/utils/autoContrast.ts，属性/令牌名是两端契约，勿单方改动。 */
-  --auto-contrast-base: rgba(24, 28, 66, 1);
-  --auto-contrast-scrim: rgba(8, 10, 26, 0.55);
-  --auto-contrast-flip-bg: rgba(240, 244, 255, 0.94);
-  --auto-contrast-flip-text: #0b1220;
+/* ===== v2.3.122：毛玻璃效果开关（原「毛玻璃（glass）」主题的磨砂观感，现为每主题开关）=====
+   <html data-glass="on"> 时：**当前主题配色不变**，仅叠加「半透明承载面 + 背景模糊」。
+   - 三个模糊令牌在此点亮；sidebar / list-pane / main-pane / chat-header / composer /
+     modal-mask 等消费点的 backdrop-filter: blur(var(--blur)) 即生效（见 index.css）。
+   - 承载面半透明**不在此覆写 --color-panel**（自定义属性自引用会成环失效），而由 index.css 的
+     [data-glass='on'] 消费端规则用 color-mix 从各主题自身颜色派生，故能适配每套主题。
+   - 渐变背景主题（vibrant / aura）的 --app-bg 为渐变，color-mix 遇渐变非法，
+     故 app-bg 的半透明同样在 index.css 按主题显式处理，不在此通用覆写。 */
+[data-glass='on'] {
+  --blur: 34px;
+  --window-bg-blur: 36px;
+  --titlebar-blur: 28px;
 }
 
 /* 极简暗色模式 */

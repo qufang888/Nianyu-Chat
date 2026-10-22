@@ -56,11 +56,13 @@ type Verdict = 'boost' | 'flip';
 
 /** 看门狗作用主题（其余主题早退） */
 // v2.3.108：aura（琉璃幻境）加入玻璃家族看门狗；liquid 已随 v2.3.107 删除。
-const WATCHED_THEMES: ReadonlySet<string> = new Set(['glass', 'aura']);
+// v2.3.122：'glass' 主题已删除——其磨砂观感改为每主题开关（settings.glassEffect），
+// 看门狗继续只看 aura（半透明/渐变底 + 可自定义主题色的场景仍需要它）。
+const WATCHED_THEMES: ReadonlySet<string> = new Set(['aura']);
 
 /** 玻璃 backdrop blur 半径（px），玻璃家族默认 --blur（30px），用于小浮层判定。
- *  注：实际 blur 可被「玻璃家族设置面板」的模糊度滑块（glassBlur 4~60px）覆盖，
- *  此处取出厂默认做近似即可（判定阈值本就是启发式）。 */
+ *  注：实际 blur 可被毛玻璃效果开关的点亮值（--blur，见 variables.css [data-glass='on']）
+ *  覆盖，此处取出厂默认做近似即可（判定阈值本就是启发式）。 */
 const BLUR_RADIUS_PX = 30;
 
 /** 小浮层判定阈值：最大边长 < 3× blur 半径（设计文档 §4.6 第 2 条） */

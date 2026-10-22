@@ -201,12 +201,14 @@ function evaluateMatrix(vars, bgOverride) {
 // ---------- 4. 输出矩阵 ----------
 check(
   `M0 主题块无漏解析（源码声明 ${declaredThemeCount} 个 [data-theme=] == 解析 ${themes.length} 个）`,
-  declaredThemeCount === themes.length && themes.length === 15,
+  declaredThemeCount === themes.length && themes.length === 14,
   `源码 ${declaredThemeCount} vs 解析 ${themes.length}`
 );
 
 // 已知披露上界主题（玻璃家族半透明面板；见 verify-chat-ui-contrast C5/C6 与 v2.3.101 GuideView 卡）
-const DISCLOSED = new Set(['glass', 'aura']);
+// v2.3.122：'glass' 主题已删除（磨砂观感改为每主题开关 settings.glassEffect），
+// 披露上界主题只剩 aura。
+const DISCLOSED = new Set(['aura']);
 
 console.log('\n主题'.padEnd(11) + '正文/面板'.padEnd(9) + '次要/面板'.padEnd(9) + '时间戳'.padEnd(8) + '系统消息'.padEnd(8) + 'AI气泡'.padEnd(8) + '用户气泡'.padEnd(8) + '图标'.padEnd(6) + '标题栏');
 const fmt = (v) => (v === null || v === undefined || !Number.isFinite(v) ? 'n/a' : v.toFixed(2));
@@ -287,7 +289,6 @@ const LIGHT_BG = '#f2f3f5';
     // glass/aura 的半透明面板天花板属既有披露性质（verify-chat-ui-contrast C5/C6、
     // GuideView v2.3.101 卡「毛玻璃固有性质」）；深色底下面板合成变暗、绝大多数格子
     // 反而达标，仅「用户气泡文字」仍是已知上界。本棘轮锁实测值，任何令牌回退都会变红。
-    glass: { text: 8.24, secondary: 9.0, muted: 13.75, system: 13.75, ai: 6.62, user: 1.88, nav: 18.14, titlebar: 11.58, ticon: 11.58 },
     aura: { text: 10.3, secondary: 9.74, muted: 12.89, system: 11.38, ai: 10.3, user: 2.6, nav: 18.46, titlebar: 16.59, ticon: 18.02 },
   };
   const keyOf = (r) => {
@@ -302,7 +303,7 @@ const LIGHT_BG = '#f2f3f5';
     return 'titlebar';
   };
   const ratchet = [];
-  for (const name of ['glass', 'aura']) {
+  for (const name of ['aura']) {
     const t = themes.find((x) => x.name === name);
     for (const r of evaluateMatrix(t.vars, DEEP_BG)) {
       console.log(`  [deep-bg 实测] ${name} ${r.label} = ${fmt(r.value)}（基线 ${DEEP_BASELINE[name][keyOf(r)]}）`);
@@ -312,7 +313,7 @@ const LIGHT_BG = '#f2f3f5';
       }
     }
   }
-  check('M3 glass/aura 深色自定义背景工况不劣于实测基线（披露上界棘轮）', ratchet.length === 0, ratchet.join('; '));
+  check('M3 aura 深色自定义背景工况不劣于实测基线（披露上界棘轮）', ratchet.length === 0, ratchet.join('; '));
 }
 
 // ---------- 7. M4 自证活性 ----------

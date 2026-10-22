@@ -907,6 +907,9 @@ export const MiniChat: React.FC = () => {
       const key = `${current.chat_type}:${current.chat_id}`;
       // 主题与 CSS 变量（圆角/气泡透明度/字体/主题/动效）与主界面一致
       document.documentElement.setAttribute('data-theme', settings.theme || 'wechat');
+      // v2.3.122：毛玻璃效果开关全局同步（与主窗 ThemeContext 的 data-glass 一致）
+      if (settings.glassEffect) document.documentElement.setAttribute('data-glass', 'on');
+      else document.documentElement.removeAttribute('data-glass');
       const root = document.documentElement;
       const ui = Number(settings.uiRadius);
       if (Number.isFinite(ui) && ui >= 0) {

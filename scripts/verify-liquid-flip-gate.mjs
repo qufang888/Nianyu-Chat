@@ -101,7 +101,7 @@ ok(
   "D1 liquid flip 规则已不存在（主题已删，不再是漏删的死规则）"
 );
 ok(
-  /\[data-theme='glass'\] \[data-auto-contrast='flip'\]/.test(css),
+  /\[data-glass='on'\] \[data-auto-contrast='flip'\]/.test(css),
   'D2 glass flip 规则仍存在'
 );
 ok(

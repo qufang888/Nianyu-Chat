@@ -141,7 +141,7 @@ function baseCSS(): string {
   .fb-row.fb-pinned{background:var(--color-hover);}
   .fb-row.fb-dragging{opacity:.45;}
   .fb-row.fb-drag-over{box-shadow:inset 0 2px 0 var(--color-primary);}
-  [data-theme='glass'] .fb-row.fb-pinned{background:rgba(255,255,255,0.10);}
+  [data-glass='on'] .fb-row.fb-pinned{background:rgba(255,255,255,0.10);}
   .fb-empty{padding:22px 12px;text-align:center;font-size:12.5px;color:var(--color-text-secondary);}
   .fb-foot{padding:8px 14px 10px;font-size:11px;color:var(--color-text-secondary);text-align:center;border-top:1px solid var(--color-border);}
 
@@ -160,17 +160,14 @@ function baseCSS(): string {
   .fb-ctx-item:hover{background:var(--color-hover);}
   .fb-ctx-aot-row{justify-content:flex-start;}
   .fb-ctx-aot-row input{accent-color:var(--color-primary);cursor:pointer;width:15px;height:15px;margin:0;}
-  [data-theme='glass'] .fb-ctx{ background:rgba(18,16,38,0.88); border-color:rgba(255,255,255,0.28); }
 
-  /* 毛玻璃主题：原面板背景为浅白低不透明（rgba(255,255,255,0.22)）+白字，
-     在亮桌面下对比不足、字被吃掉。改用深暗半透明磨砂底，保证浅色文字始终可读。
-     （这里"降不透明度"指降低亮色覆盖、提高暗色对比，而非单纯调低 alpha 导致透出桌面） */
-  [data-theme='glass'] .fb-panel{
-    background:rgba(18,16,38,0.88);
-    border-color:rgba(255,255,255,0.28);
+  /* v2.3.122：毛玻璃效果开关（原「毛玻璃」主题的悬浮球观感，现为每主题开关）。
+     面板/行悬停/置顶行随开关叠加半透明（color-mix 只降 alpha、保留主题自身配色），
+     配合上方 backdrop-filter 形成磨砂；不再有玻璃主题专属的深底/紫色覆写（配色不变）。 */
+  [data-glass='on'] .fb-panel{
+    background:color-mix(in srgb, var(--color-panel) 78%, transparent);
   }
-  [data-theme='glass'] .fb-row:hover{ background:rgba(255,255,255,0.10); }
-  [data-theme='glass'] .fb-panel-h .cnt{ color:#cfd2ff; background:rgba(124,131,255,0.32); }
+  [data-glass='on'] .fb-row:hover{ background:rgba(255,255,255,0.10); }
 
   /* 动效开关（animMode='all-off' 时根元素挂 .anim-off）：全局禁用所有 CSS 动画/过渡，
      与主界面 index.css 的 .anim-off 规则同语义（覆盖 .fb-panel/.fb-ctx/.fb-ball 等全部动画）。
@@ -235,6 +232,11 @@ function setupTheme(onChanged?: () => void): void {
   function applyTheme(theme?: string): void {
     document.documentElement.setAttribute('data-theme', theme || 'wechat');
   }
+  // v2.3.122：毛玻璃效果开关全局同步（与主窗 ThemeContext 的 data-glass 一致）
+  function applyGlass(settings: any): void {
+    if (settings?.glassEffect) document.documentElement.setAttribute('data-glass', 'on');
+    else document.documentElement.removeAttribute('data-glass');
+  }
   // 高级动画控制（v2.3.90）：总控 / 单控互斥。悬浮球是独立 document，
   // 总控关闭 → 上面 baseCSS 的 `.anim-off` 全局 kill 生效；
   // 单控模式 → 改用 `html[data-anim-off~="floatball"]` + 自动生成的 <style> 精确关掉本窗动画。
@@ -247,6 +249,7 @@ function setupTheme(onChanged?: () => void): void {
       api.getSettings()
         .then((s: any) => {
           applyTheme(s?.theme);
+          applyGlass(s);
           applyAnim(s);
         })
         .catch(() => {});

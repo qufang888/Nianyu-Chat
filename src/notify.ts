@@ -11,8 +11,9 @@ const CARD_H = 96;
 /** 深色系主题列表（其余为浅色系） */
 // v2.3.108：新增 'aura'（琉璃幻境）。它的底色是深海靛极光渐变，
 // 若漏登记，通知卡片会按「浅色主题」生成（浅底 + 深字），叠在深色软件窗口上会突兀。
-//（前代 'liquid' 已随 v2.3.107 整体删除。）
-const DARK_THEMES = new Set(['dark', 'glass', 'galaxy', 'cyber', 'ember', 'aura']);
+//（前代 'liquid' 已随 v2.3.107 整体删除；'glass' 主题已随 v2.3.122 删除——
+// 其磨砂观感改为每主题开关 settings.glassEffect，不再是独立主题。）
+const DARK_THEMES = new Set(['dark', 'galaxy', 'cyber', 'ember', 'aura']);
 
 /** 根据主题名判断是否深色 */
 function isDarkTheme(theme?: string): boolean {

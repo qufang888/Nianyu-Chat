@@ -212,11 +212,17 @@ section('A2. 无条件渲染的条目确实是无条件渲染的');
     !staticIndex.some((i) => i.id === 'sec-glassbg'),
     '仍在静态表里 → 非 glass/frost 主题下会变成死条目'
   );
-  // v2.3.97：原先硬编码两主题的字面写法 `(theme === 'glass' || theme === 'frost') && (`，
-  // 但液态玻璃加入后该守卫已扩容为三主题 → 断言误报。改为**通用匹配**：
-  // 只要存在「theme 判断 && (」形式的条件渲染守卫即算通过，不再锁死具体主题列表。
-  const glassGuard = /\(theme === '[a-z]+'(\s*\|\|\s*theme === '[a-z]+')+\)\s*&&\s*\(/.test(code);
-  check('sec-glassbg 的 DOM 确实仍受 glass/frost 主题守卫（说明必须条件收录）', glassGuard);
+  // v2.3.122：「毛玻璃（glass）」主题已删除——原 sec-glassbg（玻璃家族背景面板）整体移除，
+  // 其三条静态索引条目（sec-glass-tint/opacity/blur）与设置项同步删除（杜绝「设置删了还能搜到」）。
+  // 磨砂效果改为全主题开关 sec-glisseffect（直接可见区，由动态索引规则⑤按 DOM 存在性收录）。
+  // 此处断言：① sec-glisseffect 已登记静态索引（可被搜到）；② 旧的 glass 三条静态条目已不存在；
+  // ③ 仍存在「theme 守卫 && (」形式的条件渲染（aura 专属块），说明条件收录机制仍在运转。
+  check('sec-glisseffect（毛玻璃开关）已登记静态索引（可被中英文搜到）',
+    staticIndex.some((i) => i.id === 'sec-glisseffect'));
+  check('旧 glass 三条静态条目（tint/opacity/blur）已随设置项同步删除',
+    !staticIndex.some((i) => /^sec-glass-(tint|opacity|blur)$/.test(i.id)));
+  const themeGuard = /theme === '[a-z]+'(\s*\|\|\s*theme === '[a-z]+')*\s*&&\s*\(/.test(code);
+  check('仍存在 theme 守卫的条件渲染（aura 专属块），条件收录机制运转正常', themeGuard);
 }
 
 // ---------------------------------------------------------------------------

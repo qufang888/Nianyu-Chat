@@ -271,35 +271,20 @@ gateNonGlass('C2 .msg-resend-btn:hover ≥4.5', (r) => r.x2);
 gateNonGlass('C3 .msg-resend-btn:disabled ≥4.5', (r) => r.x3);
 gateNonGlass('C4 .advanced-toggle ≥4.5', (r) => r.x4);
 
-// ---------- 7. glass：上界断言 + ceiling 披露（不 skip、不排除）----------
-console.log('\n=== C5/C6 glass 上界 + ceiling（照 verify-dye-contrast.mjs 的 G2/G2b 范式）===');
-check(
-  `C5a glass 按钮常态值 == 该主题 --color-text 压同一承载面（${fmt(glass.x1)} vs ${fmt(glass.refTextNorm)}）`,
-  glass.x1 !== null && Math.abs(glass.x1 - glass.refTextNorm) <= 0.01,
-  `按钮=${fmt(glass.x1)} 正文参考=${fmt(glass.refTextNorm)}`
-);
-check(
-  `C5b glass 按钮 hover 值 == 该主题 --color-text 压同一承载面（${fmt(glass.x2)} vs ${fmt(glass.refTextHover)}）`,
-  glass.x2 !== null && Math.abs(glass.x2 - glass.refTextHover) <= 0.01,
-  `按钮=${fmt(glass.x2)} 正文参考=${fmt(glass.refTextHover)}`
-);
-check(
-  `C6a glass ceiling 披露：按钮常态 ${fmt(glass.x1)} < 4.5（已知上界，写成断言以便面板/文字变动时报出）`,
-  glass.x1 !== null && glass.x1 < AA,
-  `glass=${fmt(glass.x1)}`
-);
-check(
-  `C6b glass ceiling 披露：折叠标题 ${fmt(glass.x4)} < 4.5`,
-  glass.x4 !== null && glass.x4 < AA,
-  `glass=${fmt(glass.x4)}`
-);
+// ---------- 7. v2.3.122：毛玻璃（glass）主题已删除 ----------
+// 原 C5/C6 是 glass 主题（半透明面板）的「已知披露上界」断言（按钮/折叠标题 <4.5 的既有性质）。
+// 主题既已整体删除（磨砂观感改为每主题开关 settings.glassEffect），这些断言随之退役；
+// 其余 14 套主题全部由 C1-C4 的 ≥4.5 硬门槛覆盖，无一豁免。
+console.log('\n=== C5 毛玻璃主题已删除，其余主题无豁免 ===');
+check('C5a 主题表中已无 glass（删除无残留）', !rows.some((r) => r.name === 'glass'));
+check('C5b 其余主题全部纳入 C1-C4 硬门槛（无披露豁免）', nonGlassRows.length === rows.length && rows.length === 14);
 
 // ---------- 8. C7 时间戳棘轮（既有性质，如实记录，不放宽）----------
 // 基线 = v2.3.102 复核时各主题的实测 time-muted 值（--color-text-muted 压聊天面）。
 // 这是**本版之前就存在**的性质（令牌与承载面均非本次引入）；本版不改，但棘轮住不许变差。
 // v2.3.108：liquid 条目随主题删除移除；新增 aura 基线（实测 1.19，与 glass 同族性质）。
 const X5_BASELINE = {
-  wechat: 3.03, glass: 1.24, dark: 4.28, vibrant: 3.12, azure: 5.9, galaxy: 5.35, pine: 6.15,
+  wechat: 3.03, dark: 4.28, vibrant: 3.12, azure: 5.9, galaxy: 5.35, pine: 6.15,
   ember: 5.6, frost: 3.43, rose: 5.57, cyber: 6.28, graphite: 5.11, indigo: 5.27, sand: 4.94, aura: 1.19,
 };
 console.log('\n=== C7 时间戳 --color-text-muted 棘轮（不劣于基线；基线为既有性质，待下一版处理）===');
