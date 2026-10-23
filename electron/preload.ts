@@ -495,6 +495,13 @@ export interface NianyuAPI {
   // v2.3.117：单光标所有权——面板窗是否为当前光标 owner（主进程轮询推送）。
   // false=光标在球/菜单/窗外，面板窗据此立即隐藏自身动态光标（保证整机只有一个光标）。
   onPanelCursorWindow: (cb: (owns: boolean) => void) => () => void;
+  // v2.3.x：主进程推送：系统光标位于悬浮球某窗矩形内（owner=ball/panel/menu）时，
+  // 主窗/小窗据此立即隐藏自身动态光标（加 cursor-gate-off 门控类 + 派发合成 mouseout），
+  // 保证「整机只有一个光标」且光标不被困在小窗矩形内；covered=false 时移除门控、恢复显示。
+  onMainCursorWindow: (cb: (covered: boolean) => void) => () => void;
+  // v2.3.x：小窗专用单光标通道（与主窗 main:cursor-window 相互独立）。主进程向小窗推
+  // mini:cursor-window，小窗据此隐藏自身动态光标，避免「小窗压在主窗上方时主窗与小窗双光标」。
+  onMiniCursorWindow: (cb: (covered: boolean) => void) => () => void;
   onBallVideoProgress: (cb: (data: { percent: number; statusText: string }) => void) => () => void;
   offBallBlur: (cb: () => void) => void;
 
@@ -1071,6 +1078,16 @@ const api: NianyuAPI = {
     const listener = (_e: any, owns: boolean) => cb(owns);
     ipcRenderer.on('panel:cursor-window', listener);
     return () => ipcRenderer.removeListener('panel:cursor-window', listener);
+  },
+  onMainCursorWindow: (cb) => {
+    const listener = (_e: any, covered: boolean) => cb(covered);
+    ipcRenderer.on('main:cursor-window', listener);
+    return () => ipcRenderer.removeListener('main:cursor-window', listener);
+  },
+  onMiniCursorWindow: (cb) => {
+    const listener = (_e: any, covered: boolean) => cb(covered);
+    ipcRenderer.on('mini:cursor-window', listener);
+    return () => ipcRenderer.removeListener('mini:cursor-window', listener);
   },
 
   // ===== 世界书 =====

@@ -141,6 +141,11 @@ function expandPanel(): void {
     width: PANEL_W,
     height: PANEL_H,
   });
+  // v2.3.x：面板窗重新显示前先复位为「整体穿透」初始态，避免上一轮展开期间因光标进入面板
+  // 而被渲染端切到可交互（setIgnoreMouseEvents(false)）后、收起时未复位、再展开时残留可交互态——
+  // 那样面板整窗（含透明区）会吃掉落在它上面的点击（光标能动但点不动）。复位后由渲染端
+  // mouseenter/mouseleave 在光标真正进入/离开面板时再切回可交互，行为正确。
+  panelWindow.setIgnoreMouseEvents(true, { forward: true });
   panelWindow.showInactive(); // 不抢焦点（focusable:false 双保险）
   panelVisible = true;
   panelWindow.webContents.send('panel:show', { h: panelDir, v: panelVDir });
@@ -317,7 +322,11 @@ function calcPanelDir(): { h: 'right' | 'left'; v: 'down' | 'up' } {
 let cursorPollTimer: ReturnType<typeof setInterval> | null = null;
 // v2.3.117：单光标所有权（'ball' | 'panel' | 'menu' | null）。取代旧的 lastCursorInside，
 // 只有 owner 窗显示动态光标，其余窗隐藏——保证整机只有一个光标。
-let lastCursorOwner: 'ball' | 'panel' | 'menu' | null = null;
+let lastCursorOwner: 'ball' | 'panel' | 'menu' | 'mini' | 'main' | null = null;
+// v2.3.x：主窗/小窗动态光标 covered 状态（用于「变化沿」推送，避免每轮轮询重发抖动）
+let lastMainCovered: boolean | null = null;
+// v2.3.x：小窗专用 covered 变化沿（小窗不再订阅 main:cursor-window，改订阅独立的 mini:cursor-window）
+let lastMiniWindowCovered: boolean | null = null;
 function pointInRect(px: number, py: number, b: Electron.Rectangle): boolean {
   return px >= b.x && px < b.x + b.width && py >= b.y && py < b.y + b.height;
 }
@@ -341,7 +350,20 @@ function startCursorPoll(): void {
       const inPanel =
         panelVisible && !!panelWindow && !panelWindow.isDestroyed() &&
         pointInRect(p.x, p.y, panelWindow.getBounds());
-      const owner: 'ball' | 'panel' | 'menu' | null = dragTimer
+      // 主窗 / 小窗可见性（owner 判定前需先算好，供下方单光标 covered 计算复用）
+      const mainWin = mainWinRef;
+      const inMainNow =
+        !!mainWin && !mainWin.isDestroyed() && mainWin.isVisible() &&
+        pointInRect(p.x, p.y, mainWin.getBounds());
+      const miniWin = miniWinRef;
+      const inMiniNow =
+        !!miniWin && !miniWin.isDestroyed() && miniWin.isVisible() &&
+        pointInRect(p.x, p.y, miniWin.getBounds());
+      // v2.3.117：单光标所有权——光标所在最上层窗口独占动态光标（整机一个光标）。
+      // 拖拽中球窗恒独占（同时保住 P0-1：不因贴边越界给球窗推 false）；否则 菜单 > 球 > 面板
+      // （球为锚点，重叠时球优先）；再其次光标在小窗（mini）上则小窗独占；最后光标在主窗（main）
+      // 上则主窗独占。只有 owner 收 cursor-window=true，其余窗收 false 立即隐藏，杜绝各类双光标。
+      const owner: 'ball' | 'panel' | 'menu' | 'mini' | 'main' | null = dragTimer
         ? 'ball'
         : inMenu
         ? 'menu'
@@ -349,9 +371,33 @@ function startCursorPoll(): void {
         ? 'ball'
         : inPanel
         ? 'panel'
+        : inMiniNow
+        ? 'mini'
+        : inMainNow
+        ? 'main'
         : null;
       const prevOwner = lastCursorOwner;
       lastCursorOwner = owner;
+      // v2.3.x：主窗/小窗动态光标 covered 同步。当系统光标位于悬浮球某窗（ball/panel/menu）矩形内、
+      // 且恰好落在其下窗口（主窗/小窗，悬浮球穿透转发事件给下层）之上时，该下层窗口的 CustomCursor
+      // 必须立即隐藏 —— 否则「整机出现两个动态光标」且光标会被困在小球窗矩形内（只能上下动）。
+      // 用「变化沿」推送（covered 状态变化才发），避免每轮 200ms 轮询都重发造成抖动。
+      // 关键点：owner 为 'mini'/'main' 时该窗自身即光标 owner，不应被自己网关掉——
+      // mainCovered 显式排除 'main'；miniCovered 仅由 ball/panel/menu 压在它上方时触发，二者互不误伤。
+      const mainCovered = owner !== null && owner !== 'main' && inMainNow;
+      const miniCovered = (owner === 'ball' || owner === 'panel' || owner === 'menu') && inMiniNow;
+      if (mainCovered !== lastMainCovered) {
+        lastMainCovered = mainCovered;
+        if (mainWin && !mainWin.isDestroyed()) {
+          mainWin.webContents.send('main:cursor-window', mainCovered);
+        }
+      }
+      if (miniCovered !== lastMiniWindowCovered) {
+        lastMiniWindowCovered = miniCovered;
+        if (miniWin && !miniWin.isDestroyed()) {
+          miniWin.webContents.send('mini:cursor-window', miniCovered);
+        }
+      }
       // v2.3.118：球窗光标所有权「level」推送（每轮都推当前值）。快速掠过悬浮球时，球窗自身
       // mouseleave 可能因「穿透↔可交互」切换时序而不触发，动态光标会卡成静止残留（鼠标已离开
       // 仍留在球上）。level 推送保证光标一离开球窗（≤一个轮询周期）即被强制隐藏；球窗
@@ -807,7 +853,11 @@ export function showFloatingBall(): void {
   if (s.floatingBall?.enabled === false) return;
   if (sessionClosed) return;
   if (ballWindow && !ballWindow.isDestroyed()) ballWindow.showInactive();
-  if (panelVisible && panelWindow && !panelWindow.isDestroyed()) panelWindow.showInactive();
+  if (panelVisible && panelWindow && !panelWindow.isDestroyed()) {
+    // v2.3.x：与主窗全屏退出恢复同理，面板重新显示前先复位为整体穿透（见 expandPanel 注释）
+    panelWindow.setIgnoreMouseEvents(true, { forward: true });
+    panelWindow.showInactive();
+  }
   // 菜单不随恢复重新弹出（menuVisible 已在 hideFloatingBall 复位为 false）
 }
 

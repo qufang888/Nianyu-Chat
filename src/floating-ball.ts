@@ -199,22 +199,18 @@ function escapeHTML(s: string): string {
 //   光标会残留，故加 cursor-gate-off 门控类（CustomCursor 忽略 mousemove），
 //   并派发合成 mouseout 触发 CustomCursor 立即淡出、恢复原生光标。
 function makeInteractive(ignoreFn: ((ignore: boolean) => void) | undefined) {
-  let gateTimer = 0;
   function setInteractive(on: boolean): void {
     if (ignoreFn) ignoreFn(!on);
-    if (gateTimer) {
-      clearTimeout(gateTimer);
-      gateTimer = 0;
-    }
     if (on) {
+      // 进入可交互（鼠标在本窗不透明区上）：解除穿透门控，动态光标正常显示
       document.body.classList.remove('cursor-gate-off');
     } else {
-      // 120ms 防抖：球→面板跨窗移动会短暂离开不透明区，避免光标闪隐
-      gateTimer = window.setTimeout(() => {
-        gateTimer = 0;
-        document.body.classList.add('cursor-gate-off');
-        document.dispatchEvent(new MouseEvent('mouseout'));
-      }, 120);
+      // v2.3.x：进入穿透态**立即**门控隐藏动态光标，不再等 120ms 防抖。穿透模式下窗口仍会收到
+      // 主进程 forward 的 mousemove，若不立即 gate，光标会按窗口相对坐标（0..窗宽）绘制，被「困」在
+      // 小窗矩形内（只能上下动 / 双光标）。故 onMouseMove 须立即停止绘制，并派发合成 mouseout 让
+      // CustomCursor 立即淡出、恢复原生光标（与 onBallMenuOpen / suppressPanelCursor 同款处理）。
+      document.body.classList.add('cursor-gate-off');
+      document.dispatchEvent(new MouseEvent('mouseout'));
     }
   }
   return setInteractive;
@@ -853,6 +849,10 @@ function mountCursor(): void {
   try {
     // 初始即为穿透区（鼠标不在球/面板上）：门控开启，动态光标不显示、原生光标不受影响
     document.body.classList.add('cursor-gate-off');
+    // v2.3.x：确保本窗（球/面板）body 不被任何残留 cursor-hidden / 内联 cursor 覆盖——
+    // 关闭动态光标后每个窗口各自显示原生光标，不依赖主窗（穿透态下球/面板区域光标由本窗决定）。
+    document.body.classList.remove('cursor-hidden');
+    document.body.style.cursor = '';
     let host = document.getElementById('cursor-root');
     if (!host) {
       host = document.createElement('div');

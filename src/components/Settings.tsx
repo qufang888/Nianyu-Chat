@@ -327,8 +327,8 @@ function CursorHotspotPreview({
     // clamp 到预览区内
     const x = Math.max(0, Math.min(displaySize, clientX - r.left));
     const y = Math.max(0, Math.min(displaySize, clientY - r.top));
-    // 转换回基础尺寸坐标系（整数）
-    onChange(Math.round(x / ratio), Math.round(y / ratio));
+    // 转换回基础尺寸坐标系（保留亚像素精度，与热点滑块 step=0.5 一致）
+    onChange(x / ratio, y / ratio);
   };
 
   return (
@@ -2631,8 +2631,8 @@ export const Settings: React.FC<{
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginTop: 4 }}>
                 <div style={{ flexShrink: 0 }}>
                   <CursorHotspotPreview
-                    hotspotX={cursor.hotspotX ?? 1}
-                    hotspotY={cursor.hotspotY ?? 1}
+                    hotspotX={cursor.hotspotX ?? 0.44}
+                    hotspotY={cursor.hotspotY ?? 0}
                     onChange={(x, y) => saveCursor({ hotspotX: x, hotspotY: y })}
                   />
                   <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 4, textAlign: 'center' }}>
@@ -2647,13 +2647,13 @@ export const Settings: React.FC<{
                       type="range"
                       min={0}
                       max={28}
-                      step={1}
-                      value={cursor.hotspotX ?? 1}
+                      step={0.5}
+                      value={cursor.hotspotX ?? 0.44}
                       onChange={(e) => saveCursor({ hotspotX: Number(e.target.value) })}
                       style={{ flex: 1 }}
                     />
                     <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                      {cursor.hotspotX ?? 1}
+                      {cursor.hotspotX ?? 0.44}
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -2662,13 +2662,13 @@ export const Settings: React.FC<{
                       type="range"
                       min={0}
                       max={28}
-                      step={1}
-                      value={cursor.hotspotY ?? 1}
+                      step={0.5}
+                      value={cursor.hotspotY ?? 0}
                       onChange={(e) => saveCursor({ hotspotY: Number(e.target.value) })}
                       style={{ flex: 1 }}
                     />
                     <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                      {cursor.hotspotY ?? 1}
+                      {cursor.hotspotY ?? 0}
                     </span>
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>

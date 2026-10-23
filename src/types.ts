@@ -1296,8 +1296,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     hoverScale: 1.25,
     idleHideMs: 5000,
     cursorSize: 28,
-    hotspotX: 1, // 默认贴近图像左上角（标准箭头光标的尖端）
-    hotspotY: 1,
+    hotspotX: 0.44, // 默认对齐 PNG 箭头真实尖端：512 图中 (8,0)/512 ≈ 28 基准下 (0.44,0)
+    hotspotY: 0,
   },
   uiZoom: {
     mainBaseW: 1200,

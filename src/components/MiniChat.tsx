@@ -385,6 +385,27 @@ export const MiniChat: React.FC = () => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // v2.3.44：卸载 / 切换聊天时停止播报并清空状态（避免音频跨聊天继续播放）
   useEffect(() => () => { audioRef.current?.pause(); }, []);
+
+  // v2.3.x：小窗动态光标与悬浮球「单光标」协调（逻辑同主窗 App.tsx 的 onMainCursorWindow 订阅）。
+  // 系统光标进入悬浮球某窗且恰落在小窗之上时立即门控隐藏小窗动态光标，避免双光标 / 光标被困小球窗。
+  // v2.3.x：小窗动态光标与悬浮球「单光标」协调（逻辑同主窗 App.tsx，但订阅小窗专用通道）。
+  // 系统光标进入悬浮球某窗且恰落在小窗之上时，主进程经 mini:cursor-window 推送 covered=true，
+  // 这里立即给 body 加 cursor-gate-off 门控类（CustomCursor.onMouseMove 据此忽略 mousemove）+
+  // 派发合成 mouseout（立即淡出、恢复原生光标），避免双光标 / 光标被困小球窗；covered=false
+  // 时移除门控，鼠标再动即恢复显示。仅控制门控类，绝不触碰 CustomCursor 自身的 cursor-hidden。
+  useEffect(() => {
+    if (!api?.onMiniCursorWindow) return;
+    const off = api.onMiniCursorWindow((covered: boolean) => {
+      if (covered) {
+        document.body.classList.add('cursor-gate-off');
+        document.dispatchEvent(new MouseEvent('mouseout'));
+      } else {
+        document.body.classList.remove('cursor-gate-off');
+      }
+    });
+    return off;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => {
     audioRef.current?.pause();
     audioRef.current = null;

@@ -52,8 +52,8 @@ const DEFAULT_CURSOR_SIZE = 28;
 // 运行时按 (cfg.cursorSize / HOTSPOT_BASE_SIZE) 等比缩放，保证调整光标大小后热点相对位置保持一致。
 const HOTSPOT_BASE_SIZE = 28;
 // 热点范围：hotspotX/HotspotY 相对图像左上角的像素偏移（基础尺寸下）。运行时乘以 baseScale。
-// 由于 PNG 箭头尖端几乎在 (8,0)/512 ≈ (0.44,0) 处，默认填 1 表示「尖端贴近左上角」，
-// 让用户用标准箭头光标的视觉习惯。最大值 64 留出小范围微调余地。
+// 由于 PNG 箭头尖端在 (8,0)/512 ≈ (0.44,0) 处，默认填 0.44（28 基准）即对齐真实尖端；
+// 此前填 1 会偏右 ~0.5px，导致「要往右挪一点才点得到」。最大值 64 留出小范围微调余地。
 const HOTSPOT_MIN = 0;
 const HOTSPOT_MAX = 64;
 const IDLE_STOP_MS = 300;           // 静止超过此时间停止 rAF（毫秒），仍保留静态光标
@@ -177,8 +177,8 @@ const CustomCursor: React.FC = () => {
       hoverScale: Math.max(1, Math.min(1.5, c.hoverScale ?? 1.25)),
       idleHideMs: Math.max(500, Math.min(300000, c.idleHideMs ?? 5000)),
       cursorSize: Math.max(16, Math.min(64, c.cursorSize ?? DEFAULT_CURSOR_SIZE)),
-      hotspotX: Math.max(HOTSPOT_MIN, Math.min(HOTSPOT_MAX, c.hotspotX ?? 1)),
-      hotspotY: Math.max(HOTSPOT_MIN, Math.min(HOTSPOT_MAX, c.hotspotY ?? 1)),
+      hotspotX: Math.max(HOTSPOT_MIN, Math.min(HOTSPOT_MAX, c.hotspotX ?? 0.44)),
+      hotspotY: Math.max(HOTSPOT_MIN, Math.min(HOTSPOT_MAX, c.hotspotY ?? 0)),
     };
   }, []);
 
@@ -463,7 +463,7 @@ const CustomCursor: React.FC = () => {
     // ---- 绘制光标本体（可调尺寸 + 热点） ----
     // 热点机制：将图像放置到 (cx - hsX, cy - hsY)，其中 hsX/hsY 已按 baseScale 与 cursorSize 缩放，
     // 这样图像上 (hotspotX, hotspotY) 这点正好对齐鼠标位置 (cx, cy)。标准箭头光标的尖端本就在
-    // 图像左上角附近 (8/512 ≈ 0.44px)，所以 hotspotX/HotspotY 默认设为 1，对齐左上角尖端。
+    // 图像左上角附近 (8/512 ≈ 0.44px)，所以 hotspotX/HotspotY 默认设为 0.44（28 基准），对齐真实尖端。
     if (img && img.complete && img.naturalWidth > 0) {
       ctx.drawImage(img, cx - hsX, cy - hsY, drawW, drawH);
     } else {
@@ -642,6 +642,10 @@ const CustomCursor: React.FC = () => {
       stopLoop();
       if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = 0; }
       document.body.classList.remove('cursor-hidden'); // 恢复原生光标
+      // v2.3.x：显式清除任何内联 cursor 覆盖，确保原生光标可靠显示。球/面板窗口在穿透态
+      // （setIgnoreMouseEvents(true,{forward:true})）下依赖本窗自身（而非主窗）决定光标样式，
+      // 故关闭动态光标时每个窗口的 CustomCursor 各自跑此 disabled 分支，互不依赖、互不残留。
+      document.body.style.cursor = '';
       const c = canvasRef.current;
       if (c) { const ctx = c.getContext('2d'); if (ctx) ctx.clearRect(0, 0, c.width, c.height); }
       return;
@@ -975,8 +979,10 @@ const CustomCursor: React.FC = () => {
         position: 'fixed',
         top: 0,
         left: 0,
-        width: '100vw',
-        height: '100vh',
+        // 与 setupCanvas 使用同一来源（window.innerWidth/innerHeight，不含滚动条宽度），
+        // 避免 100vw 含滚动条宽度导致的尺寸错位（setupCanvas 未执行时画布尺寸不一致）
+        width: window.innerWidth + 'px',
+        height: window.innerHeight + 'px',
         zIndex: 2147483646, // 最高层级：高于所有模态(10001)、弹窗、Toast、右键菜单(OS原生)。
                        // pointer-events:none 确保不拦截任何交互。
         pointerEvents: 'none', // 关键：不拦截鼠标事件

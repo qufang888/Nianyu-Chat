@@ -524,6 +524,13 @@ export interface NianyuAPI {
   // v2.3.88：上报主窗当前一级视图（'chats' | 'contacts' | ... | 'moments'）。
   // 供朋友圈自动配图 / 配视频的状态提醒判断「用户此刻是否正停在朋友圈页」。
   setActiveView: (view: string) => void;
+  // v2.3.x：主进程推送：系统光标位于悬浮球某窗矩形内（owner=ball/panel/menu）时，
+  // 主窗/小窗据此立即隐藏自身动态光标（gate-off + 合成 mouseout），保证整机单光标。
+  // 仅在此声明供渲染层类型检查；实现经 ...raw 透传 preload 的同名方法（无需在导出对象里重复写）。
+  onMainCursorWindow?: (cb: (covered: boolean) => void) => () => void;
+  // v2.3.x：小窗专用单光标通道（与主窗 main:cursor-window 相互独立）。主进程向小窗推
+  // mini:cursor-window，小窗据此隐藏自身动态光标，避免「小窗压在主窗上方时主窗与小窗双光标」。
+  onMiniCursorWindow?: (cb: (covered: boolean) => void) => () => void;
 
   // ===== 主进程错误推送 =====
   onAppError?: (cb: (data: { message: string; cause: string; solution: string; lang: string }) => void) => () => void;

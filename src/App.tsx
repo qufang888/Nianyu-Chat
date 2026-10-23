@@ -249,6 +249,26 @@ export default function App() {
     if (showSplash && settings && !isGroupEnabled(settings, 'splash')) setShowSplash(false);
   }, [showSplash, settings]);
 
+  // v2.3.x：主窗动态光标与悬浮球「单光标」协调。系统光标进入悬浮球某窗（球/面板/菜单）且恰落在主窗之上时，
+  // 主进程经 main:cursor-window 推送 covered=true，这里立即给 body 加 cursor-gate-off 门控类
+  // （CustomCursor.onMouseMove 据此忽略 mousemove）+ 派发合成 mouseout（立即淡出、恢复原生光标），
+  // 杜绝「主窗与悬浮球各亮一个光标 / 光标被困小球窗」；covered=false 时移除门控，鼠标再动即恢复显示。
+  // 仅控制门控类，绝不触碰 CustomCursor 自身的 cursor-hidden / 渲染状态，故与鼠标自然移出
+  // （onMouseOut→hideCursorImmediate）路径互不干扰、可叠加。
+  useEffect(() => {
+    if (!api?.onMainCursorWindow) return;
+    const off = api.onMainCursorWindow((covered: boolean) => {
+      if (covered) {
+        document.body.classList.add('cursor-gate-off');
+        document.dispatchEvent(new MouseEvent('mouseout'));
+      } else {
+        document.body.classList.remove('cursor-gate-off');
+      }
+    });
+    return off;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ===== 新手引导（v2.3.90，可跳过）=====
   // 与上面的初始设置向导严格互斥：仅当 firstRunDone === true（初始设置已走完）且
   // 初始设置向导当前没有展示时，才可能挂载 TutorialOverlay。
