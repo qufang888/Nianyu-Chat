@@ -531,6 +531,11 @@ export interface NianyuAPI {
   // v2.3.x：小窗专用单光标通道（与主窗 main:cursor-window 相互独立）。主进程向小窗推
   // mini:cursor-window，小窗据此隐藏自身动态光标，避免「小窗压在主窗上方时主窗与小窗双光标」。
   onMiniCursorWindow?: (cb: (covered: boolean) => void) => () => void;
+  // v2.3.126（P2-A）：面板「可交互态」通道 —— 主进程权威下发（level 推，带 3px 迟滞）。
+  // true=系统光标落在面板**不透明命中区**内（面板窗 bounds 内缩 PANEL_PAD）→ 面板窗切可交互；
+  // false=光标不在面板不透明区（含透明边距）→ 面板窗恢复点击穿透，鼠标事件落到下层窗口。
+  // 渲染端只在值变化时才切换（避免每 200ms 重复派发合成 mouseout）。
+  onPanelInteractive?: (cb: (interactive: boolean) => void) => () => void;
 
   // ===== 主进程错误推送 =====
   onAppError?: (cb: (data: { message: string; cause: string; solution: string; lang: string }) => void) => () => void;

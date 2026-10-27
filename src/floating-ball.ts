@@ -19,6 +19,25 @@ import { applyAnimControl, animMs, readAnimSpeed } from './utils/animControl';
 
 const api = (window as any).api;
 
+// ===== v2.3.126：动态光标开关的本窗镜像（修复 Bug A/C：关闭动态光标后球/面板原生光标永久消失）=====
+// 根因：球/面板窗在右键菜单弹出时会加 body.cursor-hidden（隐藏原生光标，让菜单窗动态光标独占）。
+// 该类原先无条件添加——动态光标关闭时 CustomCursor 的 effect 提前 return（监听器全不挂），
+// 没有任何路径摘掉 cursor-hidden → 球/面板窗原生光标永久消失（用户只能重启恢复）。
+// 修法：把 settings.customCursor.enabled 镜像到本窗（初始化拉一次 + 设置变更时刷新），
+// 菜单弹出处理器仅在动态光标启用时才加 cursor-hidden；关闭动态光标时原生光标始终可见。
+let dynCursorEnabled = false; // 动态光标总开关（settings.customCursor.enabled）的本窗镜像
+function setupCursorEnabled(): void {
+  const pull = (): void => {
+    if (api?.getSettings) {
+      api.getSettings()
+        .then((s: any) => { dynCursorEnabled = !!s?.customCursor?.enabled; })
+        .catch(() => {});
+    }
+  };
+  pull();
+  if (api?.onSettingsChanged) api.onSettingsChanged(pull);
+}
+
 const BALL = 60;
 const BALL_L = 4; // 球 DOM 相对球窗左上角内边距（与主进程 BALL_PAD 同步；角标溢出 4px 恰好仍在窗内）
 const BALL_T = 4;
@@ -263,6 +282,8 @@ function setupTheme(onChanged?: () => void): void {
 // ===================== 球窗渲染端 =====================
 function mountBall(): void {
   injectCSS();
+  // v2.3.126：镜像动态光标开关（必须在订阅 onBallMenuOpen 之前就绪，见 setupCursorEnabled 注释）
+  setupCursorEnabled();
   const root = document.getElementById('root') as HTMLElement;
 
   let unreadCount = 0;
@@ -361,9 +382,10 @@ function mountBall(): void {
       document.body.classList.add('cursor-gate-off');
       document.dispatchEvent(new MouseEvent('mouseout'));
       // v2.3.120：合成 mouseout 会触发 CustomCursor 隐藏链路并摘掉 cursor-hidden（露出原生
-      // 光标）。菜单弹出期间不应出现原生光标（菜单窗独占动态光标），故补回 cursor-hidden；
-      // 光标移回球窗时 setInteractive(true) 会移除 gate-off，CustomCursor 正常恢复。
-      document.body.classList.add('cursor-hidden');
+      // 光标）。菜单弹出期间不应出现原生光标（菜单窗独占动态光标），故补回 cursor-hidden。
+      // v2.3.126：仅动态光标启用时才隐藏原生光标——菜单窗没有动态光标，原生光标本就该显示；
+      // 关闭动态光标时更不能残留此类，否则原生光标永久消失且无人摘除（Bug A/C 根因）。
+      if (dynCursorEnabled) document.body.classList.add('cursor-hidden');
     });
   }
   // 失焦（点击球唤出主窗等）：恢复穿透与光标门控；面板收起由主进程 blur 链路统一处理
@@ -427,6 +449,8 @@ function mountBall(): void {
 // ===================== 面板窗渲染端 =====================
 function mountPanel(): void {
   injectCSS();
+  // v2.3.126：镜像动态光标开关（必须在订阅 onBallMenuOpen 之前就绪，见 setupCursorEnabled 注释）
+  setupCursorEnabled();
   const root = document.getElementById('root') as HTMLElement;
 
   let panelShown = false; // 面板当前是否处于 .show 弹出态
@@ -464,24 +488,45 @@ function mountPanel(): void {
       if (d) {
         suppressPanelCursor();
       } else {
-        // 拖拽结束：按当前是否悬停面板恢复（true→下次 mousemove 显光标；false→走防抖 gate-off）
-        setInteractive(!!(panel && panel.matches(':hover')));
+        // v2.3.126（P2-A）：拖拽结束 → 恢复主进程权威下发的可交互态（不再自行 :hover 判定）。
+        // 拖拽期间主进程仍会每 200ms 下发权威值（渲染端拖拽期忽略），故 ≤200ms 内必然被纠正。
+        setInteractive(!!lastPanelInteractive);
       }
     });
   }
-  // v2.3.117：单光标所有权——面板窗非当前光标 owner（光标在球/菜单/窗外）时立即隐藏自身
-  // 动态光标，与球窗的所有权信号互斥，保证「整机只有一个光标」（修悬浮球与面板同时各亮一个）。
-  // owns=true 时不干预：面板由自身 hover 逻辑正常显示。
+  // v2.3.117：单光标所有权——主进程 200ms 轮询「系统光标是否为面板窗 owner」，按变化沿推送。
+  // v2.3.126（P2-A）：本通道**只负责「隐藏/显示面板自身动态光标」**，**不再驱动可交互态**
+  // （可交互态的唯一真源是下面的 panel:interactive 通道）——消除「多源驱动可交互态」打架。
+  // owns=false：光标不在面板 → 立即门控隐藏自身动态光标（菜单/球/下层窗口独占光标）。
   if (api && api.onPanelCursorWindow) {
     api.onPanelCursorWindow((owns: boolean) => {
       if (!owns) suppressPanelCursor();
+    });
+  }
+
+  // ===== v2.3.126（P2-A）：面板「可交互态」= 主进程权威（唯一真源）=====
+  // 主进程按「面板不透明命中区」（面板窗 bounds 内缩 PANEL_PAD）判定光标是否在面板上，
+  // 带 3px 迟滞，level 推 panel:interactive：
+  //   true  → 面板窗切可交互（点击落到面板行）
+  //   false → 面板窗恢复整体穿透（点击落到下层窗口；透明边距也不再挡住下层）
+  // 渲染端用 ref 记住上一次的值，**只在变化时**才 setInteractive（避免每 200ms 重复派发
+  // 合成 mouseout 造成光标闪烁）；拖球期间不响应（球窗独占光标）。
+  let lastPanelInteractive: boolean | null = null;
+  if (api && api.onPanelInteractive) {
+    api.onPanelInteractive((interactive: boolean) => {
+      if (ballDragging) return; // v2.3.116：拖球期间球窗独占，面板不参与可交互态
+      if (lastPanelInteractive === interactive) return; // 值未变 → 不重复切换
+      lastPanelInteractive = interactive;
+      setInteractive(interactive);
     });
   }
   // v2.3.119：右键菜单弹出 → 面板窗也立即隐藏自身动态光标（菜单窗独占光标，杜绝双光标）
   if (api && api.onBallMenuOpen) {
     api.onBallMenuOpen(() => {
       suppressPanelCursor();
-      document.body.classList.add('cursor-hidden'); // v2.3.120：不露原生光标（菜单窗独占动态光标）
+      // v2.3.126：仅动态光标启用时才加 cursor-hidden（Bug A/C：关闭动态光标时该类无人摘除，
+      // 会导致面板窗原生光标永久消失；菜单窗无动态光标，原生光标本就该显示）。
+      if (dynCursorEnabled) document.body.classList.add('cursor-hidden');
     });
   }
 
@@ -627,7 +672,8 @@ function mountPanel(): void {
     if (!ctxMenu) {
       menuOpen = false;
       document.removeEventListener('mousedown', onDocDown, true);
-      setInteractive(!!(panel && panel.matches(':hover')));
+      // v2.3.126（P2-A）：恢复主进程权威下发的可交互态（不再用 :hover 自行判定）
+      setInteractive(!!lastPanelInteractive);
       return;
     }
     const el = ctxMenu;
@@ -641,8 +687,10 @@ function mountPanel(): void {
     // v2.3.97：与 CSS 的 .fb-ctx 退场同步缩放（该transition 已改成 calc(.16s * var(--anim-speed,1))）。
     // 用 animMs(0.16) + 20ms 余量，与 menuHideAnimMs() 同一套换算。
     window.setTimeout(() => el.remove(), Math.round(animMs(0.16)) + 20);
-    // 菜单关闭后按当前悬停状态恢复穿透（悬停在面板上则保持可交互）
-    setInteractive(!!(panel && panel.matches(':hover')));
+    // v2.3.126（P2-A）：菜单关闭后恢复主进程权威下发的可交互态；并**请求主进程立即重算**
+    // （光标此刻是否落在面板不透明命中区由主进程判定，渲染端不自行猜测）。
+    setInteractive(!!lastPanelInteractive);
+    if (api?.panelHoverPanel) api.panelHoverPanel(true);
   }
 
   function attachMenu(menu: HTMLDivElement): void {
@@ -677,28 +725,47 @@ function mountPanel(): void {
   if (api && api.onPanelShow) {
     api.onPanelShow((d: Dir) => {
       closeCtxMenu(); // 面板重弹前清掉残留菜单（如失焦期间未关）
+      // v2.3.126：主进程重展开面板时会把窗口复位为整体穿透（forward:true），渲染端门控必须同步
+      // 复位——窗口 hide 期间收不到 mouseleave，gate-off 可能停留在「已摘除」态，导致重展开后
+      // forward 转发的 mousemove 直接激活动态光标（与下层窗口原生光标双现）且点击穿透面板（Bug B/D）。
+      document.body.classList.add('cursor-gate-off');
+      document.dispatchEvent(new MouseEvent('mouseout'));
       setRootDir(d?.h || 'right', d?.v || 'down');
       panelShown = true;
       void fetchChats(); // 每次展开都拉取最新聊天列表
-      requestAnimationFrame(() => panel.classList.add('show')); // linear 弹出
+      requestAnimationFrame(() => {
+        panel.classList.add('show'); // linear 弹出
+        // v2.3.126（P2-A）：**不再**用 panel.matches(':hover') 兜底可交互态 —— pointer-events
+        // 刚由 none 翻回 auto 的同一帧，:hover 未必已重算（实测不可靠，会漏恢复 → 面板偶发点不动）。
+        // 可交互态改由主进程 panel:interactive 权威下发（光标在面板不透明区时立即 true）。
+      });
     });
   }
   if (api && api.onPanelHide) {
     api.onPanelHide(() => {
       panelShown = false;
       panel.classList.remove('show'); // linear 收回（窗口由主进程在动画播完后 hide）
+      // v2.3.126（P2-A）：面板收起 → 复位可交互态（面板不存在时不应再吃点击）
+      lastPanelInteractive = null;
+      setInteractive(false);
     });
   }
   if (api && api.onPanelLayout) {
     api.onPanelLayout((d: Dir) => {
       // 拖动中换向第二阶段：按新方向镜像布局并重播弹出动画（面板窗已由主进程换位）
       closeCtxMenu();
+      // v2.3.126：同 onPanelShow——换向重弹前门控复位与窗口穿透态保持一致（Bug B/D）
+      document.body.classList.add('cursor-gate-off');
+      document.dispatchEvent(new MouseEvent('mouseout'));
       setRootDir(d?.h || 'right', d?.v || 'down');
       panelShown = true;
       void fetchChats();
       panel.classList.remove('show');
       void panel.offsetWidth; // 强制 reflow：确保收回态生效后再重弹
-      requestAnimationFrame(() => panel.classList.add('show')); // linear 重新弹出
+      requestAnimationFrame(() => {
+        panel.classList.add('show'); // linear 重新弹出
+        // v2.3.126（P2-A）：同 onPanelShow——不再用 :hover 兜底（可交互态由主进程权威下发）
+      });
     });
   }
 
@@ -715,13 +782,15 @@ function mountPanel(): void {
   });
   panel.addEventListener('mouseenter', () => {
     if (ballDragging) return; // v2.3.116：拖球期间面板不激活动态光标
-    setInteractive(true);
+    // v2.3.126（P2-A）：此处**不再**切可交互态（唯一真源 = 主进程 panel:interactive）。
+    // 只上报悬停电平（主进程据此立即重算并下发可交互态 → 进入面板即刻可点，无 200ms 延迟）。
     if (api?.panelHoverPanel) api.panelHoverPanel(true);
   });
   panel.addEventListener('mouseleave', () => {
     if (menuOpen) return; // 光标移入菜单（菜单不在 .fb-panel 子树）：菜单打开期间不上报离开
+    // v2.3.126（P2-A）：此处**不再**切可交互态（唯一真源 = 主进程 panel:interactive）。
+    // 上报离开 → 主进程立即下发 interactive=false → 面板立刻恢复穿透（不留隐形空气墙）。
     if (api?.panelHoverPanel) api.panelHoverPanel(false);
-    setInteractive(false);
   });
   // 失焦：收起菜单（主进程 blur 链路已统一走防抖收起）
   if (api && api.onBallBlur) api.onBallBlur(() => closeCtxMenu());

@@ -495,6 +495,9 @@ export interface NianyuAPI {
   // v2.3.117：单光标所有权——面板窗是否为当前光标 owner（主进程轮询推送）。
   // false=光标在球/菜单/窗外，面板窗据此立即隐藏自身动态光标（保证整机只有一个光标）。
   onPanelCursorWindow: (cb: (owns: boolean) => void) => () => void;
+  // v2.3.126（P2-A）：面板「可交互态」通道（主进程权威，level 推 + 3px 迟滞）。
+  // true=光标在面板不透明命中区内（面板窗可交互）；false=不在（含透明边距 → 点击穿透到下层）。
+  onPanelInteractive: (cb: (interactive: boolean) => void) => () => void;
   // v2.3.x：主进程推送：系统光标位于悬浮球某窗矩形内（owner=ball/panel/menu）时，
   // 主窗/小窗据此立即隐藏自身动态光标（加 cursor-gate-off 门控类 + 派发合成 mouseout），
   // 保证「整机只有一个光标」且光标不被困在小窗矩形内；covered=false 时移除门控、恢复显示。
@@ -1078,6 +1081,11 @@ const api: NianyuAPI = {
     const listener = (_e: any, owns: boolean) => cb(owns);
     ipcRenderer.on('panel:cursor-window', listener);
     return () => ipcRenderer.removeListener('panel:cursor-window', listener);
+  },
+  onPanelInteractive: (cb) => {
+    const listener = (_e: any, interactive: boolean) => cb(interactive);
+    ipcRenderer.on('panel:interactive', listener);
+    return () => ipcRenderer.removeListener('panel:interactive', listener);
   },
   onMainCursorWindow: (cb) => {
     const listener = (_e: any, covered: boolean) => cb(covered);

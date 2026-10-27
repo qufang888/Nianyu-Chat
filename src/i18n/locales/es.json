@@ -1576,7 +1576,7 @@
  "stats.favGenderNone": "Sin elegir",
  "stats.favNoResult": "No se encontró ningún personaje coincidente",
  "stats.favPickFirst": "Elige primero un personaje",
- "stats.favPickMeta": "Mostrando {shown} de {total} personajes (hasta {max} sugerencias)",
+ "stats.favPickMeta": "Mostrando {shown} de {total} personajes ({max} por página, desplazable)",
  "stats.favPickTitle": "Elige tu personaje favorito",
  "stats.favRoleLabel": "Personaje",
  "stats.favSave": "Guardar",

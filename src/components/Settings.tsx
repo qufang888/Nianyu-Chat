@@ -2631,7 +2631,7 @@ export const Settings: React.FC<{
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginTop: 4 }}>
                 <div style={{ flexShrink: 0 }}>
                   <CursorHotspotPreview
-                    hotspotX={cursor.hotspotX ?? 0.44}
+                    hotspotX={cursor.hotspotX ?? 1.9141}
                     hotspotY={cursor.hotspotY ?? 0}
                     onChange={(x, y) => saveCursor({ hotspotX: x, hotspotY: y })}
                   />
@@ -2648,12 +2648,12 @@ export const Settings: React.FC<{
                       min={0}
                       max={28}
                       step={0.5}
-                      value={cursor.hotspotX ?? 0.44}
+                      value={cursor.hotspotX ?? 1.9141}
                       onChange={(e) => saveCursor({ hotspotX: Number(e.target.value) })}
                       style={{ flex: 1 }}
                     />
                     <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                      {cursor.hotspotX ?? 0.44}
+                      {cursor.hotspotX ?? 1.9141}
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

@@ -237,6 +237,31 @@ export function migrateMediaApiConfigs(settings: AppSettings): void {
   }
 }
 
+/**
+ * 读盘时迁移「动态光标热点」的旧默认值（原地修改 settings）。
+ *
+ * 背景（v2.3.126）：cursor.png 是 512×512 调色板 PNG，实测顶行(y=0) alpha 梯度为
+ *   x=34→7、x=35→71、x=36→119…，轮廓可见起点（箭头尖端）在 x=35，
+ *   28 基准下的正确热点 = 35/512*28 = **1.9141px**。
+ * 而旧默认值 hotspotX=0.44 来自「把尖端误测为 8/512」的错误取证 → 字形尖端被画在真实指针
+ * **右侧 1.47px** → 用户看到的「光标尖」在真实点击点右边，点下去落在左侧（用户原话：
+ * 「点击的位置在鼠标光标显示位置的左侧」）。
+ *
+ * **旧默认热点本身就是错值，必须迁移**——否则老用户本地 settings.json 里已存的 0.44
+ * 会继续生效，偏移依旧存在。判定条件只认「等于旧默认值」这一种情况：用户手动调成其它值的
+ * （哪怕也是错的）一律不动，尊重用户自己的微调。
+ *
+ * 幂等：迁移后值为 1.9141，再次读盘不满足 |x-0.44|<0.001，不会重复改写。
+ */
+export function migrateCursorHotspot(settings: AppSettings): void {
+  const c = settings.customCursor;
+  if (!c) return;
+  // 旧默认错值 0.44 → 实测正确值 1.9141（容差 0.001 覆盖浮点写入误差）
+  if (typeof c.hotspotX === 'number' && Math.abs(c.hotspotX - 0.44) < 0.001) {
+    c.hotspotX = 1.9141;
+  }
+}
+
 /** 凭 Base URL 猜一个提供商 id（迁移时给个像样的默认值，用户可在界面改） */
 function guessProviderByUrl(baseUrl: string | undefined): string {
   const u = (baseUrl || '').toLowerCase();
@@ -1225,6 +1250,8 @@ class DataManager {
         }
         // 需求 7：多 API 配置迁移（TTS/ASR/生图/生视频）
         migrateMediaApiConfigs(merged);
+        // v2.3.126：动态光标热点迁移（旧默认 0.44 是错值，会让字形尖端偏离真实点击点 1.47px）
+        migrateCursorHotspot(merged);
         return merged;
       }
     } catch (e) {

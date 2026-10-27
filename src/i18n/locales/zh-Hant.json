@@ -1576,7 +1576,7 @@
  "stats.favGenderNone": "不選",
  "stats.favNoResult": "沒有找到符合的人物",
  "stats.favPickFirst": "請先選擇一位人物",
- "stats.favPickMeta": "顯示 {shown} / {total} 位人物（最多 {max} 條候選）",
+ "stats.favPickMeta": "顯示 {shown} / {total} 位人物（每屏 {max} 位，可滾動）",
  "stats.favPickTitle": "選擇最喜愛的人物",
  "stats.favRoleLabel": "人物",
  "stats.favSave": "儲存",

@@ -1576,7 +1576,7 @@
  "stats.favGenderNone": "選択なし",
  "stats.favNoResult": "該当するキャラクターが見つかりません",
  "stats.favPickFirst": "先にキャラクターを選んでください",
- "stats.favPickMeta": "{total} 人中 {shown} 人を表示（候補は最大 {max} 件）",
+ "stats.favPickMeta": "{total} 人中 {shown} 人を表示（1 画面 {max} 人、スクロール可）",
  "stats.favPickTitle": "一番好きなキャラクターを選択",
  "stats.favRoleLabel": "キャラクター",
  "stats.favSave": "保存",

@@ -1,6 +1,18 @@
 import { BrowserWindow, screen, ipcMain, app } from 'electron';
 import path from 'node:path';
 import { getDataManager } from './db';
+// v2.3.126（QA P1/P2-A）：覆盖关系（covered）与面板可交互态的**单一真源**纯函数模块。
+// 谓词同源 + 只在变化沿推送 = 根治「hover 推 true / 轮询推 false」5Hz 永久振荡（光标闪烁）。
+import {
+  computeCoveredState,
+  computePanelInteractive,
+  diffCoverState,
+  insetRect,
+  BALL_PAD,
+  PANEL_PAD,
+  type CoverRect,
+  type CursorOwner,
+} from './cursorCoverState';
 
 // ===================== 桌面悬浮球（三窗口架构）=====================
 // 球窗 + 面板窗 + 菜单窗三个独立 BrowserWindow：
@@ -21,7 +33,8 @@ const dm = getDataManager();
 
 // ===== 几何常量（渲染端 src/floating-ball.ts 同步维护）=====
 const BALL_WIN = 68; // 球窗边长：球 DOM 60x60 内边距 4，未读角标溢出 4px 恰好仍在窗内
-const BALL_PAD = 4; // 球 DOM 相对球窗左上角的偏移
+// v2.3.126：球 DOM 相对球窗左上角的偏移 —— 改从共享模块 cursorCoverState 导入（BALL_PAD=4），
+// 与渲染端 src/floating-ball.ts 的 BALL_L / BALL_T 保持同一真源，避免三处数值漂移。
 const BALL_SIZE = 60; // 球径
 const PANEL_W = 320; // 面板窗宽
 const PANEL_H = 460; // 面板窗高
@@ -271,7 +284,11 @@ function setHoverBall(v: boolean, expandOnly: boolean): void {
     const edge = !hoverBall;
     hoverBall = true;
     cancelCollapseTimer();
-    if (edge && expandOnly) expandPanel();
+    if (edge && expandOnly) {
+      expandPanel();
+      // v2.3.126：hover 启动沿即时门控下层主窗/小窗动态光标（修复 Bug D 轮询滞后窗内错误光标）
+      pushCoveredNow();
+    }
   } else {
     hoverBall = false;
     scheduleCollapse();
@@ -283,8 +300,13 @@ function setHoverBall(v: boolean, expandOnly: boolean): void {
 // 若只清 collapseTimer 不撤 collapseTimer2，面板会在光标下消失。
 function setHoverPanel(v: boolean): void {
   if (v) {
+    // v2.3.126（QA P1）：**上升沿守卫**——panel:hover-panel 在光标停在面板内时每 100ms 上报一次，
+    // 若每次都 pushCoveredNow()，而它推的值与 200ms 轮询算出的值不一致 → 两者互相覆盖 → 5Hz 振荡。
+    // 上升沿（用旧值判断）才即时门控下层主窗/小窗动态光标（修复 Bug D 轮询滞后窗内错误光标）。
+    const rising = !hoverPanel;
     hoverPanel = true;
     undoCollapse();
+    if (rising) pushCoveredNow();
     // 面板/菜单互斥（对称侧）：光标回到面板窗 → 菜单立即缩回。菜单窗 Z 序在面板之上，
     // 不收会挡住面板内容；光标已进入面板（离开菜单），无「用户正在交互菜单」的保留理由。
     // requestMenuHide 自带 menuHidePending 防重入，轮询每轮重复调用安全。
@@ -327,6 +349,105 @@ let lastCursorOwner: 'ball' | 'panel' | 'menu' | 'mini' | 'main' | null = null;
 let lastMainCovered: boolean | null = null;
 // v2.3.x：小窗专用 covered 变化沿（小窗不再订阅 main:cursor-window，改订阅独立的 mini:cursor-window）
 let lastMiniWindowCovered: boolean | null = null;
+// v2.3.126：hover 启动沿即时推送 covered=true（不等 200ms 轮询）——修复 Bug D 残留：
+// 光标从外部快速滑入被悬浮球压住的主窗/小窗时，main:cursor-window / mini:cursor-window 的
+// covered=true 依赖 200ms 轮询变化沿，滞后窗内主窗/小窗会短暂画出不该有的动态光标。
+// 悬浮球某窗获得光标（hover 进入沿 / 菜单弹出）时，其下方的主窗/小窗必须立刻门控自身动态光标。
+// 球悬停在桌面上时主窗/小窗本就不在指针下，误门控无害——下一轮轮询按真实覆盖关系沿推 false 纠正。
+function pushCoveredNow(): void {
+  // v2.3.126（QA P1 修复）：**现算**覆盖关系，只在结果与边沿缓存不同才推，且缓存写入**实际推的值**。
+  // 旧实现无条件推 true 并把缓存写成 true → 与 200ms 轮询算出的 false 冲突 → 5Hz 永久振荡：
+  //   hoverPanel 推 true → 下轮轮询推 false → hover 再推 true → 主窗/小窗动态光标反复被隐藏 → 闪烁。
+  // 现在 hover 沿与轮询共用同一谓词（computeCoveredState）+ 同一变化沿缓存 → 序列必然收敛。
+  const next = computeCoveredStateNow();
+  const diff = diffCoverState(
+    { main: lastMainCovered, mini: lastMiniWindowCovered },
+    { main: next.main, mini: next.mini }
+  );
+  if (diff.main !== undefined) {
+    lastMainCovered = diff.main;
+    const mainWin = mainWinRef;
+    if (mainWin && !mainWin.isDestroyed() && mainWin.isVisible()) {
+      mainWin.webContents.send('main:cursor-window', diff.main);
+    }
+  }
+  if (diff.mini !== undefined) {
+    lastMiniWindowCovered = diff.mini;
+    const miniWin = miniWinRef;
+    if (miniWin && !miniWin.isDestroyed() && miniWin.isVisible()) {
+      miniWin.webContents.send('mini:cursor-window', diff.mini);
+    }
+  }
+}
+
+/** 收集当前几何，交给单一真源算覆盖关系（hover 沿与轮询共用，杜绝谓词漂移） */
+function computeCoveredStateNow(): { owner: CursorOwner; main: boolean; mini: boolean } {
+  let cursorX = -1;
+  let cursorY = -1;
+  try {
+    const p = screen.getCursorScreenPoint();
+    cursorX = p.x;
+    cursorY = p.y;
+  } catch {
+    /* 取不到光标位置时按「无覆盖」处理 */
+  }
+  const mainWin = mainWinRef;
+  const miniWin = miniWinRef;
+  const ballWin = ballWindow;
+  return computeCoveredState({
+    cursorX,
+    cursorY,
+    dragging: !!dragTimer,
+    // v2.3.126（收口）：球窗传**不透明命中区**（内缩 BALL_PAD = 球 DOM 实际范围 60×60），
+    // 不再用整窗矩形 —— 整窗矩形会把球窗外圈 4px 穿透区也算成「球的不透明区」，
+    // 该窄条 owner 会是 'ball' → 轮询 level 推 true → 无法自愈；一旦渲染端 mouseleave 丢失，
+    // 窄条会同时出现下层原生光标 + 球窗动态字形（双光标）。内缩后 owner 归下层窗口，
+    // 轮询 level 推 false → 球窗门控打开 → 窄条只剩下层原生光标。
+    ballRect:
+      ballWin && !ballWin.isDestroyed() && ballWin.isVisible()
+        ? insetRect(ballWin.getBounds() as CoverRect, BALL_PAD)
+        : null,
+    menuRect:
+      menuVisible && menuWindow && !menuWindow.isDestroyed() ? (menuWindow.getBounds() as CoverRect) : null,
+    // 面板用**不透明命中区**（inset PANEL_PAD）：owner 与 covered 同源，
+    // 透明边距不算「面板区域」→ 该区域光标归下层窗口，不会出现「一个光标都没有」的死区。
+    panelRect: panelOpaqueRect(),
+    mainRect: mainWin && !mainWin.isDestroyed() && mainWin.isVisible() ? (mainWin.getBounds() as CoverRect) : null,
+    miniRect: miniWin && !miniWin.isDestroyed() && miniWin.isVisible() ? (miniWin.getBounds() as CoverRect) : null,
+  });
+}
+
+/** 面板不透明命中区：面板窗 bounds 四边内缩 PANEL_PAD（面板 DOM 就是 inset 14） */
+function panelOpaqueRect(): CoverRect | null {
+  if (!panelVisible || !panelWindow || panelWindow.isDestroyed()) return null;
+  return insetRect(panelWindow.getBounds() as CoverRect, PANEL_PAD);
+}
+
+// v2.3.126（P2-A）：面板「可交互态」由主进程权威下发（level 推，渲染端去重）。
+// 判定 = 光标是否落在面板不透明命中区内（进入用 inset 矩形，退出用 inset 再外扩 3px 的迟滞矩形）。
+let lastPanelInteractive = false;
+/** 现算面板可交互态（带迟滞） */
+function panelInteractiveNow(): boolean {
+  const rect = panelOpaqueRect();
+  if (!rect) return false;
+  let cursorX = -1;
+  let cursorY = -1;
+  try {
+    const p = screen.getCursorScreenPoint();
+    cursorX = p.x;
+    cursorY = p.y;
+  } catch {
+    return false;
+  }
+  return computePanelInteractive(cursorX, cursorY, rect, lastPanelInteractive);
+}
+/** 下发面板可交互态（level：每轮推当前值；渲染端只在值变化时才切可交互态） */
+function pushPanelInteractive(): void {
+  if (!panelWindow || panelWindow.isDestroyed()) return;
+  const v = panelInteractiveNow();
+  lastPanelInteractive = v;
+  panelWindow.webContents.send('panel:interactive', v);
+}
 function pointInRect(px: number, py: number, b: Electron.Rectangle): boolean {
   return px >= b.x && px < b.x + b.width && py >= b.y && py < b.y + b.height;
 }
@@ -336,7 +457,12 @@ function startCursorPoll(): void {
     if (!ballWindow || ballWindow.isDestroyed() || !ballWindow.isVisible()) return;
     try {
       const p = screen.getCursorScreenPoint();
+      // ⚠️ 仅用于 hover 电平 / 收起防抖；owner 与 covered 一律以 computeCoveredStateNow() 的
+      // 不透明命中区为准（球 = 内缩 BALL_PAD 的球 DOM 范围）。此处用整窗矩形是**故意的**：
+      // hover 语义要覆盖球的透明边距（防误收起），但**不可**当 owner 谓词用（会与共享模块漂移）。
       const inBall = pointInRect(p.x, p.y, ballWindow.getBounds());
+      // ⚠️ 仅用于 hover 电平 / 收起防抖 + 菜单互斥；owner 与 covered 一律以
+      // computeCoveredStateNow() 的不透明命中区为准。菜单按整窗矩形近似（菜单窗不挂 CustomCursor）。
       // 菜单窗相关判定（menuVisible 时有效）
       const inMenu =
         menuVisible &&
@@ -347,35 +473,26 @@ function startCursorPoll(): void {
       // 拖拽中球窗恒独占（同时保住 P0-1：不因贴边越界给球窗推 false）；否则 菜单 > 球 > 面板
       // （球为锚点，重叠时球优先）。只有 owner 收 cursor-window=true，其余窗收 false 立即隐藏，
       // 杜绝「悬浮球与快捷面板同时各亮一个动态光标」。
+      // ⚠️ 仅用于 hover 电平 / 收起防抖（panel:hover-panel 的防误收起需要**整窗**语义：
+      // 面板的 14px 透明边距也算「悬停面板」，否则光标在边距上时面板会被收起）；
+      // owner 与 covered 一律以 computeCoveredStateNow() 的不透明命中区（inset PANEL_PAD）为准。
       const inPanel =
         panelVisible && !!panelWindow && !panelWindow.isDestroyed() &&
         pointInRect(p.x, p.y, panelWindow.getBounds());
-      // 主窗 / 小窗可见性（owner 判定前需先算好，供下方单光标 covered 计算复用）
+      // v2.3.126（QA P1）：主窗 / 小窗的命中判定已下沉到单一真源 computeCoveredStateNow()，
+      // 这里不再重复计算（重复计算 = 两套谓词 = 漂移风险）。此处只保留窗口引用供下发 IPC 用。
       const mainWin = mainWinRef;
-      const inMainNow =
-        !!mainWin && !mainWin.isDestroyed() && mainWin.isVisible() &&
-        pointInRect(p.x, p.y, mainWin.getBounds());
       const miniWin = miniWinRef;
-      const inMiniNow =
-        !!miniWin && !miniWin.isDestroyed() && miniWin.isVisible() &&
-        pointInRect(p.x, p.y, miniWin.getBounds());
       // v2.3.117：单光标所有权——光标所在最上层窗口独占动态光标（整机一个光标）。
       // 拖拽中球窗恒独占（同时保住 P0-1：不因贴边越界给球窗推 false）；否则 菜单 > 球 > 面板
       // （球为锚点，重叠时球优先）；再其次光标在小窗（mini）上则小窗独占；最后光标在主窗（main）
       // 上则主窗独占。只有 owner 收 cursor-window=true，其余窗收 false 立即隐藏，杜绝各类双光标。
-      const owner: 'ball' | 'panel' | 'menu' | 'mini' | 'main' | null = dragTimer
-        ? 'ball'
-        : inMenu
-        ? 'menu'
-        : inBall
-        ? 'ball'
-        : inPanel
-        ? 'panel'
-        : inMiniNow
-        ? 'mini'
-        : inMainNow
-        ? 'main'
-        : null;
+      // v2.3.126（QA P1）：owner 与 covered 判定改用**单一真源**（electron/cursorCoverState.ts），
+      // 与 hover 启动沿的 pushCoveredNow() 完全同源 → 两者对同一几何必给同一结论 → 不会互相覆盖。
+      // 注意面板用的是**不透明命中区**（inset PANEL_PAD）：光标停在面板透明边距时 owner 归下层窗口，
+      // 该区域由下层窗口出光标（不会一个光标都没有），且面板该处保持点击穿透。
+      const cover = computeCoveredStateNow();
+      const owner = cover.owner;
       const prevOwner = lastCursorOwner;
       lastCursorOwner = owner;
       // v2.3.x：主窗/小窗动态光标 covered 同步。当系统光标位于悬浮球某窗（ball/panel/menu）矩形内、
@@ -384,20 +501,27 @@ function startCursorPoll(): void {
       // 用「变化沿」推送（covered 状态变化才发），避免每轮 200ms 轮询都重发造成抖动。
       // 关键点：owner 为 'mini'/'main' 时该窗自身即光标 owner，不应被自己网关掉——
       // mainCovered 显式排除 'main'；miniCovered 仅由 ball/panel/menu 压在它上方时触发，二者互不误伤。
-      const mainCovered = owner !== null && owner !== 'main' && inMainNow;
-      const miniCovered = (owner === 'ball' || owner === 'panel' || owner === 'menu') && inMiniNow;
-      if (mainCovered !== lastMainCovered) {
-        lastMainCovered = mainCovered;
+      const mainCovered = cover.main;
+      const miniCovered = cover.mini;
+      // 变化沿推送（与 pushCoveredNow 共用同一 diffCoverState + 同一缓存）→ 序列稳定不振荡
+      const coverDiff = diffCoverState(
+        { main: lastMainCovered, mini: lastMiniWindowCovered },
+        { main: mainCovered, mini: miniCovered }
+      );
+      if (coverDiff.main !== undefined) {
+        lastMainCovered = coverDiff.main;
         if (mainWin && !mainWin.isDestroyed()) {
-          mainWin.webContents.send('main:cursor-window', mainCovered);
+          mainWin.webContents.send('main:cursor-window', coverDiff.main);
         }
       }
-      if (miniCovered !== lastMiniWindowCovered) {
-        lastMiniWindowCovered = miniCovered;
+      if (coverDiff.mini !== undefined) {
+        lastMiniWindowCovered = coverDiff.mini;
         if (miniWin && !miniWin.isDestroyed()) {
-          miniWin.webContents.send('mini:cursor-window', miniCovered);
+          miniWin.webContents.send('mini:cursor-window', coverDiff.mini);
         }
       }
+      // v2.3.126（P2-A）：每轮 level 推面板可交互态（渲染端去重后只切一次）
+      pushPanelInteractive();
       // v2.3.118：球窗光标所有权「level」推送（每轮都推当前值）。快速掠过悬浮球时，球窗自身
       // mouseleave 可能因「穿透↔可交互」切换时序而不触发，动态光标会卡成静止残留（鼠标已离开
       // 仍留在球上）。level 推送保证光标一离开球窗（≤一个轮询周期）即被强制隐藏；球窗
@@ -857,6 +981,10 @@ export function showFloatingBall(): void {
     // v2.3.x：与主窗全屏退出恢复同理，面板重新显示前先复位为整体穿透（见 expandPanel 注释）
     panelWindow.setIgnoreMouseEvents(true, { forward: true });
     panelWindow.showInactive();
+    // v2.3.126：全屏恢复路径此前只 show 窗口、不推 panel:show，渲染端门控同样失同步
+    // （面板窗 hide 期间收不到 mouseleave，gate-off 停留在「已摘除」态）。重推 panel:show
+    // 幂等——.show 重复添加无副作用，渲染端借此同步门控复位 + 按真实悬停态恢复可交互。
+    panelWindow.webContents.send('panel:show', { h: panelDir, v: panelVDir });
   }
   // 菜单不随恢复重新弹出（menuVisible 已在 hideFloatingBall 复位为 false）
 }
@@ -1030,6 +1158,10 @@ export function registerBallIPC(): void {
   // 面板 hover 上报（只参与收起判定，永不触发展开）
   ipcMain.on('panel:hover-panel', (_e, v: boolean) => {
     setHoverPanel(!!v);
+    // v2.3.126（P2-A）：hover 上报即**立即**重算并下发面板可交互态（主进程权威，渲染端不自行判定）。
+    // 目的：① 光标进入面板不透明区时面板**立即**可点击（不等 200ms 轮询）；
+    //      ② 光标离开面板时立即恢复点击穿透（不等轮询 → 不出现「隐形空气墙」滞留）。
+    pushPanelInteractive();
   });
 
   // 球右键：弹出独立菜单窗（不强制展开面板，面板展开状态保持原样）。
@@ -1037,6 +1169,9 @@ export function registerBallIPC(): void {
   // 重设 bounds 并重推 menu:show（同一窗口，无重复弹窗；渲染端会作废进行中的缩入动画）。
   ipcMain.on('ball:ctx-menu', () => {
     if (!menuWindow || menuWindow.isDestroyed()) return;
+    // v2.3.126：菜单弹出即悬浮球侧获得光标 → 立即门控下层主窗/小窗动态光标（不等 200ms 轮询，
+    // 修复 Bug D 轮询滞后窗内错误光标）
+    pushCoveredNow();
     // show 时重置为 forward 穿透初始态（上一次显示期间渲染端可能切过可交互）
     menuWindow.setIgnoreMouseEvents(true, { forward: true });
     menuWindow.setBounds(calcMenuRect());

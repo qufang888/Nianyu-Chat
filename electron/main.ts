@@ -6994,8 +6994,23 @@ function registerIPC(): void {
     }
   );
   // 悬浮球面板点击某聊天：呼出该聊天的「小窗」界面（而非主窗口），契合快捷选择聊天定位
+  // v2.3.126：小窗**已存在**时必须显式下发 mini:switch 切到被点击的会话。
+  // 原来只写 pendingMiniChat 就 showMiniWindow()，而 pendingMiniChat 只在**小窗挂载时**
+  // 被 mini:getInitial 消费一次（已存在的小窗不会再读它），且 showMiniWindow() 发的
+  // mini:switch 载荷是 null → 小窗不知道要切到谁 → 点哪个人物都是当前/默认会话。
+  // 下面写法与上面的 mini:open 处理器同款：已有小窗直接 send mini:switch（载荷
+  // { chatType, chatId }，与 MiniChat 的 onMiniSwitch → applyInitialChat(data) 兼容，
+  // 单聊走 getRole、群聊走 getGroup，两种 chatType 都能正确切换）。
   ipcMain.on('ball:open-chat', (_e, chat: { chatType: string; chatId: string; name?: string }) => {
     clearUnreadForChat(chat.chatType, chat.chatId);
+    if (miniWindow && !miniWindow.isDestroyed()) {
+      miniWindow.webContents.send('mini:switch', { chatType: chat.chatType, chatId: chat.chatId });
+      miniWindow.setOpacity(1);
+      miniWindow.show();
+      miniWindow.focus();
+      return;
+    }
+    // 小窗尚未创建：把目标会话挂到 pendingMiniChat，等小窗挂载时经 mini:getInitial 取走
     pendingMiniChat = { chatType: chat.chatType, chatId: chat.chatId };
     showMiniWindow();
   });

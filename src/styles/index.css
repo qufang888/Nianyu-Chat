@@ -6484,11 +6484,14 @@ html[data-anim-off~='panel'] .msg-action-divider {
   outline: none;
   border-color: var(--color-primary);
 }
-/* 候选项框：面板自带 overflow-y（配合 MAX_SUGGESTIONS 与滚动条查看其余候选） */
+/* 候选项框：视口固定 5 行（高度由 StatsView.tsx 的 PICK_LIST_HEIGHT 常量锁定 = 218px），
+   滚动交给内部 CustomScrollArea（JS 滑动条：滚轮与滑动条拇指天然同步，
+   也避免原生滚动条盖住动态光标） */
 .stats-role-pick-list {
-  flex: 1;
-  overflow-y: auto;
   padding: 0 8px 8px;
+}
+/* 滚动内容容器：行间距 2px（须与 StatsView.tsx 的 PICK_ROW_GAP 常量一致） */
+.stats-role-pick-scroll {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -6497,6 +6500,10 @@ html[data-anim-off~='panel'] .msg-action-divider {
   display: flex;
   align-items: center;
   gap: 10px;
+  /* 固定行高 42px（avatar 26px + 上下 padding 各 8px）——必须与 StatsView.tsx 的
+     PICK_ROW_HEIGHT 常量一致，改一处要改两处 */
+  height: 42px;
+  box-sizing: border-box;
   padding: 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -6507,7 +6514,15 @@ html[data-anim-off~='panel'] .msg-action-divider {
   color: var(--color-text);
   transition: background var(--transition);
 }
+/* 头像不参与弹性压缩，保证 42px 行高内不被压扁 */
+.stats-role-pick-item .avatar {
+  flex: 0 0 auto;
+}
 .stats-role-pick-item:hover {
+  background: var(--color-hover);
+}
+/* 键盘 ↑↓ 导航命中的高亮项 */
+.stats-role-pick-item.active {
   background: var(--color-hover);
 }
 .stats-role-pick-item .stats-role-pick-name {

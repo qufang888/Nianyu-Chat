@@ -1576,7 +1576,7 @@
  "stats.favGenderNone": "Keine Angabe",
  "stats.favNoResult": "Keine passende Figur gefunden",
  "stats.favPickFirst": "Bitte zuerst eine Figur auswählen",
- "stats.favPickMeta": "{shown} von {total} Figuren (höchstens {max} Vorschläge)",
+ "stats.favPickMeta": "{shown} von {total} Figuren ({max} pro Seite, scrollbar)",
  "stats.favPickTitle": "Lieblingsfigur auswählen",
  "stats.favRoleLabel": "Figur",
  "stats.favSave": "Speichern",

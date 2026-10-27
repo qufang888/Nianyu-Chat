@@ -713,7 +713,7 @@ export const translations: Record<Lang, Dict> = {
     'stats.favPickTitle': '选择最喜爱的人物',
     'stats.favSearchPh': '搜索人物名称…',
     'stats.favNoResult': '没有找到匹配的人物',
-    'stats.favPickMeta': '显示 {shown} / {total} 位人物（最多 {max} 条候选）',
+    'stats.favPickMeta': '显示 {shown} / {total} 位人物（每屏 {max} 位，可滚动）',
     // ===== v2.3.95：独立编辑界面（主页面改为纯展示）=====
     'stats.favEdit': '编辑',
     'stats.favEditTitle': '编辑最喜爱人物',
@@ -2503,7 +2503,7 @@ export const translations: Record<Lang, Dict> = {
     'stats.favPickTitle': 'Pick your favorite character',
     'stats.favSearchPh': 'Search character name…',
     'stats.favNoResult': 'No matching character found',
-    'stats.favPickMeta': 'Showing {shown} of {total} characters (up to {max} suggestions)',
+    'stats.favPickMeta': 'Showing {shown} of {total} characters ({max} per page, scrollable)',
     // ===== v2.3.95: standalone editor (main page is display-only) =====
     'stats.favEdit': 'Edit',
     'stats.favEditTitle': 'Edit favorite character',

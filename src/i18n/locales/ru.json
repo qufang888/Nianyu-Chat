@@ -1576,7 +1576,7 @@
  "stats.favGenderNone": "Не выбран",
  "stats.favNoResult": "Совпадающих персонажей не найдено",
  "stats.favPickFirst": "Сначала выберите персонажа",
- "stats.favPickMeta": "Показано {shown} из {total} персонажей (до {max} подсказок)",
+ "stats.favPickMeta": "Показано {shown} из {total} персонажей ({max} на экране, с прокруткой)",
  "stats.favPickTitle": "Выберите любимого персонажа",
  "stats.favRoleLabel": "Персонаж",
  "stats.favSave": "Сохранить",

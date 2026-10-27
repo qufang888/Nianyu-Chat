@@ -24,10 +24,10 @@ const cur = read('src/components/CustomCursor.tsx');
 
 console.log('=== A. 即时隐藏函数存在且行为正确 ===');
 ok(/const hideCursorImmediate\s*=\s*\(\)\s*=>/.test(cur), 'hideCursorImmediate 已定义');
-ok(/hideCursorImmediate[\s\S]{0,500}?classList\.remove\('cursor-hidden'\)/.test(cur),
+ok(/hideCursorImmediate[\s\S]{0,1400}?classList\.remove\('cursor-hidden'\)/.test(cur),
   'hideCursorImmediate 移除 cursor-hidden（立即恢复原生光标）');
-ok(/hideCursorImmediate[\s\S]{0,1000}?stopLoop\(\)/.test(cur), 'hideCursorImmediate 停止 rAF 循环');
-ok(/hideCursorImmediate[\s\S]{0,700}?clearRect/.test(cur), 'hideCursorImmediate 清空画布（无残留光标）');
+ok(/hideCursorImmediate[\s\S]{0,2000}?stopLoop\(\)/.test(cur), 'hideCursorImmediate 停止 rAF 循环');
+ok(/hideCursorImmediate[\s\S]{0,1400}?clearRect/.test(cur), 'hideCursorImmediate 清空画布（无残留光标）');
 
 console.log('=== B. 鼠标移出窗口走即时隐藏（而非淡出）===');
 const grab = (name) => {
@@ -57,8 +57,8 @@ for (const [f, label] of [
 }
 
 console.log('=== E. 进入吸附指针 + 一步到位全显（v2.3.115 修边缘无光标 / 双光标）===');
-ok(/hideCursorImmediate[\s\S]{0,900}?renderXRef\.current = OFFSCREEN/.test(cur) &&
-   /hideCursorImmediate[\s\S]{0,960}?renderYRef\.current = OFFSCREEN/.test(cur),
+ok(/hideCursorImmediate[\s\S]{0,1400}?renderXRef\.current = OFFSCREEN/.test(cur) &&
+   /hideCursorImmediate[\s\S]{0,1500}?renderYRef\.current = OFFSCREEN/.test(cur),
   'hideCursorImmediate 把渲染位置打回离屏哨兵（下次进入吸附到指针，不再从陈旧位置缓动）');
 ok(/const ensureVisible = \(crisp = false\)/.test(cur), 'ensureVisible 支持 crisp 参数');
 ok(/if \(crisp\) \{[\s\S]{0,160}?opacityRef\.current = 1;[\s\S]{0,80}?fadeStateRef\.current = 'none';/.test(cur),

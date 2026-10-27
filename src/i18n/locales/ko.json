@@ -1576,7 +1576,7 @@
  "stats.favGenderNone": "선택 안 함",
  "stats.favNoResult": "일치하는 캐릭터가 없습니다",
  "stats.favPickFirst": "먼저 캐릭터를 선택하세요",
- "stats.favPickMeta": "{total}명 중 {shown}명 표시 (최대 {max}개 제안)",
+ "stats.favPickMeta": "{total}명 중 {shown}명 표시 (한 화면 {max}명, 스크롤 가능)",
  "stats.favPickTitle": "가장 좋아하는 캐릭터 선택",
  "stats.favRoleLabel": "캐릭터",
  "stats.favSave": "저장",

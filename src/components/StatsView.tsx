@@ -4,6 +4,7 @@ import { useI18n } from '../i18n/I18nContext';
 import { useTheme } from '../theme/ThemeContext';
 import type { AppSettings, Role, RoleStat } from '../types';
 import { AvatarImg } from './ChatList';
+import CustomScrollArea from './CustomScrollArea';
 import { normalizeRelation, RELATION_LABELS } from '../types';
 import { isGroupEnabled, getAnimSpeed } from '../utils/animControl';
 import {
@@ -26,7 +27,7 @@ import {
   type RankMode,
   type RankRow,
 } from '../utils/statsRank';
-import { highlightParts, MAX_SUGGESTIONS, rankCandidates, suggest } from '../utils/fuzzySearch';
+import { highlightParts, MAX_SUGGESTIONS, rankCandidates } from '../utils/fuzzySearch';
 
 /** 饼图 SVG 视图框边长（viewBox 为 0 0 200 200，圆心 100,100） */
 const PIE_SIZE = 200;
@@ -1343,8 +1344,29 @@ const FavoriteEditor: React.FC<{
 };
 
 // ============================================================================
-// 人物选择弹层（模糊搜索 · 必须走 utils/fuzzySearch 的 suggest）
+// 人物选择弹层（模糊搜索 · 必须走 utils/fuzzySearch 的 rankCandidates）
 // ============================================================================
+
+/**
+ * 单行高度（px）——必须与 index.css `.stats-role-pick-item` 的 height 对齐，
+ * 改一处要改两处（JS 常量与 CSS 行高）。依据：avatar 26px + 上下 padding 各 8px = 42px。
+ */
+const PICK_ROW_HEIGHT = 42;
+/**
+ * 每屏可见行数（用户要求：一屏只显示 5 位人物，多出来的用滚轮 / 滑动条翻）。
+ * 复用 fuzzySearch 的 MAX_SUGGESTIONS（=5）——与 SearchSuggest「max = 同时可见行数」的
+ * 解释一致；全局「一屏 5 条」铁律的唯一真源仍是 fuzzySearch，本文件不另写魔法数。
+ */
+const PICK_VISIBLE_ROWS = MAX_SUGGESTIONS;
+/** 行间距（px）——须与 index.css `.stats-role-pick-scroll` 的 gap 一致 */
+const PICK_ROW_GAP = 2;
+/**
+ * 列表视口高度（px）= 5 行 + 4 个 2px 间隙 = 218。
+ * 「一屏恰好 5 位、第 6 位被裁切（可滚动）」的高度来源；
+ * 改 PICK_ROW_HEIGHT / PICK_ROW_GAP 时需同步这里与 index.css。
+ */
+const PICK_LIST_HEIGHT =
+  PICK_VISIBLE_ROWS * PICK_ROW_HEIGHT + (PICK_VISIBLE_ROWS - 1) * PICK_ROW_GAP;
 
 const RolePicker: React.FC<{
   roles: Role[];
@@ -1353,29 +1375,72 @@ const RolePicker: React.FC<{
 }> = ({ roles, onPick, onClose }) => {
   const { t } = useI18n();
   const [q, setQ] = useState('');
+  const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  /** CustomScrollArea 的滚动容器（键盘移动高亮时用它把该项滚入可视区） */
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
-    // Esc 关闭
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, []);
 
-  // 模糊搜索：走 fuzzySearch 的 suggest（最多 MAX_SUGGESTIONS 条），
-  // 绝不自写 filter(includes) —— 那是用户的全局铁律。
-  // 候选总数另用 rankCandidates 求（用于底部「显示 x / y 位」提示与是否显示滚动条）。
-  const shown = useMemo(
-    () => suggest(q, roles, (r) => ({ label: r.name, keywords: [r.occupation, r.short_intro] })),
+  // 模糊搜索：走 fuzzySearch 的 rankCandidates（不截断）→ 完整排名列表。
+  // 绝不自写 filter(includes) —— 那是用户的全局铁律；模糊匹配与相关度排序全部由
+  // fuzzySearch 负责（唯一真源）。改成完整列表，是为了让下面的滚动条能翻到更多人物。
+  const ranked = useMemo(
+    () => rankCandidates(q, roles, (r) => ({ label: r.name, keywords: [r.occupation, r.short_intro] })),
     [q, roles]
   );
-  const total = useMemo(
-    () => rankCandidates(q, roles, (r) => ({ label: r.name, keywords: [r.occupation, r.short_intro] })).length,
-    [q, roles]
-  );
+  const total = ranked.length;
+  const shown = useMemo(() => ranked.map((r) => r.item), [ranked]);
+
+  // 查询词变化 → 高亮回到首项
+  useEffect(() => { setActive(0); }, [q]);
+
+  // 候选变少时（如搜索后）高亮索引越界 → 复位
+  useEffect(() => {
+    if (active >= shown.length) setActive(0);
+  }, [active, shown.length]);
+
+  // 键盘：↑↓ 移动高亮、Enter 选中、Esc 关闭（Esc 会 stopPropagation，
+  // 避免连带关掉外层弹层，与 SearchSuggest 的语义一致）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      } else if (e.key === 'ArrowDown') {
+        if (!shown.length) return;
+        e.preventDefault();
+        setActive((i) => (i + 1) % shown.length);
+      } else if (e.key === 'ArrowUp') {
+        if (!shown.length) return;
+        e.preventDefault();
+        setActive((i) => (i - 1 + shown.length) % shown.length);
+      } else if (e.key === 'Enter') {
+        if (!shown.length) return;
+        e.preventDefault();
+        const r = shown[Math.min(active, shown.length - 1)];
+        if (r) onPick(r);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose, onPick, shown, active]);
+
+  // 键盘移动时把高亮项滚入可视区：只改 CustomScrollArea 自身的 scrollTop，
+  // 不用 scrollIntoView（后者会连带滚动外层祖先容器）
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const item = el.querySelector(`[data-idx="${active}"]`) as HTMLElement | null;
+    if (!item) return;
+    const top = item.offsetTop;
+    const bottom = top + item.offsetHeight;
+    if (top < el.scrollTop) el.scrollTop = top;
+    else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight;
+  }, [active]);
 
   return (
     <div className="stats-role-pick-mask" onClick={onClose}>
@@ -1395,22 +1460,38 @@ const RolePicker: React.FC<{
           />
         </div>
         <div className="stats-role-pick-list">
-          {shown.length === 0 && <div className="stats-empty">{t('stats.favNoResult')}</div>}
-          {shown.map((r) => (
-            <button key={r.id} className="stats-role-pick-item" onClick={() => onPick(r)}>
-              <div className="avatar" style={{ width: 26, height: 26, borderRadius: 8, fontSize: 12 }}>
-                {r.avatar_path ? <AvatarImg path={r.avatar_path} /> : '🤖'}
-              </div>
-              <span className="stats-role-pick-name">
-                {highlightParts(r.name, q).map((p, i) =>
-                  p.hit ? <mark key={i}>{p.text}</mark> : <React.Fragment key={i}>{p.text}</React.Fragment>
-                )}
-              </span>
-            </button>
-          ))}
+          {/* 用 CustomScrollArea 承载滚动：它自带 JS 滑动条（拇指可拖、隐藏原生滚动条），
+              且监听内容 scroll 事件驱动拇指位置 → 滚轮滚动与滑动条位置天然同步。 */}
+          <CustomScrollArea style={{ height: PICK_LIST_HEIGHT }} scrollRef={scrollRef}>
+            <div className="stats-role-pick-scroll">
+              {shown.length === 0 && <div className="stats-empty">{t('stats.favNoResult')}</div>}
+              {shown.map((r, i) => (
+                <button
+                  key={r.id}
+                  data-idx={i}
+                  className={`stats-role-pick-item${i === active ? ' active' : ''}`}
+                  onMouseEnter={() => setActive(i)}
+                  onClick={() => onPick(r)}
+                >
+                  <div className="avatar" style={{ width: 26, height: 26, borderRadius: 8, fontSize: 12 }}>
+                    {r.avatar_path ? <AvatarImg path={r.avatar_path} /> : '🤖'}
+                  </div>
+                  <span className="stats-role-pick-name">
+                    {highlightParts(r.name, q).map((p, k) =>
+                      p.hit ? <mark key={k}>{p.text}</mark> : <React.Fragment key={k}>{p.text}</React.Fragment>
+                    )}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </CustomScrollArea>
         </div>
         <div className="stats-role-pick-meta">
-          {t('stats.favPickMeta', { shown: shown.length, total, max: MAX_SUGGESTIONS })}
+          {t('stats.favPickMeta', {
+            shown: Math.min(shown.length, PICK_VISIBLE_ROWS),
+            total,
+            max: PICK_VISIBLE_ROWS,
+          })}
         </div>
       </div>
     </div>
