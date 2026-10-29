@@ -30,7 +30,7 @@ import type { AppSettings } from '../types';
 import { clampAnimSpeed, animSpeedFromSeconds, ANIM_SPEED_DEFAULT } from '../types';
 
 /** 文档种类：决定某分组在该文档里用哪套选择器 */
-export type AnimDocKind = 'main' | 'floating' | 'notify';
+export type AnimDocKind = 'main' | 'floating' | 'notify' | 'character';
 
 /**
  * 动画控制档位（v2.3.92）。
@@ -432,6 +432,17 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.stats-fav-plus',
       '.stats-fav-field input',
     ],
+  },
+  {
+    // V3：桌面角色窗与「捉宠角色」面板里的动画（呼吸 / 气泡 / 菜单 / 舞台气泡）。
+    // 角色窗是第 5 个独立 document（character.html），类名与主窗完全不同，
+    // 因此必须用 docSelectors.character 单独登记，否则自定义档的开关对它无效。
+    id: 'character',
+    labelKey: 'animCtl.groupCharacter',
+    selectors: ['.dc-svg', '.dc-modelimg', '.stage-bubble', '.stage-model'],
+    docSelectors: {
+      character: ['.dc-svg', '.dc-modelimg', '.dc-bubble', '.dc-menu', '.dc-err'],
+    },
   },
 ];
 

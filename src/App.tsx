@@ -23,6 +23,8 @@ import {
 } from './components/QuickImportPreviewModal';
 import { ModelCompare } from './components/ModelCompare';
 import { MomentsView } from './components/MomentsView';
+// V3：桌面角色（捉宠角色）板块——主界面内的角色管理面板
+import { CharacterCollection } from './components/CharacterCollection';
 import { useToast, ToastView } from './components/Toast';
 import DynamicCursor from './cursor/DynamicCursor';
 import VideoBubble from './components/VideoBubble';
@@ -33,7 +35,7 @@ import { TutorialOverlay } from './components/TutorialOverlay';
 import { isGroupEnabled } from './utils/animControl';
 import type { Role, QuickImportResult, QuickImportPreviewItem } from './types';
 
-type View = 'chats' | 'contacts' | 'compare' | 'settings' | 'stats' | 'library' | 'moments';
+type View = 'chats' | 'contacts' | 'compare' | 'settings' | 'stats' | 'library' | 'moments' | 'characters';
 interface Selected {
   type: string;
   id: string;
@@ -118,6 +120,21 @@ export default function App() {
       if (p) paths.push(p);
     }
     if (!paths.length) return;
+    // V3：先把「角色包」交给桌面角色素材层认领（zip / .vrm / .glb / 整个角色文件夹），
+    // 认领了就到此为止，不再走角色卡/世界书那套快速导入，避免同一个包被解析两次。
+    try {
+      const dc = await api.dcImportPaths(paths);
+      if (dc.handled) {
+        const ok = dc.results.filter((r) => r.ok);
+        const bad = dc.results.filter((r) => !r.ok);
+        if (ok.length) showToast(t('characters.importOk', { n: String(ok.length) }));
+        if (bad.length) showToast(`${bad[0].name}：${t('characters.errImport')}`, { error: true, duration: 5000 });
+        if (ok.length) setView('characters');
+        return;
+      }
+    } catch {
+      /* 角色包识别失败时继续走原有快速导入流程 */
+    }
     // ① 预检：主进程只读解析，不落库
     setPreview({ loading: true, result: null, error: '' });
     try {
@@ -320,6 +337,33 @@ export default function App() {
     return off;
   }, []);
 
+  // V3：桌面角色窗口发来的两种导航请求
+  // 1) dc:open-collection → 切到「捉宠角色」板块（右键菜单「管理角色」/ 设置里点「管理」）
+  // 2) dc:open-chat       → 角色已绑定对话时，左键点击角色直接跳到那个会话
+  // 绑定记录里带了会话名，但可能为空（历史数据），此时回查会话列表补全，避免标题空白。
+  useEffect(() => {
+    if (typeof api.onDcOpenCollection !== 'function') return;
+    const offCollection = api.onDcOpenCollection(() => setView('characters'));
+    const offChat = api.onDcOpenChat(async (chat) => {
+      let name = chat.name || '';
+      if (!name) {
+        try {
+          const list = await api.getChatList();
+          const hit = list.find((x) => x.chat_type === chat.type && x.chat_id === chat.id);
+          name = hit?.chat_name || hit?.name || chat.id;
+        } catch {
+          name = chat.id;
+        }
+      }
+      onSelectChat({ chat_type: chat.type, chat_id: chat.id, name });
+    });
+    return () => {
+      offCollection();
+      offChat();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // AI 自动发朋友圈后弹 toast 提示
   useEffect(() => {
     if (typeof api.onMomentsAutoPosted !== 'function') return;
@@ -409,6 +453,7 @@ export default function App() {
   const title = (() => {
     if (view === 'chats' && selected) return selected.name;
   if (view === 'contacts') return t('nav.contacts');
+  if (view === 'characters') return t('nav.characters');
   if (view === 'compare') return t('nav.compare');
   if (view === 'settings') return t('nav.settings');
   if (view === 'moments') return t('nav.moments');
@@ -518,6 +563,7 @@ export default function App() {
         />
       )}
       {view === 'stats' && <StatsView />}
+      {view === 'characters' && <CharacterCollection />}
       {view === 'moments' && <MomentsView />}
       {view === 'library' && (
         <Library

@@ -23,6 +23,9 @@ import type {
   MomentMediaStatusEvent,
   VoiceListResult,
   ListVoicesOptions,
+  CharacterRuntimeSettings,
+  DesktopCharacter,
+  CharacterImportResult,
 } from './types';
 import type { ImportCharacterResult } from './utils/characterCard';
 export type { ImportCharacterResult };
@@ -537,6 +540,35 @@ export interface NianyuAPI {
   // 渲染端只在值变化时才切换（避免每 200ms 重复派发合成 mouseout）。
   onPanelInteractive?: (cb: (interactive: boolean) => void) => () => void;
 
+  // ===== 桌面角色（V3）=====
+  dcSetIgnore: (ignore: boolean) => void;
+  dcDragStart: (gx: number, gy: number) => void;
+  dcDragEnd: () => void;
+  dcSetAlwaysOnTop: (v: boolean) => void;
+  dcSetPassThroughLock: (v: boolean) => void;
+  dcSetEnabled: (v: boolean) => void;
+  dcSetActive: (id: string) => void;
+  dcGetState: () => Promise<{
+    runtime: CharacterRuntimeSettings;
+    characters: DesktopCharacter[];
+    active: DesktopCharacter | null;
+  }>;
+  dcOpenChat: (chat: { type: 'single' | 'group'; id: string; name?: string }) => void;
+  dcOpenCollection: () => void;
+  dcHideWindow: () => void;
+  dcShowWindow: () => void;
+  dcReposition: (x: number, y: number) => void;
+  // ===== 素材层（V3）=====
+  dcPickImport: (mode: 'file' | 'folder') => Promise<{ canceled: boolean; results: CharacterImportResult[] }>;
+  dcImportPaths: (paths: string[]) => Promise<{ handled: boolean; results: CharacterImportResult[] }>;
+  dcDeleteCharacter: (id: string) => Promise<boolean>;
+  dcRuntimeDir: () => Promise<string>;
+  dcRuntimeStatus: () => Promise<{ dir: string; cubism4: boolean; cubism2: boolean }>;
+  dcOpenRuntimeDir: () => Promise<boolean>;
+  onDcState: (cb: (data: { runtime: CharacterRuntimeSettings; character: DesktopCharacter | null }) => void) => () => void;
+  onDcOpenChat: (cb: (chat: { type: 'single' | 'group'; id: string; name?: string }) => void) => () => void;
+  onDcOpenCollection: (cb: () => void) => () => void;
+
   // ===== 主进程错误推送 =====
   onAppError?: (cb: (data: { message: string; cause: string; solution: string; lang: string }) => void) => () => void;
   offAppError?: (cb: (data: any) => void) => void;
@@ -583,6 +615,29 @@ export const api: NianyuAPI = {
   getCompanionByRole: () => raw.getCompanionByRole(),
   resolveChatRoleId: (chatType: string, chatId: string) => raw.resolveChatRoleId(chatType, chatId),
   ballOpenChat: (chat) => raw.ballOpenChat(chat),
+  // ===== 桌面角色（V3）=====
+  dcSetIgnore: (ignore) => raw.dcSetIgnore(ignore),
+  dcDragStart: (gx, gy) => raw.dcDragStart(gx, gy),
+  dcDragEnd: () => raw.dcDragEnd(),
+  dcSetAlwaysOnTop: (v) => raw.dcSetAlwaysOnTop(v),
+  dcSetPassThroughLock: (v) => raw.dcSetPassThroughLock(v),
+  dcSetEnabled: (v) => raw.dcSetEnabled(v),
+  dcSetActive: (id) => raw.dcSetActive(id),
+  dcGetState: () => raw.dcGetState(),
+  dcOpenChat: (chat) => raw.dcOpenChat(chat),
+  dcOpenCollection: () => raw.dcOpenCollection(),
+  dcHideWindow: () => raw.dcHideWindow(),
+  dcShowWindow: () => raw.dcShowWindow(),
+  dcReposition: (x, y) => raw.dcReposition(x, y),
+  dcPickImport: (mode) => raw.dcPickImport(mode),
+  dcImportPaths: (paths) => raw.dcImportPaths(paths),
+  dcDeleteCharacter: (id) => raw.dcDeleteCharacter(id),
+  dcRuntimeDir: () => raw.dcRuntimeDir(),
+  dcRuntimeStatus: () => raw.dcRuntimeStatus(),
+  dcOpenRuntimeDir: () => raw.dcOpenRuntimeDir(),
+  onDcState: (cb) => raw.onDcState(cb),
+  onDcOpenChat: (cb) => raw.onDcOpenChat(cb),
+  onDcOpenCollection: (cb) => raw.onDcOpenCollection(cb),
   rateInfo: (modelId) => raw.rateInfo(modelId),
   queueSnapshot: () => raw.queueSnapshot(),
   queueReorder: (key, orderedIds) => raw.queueReorder(key, orderedIds),

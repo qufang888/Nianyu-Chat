@@ -590,7 +590,7 @@ section('10. 运行时冒烟（用最小 DOM 桩**真的执行**一遍引擎）'
 section('9. CI 入口');
 // ============================================================================
 const pkg = JSON.parse(read('package.json'));
-ok(pkg.version === '2.3.126', `package.json 版本号未改动（${pkg.version}）`);
+ok(pkg.version === '3.0.0-beta.1', `package.json 版本号为 V3 测试版（${pkg.version}）`);
 ok(typeof pkg.scripts['verify:cursor-engine'] === 'string', 'package.json 含 verify:cursor-engine 入口');
 for (const s of ['verify:cursor-hotspot', 'verify:cursor-leave', 'verify:launch-cursor', 'verify:cursor-cover-state']) {
   ok(typeof pkg.scripts[s] === 'string', `package.json 保留 ${s} 入口`);

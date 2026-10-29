@@ -599,6 +599,68 @@ export interface SkillImportResult {
   warnings?: string[];
 }
 
+/**
+ * 桌面角色（V3 新增）。
+ *
+ * 说明：本模块是念语自有的「桌面陪伴角色」运行时，仅借用桌面陪伴类产品的**通用交互范式**
+ * （透明置顶窗口、命中/穿透切换、拖拽弹簧、随机待机动作、气泡反馈），
+ * 不包含任何第三方软件的品牌资产、角色形象、专有文案或动画复刻。
+ * 默认角色为**原创几何占位角色**；用户可自行导入其拥有权利的角色素材。
+ */
+export type DesktopCharacterKind = 'placeholder' | 'image' | 'sprite' | 'live2d' | 'vrm' | 'glb';
+
+export interface DesktopCharacter {
+  id: string;
+  name: string;
+  kind: DesktopCharacterKind;
+  /** 角色资源文件（相对 <数据目录>/characters/<id>/ 的文件名；placeholder 为空） */
+  files: string[];
+  /** 入口文件（相对 <数据目录>/characters/<id>/ 的路径）：Live2D 的 model3.json、3D 的模型文件、图片的 png */
+  entry?: string;
+  /** 预览图（相对路径 / dataURL；空则用原创占位绘制） */
+  preview?: string;
+  /** 绑定的对话；null/undefined = 未绑定（左键不跳转，右键菜单仍可用） */
+  boundChat?: { type: 'single' | 'group'; id: string; name: string } | null;
+  /** 是否在桌面显示 */
+  enabled: boolean;
+  /** 显示缩放（0.6~1.6） */
+  scale: number;
+  /** 是否启用自主行为（随机动作 / 主动气泡） */
+  behavior: boolean;
+  /** 是否显示气泡 */
+  bubble: boolean;
+  /** 导入时的格式提示（非原生可渲染格式的说明文案键后缀） */
+  note?: string;
+}
+
+/** 桌面角色导入结果（主进程解包后回传给渲染层） */
+export interface CharacterImportResult {
+  ok: boolean;
+  /** 成功时为新角色 id；失败为空 */
+  id?: string;
+  /** 角色名（默认取包名） */
+  name: string;
+  kind?: DesktopCharacterKind;
+  /** 入口文件（相对 characters/<id>/） */
+  entry?: string;
+  /** 失败原因键：too_large / no_model / unsafe entry / 其他底层错误信息 */
+  error?: string;
+}
+
+export interface CharacterRuntimeSettings {
+  /** 桌面角色总开关 */
+  enabled: boolean;
+  /** 角色窗左上角屏幕坐标（DIP） */
+  x: number;
+  y: number;
+  /** 角色是否置顶（与悬浮球同级 'screen-saver'） */
+  alwaysOnTop: boolean;
+  /** 穿透锁定：锁定后角色不再自动切回可交互（仅右键菜单可解除） */
+  passThroughLocked: boolean;
+  /** 当前展示的角色 id（空 = 首个启用角色） */
+  activeId: string;
+}
+
 export interface AppSettings {
   apiKeys: ApiKeys;
   defaultModel: string;
@@ -788,7 +850,7 @@ export interface AppSettings {
     enabled: boolean; // 全局音效开关
     volume: number; // 音量 0~1
     // v2.3.111：音效主题（出厂 'default' = 经典音效；其余为主题包，见 utils/sound.ts）
-    theme?: 'default' | 'aurora' | 'crystal' | 'wood' | 'bubble' | 'chime';
+    theme?: 'default' | 'aurora' | 'crystal' | 'wood' | 'bubble' | 'chime' | 'user';
     // 各类型音效的自定义文件（userData/custom-sounds 下的文件名）；null=使用内置默认音效
     custom: {
       error: string | null;
@@ -816,6 +878,11 @@ export interface AppSettings {
     autoHideInFullscreen?: boolean; // 主窗口全屏时自动关闭悬浮球（默认开）
     coordVer?: number; // x/y 坐标语义版本：1=旧单窗左上角（球偏移18），2=双窗架构球窗左上角（球偏移4）；读取时 <2 一次性 +14 迁移
   };
+  // ===== 桌面角色（V3）=====
+  /** 用户添加的全部桌面角色（含原创占位角色）。空数组 = 仅使用内置占位角色。 */
+  desktopCharacters?: DesktopCharacter[];
+  /** 桌面角色运行时状态（窗口位置 / 置顶 / 穿透锁定 / 当前角色） */
+  characterRuntime?: CharacterRuntimeSettings;
   // ===== 自定义动态光标 =====
   customCursor: {
     enabled: boolean; // 总开关：false=系统原生光标，true=动态光标（DOM 字形 + Canvas 特效）
@@ -1288,6 +1355,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
   launchOnBoot: true, // 开机自启动默认开启
   hasShownSplash: false,
   floatingBall: { enabled: true, x: 0, y: 0, alwaysOnTop: true, autoHideInFullscreen: true },
+  // V3 桌面角色：默认不自动展示（用户可在「捉宠角色」面板开启），无任何第三方素材
+  desktopCharacters: [],
+  characterRuntime: {
+    enabled: false,
+    x: 0,
+    y: 0,
+    alwaysOnTop: true,
+    passThroughLocked: false,
+    activeId: '',
+  },
   customCursor: {
     enabled: false,
     lerpSpeed: 0.25,

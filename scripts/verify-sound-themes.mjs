@@ -96,7 +96,7 @@ section('B. sound.ts：解析优先级 = 角色自定义 > 用户自定义 > 主
   check('导出 SOUND_THEMES（6 个内置主题）', /export const SOUND_THEMES: SoundTheme\[\] = \[[^\]]*'default'[^\]]*\];/.test(soundCode));
   check('SOUND_THEMES 含全部 5 套新主题',
     THEMES.every((t) => soundCode.includes(`'${t}'`)));
-  check('SoundTheme 类型含 6 个成员', /export type SoundTheme = 'default' \| 'aurora' \| 'crystal' \| 'wood' \| 'bubble' \| 'chime';/.test(soundCode));
+  check('SoundTheme 类型含 7 个成员（6 内置 + 自定义）', /export type SoundTheme = 'default' \| 'aurora' \| 'crystal' \| 'wood' \| 'bubble' \| 'chime' \| 'user';/.test(soundCode));
 
   // pickBuiltin：主题分支返回 sounds/themes/<id>/<file>.wav
   check('pickBuiltin 有主题分支（sounds/themes/<id>/<file>）',
@@ -155,8 +155,8 @@ section('C. Settings 音效区：主题选择器（6 主题 + 试听 + 落盘 + 
 // ---------- D. types.ts ----------
 section('D. types.ts：sound.theme 字段与出厂值');
 {
-  check('AppSettings.sound 增加 theme 字段（6 成员可选）',
-    /theme\?: 'default' \| 'aurora' \| 'crystal' \| 'wood' \| 'bubble' \| 'chime';/.test(typesCode));
+  check('AppSettings.sound 增加 theme 字段（7 成员可选，V3 起含 user）',
+    /theme\?: 'default' \| 'aurora' \| 'crystal' \| 'wood' \| 'bubble' \| 'chime' \| 'user';/.test(typesCode));
   check('DEFAULT_SETTINGS.sound.theme 出厂为 default', /sound: \{\s*enabled: true,\s*volume: 0\.7,\s*theme: 'default',/.test(typesCode));
 }
 
@@ -172,6 +172,8 @@ section('E. i18n：主题相关键 10 处齐备');
     'settings.soundThemeWood',
     'settings.soundThemeBubble',
     'settings.soundThemeChime',
+    // V3：新增「自定义（本地音效）」主题
+    'settings.soundThemeUser',
   ];
   for (const k of keys) {
     const n = (transSrc.match(new RegExp(`'${k}':`, 'g')) || []).length;
@@ -180,7 +182,7 @@ section('E. i18n：主题相关键 10 处齐备');
   for (const l of ['de', 'es', 'fr', 'ja', 'ko', 'pt', 'ru', 'zh-Hant']) {
     const j = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'i18n', 'locales', `${l}.json`), 'utf8'));
     const miss = keys.filter((k) => typeof j[k] !== 'string' || !j[k].trim());
-    check(`locales/${l}.json 含 8 个主题键且非空`, miss.length === 0, miss.join(', '));
+    check(`locales/${l}.json 含 9 个主题键且非空`, miss.length === 0, miss.join(', '));
   }
 }
 

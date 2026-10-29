@@ -582,6 +582,19 @@ function startCursorPoll(): void {
   }, CURSOR_POLL_MS);
 }
 
+/**
+ * V3：对外暴露悬浮球窗矩形，供「桌面角色」做**非重叠**避让。
+ * 只读快照；窗口不存在/已销毁返回 null。桌面角色与悬浮球同为 'screen-saver' 层，
+ * 同层内若不避让会互相遮挡，故桌面角色在初始定位与拖拽落点都调用本函数做位移避让。
+ */
+export function getBallWindowBounds(): Electron.Rectangle | null {
+  if (ballWindow && !ballWindow.isDestroyed()) {
+    const b = ballWindow.getBounds();
+    return { x: b.x, y: b.y, width: b.width, height: b.height };
+  }
+  return null;
+}
+
 export function setBallMainShow(fn: () => void): void {
   mainShowFn = fn;
 }

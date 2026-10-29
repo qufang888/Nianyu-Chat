@@ -18,6 +18,7 @@ import type {
   QueueSnapshot,
   QuickImportResult,
   QuickImportPreviewResult,
+  CharacterImportResult,
   SceneImageStatusEvent,
   MomentMediaStatusEvent,
   VoiceListResult,
@@ -480,6 +481,30 @@ export interface NianyuAPI {
   ballSetEnabled: (enabled: boolean) => void;
   ballSetAlwaysOnTop: (v: boolean) => void; // 切换悬浮球置顶
   ballCloseSession: () => void; // 本次关闭悬浮球（不持久化，重启恢复）
+  // ===== 桌面角色（V3）：透明置顶角色窗 / 穿透路由 / 弹簧拖拽 / 右键菜单 =====
+  dcSetIgnore: (ignore: boolean) => void;
+  dcDragStart: (gx: number, gy: number) => void;
+  dcDragEnd: () => void;
+  dcSetAlwaysOnTop: (v: boolean) => void;
+  dcSetPassThroughLock: (v: boolean) => void;
+  dcSetEnabled: (v: boolean) => void;
+  dcSetActive: (id: string) => void;
+  dcGetState: () => Promise<{ runtime: any; characters: any[]; active: any | null }>;
+  dcOpenChat: (chat: { type: 'single' | 'group'; id: string; name?: string }) => void;
+  dcOpenCollection: () => void;
+  dcHideWindow: () => void;
+  dcShowWindow: () => void;
+  dcReposition: (x: number, y: number) => void;
+  // 素材层（V3）：角色包导入 / 删除 / 运行库
+  dcPickImport: (mode: 'file' | 'folder') => Promise<{ canceled: boolean; results: CharacterImportResult[] }>;
+  dcImportPaths: (paths: string[]) => Promise<{ handled: boolean; results: CharacterImportResult[] }>;
+  dcDeleteCharacter: (id: string) => Promise<boolean>;
+  dcRuntimeDir: () => Promise<string>;
+  dcRuntimeStatus: () => Promise<{ dir: string; cubism4: boolean; cubism2: boolean }>;
+  dcOpenRuntimeDir: () => Promise<boolean>;
+  onDcState: (cb: (data: any) => void) => () => void;
+  onDcOpenChat: (cb: (chat: any) => void) => () => void;
+  onDcOpenCollection: (cb: () => void) => () => void;
   setActiveChat: (type: string, id: string) => void; // 通知主进程当前聊天（主动消息未读判断）
   // v2.3.88：上报主窗当前一级视图（'chats' | 'contacts' | ... | 'moments'）。
   // 供朋友圈自动配图 / 配视频的状态提醒判断「用户此刻是否正停在朋友圈页」——
@@ -1040,6 +1065,41 @@ const api: NianyuAPI = {
   ballSetEnabled: (enabled) => ipcRenderer.send('ball:set-enabled', enabled),
   ballSetAlwaysOnTop: (v) => ipcRenderer.send('ball:set-always-on-top', v),
   ballCloseSession: () => ipcRenderer.send('ball:close-session'),
+  // ===== 桌面角色（V3）=====
+  dcSetIgnore: (ignore) => ipcRenderer.send('dc:set-ignore', ignore),
+  dcDragStart: (gx, gy) => ipcRenderer.send('dc:drag-start', gx, gy),
+  dcDragEnd: () => ipcRenderer.send('dc:drag-end'),
+  dcSetAlwaysOnTop: (v) => ipcRenderer.send('dc:set-always-on-top', v),
+  dcSetPassThroughLock: (v) => ipcRenderer.send('dc:set-pass-through-lock', v),
+  dcSetEnabled: (v) => ipcRenderer.send('dc:set-enabled', v),
+  dcSetActive: (id) => ipcRenderer.send('dc:set-active', id),
+  dcGetState: () => ipcRenderer.invoke('dc:get-state'),
+  dcOpenChat: (chat) => ipcRenderer.send('dc:open-chat', chat),
+  dcOpenCollection: () => ipcRenderer.send('dc:open-collection'),
+  dcHideWindow: () => ipcRenderer.send('dc:hide-window'),
+  dcShowWindow: () => ipcRenderer.send('dc:show-window'),
+  dcReposition: (x, y) => ipcRenderer.send('dc:reposition', x, y),
+  dcPickImport: (mode) => ipcRenderer.invoke('dc:pick-import', mode),
+  dcImportPaths: (paths) => ipcRenderer.invoke('dc:import-paths', paths),
+  dcDeleteCharacter: (id) => ipcRenderer.invoke('dc:delete-character', id),
+  dcRuntimeDir: () => ipcRenderer.invoke('dc:runtime-dir'),
+  dcRuntimeStatus: () => ipcRenderer.invoke('dc:runtime-status'),
+  dcOpenRuntimeDir: () => ipcRenderer.invoke('dc:open-runtime-dir'),
+  onDcState: (cb) => {
+    const listener = (_e: any, data: any) => cb(data);
+    ipcRenderer.on('dc:state', listener);
+    return () => ipcRenderer.removeListener('dc:state', listener);
+  },
+  onDcOpenChat: (cb) => {
+    const listener = (_e: any, chat: any) => cb(chat);
+    ipcRenderer.on('dc:open-chat', listener);
+    return () => ipcRenderer.removeListener('dc:open-chat', listener);
+  },
+  onDcOpenCollection: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('dc:open-collection', listener);
+    return () => ipcRenderer.removeListener('dc:open-collection', listener);
+  },
   setActiveChat: (type, id) => ipcRenderer.send('app:active-chat', { type, id }),
     // v2.3.88：上报主窗当前一级视图（供朋友圈配图 / 配视频提醒判断用户是否正停在朋友圈页）
     setActiveView: (view: string) => ipcRenderer.send('app:active-view', { view }),

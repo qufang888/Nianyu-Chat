@@ -1275,6 +1275,15 @@ class DataManager {
         ...patch.imageGen,
       };
     }
+    // V3 桌面角色：运行时是「位置 + 开关」的混合体，必须浅层合并而不是整体替换。
+    // 否则设置页只改一个开关、却带着读设置时的旧 x/y 一起写回，桌上角色会瞬移回旧位置。
+    if (patch.characterRuntime) {
+      this.settings.characterRuntime = {
+        ...DEFAULT_SETTINGS.characterRuntime,
+        ...this.settings.characterRuntime,
+        ...patch.characterRuntime,
+      };
+    }
     // 需求 7：保存后立刻把「当前启用配置」回写到扁平兼容字段，
     // 这样所有仍读扁平字段的老调用点（audio:tts / image:generate / video:generate 等）
     // 无需改动就能拿到当前配置，改造范围与回归风险都显著降低。

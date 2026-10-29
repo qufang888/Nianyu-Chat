@@ -402,7 +402,8 @@ section('E. 门控未被破坏（三档 + 15 分组仍照旧工作）');
   const ac = fs.readFileSync(path.join(ROOT, 'src/utils/animControl.ts'), 'utf8');
   check('ANIM_GROUPS 仍存在且未被本脚本改动结构', /export const ANIM_GROUPS: AnimGroupDef\[\]/.test(ac));
   const groupIds = (ac.match(/^\s{4}id: '([a-z]+)',$/gm) || []).map((s) => s.match(/'([a-z]+)'/)[1]);
-  check(`分组数 = 15（实际 ${groupIds.length}）`, groupIds.length === 15, groupIds.join(','));
+  // V3：新增 character 分组（桌面角色窗），15 -> 16
+  check(`分组数 = 16（实际 ${groupIds.length}）`, groupIds.length === 16, groupIds.join(','));
   // 通配选择器 `.xxx *` 会静默关掉流式打字机动画（它们在任何分组容器内都可能存在）
   const wildcards = (ac.match(/'[.][a-z-]*\s\*'/g) || []).concat((ac.match(/,\s*'\.[a-z-]+\s\*'/g) || []));
   check('禁用通配选择器 `.xxx *`（会误杀流式豁免）', wildcards.length === 0, wildcards.join(','));

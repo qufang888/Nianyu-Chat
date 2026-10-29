@@ -125,6 +125,16 @@ import {
   setBallSessionClosed,
   isViewingChat,
 } from './floatingBall';
+import {
+  createDesktopCharacter,
+  getDesktopCharacterSnapshot,
+  refreshDesktopCharacter,
+  registerDesktopCharacterIPC,
+  setCharacterMainWindow,
+  setCharacterSettingsSink,
+} from './desktopCharacter';
+// V3 桌面角色素材层：角色包导入/解压、nychar:// 私有协议、运行库目录
+import { registerCharacterAssetIPC, registerCharacterProtocol } from './characterAssets';
 import { seedBuiltinContent } from './builtinContent';
 import {
   enqueueAndWait,
@@ -203,6 +213,12 @@ function pushMediaUnread(
 // 必须在 app ready 之前注册为特权协议，才能被 <audio> 正常加载。
 protocol.registerSchemesAsPrivileged([
   { scheme: 'nysound', privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true } },
+  // V3：桌面角色素材（解压后的 Live2D/3D/图片）。standard+secure 才能被 GLTFLoader / fetch 正常读取，
+  // corsEnabled 让 file:// 与 dev server 两个来源都能跨源取得素材。
+  {
+    scheme: 'nychar',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, bypassCSP: true, stream: true },
+  },
 ]);
 
 // 禁用若干 Chromium 媒体/GPU 子功能。本应用无视频播放，这些功能初始化时
@@ -6031,6 +6047,10 @@ function registerIPC(): void {
     if (patch && patch.launchOnBoot !== undefined) applyLaunchOnBoot(patch.launchOnBoot);
     // 软件更新：自动检查开关变更时重排定时器（v2.3.45）
     if (patch && patch.autoCheckUpdate !== undefined) syncAutoCheck();
+    // V3 桌面角色：角色列表 / 运行时状态变更后刷新角色窗
+    if (patch && (patch.desktopCharacters !== undefined || patch.characterRuntime !== undefined)) {
+      refreshDesktopCharacter();
+    }
     // 广播设置变更，让主窗与小窗同步刷新（世界书/身份/背景/开关等）
     broadcast('settings:changed', patch || {});
     // 缩放基准/上下限变更时，主窗与小窗立即按新参数重新缩放（两端同步显示）
@@ -7782,6 +7802,18 @@ app.whenReady().then(() => {
   setBallMainShow(showMainWindow);
   setBallMainWindow(mainWindow);
   createFloatingBall();
+  // V3 桌面角色：注册 IPC 并按设置创建角色窗（默认关闭，由「捉宠角色」面板开启）
+  setCharacterMainWindow(mainWindow);
+  // 运行时开关由主进程落盘并广播，渲染层只重读、不回写（避免把旧 x/y 覆盖回来）
+  setCharacterSettingsSink((patch) => broadcast('settings:changed', patch));
+  registerDesktopCharacterIPC();
+  // 素材层：nychar:// 供渲染层读取解压后的角色素材；导入/删除后同步刷新角色窗与会话列表
+  registerCharacterProtocol();
+  registerCharacterAssetIPC(() => {
+    refreshDesktopCharacter();
+    broadcast('settings:changed', { desktopCharacters: getDesktopCharacterSnapshot().characters });
+  });
+  createDesktopCharacter();
   // 启动即处于全屏时，按设置隐藏悬浮球
   if (mainWindow && mainWindow.isFullScreen()) {
     const s = dm.getSettings();

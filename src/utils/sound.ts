@@ -12,10 +12,10 @@ export type SoundType = 'error' | 'click' | 'notification' | 'popup' | 'miniPopu
  * 解析优先级（resolveSoundUrl）：角色自定义 > 该类型用户自定义（nysound://）
  * > 主题音效文件 > 内置 default 兜底。
  */
-export type SoundTheme = 'default' | 'aurora' | 'crystal' | 'wood' | 'bubble' | 'chime';
+export type SoundTheme = 'default' | 'aurora' | 'crystal' | 'wood' | 'bubble' | 'chime' | 'user';
 
 /** 全部内置主题 id（出厂顺序即设置页展示顺序；default 必须是第一项） */
-export const SOUND_THEMES: SoundTheme[] = ['default', 'aurora', 'crystal', 'wood', 'bubble', 'chime'];
+export const SOUND_THEMES: SoundTheme[] = ['default', 'aurora', 'crystal', 'wood', 'bubble', 'chime', 'user'];
 
 /** 主题名 i18n 键（设置页主题选择器用） */
 export const SOUND_THEME_LABEL_KEYS: Record<SoundTheme, string> = {
@@ -25,6 +25,25 @@ export const SOUND_THEME_LABEL_KEYS: Record<SoundTheme, string> = {
   wood: 'settings.soundThemeWood',
   bubble: 'settings.soundThemeBubble',
   chime: 'settings.soundThemeChime',
+  user: 'settings.soundThemeUser',
+};
+
+/**
+ * 「用户音效」主题包（V3）：由用户提供的 5 个素材组成，放在 public/sounds/themes/user/。
+ * - error / click 各自一条；
+ * - notification 提供 a/b/c 三条随机池；
+ * - popup / miniPopup / messageSend 未提供 → 回退经典默认（见 pickBuiltin），
+ *   因此选该主题不会出现「某类音效没声音」。
+ * 素材来源：用户自行提供并声称为其拥有权利的素材（不随仓库内置任何来源不明的第三方音频）。
+ */
+const USER_THEME: Partial<Record<SoundType, string | string[]>> = {
+  error: 'sounds/themes/user/error.mp3',
+  click: 'sounds/themes/user/click.mp3',
+  notification: [
+    'sounds/themes/user/notification-a.mp3',
+    'sounds/themes/user/notification-b.mp3',
+    'sounds/themes/user/notification-c.mp3',
+  ],
 };
 
 /** 6 类音效的文件名（不含目录；与 BUILTIN 的键一一对应） */
@@ -118,6 +137,15 @@ export function invalidateSoundCache(): void {
 }
 
 function pickBuiltin(type: SoundType, theme: SoundTheme = 'default'): string {
+  // V3：用户音效包 —— 部分类型覆盖 + 其余回退经典默认
+  if (theme === 'user') {
+    const u = USER_THEME[type];
+    if (Array.isArray(u)) return u[Math.floor(Math.random() * u.length)];
+    if (typeof u === 'string') return u;
+    const fallback = BUILTIN[type];
+    if (Array.isArray(fallback)) return fallback[Math.floor(Math.random() * fallback.length)];
+    return fallback;
+  }
   // v2.3.111：主题音效文件（default 主题没有独立目录，直接用根下的经典音效）
   if (theme !== 'default') return `sounds/themes/${theme}/${SOUND_FILE_NAMES[type]}`;
   const files = BUILTIN[type];
@@ -224,7 +252,9 @@ export async function previewThemeSound(
   type: SoundType = 'messageSend'
 ): Promise<void> {
   const s = await getSettings();
-  const audio = new Audio(pickBuiltin(type, theme));
+  // 用户音效包未覆盖 messageSend，试听时改用 notification，确保能听到用户素材本身
+  const previewType: SoundType = theme === 'user' ? 'notification' : type;
+  const audio = new Audio(pickBuiltin(previewType, theme));
   audio.volume = s.volume > 0 ? s.volume : 0.7;
   try {
     await audio.play();

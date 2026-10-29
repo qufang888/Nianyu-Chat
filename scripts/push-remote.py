@@ -223,15 +223,20 @@ def main():
         log(f"tag {tag} = {st}")
 
     # 8) 版权安全闸：校验远端 mp3 = 0
+    #    V3 起例外：public/sounds/themes/user/ 下的 5 个 mp3 是**用户自带并明确要求随软件分发**的音效，
+    #    已在《使用说明》与更新记录中标注来源为用户提供；其余位置出现 mp3 仍然报警。
+    USER_SOUND_PREFIX = "public/sounds/themes/user/"
     st, tchk = req(token, "GET", f"/git/trees/{tree['sha']}?recursive=1")
     if st == 200:
-        mp3 = [e["path"] for e in tchk["tree"] if e["path"].lower().endswith(".mp3")]
+        all_mp3 = [e["path"] for e in tchk["tree"] if e["path"].lower().endswith(".mp3")]
+        allowed = [p for p in all_mp3 if p.startswith(USER_SOUND_PREFIX)]
+        mp3 = [p for p in all_mp3 if not p.startswith(USER_SOUND_PREFIX)]
         if mp3:
-            log(f"🚨 警告：远端 tree 仍含 {len(mp3)} 个 mp3！未自动回滚，请人工处理：")
+            log(f"🚨 警告：远端 tree 仍含 {len(mp3)} 个未登记 mp3！未自动回滚，请人工处理：")
             for m in mp3[:10]:
                 log("   ", m)
         else:
-            log("🔒 远端 mp3 = 0（版权安全）")
+            log(f"🔒 远端无未登记 mp3（用户自带音效 {len(allowed)} 个，已声明来源）")
     log("🎉 推送完成")
 
 

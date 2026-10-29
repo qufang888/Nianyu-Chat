@@ -1,6 +1,6 @@
 {
   "name": "nianyu-client",
-  "version": "2.3.127",
+  "version": "3.0.0-beta.1",
   "description": "念语 - AI 数字人聊天客户端 (Electron + React + TypeScript)",
   "main": "dist-electron/electron/main.js",
   "author": "前方",
@@ -20,19 +20,25 @@
     "verify:cursor-hotspot": "node scripts/verify-cursor-hotspot.mjs",
     "verify:cursor-cover-state": "node scripts/verify-cursor-cover-state.mjs",
     "verify:cursor-engine": "node scripts/verify-cursor-engine.mjs",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win",
+    "verify:desktop-character": "node scripts/verify-desktop-character.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@pixiv/three-vrm": "^3.4.0",
     "adm-zip": "^0.5.16",
+    "pixi-live2d-display": "^0.4.0",
+    "pixi.js": "^6.5.10",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "three": "^0.170.0"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.5",
     "@types/node": "^22.7.4",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",
+    "@types/three": "^0.170.0",
     "@vitejs/plugin-react": "^4.3.2",
     "electron": "^32.1.2",
     "electron-builder": "^26.15.3",

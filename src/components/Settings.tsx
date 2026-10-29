@@ -209,7 +209,7 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'cat-appearance', key: 'settings.catAppearance', kw: ['外观', '主题', '界面', '动效', 'appearance', 'theme'] },
   // v2.3.102 需求 3：原 cat-generation + cat-translation 合并为 cat-extensions（扩展与工具）。
   { id: 'cat-extensions', key: 'settings.catExtensions', kw: ['扩展', '工具', '生成', '生图', '生视频', '翻译', '音效', '插件', '技能', '联网', 'extension', 'tools', 'generation', 'translation', 'sound'] },
-  { id: 'cat-window', key: 'settings.catWindow', kw: ['窗口', '小窗', '悬浮球', '系统', 'window', '迷你'] },
+  { id: 'cat-window', key: 'settings.catWindow', kw: ['窗口', '小窗', '悬浮球', '桌面角色', '捉宠', '系统', 'window', '迷你'] },
   { id: 'sec-language', key: 'settings.language', kw: ['语言', 'language', '界面语言', '中文', '英文'] },
   { id: 'sec-animations', key: 'settings.animations', kw: ['动画', 'animation', '动效', '全部开启', '全部关闭', '自定义', '分组', 'all on', 'all off', 'custom', 'group'] },
   // v2.3.97 补：动效分组开关区。**条件渲染**（仅动效「自定义」档存在），
@@ -271,6 +271,8 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-mini', key: 'settings.mini', kw: ['小窗', '迷你', 'mini', '快捷'] },
   { id: 'sec-inactive-chat', key: 'settings.inactiveChatDays', kw: ['不常用', '不常用聊天', '不活跃', '闲置', '归档', '收起来', '多少天', '天数', 'inactive', 'archive', 'folder', 'days', 'stale'] },
   { id: 'sec-floatingball', key: 'settings.floatingBall', kw: ['悬浮球', '浮动球', '球', 'floating', '桌面'] },
+  // V3：桌面角色（捉宠角色）——角色窗开关 / 置顶 / 穿透锁定 / 导入角色包
+  { id: 'sec-desktopcharacter', key: 'settings.desktopCharacter', kw: ['桌面角色', '捉宠角色', '捉宠', '角色窗', '穿透锁定', '置顶人物', '角色包', 'live2d', 'vrm', 'glb', '3d', 'desktop character', 'pet', '角色'] },
   { id: 'sec-datapath', key: 'settings.dataPath', kw: ['数据', '路径', 'data', 'path', '存储'] },
   { id: 'sec-closebehavior', key: 'settings.closeBehavior', kw: ['关闭', '退出', 'close', '退出行为'] },
   { id: 'sec-errorlog', key: 'settings.errorLog', kw: ['错误', '日志', 'error', 'log', '报错'] },
@@ -1245,6 +1247,17 @@ export const Settings: React.FC<{
   const sound = { ...DEFAULT_SETTINGS.sound, ...(draft.sound || {}) };
   const floating =
     draft.floatingBall || { enabled: true, x: 0, y: 0, alwaysOnTop: true, autoHideInFullscreen: true };
+  // V3 桌面角色运行时（窗口位置/置顶/穿透锁定/当前角色）——只在本页读写，实际生效在主进程角色窗
+  const dcRuntime = {
+    enabled: false,
+    x: 0,
+    y: 0,
+    alwaysOnTop: true,
+    passThroughLocked: false,
+    activeId: '',
+    ...(DEFAULT_SETTINGS.characterRuntime || {}),
+    ...(draft.characterRuntime || {}),
+  };
   // 语音 / 生图 / 小窗 此前只改本地 draft，必须点底部「保存」才生效，与其他即时保存的开关不一致，
   // 容易让用户误以为设置没生效。改为与全页一致：改动即时落盘并触发 reloadSettings。
   const patchVoice = (p: Partial<typeof voice>) => {
@@ -5147,6 +5160,55 @@ export const Settings: React.FC<{
           >
             {t('settings.openGuide')}
           </button>
+        </div>
+
+        {/* ===== 桌面角色（V3）===== */}
+        <div id="sec-desktopcharacter" className="section-title" style={{ marginTop: 24 }}>{t('settings.desktopCharacter')}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 520 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={!!dcRuntime.enabled}
+              onChange={(e) => {
+                // 只发 IPC：运行时状态的唯一真源在主进程，它会落盘并广播 settings:changed，
+                // 本页重读后开关自然回显。若这里顺手 patch 整份 characterRuntime，
+                // 会把设置页里的**旧 x/y** 写回去，导致桌面上角色瞬移回旧位置。
+                api.dcSetEnabled(e.target.checked);
+              }}
+            />
+            <span style={{ fontSize: 13 }}>{t('settings.dcEnable')}<Hint text={t('settings.dcDesc')} /></span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={dcRuntime.alwaysOnTop !== false}
+              onChange={(e) => {
+                api.dcSetAlwaysOnTop(e.target.checked);
+              }}
+            />
+            <span style={{ fontSize: 13 }}>{t('settings.dcAlwaysOnTop')}<Hint text={t('settings.dcAlwaysOnTopDesc')} /></span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={!!dcRuntime.passThroughLocked}
+              onChange={(e) => {
+                api.dcSetPassThroughLock(e.target.checked);
+              }}
+            />
+            <span style={{ fontSize: 13 }}>{t('settings.dcPassThrough')}<Hint text={t('settings.dcPassThroughDesc')} /></span>
+          </label>
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <button className="btn-ghost" type="button" onClick={() => api.dcOpenCollection()}>
+              {t('settings.dcManage')}
+            </button>
+            <button className="btn-ghost" type="button" onClick={() => void api.dcOpenRuntimeDir()}>
+              {t('settings.dcRuntimeDir')}
+            </button>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+            {t('settings.dcAssetHint')}
+          </div>
         </div>
 
         {/* ===== 数据备份与还原 ===== */}
