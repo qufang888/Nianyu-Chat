@@ -816,19 +816,21 @@ export interface AppSettings {
     autoHideInFullscreen?: boolean; // 主窗口全屏时自动关闭悬浮球（默认开）
     coordVer?: number; // x/y 坐标语义版本：1=旧单窗左上角（球偏移18），2=双窗架构球窗左上角（球偏移4）；读取时 <2 一次性 +14 迁移
   };
-  // ===== 自定义 Canvas 光标 =====
+  // ===== 自定义动态光标 =====
   customCursor: {
-    enabled: boolean; // 总开关：false=系统原生光标，true=动态Canvas光标
-    lerpSpeed: number; // 光标跟随缓动系数（0.1~0.5，越大跟得越紧）
-    trailEnabled: boolean; // 液态渐变拖尾开关
-    trailMaxLength: number; // 拖尾最大点位数（上限10）
-    particlesEnabled: boolean; // 流光粒子点缀开关
-    maxParticles: number; // 粒子数上限（上限8）
+    enabled: boolean; // 总开关：false=系统原生光标，true=动态光标（DOM 字形 + Canvas 特效）
+    lerpSpeed: number; // 拖尾跟随手感系数（0.05~0.5，越大拖尾越跟手）。**只作用于拖尾/粒子**，字形本体永远精确跟随指针
+    trailEnabled: boolean; // 拖尾开关（柔性圆点轨迹）
+    trailMaxLength: number; // 拖尾最大点位数（上限 24）
+    particlesEnabled: boolean; // 粒子特效开关（带速度继承的甩出粒子）
+    maxParticles: number; // 粒子上限（统一粒子池上限 64）
     hoverScale: number; // 悬浮可交互控件时放大比例（1.0~1.5）
     idleHideMs: number; // 空闲隐藏时长（毫秒）：静止超过此时长后隐藏自定义光标并恢复系统原生光标（500~300000，最高 5 分钟）
     cursorSize: number; // 光标显示尺寸（像素，长边）：16~64，默认 28。越大越清晰醒目
-    hotspotX: number;  // 热点水平偏移（像素，相对图像左上角）：0~cursorSize。运行时为 (cx - hotspotX*scale, cy - hotspotY*scale) 绘制，使该点对齐鼠标实际位置
-    hotspotY: number;  // 热点垂直偏移（像素，相对图像左上角）：0~cursorSize。
+    hotspotX: number;  // 热点水平比例（0~1，相对**图像自身宽度**）：图上的这一点即为鼠标实际点击位置。与图像原始分辨率、cursorSize 均无关
+    hotspotY: number;  // 热点垂直比例（0~1，相对**图像自身高度**）
+    image?: string;    // 自定义光标图片 dataURL（空字符串=使用内置 cursor.png）
+    hotspotSpace?: 'ratio'; // 热点语义版本标记：'ratio'=已是比例语义（迁移完成）。缺省视为旧「28 基准像素」语义，electron/db.ts 会做一次性迁移
   };
   // ===== 翻译（右键菜单翻译文本） =====
   translationEnabled?: boolean; // 是否启用右键"翻译文本"
@@ -1290,17 +1292,20 @@ export const DEFAULT_SETTINGS: AppSettings = {
     enabled: false,
     lerpSpeed: 0.25,
     trailEnabled: true,
-    trailMaxLength: 10,
+    trailMaxLength: 24,
     particlesEnabled: true,
-    maxParticles: 8,
+    maxParticles: 64,
     hoverScale: 1.25,
     idleHideMs: 5000,
     cursorSize: 28,
-    hotspotX: 1.9141, // 默认对齐 PNG 箭头真实尖端：512 调色板图实测顶行(y=0) alpha 梯度为
-                       // x=34→7、x=35→71、x=36→119…，轮廓可见起点在 x=35；28 基准 = 35/512*28 = 1.9141px。
-                       // 旧默认值 0.44（源自把尖端误测为 8/512）会让字形尖端偏右 1.47px —— 用户看到的
-                       // 「光标尖」在真实点击点右侧，点下去落在左侧（用户原话：点击位置在光标显示位置左侧）。
+    hotspotX: 0.06836, // 默认对齐内置 cursor.png 的真实箭头尖端：512×512 调色板图实测顶行(y=0)
+                        // alpha 梯度为 x=34→7、x=35→71、x=36→119…，轮廓可见起点在 x=35 → 35/512 = 0.06836。
+                        // v2.3.126 起热点语义是**比例**（相对图像自身尺寸），换图也不失准。
+                        // 旧默认值 0.44（源自把尖端误测为 8/512）会让字形尖端偏右 1.47px ——
+                        // 用户看到的「光标尖」在真实点击点右侧，点下去落在左侧。
     hotspotY: 0,
+    image: '',
+    hotspotSpace: 'ratio', // 默认值本身就是比例语义 → 新装用户无需迁移
   },
   uiZoom: {
     mainBaseW: 1200,

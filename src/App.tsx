@@ -24,7 +24,7 @@ import {
 import { ModelCompare } from './components/ModelCompare';
 import { MomentsView } from './components/MomentsView';
 import { useToast, ToastView } from './components/Toast';
-import CustomCursor from './components/CustomCursor';
+import DynamicCursor from './cursor/DynamicCursor';
 import VideoBubble from './components/VideoBubble';
 import ErrorBubble from './components/ErrorBubble';
 import QueueDock from './components/QueueDock';
@@ -251,9 +251,9 @@ export default function App() {
 
   // v2.3.x：主窗动态光标与悬浮球「单光标」协调。系统光标进入悬浮球某窗（球/面板/菜单）且恰落在主窗之上时，
   // 主进程经 main:cursor-window 推送 covered=true，这里立即给 body 加 cursor-gate-off 门控类
-  // （CustomCursor.onMouseMove 据此忽略 mousemove）+ 派发合成 mouseout（立即淡出、恢复原生光标），
+  // （DynamicCursor 引擎据此忽略指针事件）+ 派发合成 mouseout（立即隐藏、恢复原生光标），
   // 杜绝「主窗与悬浮球各亮一个光标 / 光标被困小球窗」；covered=false 时移除门控，鼠标再动即恢复显示。
-  // 仅控制门控类，绝不触碰 CustomCursor 自身的 cursor-hidden / 渲染状态，故与鼠标自然移出
+  // 仅控制门控类，绝不触碰 DynamicCursor 自身的 cursor-hidden / 渲染状态，故与鼠标自然移出
   // （onMouseOut→hideCursorImmediate）路径互不干扰、可叠加。
   useEffect(() => {
     if (!api?.onMainCursorWindow) return;
@@ -614,7 +614,7 @@ export default function App() {
         />
       )}
       <ToastView toast={toast} />
-      <CustomCursor />
+      <DynamicCursor />
       <VideoBubble />
       <ErrorBubble />
       <QueueDock />

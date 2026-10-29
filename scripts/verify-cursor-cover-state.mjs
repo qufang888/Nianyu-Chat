@@ -345,6 +345,7 @@ console.log('=== 6. CI 入口（package.json verify 脚本）===');
 const pkg = JSON.parse(read('package.json'));
 ok(typeof pkg.scripts['verify:cursor-hotspot'] === 'string', 'package.json 含 verify:cursor-hotspot');
 ok(typeof pkg.scripts['verify:cursor-cover-state'] === 'string', 'package.json 含 verify:cursor-cover-state');
+ok(typeof pkg.scripts['verify:cursor-engine'] === 'string', 'package.json 含 verify:cursor-engine（v2.3.126 新引擎闸门）');
 ok(typeof pkg.scripts['verify:cursor-leave'] === 'string' && typeof pkg.scripts['verify:launch-cursor'] === 'string',
   '既有 verify 入口仍在（未破坏）');
 

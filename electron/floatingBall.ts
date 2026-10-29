@@ -462,7 +462,7 @@ function startCursorPoll(): void {
       // hover 语义要覆盖球的透明边距（防误收起），但**不可**当 owner 谓词用（会与共享模块漂移）。
       const inBall = pointInRect(p.x, p.y, ballWindow.getBounds());
       // ⚠️ 仅用于 hover 电平 / 收起防抖 + 菜单互斥；owner 与 covered 一律以
-      // computeCoveredStateNow() 的不透明命中区为准。菜单按整窗矩形近似（菜单窗不挂 CustomCursor）。
+      // computeCoveredStateNow() 的不透明命中区为准。菜单按整窗矩形近似（菜单窗不挂 DynamicCursor）。
       // 菜单窗相关判定（menuVisible 时有效）
       const inMenu =
         menuVisible &&
@@ -496,7 +496,7 @@ function startCursorPoll(): void {
       const prevOwner = lastCursorOwner;
       lastCursorOwner = owner;
       // v2.3.x：主窗/小窗动态光标 covered 同步。当系统光标位于悬浮球某窗（ball/panel/menu）矩形内、
-      // 且恰好落在其下窗口（主窗/小窗，悬浮球穿透转发事件给下层）之上时，该下层窗口的 CustomCursor
+      // 且恰好落在其下窗口（主窗/小窗，悬浮球穿透转发事件给下层）之上时，该下层窗口的 DynamicCursor
       // 必须立即隐藏 —— 否则「整机出现两个动态光标」且光标会被困在小球窗矩形内（只能上下动）。
       // 用「变化沿」推送（covered 状态变化才发），避免每轮 200ms 轮询都重发造成抖动。
       // 关键点：owner 为 'mini'/'main' 时该窗自身即光标 owner，不应被自己网关掉——

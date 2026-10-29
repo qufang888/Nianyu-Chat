@@ -44,6 +44,7 @@ import {
 } from '../types';
 import { DEFAULT_MEMORY_SUMMARIZE_PROMPT, DEFAULT_MEMORY_INJECT_PROMPT } from '../utils/builtinPrompts';
 import { Hint } from './Hint';
+import CursorSettings from './CursorSettings';
 import {
   ANIM_GROUPS,
   ANIM_MODES,
@@ -81,7 +82,6 @@ import {
   type SoundType,
 } from '../utils/sound';
 import { compareVersions } from '../utils/versionCompare';
-import cursorPngUrl from '../assets/cursor/cursor.png';
 
 export const THEMES: { key: ThemeName; nameKey: string; swatch: string }[] = [
   { key: 'wechat', nameKey: 'theme.wechat', swatch: 'linear-gradient(135deg,#07c160,#2e2e2e)' },
@@ -250,7 +250,7 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-emoevent', key: 'settings.emoEventAdvanced', kw: ['情绪', '事件', 'emotion', 'event', '高级'] },
   { id: 'sec-proactive-engine', key: 'settings.proactiveEngine', kw: ['主动消息', '机制', '引擎', '触发方式', 'proactive', 'engine', '机制选择'] },
   { id: 'sec-inputappearance', key: 'settings.inputAppearance', kw: ['输入框', 'input', '输入栏', '外观'] },
-  { id: 'sec-cursor', key: 'settings.cursor', kw: ['光标', 'cursor', '鼠标指针', '自定义光标'] },
+  { id: 'sec-cursor', key: 'settings.cursor', kw: ['光标', 'cursor', '鼠标指针', '自定义光标', '自定义图片', '上传', 'upload', '图片', '粒子', '拖尾', '特效', '点击位置', '热点', 'hotspot'] },
   // v2.3.122：原「毛玻璃（glass）」主题删除，其色调/不透明度/模糊度三条静态索引条目
   // （sec-glass-tint / sec-glass-opacity / sec-glass-blur）与对应设置项**同步删除**，
   // 杜绝「设置删了但搜索还能搜到、点了没反应」的orphan 条目。磨砂效果改为
@@ -301,79 +301,6 @@ const SOUND_ROWS: { type: SoundType; labelKey: string }[] = [
   { type: 'miniPopup', labelKey: 'settings.soundMiniPopup' },
   { type: 'messageSend', labelKey: 'settings.soundMessageSend' },
 ];
-
-// 光标热点预览（拖动红点设置）
-// hotspot 值是相对图像左上角的像素偏移，存储在「基础尺寸 28」坐标系下，
-// 滑块在预览中以 (displaySize / 28) 的比例反映实际位置。
-function CursorHotspotPreview({
-  hotspotX, hotspotY, displaySize = 112, onChange,
-}: {
-  hotspotX: number;
-  hotspotY: number;
-  displaySize?: number;
-  onChange: (x: number, y: number) => void;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const draggingRef = useRef(false);
-  const BASE = 28; // 与 CustomCursor.tsx 的 HOTSPOT_BASE_SIZE 对齐
-  const ratio = displaySize / BASE;
-  const markerLeft = hotspotX * ratio;
-  const markerTop = hotspotY * ratio;
-
-  const handlePointer = (clientX: number, clientY: number) => {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    // clamp 到预览区内
-    const x = Math.max(0, Math.min(displaySize, clientX - r.left));
-    const y = Math.max(0, Math.min(displaySize, clientY - r.top));
-    // 转换回基础尺寸坐标系（保留亚像素精度，与热点滑块 step=0.5 一致）
-    onChange(x / ratio, y / ratio);
-  };
-
-  return (
-    <div
-      ref={ref}
-      data-cursor-preview
-      style={{
-        position: 'relative', width: displaySize, height: displaySize,
-        borderRadius: 10, overflow: 'hidden', background: 'var(--color-input-bg)',
-        border: '1px solid var(--color-border)', touchAction: 'none', userSelect: 'none',
-        // 这里故意用 crosshair 风格的原生光标：CustomCursor 永远在它之上，preview 只是占位提示
-        cursor: 'none',
-      }}
-      onMouseDown={(e) => {
-        draggingRef.current = true;
-        handlePointer(e.clientX, e.clientY);
-        e.preventDefault();
-      }}
-      onMouseMove={(e) => { if (draggingRef.current) handlePointer(e.clientX, e.clientY); }}
-      onMouseUp={() => { draggingRef.current = false; }}
-      onMouseLeave={() => { draggingRef.current = false; }}
-    >
-      <img
-        src={cursorPngUrl}
-        alt="cursor"
-        draggable={false}
-        style={{ width: displaySize, height: displaySize, display: 'block', pointerEvents: 'none' }}
-      />
-      {/* 红色十字 + 圆点标记光标点击点 */}
-      <div
-        style={{
-          position: 'absolute', left: markerLeft, top: markerTop,
-          pointerEvents: 'none', transform: 'translate(-50%, -50%)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}
-      >
-        <div style={{ position: 'absolute', width: 14, height: 1, background: 'var(--color-danger)' }} />
-        <div style={{ position: 'absolute', width: 1, height: 14, background: 'var(--color-danger)' }} />
-        <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'color-mix(in srgb, var(--color-danger) 18%, transparent)', border: '1px solid color-mix(in srgb, var(--color-danger) 60%, transparent)' }} />
-      </div>
-      {/* 左上角 0,0 基准提示 */}
-      <div style={{ position: 'absolute', left: 0, top: 0, width: 4, height: 4, background: 'var(--color-primary)' }} />
-    </div>
-  );
-}
 
 export const Settings: React.FC<{
   onRerunWizard?: () => void;
@@ -1316,7 +1243,6 @@ export const Settings: React.FC<{
   const imageGen = { ...DEFAULT_SETTINGS.imageGen, ...(draft.imageGen || {}) } as ImageGenSettings;
   const mini = { ...DEFAULT_SETTINGS.miniWindow, ...(draft.miniWindow || {}) };
   const sound = { ...DEFAULT_SETTINGS.sound, ...(draft.sound || {}) };
-  const cursor = { ...DEFAULT_SETTINGS.customCursor, ...(draft.customCursor || {}) };
   const floating =
     draft.floatingBall || { enabled: true, x: 0, y: 0, alwaysOnTop: true, autoHideInFullscreen: true };
   // 语音 / 生图 / 小窗 此前只改本地 draft，必须点底部「保存」才生效，与其他即时保存的开关不一致，
@@ -1389,12 +1315,6 @@ export const Settings: React.FC<{
     api.saveSettings({ miniWindow: next }).then(reloadSettings);
   };
   const patchSound = (p: Partial<typeof sound>) => patch({ sound: { ...sound, ...p } });
-  const patchCursor = (p: Partial<typeof cursor>) => patch({ customCursor: { ...cursor, ...p } });
-
-  // 光标子设置必须落盘并触发 reloadSettings，否则 ThemeContext.settings 不会更新，
-  // CustomCursor 读取不到变化（patch 只改本地 draft）。与 enabled 开关保持一致。
-  const saveCursor = (p: Partial<typeof cursor>) =>
-    api.saveSettings({ customCursor: { ...cursor, ...p } }).then(reloadSettings);
 
   // 生图 / TTS / ASR 模型名拉取：复用 OpenAI 兼容 /models，按类型关键字过滤后填入 ComboBox 建议列表
   // （v2.3.39 起由原生 datalist 改为可滚动组合框），用户既能从下拉选也能手填。
@@ -2516,169 +2436,12 @@ export const Settings: React.FC<{
           </div>
         </div>
 
-        {/* ===== 动态 Canvas 光标 ===== */}
+        {/* ===== 动态光标（DOM 字形 + Canvas 特效）=====
+            v2.3.126 重做：字形层改为 DOM（transform 同步定位 → 显示位置 == 点击位置），
+            特效层单 Canvas（拖尾 + 粒子）；热点改为比例语义；支持上传自定义光标图片。
+            完整 UI 在 src/components/CursorSettings.tsx。 */}
         <div id="sec-cursor" className="section-title">{t('settings.cursor')}<Hint text={t('settings.cursorDesc')} /></div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={!!cursor.enabled}
-              onChange={(e) => {
-                patchCursor({ enabled: e.target.checked });
-                api.saveSettings({ customCursor: { ...cursor, enabled: e.target.checked } }).then(reloadSettings);
-              }}
-            />
-            <span style={{ fontSize: 13 }}>{t('settings.cursorEnabled')}</span>
-          </label>
-          {cursor.enabled && (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorLerpSpeed')}</span>
-                <input
-                  type="range"
-                  min={10}
-                  max={50}
-                  step={1}
-                  value={Math.round((cursor.lerpSpeed ?? 0.25) * 100)}
-                  onChange={(e) => saveCursor({ lerpSpeed: Number(e.target.value) / 100 })}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                  {(cursor.lerpSpeed ?? 0.25).toFixed(2)}
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                {t('settings.cursorLerpSpeedDesc')}
-              </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={cursor.trailEnabled !== false}
-                  onChange={(e) => saveCursor({ trailEnabled: e.target.checked })}
-                />
-                <span style={{ fontSize: 13 }}>{t('settings.cursorTrail')}</span>
-              </label>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginLeft: 24 }}>
-                {t('settings.cursorTrailDesc')}
-              </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={cursor.particlesEnabled !== false}
-                  onChange={(e) => saveCursor({ particlesEnabled: e.target.checked })}
-                />
-                <span style={{ fontSize: 13 }}>{t('settings.cursorParticles')}</span>
-              </label>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginLeft: 24 }}>
-                {t('settings.cursorParticlesDesc')}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorHoverScale')}</span>
-                <input
-                  type="range"
-                  min={100}
-                  max={150}
-                  step={5}
-                  value={Math.round((cursor.hoverScale ?? 1.25) * 100)}
-                  onChange={(e) => saveCursor({ hoverScale: Number(e.target.value) / 100 })}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                  {(cursor.hoverScale ?? 1.25).toFixed(2)}x
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                {t('settings.cursorHoverScaleDesc')}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorIdleHide')}</span>
-                <input
-                  type="range"
-                  min={1}
-                  max={300}
-                  step={1}
-                  value={Math.max(1, Math.round((cursor.idleHideMs ?? 5000) / 1000))}
-                  onChange={(e) => saveCursor({ idleHideMs: Number(e.target.value) * 1000 })}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 48, textAlign: 'right' }}>
-                  {Math.max(1, Math.round((cursor.idleHideMs ?? 5000) / 1000))}s
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                {t('settings.cursorIdleHideDesc')}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.cursorSize')}</span>
-                <input
-                  type="range"
-                  min={16}
-                  max={64}
-                  step={1}
-                  value={cursor.cursorSize ?? 28}
-                  onChange={(e) => saveCursor({ cursorSize: Number(e.target.value) })}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                  {cursor.cursorSize ?? 28}px
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                {t('settings.cursorSizeDesc')}
-              </div>
-
-              {/* 热点（点击位置）设置：左侧可拖动预览，右侧滑块微调 */}
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginTop: 4 }}>
-                <div style={{ flexShrink: 0 }}>
-                  <CursorHotspotPreview
-                    hotspotX={cursor.hotspotX ?? 1.9141}
-                    hotspotY={cursor.hotspotY ?? 0}
-                    onChange={(x, y) => saveCursor({ hotspotX: x, hotspotY: y })}
-                  />
-                  <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 4, textAlign: 'center' }}>
-                    {t('settings.hotspotPreview')}
-                  </div>
-                </div>
-                <div style={{ flex: 1, minWidth: 240, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.hotspot')}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.hotspotX')}</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={28}
-                      step={0.5}
-                      value={cursor.hotspotX ?? 1.9141}
-                      onChange={(e) => saveCursor({ hotspotX: Number(e.target.value) })}
-                      style={{ flex: 1 }}
-                    />
-                    <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                      {cursor.hotspotX ?? 1.9141}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 13, whiteSpace: 'nowrap', minWidth: 100 }}>{t('settings.hotspotY')}</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={28}
-                      step={0.5}
-                      value={cursor.hotspotY ?? 0}
-                      onChange={(e) => saveCursor({ hotspotY: Number(e.target.value) })}
-                      style={{ flex: 1 }}
-                    />
-                    <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 36, textAlign: 'right' }}>
-                      {cursor.hotspotY ?? 0}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                    {t('settings.hotspotDesc')}
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+        <CursorSettings />
 
         {/* ===== v2.3.122：琉璃幻境（aura）专属 =====
             原「玻璃家族」面板（毛玻璃自定义背景 / 色调 / 不透明度 / 模糊度 / Token 与气泡配色）

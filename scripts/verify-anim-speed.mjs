@@ -310,16 +310,25 @@ section('D. JS 常量：必须出现速度缩放表达式');
     /PIE_ANIM_MS\s*\*\s*speedRef\.current/.test(stats) && !/PIE_ANIM_MS\s*\/\s*speedRef/.test(stats));
   check('StatsView：倍率来自 getAnimSpeed(settings)', /getAnimSpeed\(settings\)/.test(stats));
 
-  const cur = read('src/components/CustomCursor.tsx');
-  check('CustomCursor：淡入时长 = FADE_IN_MS **×** 倍率（除错会变快）',
-    /FADE_IN_MS\s*\*\s*speedRef\.current/.test(cur) && !/FADE_IN_MS\s*\/\s*speedRef/.test(cur));
-  check('CustomCursor：淡出时长 = FADE_OUT_MS **×** 倍率（除错会变快）',
-    /FADE_OUT_MS\s*\*\s*speedRef\.current/.test(cur) && !/FADE_OUT_MS\s*\/\s*speedRef/.test(cur));
-  check('CustomCursor：lerp 系数 = 基准 **÷** 倍率（语义与时长相反，故方向也相反）',
-    /lerpSpeed:[\s\S]{0,240}?\/\s*speedRef\.current/.test(cur),
-    'lerp 系数若误用乘号，调慢会变成光标疯狂甩尾');
-  check('CustomCursor：lerp 系数不存在误用乘号的写法',
-    !/lerpSpeed:[\s\S]{0,240}?\*\s*speedRef\.current/.test(cur));
+  // v2.3.126 重做：动态光标拆成「DOM 字形层 + Canvas 特效层」，
+  // 引擎在 src/cursor/cursorEngine.ts，React 包装层在 src/cursor/DynamicCursor.tsx。
+  const cur = read('src/cursor/cursorEngine.ts');
+  const curWrap = read('src/cursor/DynamicCursor.tsx');
+  check('动态光标引擎：淡入时长 = FADE_IN_MS **×** 倍率（除错会变快）',
+    /FADE_IN_MS\s*\*\s*Math\.max\(0\.1, cfg\.animSpeed\)/.test(cur) &&
+    !/FADE_IN_MS\s*\/\s*Math\.max/.test(cur));
+  check('动态光标引擎：淡出时长 = FADE_OUT_MS **×** 倍率（除错会变快）',
+    /FADE_OUT_MS\s*\*\s*Math\.max\(0\.1, cfg\.animSpeed\)/.test(cur) &&
+    !/FADE_OUT_MS\s*\/\s*Math\.max/.test(cur));
+  check('动态光标：lerp 系数 = 基准 **÷** 倍率（语义与时长相反，故方向也相反）',
+    /lerpSpeed[\s\S]{0,260}?\/\s*Math\.max\(0\.1, animSpeed\)/.test(curWrap),
+    'lerp 系数若误用乘号，调慢会变成拖尾疯狂甩尾');
+  check('动态光标：lerp 系数不存在误用乘号的写法',
+    !/lerpSpeed[\s\S]{0,260}?\*\s*Math\.max\(0\.1, animSpeed\)/.test(curWrap));
+  check('动态光标：动画门控走 isGroupEnabled(settings, "cursor")',
+    /isGroupEnabled\(settings, 'cursor'\)/.test(curWrap));
+  check('动态光标：倍率来自 getAnimSpeed(settings)',
+    /getAnimSpeed\(settings\)/.test(curWrap));
 
   // ── D2：与 CSS 动画配对的 JS 定时器必须同步缩放 ──
   // 这类脱节是本次改造最容易漏的地方，且症状隐蔽（快档「傻等」、慢档「凭空消失」）。

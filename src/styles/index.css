@@ -4979,8 +4979,25 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
 [data-glass='on'] .queue-dock-panel,
 [data-glass='on'] .api-params-panel,
 [data-glass='on'] .chat-model-picker-results {
-  background: rgba(18, 16, 38, 0.88) !important;
+  background: rgba(18, 16, 38, 0.92) !important;
   border-color: rgba(255, 255, 255, 0.18);
+  /* v2.3.127 修复：毛玻璃观感下承载面统一为深色高不透明底，但文字必须翻为亮色。
+     此前只改了 background，未改文字；浅色主题（wechat / frost / sand / vibrant 等）
+     开启毛玻璃后「深底 + 深字 → 文字几乎不可读」（用户实测截图 bug）。
+     以下令牌只作用在这些浮层内部（局部覆盖，不写进 :root），主界面与其余主题不受影响；
+     嵌套面板（--color-panel / --color-panel-alt）一并转深，避免浅色子面板在深底上反差刺眼。 */
+  color: #eef1f7;
+  --color-panel: rgba(18, 16, 38, 0.92);
+  --color-panel-alt: rgba(255, 255, 255, 0.06);
+  --color-text: #eef1f7;
+  --color-text-secondary: #c2c9d6;
+  --color-text-muted: #aab2c2;
+  --color-system-msg: #c2c9d6;
+  --color-input-bg: rgba(255, 255, 255, 0.10);
+  --color-select-bg: rgba(255, 255, 255, 0.10);
+  --color-select-text: #eef1f7;
+  --color-border: rgba(255, 255, 255, 0.18);
+  --color-hover: rgba(255, 255, 255, 0.08);
 }
 /* 毛玻璃主题：选择器输入框/占位符改用低透明白底 + 亮字，避免亮字叠半透明白底看不清 */
 [data-glass='on'] .chat-model-picker-input {

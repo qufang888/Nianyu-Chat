@@ -46,7 +46,7 @@ export interface CoverInput {
    *     → **轮询无法自愈**；一旦渲染端 DOM mouseleave 在快速移动/穿透切换时序里丢失，
    *     该窄条会同时出现「下层原生光标 + 球窗动态字形」= 双光标窄条。内缩后 owner 归下层窗口，
    *     轮询 level 推 false → 球窗 setInteractive(false) → 门控打开 → 窄条只剩下层原生光标。
-   *   - 菜单：菜单窗**不挂 CustomCursor**（无动态光标），天然不存在双光标，且菜单 DOM 几乎铺满
+   *   - 菜单：菜单窗**不挂 DynamicCursor**（无动态光标），天然不存在双光标，且菜单 DOM 几乎铺满
    *     窗体（无有效透明边距），故按整窗矩形近似即可，不做内缩。
    */
   ballRect: CoverRect | null;

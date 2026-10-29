@@ -71,11 +71,13 @@ ok(/onBallMenuOpen\(\(\) => \{[\s\S]{0,300}?dispatchEvent\(new MouseEvent\('mous
 ok(/onBallMenuOpen\(\(\) => \{[\s\S]{0,90}?suppressPanelCursor\(\)[\s\S]{0,320}?if \(dynCursorEnabled\) document\.body\.classList\.add\('cursor-hidden'\)/.test(fbRender),
   '面板窗收到即 suppressPanelCursor + 仅动态光标启用时补回 cursor-hidden（v2.3.126 改条件添加：关闭动态光标时该类无人摘除会导致原生光标永久消失，不得无条件残留）');
 
-console.log('=== D. 光标贴指针 + DPR 叠片防护（v2.3.120）===');
-const cur = read('src/components/CustomCursor.tsx');
-ok(/renderXRef\.current = mouseXRef\.current;/.test(cur) && !/CURSOR_SNAP_PX/.test(cur) && !/lerp\(renderXRef/.test(cur),
+console.log('=== D. 光标贴指针 + DPR 叠片防护（v2.3.126 重做后更新）===');
+const cur = read('src/cursor/cursorEngine.ts');
+ok(!/lerp\s*\(/.test(cur) && !/CURSOR_SNAP_PX/.test(cur),
   '光标本体一步贴合指针（无 lerp 滞后，修「显示位置与点击位置偏移」）');
-ok(/canvasDprRef\.current \|\| 1/.test(cur), 'clearRectClamped 用建画布时的 DPR 换算边界（防 DPR 变化后旧帧清不掉→光标叠片）');
+ok(/translate3d\(\$\{x - off\.offX \* s\}px, \$\{y - off\.offY \* s\}px, 0\) scale\(\$\{s\}\)/.test(cur),
+  '字形层用 translate3d 同步定位（DOM 字形层，位置严格 = 事件坐标）');
+ok(/this\.canvasDpr \|\| 1/.test(cur), 'clearRects 用建画布时的 DPR 换算边界（防 DPR 变化后旧帧清不掉→光标叠片）');
 ok(/matchMedia\(`\(resolution: /.test(cur) && /onDprChange/.test(cur), 'DPR 变化（全屏/换显示器/缩放）重设画布');
 
 console.log('=== E. v2.3.126 五项修复（Bug A-F）===');
@@ -97,49 +99,44 @@ ok(/pushCoveredNow[\s\S]{0,900}?lastMainCovered = diff\.main;[\s\S]{0,400}?lastM
   '修复3（v2.3.126 QA P1 改写）：变化沿缓存写入**实际推的值**（diff.main/diff.mini，true/false 都写）—— 旧实现写死 true 是 5Hz 振荡根因');
 ok(/panelWindow\.showInactive\(\);[\s\S]{0,320}?send\('panel:show', \{ h: panelDir, v: panelVDir \}\)/.test(fbMain),
   '修复2d：全屏恢复路径 showFloatingBall 补推 panel:show（渲染端门控同步）');
-ok(/const onMouseDown = \(e: MouseEvent\) => \{[\s\S]{0,900}?renderXRef\.current = e\.clientX;[\s\S]{0,600}?drawBodyAt\(e\.clientX, e\.clientY\);/.test(cur),
-  '修复4（v2.3.126 改写）：mousedown 瞬间吸附真实指针并**同步重画本体层**（双画布架构下不再走 clearAndDraw）');
+ok(/private onMouseDown = \(e: MouseEvent\): void => \{[\s\S]{0,900}?this\.pointerX = e\.clientX;[\s\S]{0,600}?this\.updateGlyphAt\(e\.clientX, e\.clientY\);/.test(cur),
+  '修复4（v2.3.126 重做改写）：mousedown 瞬间吸附真实指针并**同步定位字形层**（DOM 字形层不走 rAF）');
 
-console.log('=== E2. v2.3.126 动态光标重做（双画布 + 边缘带 + A4 复位）===');
-// ---- A5：v2.3.126 的「画布内钳制」必须已被撤销（钳制 = 人为位移，与用户诉求冲突）----
-ok(!/const gx = Math\.max\(0, Math\.min\(cx - hsX/.test(cur) && !/const gy = Math\.max\(0, Math\.min\(cy - hsY/.test(cur),
-  'A5：v2.3.126 的画布内钳制已撤销（钳制会让字形平移 = 制造偏移）');
-ok(!/const fdx = Math\.max\(0, 14 - cx\);/.test(cur) && !/const fdy = Math\.max\(0, 18 - cy\);/.test(cur),
-  'A5：后备箭头路径钳制一并撤销（改由边缘带接管边缘可见性）');
-// ---- A2：双画布结构 ----
-ok(/const fxCanvasRef = useRef<HTMLCanvasElement \| null>\(null\);/.test(cur) &&
-   /const bodyCanvasRef = useRef<HTMLCanvasElement \| null>\(null\);/.test(cur),
-  'A2：双画布 ref 存在（fxCanvasRef 特效层 / bodyCanvasRef 本体层）');
-ok(/<canvas ref=\{fxCanvasRef\}/.test(cur) && /<canvas ref=\{bodyCanvasRef\}/.test(cur) &&
-   /zIndex: 2147483646/.test(cur) && /zIndex: 2147483647/.test(cur),
-  'A2：Portal 同时渲染两块画布（本体层 z-index 最高，字形不被弹窗盖住）');
-ok(/const clearAndDrawFx = useCallback/.test(cur) && !/const clearAndDraw = useCallback/.test(cur),
-  'A2：特效层只画拖尾/粒子（原 clearAndDraw 已改为 clearAndDrawFx，本体不在此层）');
-ok(/const drawBodyAt = useCallback/.test(cur) && /bodyPrevRectRef/.test(cur),
-  'A2：本体层独立维护「上一帧字形矩形」（不与特效层脏矩形混用 → 拖尾不会被挖洞）');
-// ---- A2：本体层同步绘制（不进 rAF 队列）----
-ok(/const onMouseMove = \(e: MouseEvent\) => \{[\s\S]{0,2600}?drawBodyAt\(e\.clientX, e\.clientY\);/.test(cur),
-  'A2：mousemove 里同步绘制本体层（绘制位置严格 = 事件坐标，无 rAF 一帧滞后）');
-ok(!/clearAndDraw\(/.test(cur) && !/drawFrame[\s\S]{0,200}?clearAndDraw\(/.test(cur),
-  'A2：本体层已不在 rAF 帧里绘制（显示位置 == 点击位置）');
-// ---- A3：边缘带 + 迟滞 ----
-ok(/const updateEdgeBand = useCallback/.test(cur) && /EDGE_BAND_HYSTERESIS_PX/.test(cur) &&
+console.log('=== E2. v2.3.126 动态光标重做（DOM 字形 + Canvas 特效 + 边缘带 + 复位）===');
+// ---- 字形层不再是 Canvas：DOM + transform 同步定位 ----
+ok(/setupGlyphHost\(\)/.test(cur) && /createElement\('img'\)/.test(cur),
+  '字形层是 DOM（div 宿主 + 内嵌 img），不再画在 Canvas 上');
+ok(/el\.style\.position = 'fixed'/.test(cur) && /el\.style\.pointerEvents = 'none'/.test(cur),
+  '字形层固定定位且不拦截鼠标事件');
+ok(/el\.style\.willChange = 'transform'/.test(cur) && /el\.style\.transformOrigin = '0 0'/.test(cur),
+  '字形层启用 transform 合成（will-change + transform-origin 0 0）');
+ok(/private updateGlyphAt\(x: number, y: number\): void/.test(cur) &&
+   /private applyGlyphTransform\(x: number, y: number\): void/.test(cur),
+  '字形定位独立成方法（applyGlyphTransform / updateGlyphAt）');
+// ---- 特效层仍是单张 Canvas，只画拖尾 + 粒子 ----
+ok(/this\.fxCanvas/.test(cur) && /getContext\('2d'/.test(cur), '特效层为单张 Canvas（拖尾 + 粒子）');
+ok(/private drawFx\(staticFrame: boolean\): void/.test(cur), '特效层绘制入口 drawFx');
+ok(!/drawBodyAt/.test(cur), '旧的「本体层 Canvas 绘制」路径已彻底移除');
+ok(/setupCanvas\(\): void/.test(cur) && /window\.innerWidth \* dpr/.test(cur),
+  '特效层尺寸/DPR 统一由 setupCanvas 设置');
+// ---- 边缘带 + 迟滞 ----
+ok(/private updateEdgeBand\(x: number, y: number\): boolean/.test(cur) && /EDGE_BAND_HYSTERESIS_PX/.test(cur) &&
    /x >= w - \(bandW \+ EDGE_BAND_HYSTERESIS_PX\)/.test(cur),
   'A3：边缘带判定带迟滞（进入 band / 离开 band+4，避免边界反复横跳闪烁）');
-ok(/if \(updateEdgeBand\(x, y\)\) \{ clearBody\(\); return; \}/.test(cur) &&
-   /document\.body\.classList\.remove\('cursor-hidden'\);/.test(cur),
-  'A3：边缘带内让位给系统原生光标（摘 cursor-hidden 且本体层不画字形）');
-ok(/if \(hiddenRef\.current\) \{[\s\S]{0,160}?edgeNativeRef\.current = false;[\s\S]{0,80}?return false;/.test(cur),
+ok(/this\.updateEdgeBand\(x, y\)/.test(cur) &&
+   /classList\.remove\(HIDDEN_CLASS\)/.test(cur),
+  'A3：边缘带内让位给系统原生光标（摘 cursor-hidden 且不画字形）');
+ok(/if \(this\.hidden\) \{[\s\S]{0,200}?this\.edgeNative = false;[\s\S]{0,120}?return false;/.test(cur),
   'A3：隐藏态优先（空闲/失焦/门控时不抢原生光标的接管权）');
 // ---- A4：跨界面切换状态复位 ----
-ok(/window\.addEventListener\('pagehide', onPageHide\)/.test(cur) &&
-   /const onPageHide = \(\) => \{ hideCursorImmediate\(\); \}/.test(cur),
+ok(/window\.addEventListener\('pagehide', this\.onPageHide\)/.test(cur) &&
+   /private onPageHide = \(\): void => \{[\s\S]{0,80}?this\.hideCursorImmediate\(\);/.test(cur),
   'A4：pagehide 走 hideCursorImmediate 复位');
-ok(/const onVisibilityChange = \(\) => \{[\s\S]{0,120}?if \(document\.hidden\) hideCursorImmediate\(\);/.test(cur),
+ok(/private onVisibilityChange = \(\): void => \{[\s\S]{0,300}?if \(document\.hidden\)[\s\S]{0,240}?this\.hideCursorImmediate\(\)/.test(cur),
   'A4：visibilitychange(hidden) 走 hideCursorImmediate 复位（rAF 被节流时淡出收尾不可靠）');
-ok(/hideCursorImmediate[\s\S]{0,1400}?mouseInsideRef\.current = false;/.test(cur) &&
-   /hideCursorImmediate[\s\S]{0,1400}?renderXRef\.current = OFFSCREEN;/.test(cur),
-  'A4：复位同时置 mouseInside=false + renderX/Y=OFFSCREEN（下次进入首事件即吸附指针）');
+ok(/hideCursorImmediate[\s\S]{0,1600}?this\.inside = false;/.test(cur) &&
+   /hideCursorImmediate[\s\S]{0,1700}?this\.pointerX = OFFSCREEN;/.test(cur),
+  'A4：复位同时置 inside=false + 指针坐标=OFFSCREEN（下次进入首事件即吸附指针）');
 
 console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
 if (fail > 0) process.exit(1);

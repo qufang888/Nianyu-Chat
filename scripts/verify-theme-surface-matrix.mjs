@@ -349,6 +349,63 @@ if (BREAK) {
   }
 }
 
+// ---------- 9. G：毛玻璃开启时浮层文字对比度（v2.3.127 修复的回归防线）----------
+// 浅色主题开启毛玻璃后，.modal/.more-dropdown 等浮层后台被强制为深色高不透明底
+// rgba(18,16,38,0.92)，文字必须翻为亮色。本段把「亮色令牌 压 深色毛玻璃底」锁死为 ≥4.5
+// （WCAG AA），并对「浅底（白）/ 深底（黑）」两种合成工况取最差，防止 v2.3.127 修复回归。
+console.log('\n=== G 毛玻璃开启时浮层文字对比度（亮色令牌 压 深色毛玻璃底）===');
+{
+  const glassLayer = parseCssColorWithAlpha('rgba(18, 16, 38, 0.92)');
+  const surfaces = [parseCssColor('#ffffff'), parseCssColor('#000000')]
+    .filter(Boolean)
+    .map((bg) => {
+      const c = compositeOver(glassLayer, bg);
+      return rgbToHex(c.r, c.g, c.b);
+    });
+  const GLASS_TEXT = {
+    '--color-text': '#eef1f7',
+    '--color-text-secondary': '#c2c9d6',
+    '--color-text-muted': '#aab2c2',
+    '--color-system-msg': '#c2c9d6',
+    '--color-select-text': '#eef1f7',
+  };
+  const bad = [];
+  for (const [tok, fg] of Object.entries(GLASS_TEXT)) {
+    const r = worstContrast(fg, surfaces);
+    if (r === null || !Number.isFinite(r) || r < AA_TEXT) bad.push(`${tok} ${fmt(r)} < ${AA_TEXT}`);
+  }
+  if (bad.length) {
+    console.log('  不达标清单：');
+    for (const b of bad) console.log('    · ' + b);
+  }
+  check('G 毛玻璃浮层亮色令牌 压 深色底（白/黑合成工况取最差）全部 ≥ 4.5', bad.length === 0, bad.join('; '));
+
+  // 琉璃幻境（aura）浮层：深色底 rgba(9,21,40,0.88) + 主题自带亮色令牌，同样锁死
+  const auraLayer = parseCssColorWithAlpha('rgba(9, 21, 40, 0.88)');
+  const aSurfaces = [parseCssColor('#ffffff'), parseCssColor('#000000')]
+    .filter(Boolean)
+    .map((bg) => {
+      const c = compositeOver(auraLayer, bg);
+      return rgbToHex(c.r, c.g, c.b);
+    });
+  const AURA_TEXT = {
+    '--color-text': '#eef7fb',
+    '--color-text-secondary': 'rgba(226,242,248,0.72)',
+    '--color-text-muted': 'rgba(220,240,248,0.85)',
+    '--color-system-msg': 'rgba(190,230,240,0.75)',
+  };
+  const abad = [];
+  for (const [tok, fg] of Object.entries(AURA_TEXT)) {
+    const r = worstContrast(fg, aSurfaces);
+    if (r === null || !Number.isFinite(r) || r < AA_TEXT) abad.push(`${tok} ${fmt(r)} < ${AA_TEXT}`);
+  }
+  if (abad.length) {
+    console.log('  aura 不达标清单：');
+    for (const b of abad) console.log('    · ' + b);
+  }
+  check('G 琉璃幻境(aura)浮层亮色令牌 压 深色底（白/黑合成工况取最差）全部 ≥ 4.5', abad.length === 0, abad.join('; '));
+}
+
 // ---------- 汇总 ----------
 console.log(`\n断言：${pass} 通过 / ${fail} 失败`);
 if (fail > 0) {

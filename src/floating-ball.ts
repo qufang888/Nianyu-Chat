@@ -14,14 +14,14 @@ import { sortChats, togglePinnedChat, applyDragOrder } from './utils/chatOrderin
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { ThemeProvider } from './theme/ThemeContext';
-import CustomCursor from './components/CustomCursor';
+import DynamicCursor from './cursor/DynamicCursor';
 import { applyAnimControl, animMs, readAnimSpeed } from './utils/animControl';
 
 const api = (window as any).api;
 
 // ===== v2.3.126：动态光标开关的本窗镜像（修复 Bug A/C：关闭动态光标后球/面板原生光标永久消失）=====
 // 根因：球/面板窗在右键菜单弹出时会加 body.cursor-hidden（隐藏原生光标，让菜单窗动态光标独占）。
-// 该类原先无条件添加——动态光标关闭时 CustomCursor 的 effect 提前 return（监听器全不挂），
+// 该类原先无条件添加——动态光标关闭时 DynamicCursor 的 effect 提前 return（监听器全不挂），
 // 没有任何路径摘掉 cursor-hidden → 球/面板窗原生光标永久消失（用户只能重启恢复）。
 // 修法：把 settings.customCursor.enabled 镜像到本窗（初始化拉一次 + 设置变更时刷新），
 // 菜单弹出处理器仅在动态光标启用时才加 cursor-hidden；关闭动态光标时原生光标始终可见。
@@ -215,8 +215,8 @@ function escapeHTML(s: string): string {
 // 交互/穿透切换 + 动态光标门控（两窗各自独立 gate，channel 由调用方传入）：
 // - on=true（鼠标在本窗不透明区域上）：关闭穿透，正常收事件 → 光标门控解除，动态光标正常显示
 // - on=false（鼠标离开）：恢复穿透。穿透模式主进程只转发 mousemove，窗口收不到 mouseleave，
-//   光标会残留，故加 cursor-gate-off 门控类（CustomCursor 忽略 mousemove），
-//   并派发合成 mouseout 触发 CustomCursor 立即淡出、恢复原生光标。
+//   光标会残留，故加 cursor-gate-off 门控类（DynamicCursor 忽略指针事件），
+//   并派发合成 mouseout 触发 DynamicCursor 立即隐藏、恢复原生光标。
 function makeInteractive(ignoreFn: ((ignore: boolean) => void) | undefined) {
   function setInteractive(on: boolean): void {
     if (ignoreFn) ignoreFn(!on);
@@ -227,7 +227,7 @@ function makeInteractive(ignoreFn: ((ignore: boolean) => void) | undefined) {
       // v2.3.x：进入穿透态**立即**门控隐藏动态光标，不再等 120ms 防抖。穿透模式下窗口仍会收到
       // 主进程 forward 的 mousemove，若不立即 gate，光标会按窗口相对坐标（0..窗宽）绘制，被「困」在
       // 小窗矩形内（只能上下动 / 双光标）。故 onMouseMove 须立即停止绘制，并派发合成 mouseout 让
-      // CustomCursor 立即淡出、恢复原生光标（与 onBallMenuOpen / suppressPanelCursor 同款处理）。
+      // DynamicCursor 立即隐藏、恢复原生光标（与 onBallMenuOpen / suppressPanelCursor 同款处理）。
       document.body.classList.add('cursor-gate-off');
       document.dispatchEvent(new MouseEvent('mouseout'));
     }
@@ -381,7 +381,7 @@ function mountBall(): void {
       setInteractive(false);
       document.body.classList.add('cursor-gate-off');
       document.dispatchEvent(new MouseEvent('mouseout'));
-      // v2.3.120：合成 mouseout 会触发 CustomCursor 隐藏链路并摘掉 cursor-hidden（露出原生
+      // v2.3.120：合成 mouseout 会触发 DynamicCursor 隐藏链路并摘掉 cursor-hidden（露出原生
       // 光标）。菜单弹出期间不应出现原生光标（菜单窗独占动态光标），故补回 cursor-hidden。
       // v2.3.126：仅动态光标启用时才隐藏原生光标——菜单窗没有动态光标，原生光标本就该显示；
       // 关闭动态光标时更不能残留此类，否则原生光标永久消失且无人摘除（Bug A/C 根因）。
@@ -477,7 +477,7 @@ function mountPanel(): void {
   // 面板收到 ball:dragging=true 立即门控 + 隐藏自身光标、并拒绝 hover 激活；结束后按悬停恢复。
   let ballDragging = false;
   const suppressPanelCursor = () => {
-    // 立即门控 + 合成 mouseout → CustomCursor 走隐藏链路（清画布 / 恢复原生光标）
+    // 立即门控 + 合成 mouseout → DynamicCursor 走隐藏链路（清特效层 / 恢复原生光标）
     document.body.classList.add('cursor-gate-off');
     document.dispatchEvent(new MouseEvent('mouseout'));
   };
@@ -909,9 +909,9 @@ if (role === 'panel') mountPanel();
 else if (role === 'menu') mountMenu();
 else mountBall();
 
-// ===== 动态光标（CustomCursor，球窗/面板窗各自独立挂载/gate）=====
+// ===== 动态光标（DynamicCursor，球窗/面板窗各自独立挂载/gate）=====
 // 悬浮球两窗均为原生 DOM 窗口，无 React 根。单独挂一个 React 根只为渲染
-// <ThemeProvider> + <CustomCursor>，光标画布 portal 到 document.body（pointer-events:none，
+// <ThemeProvider> + <DynamicCursor>，光标层 portal 到 document.body（pointer-events:none，
 // 不影响透明区的鼠标穿透）。配置与总开关复用 settings.customCursor，与主界面/小窗一致。
 // 菜单窗（role=menu）不挂载：菜单窗无动态光标需求，减少复杂度。
 function mountCursor(): void {
@@ -934,7 +934,7 @@ function mountCursor(): void {
     }
     const cursorRoot = createRoot(host);
     cursorRoot.render(
-      React.createElement(ThemeProvider, null, React.createElement(CustomCursor)),
+      React.createElement(ThemeProvider, null, React.createElement(DynamicCursor)),
     );
   } catch (e) {
     console.error('[floating-ball] mount Cursor failed', e);
