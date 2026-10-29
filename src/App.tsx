@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from './ipc';
 import { useI18n } from './i18n/I18nContext';
 import { useTheme } from './theme/ThemeContext';
@@ -23,8 +23,12 @@ import {
 } from './components/QuickImportPreviewModal';
 import { ModelCompare } from './components/ModelCompare';
 import { MomentsView } from './components/MomentsView';
-// V3：桌面角色（捉宠角色）板块——主界面内的角色管理面板
-import { CharacterCollection } from './components/CharacterCollection';
+// V3：桌面角色（捉宠角色）板块——主界面内的角色管理面板。
+// 用 React.lazy 按需加载：该面板会带出 ModelView / 角色舞台（内含 WebGL 相关代码，约 1MB），
+// 静态引入会让每次冷启动都白白预加载一大块「可能根本不用」的代码。
+const CharacterCollection = React.lazy(() =>
+  import('./components/CharacterCollection').then((m) => ({ default: m.CharacterCollection }))
+);
 import { useToast, ToastView } from './components/Toast';
 import DynamicCursor from './cursor/DynamicCursor';
 import VideoBubble from './components/VideoBubble';
@@ -563,7 +567,11 @@ export default function App() {
         />
       )}
       {view === 'stats' && <StatsView />}
-      {view === 'characters' && <CharacterCollection />}
+      {view === 'characters' && (
+        <React.Suspense fallback={<div className="main-pane" />}>
+          <CharacterCollection />
+        </React.Suspense>
+      )}
       {view === 'moments' && <MomentsView />}
       {view === 'library' && (
         <Library

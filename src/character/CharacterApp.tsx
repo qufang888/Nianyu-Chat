@@ -47,7 +47,9 @@ export const CharacterApp: React.FC = () => {
 
   const charRef = useRef<HTMLDivElement | null>(null);
   const interactiveRef = useRef(false);
-  const dragRef = useRef<{ started: boolean; sx: number; sy: number; gdx: number; gdy: number } | null>(null);
+  // from：这次按下发生在角色本体还是气泡上。只有角色本体的「点一下」才等于点角色
+  //（气泡是中性可拖拽区，点气泡不该顺手跳转绑定的对话）。
+  const dragRef = useRef<{ started: boolean; from: 'character' | 'bubble'; sx: number; sy: number; gdx: number; gdy: number } | null>(null);
   const bubbleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const actionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draggingRef = useRef(false);
@@ -223,8 +225,12 @@ export const CharacterApp: React.FC = () => {
     if (e.button !== 0) return;
     if (runtime.passThroughLocked) return;
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    const from: 'character' | 'bubble' = (e.currentTarget as HTMLElement).classList.contains('dc-character')
+      ? 'character'
+      : 'bubble';
     dragRef.current = {
       started: false,
+      from,
       sx: e.screenX,
       sy: e.screenY,
       gdx: e.screenX - window.screenX,
@@ -253,8 +259,9 @@ export const CharacterApp: React.FC = () => {
       setTimeout(() => setExpression('neutral'), 260);
       return;
     }
-    // 未越过门槛 = 单击：先给角色反馈；若已绑定对话再跳转（未绑定左键不跳转）
-    onCharacterClick();
+    // 未越过门槛 = 单击：只有点在角色本体上才算「点角色」——
+    // 点在气泡上只由气泡自身处理（文字区点击即收起），不触发跳转。
+    if (d?.from === 'character') onCharacterClick();
   };
 
   const onCharacterClick = () => {

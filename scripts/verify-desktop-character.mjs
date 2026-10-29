@@ -94,6 +94,8 @@ check('拖拽门槛 5px', /DRAG_THRESHOLD\s*=\s*5/.test(appTsx));
 check('只有角色命中箱 pointerdown 才抓取（不监听全窗左键）',
   /onPointerDown=\{beginPointer\}/.test(appTsx) && !/window\.addEventListener\('pointerdown'/.test(appTsx));
 check('单击先给反馈、绑定对话才跳转', /api\.dcOpenChat\(bound\)/.test(appTsx) && /boundChat/.test(appTsx));
+check('点气泡不算点角色（只有 from===\'character\' 才跳转）',
+  /from: 'character' \| 'bubble'/.test(appTsx) && /d\?\.from === 'character'\) onCharacterClick\(\)/.test(appTsx));
 check('右键菜单 6 项齐备（锁定/置顶/绑定/舞台/管理/隐藏）',
   ['menuLockPass', 'menuOnTop', 'menuBind', 'menuStage', 'menuManage', 'menuHide'].every((k) => appTsx.includes(k)));
 check('右键菜单色走主题变量（无硬编码十六进制）', !/#[0-9a-fA-F]{6}/.test(charCss.split('/* ===== 右键菜单')[1]?.split('/* 毛玻璃')[0] || ''));
@@ -140,7 +142,9 @@ check('画布不吃指针事件（拖拽仍由外层接管）', /pointer-events:
 section('E. 主界面接线');
 // ============================================================================
 check('侧边栏新增「捉宠角色」入口', /key: 'characters'/.test(sidebar) && /nav\.characters/.test(sidebar));
-check('App 视图可渲染 CharacterCollection', /view === 'characters' && <CharacterCollection/.test(appRoot));
+check('App 视图按需渲染 CharacterCollection（React.lazy + Suspense）',
+  /lazy\(\(\) =>[\s\S]{0,200}CharacterCollection/.test(appRoot) &&
+  /view === 'characters' && \(\s*<React\.Suspense/.test(appRoot));
 check('App 处理角色窗导航（open-collection / open-chat）',
   /onDcOpenCollection/.test(appRoot) && /onDcOpenChat/.test(appRoot));
 check('拖拽导入先问角色层认领（dcImportPaths）', /dcImportPaths\(paths\)/.test(appRoot));
