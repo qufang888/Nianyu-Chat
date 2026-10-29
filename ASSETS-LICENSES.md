@@ -25,6 +25,20 @@
 **不含任何第三方采样素材**，因此不涉及任何第三方著作权。
 重新生成：`node scripts/gen-builtin-sounds.mjs`
 
+### 1.1.1 V3 起：「自定义（本地音效）」主题的 5 个 mp3
+
+| 文件 | 用途 | 来源 | 许可 |
+|---|---|---|---|
+| `public/sounds/themes/user/error.mp3` | 报错弹窗 | **作者自带**（前方提供） | 随本项目以 MIT 分发 |
+| `public/sounds/themes/user/click.mp3` | UI 点击 | 同上 | 同上 |
+| `public/sounds/themes/user/notification-a.mp3` | 消息通知（三选一随机） | 同上 | 同上 |
+| `public/sounds/themes/user/notification-b.mp3` | 同上 | 同上 | 同上 |
+| `public/sounds/themes/user/notification-c.mp3` | 同上 | 同上 | 同上 |
+
+这 5 个文件**不是**从第三方音效站下载的素材，而是项目作者自带并明确要求随软件分发；
+发版脚本 `scripts/push-remote.py` 的「mp3 版权安全闸」已对 `public/sounds/themes/user/` 白名单放行，
+其余位置出现 mp3 仍会报警。若你二次分发本项目，请自行确认对这 5 个音频的使用权。
+
 ### 1.2 v2.3.97 的安全处置记录（历史）
 
 v2.3.94 及更早版本内置了 11 个来自第三方音效站的 mp3，文件名形如
@@ -85,6 +99,21 @@ v2.3.94 及更早版本内置了 11 个来自第三方音效站的 mp3，文件�
 
 全部依赖均为宽松许可，**无 GPL / AGPL / LGPL / MPL 等强/弱著佐权依赖**，
 故本项目以 MIT 协议开源不受传染。完整清单见 [`NOTICE`](./NOTICE) 文件。
+
+---
+
+### 3.1 V3 新增依赖（3D / Live2D 渲染）
+
+| 包 | 版本 | 许可 | 用途 |
+|---|---|---|---|
+| `three` | 0.170.0 | MIT | 3D 渲染（GLB / GLTF） |
+| `@pixiv/three-vrm` | 3.4.0 | MIT | VRM 0.x / 1.0 支持（MToon 材质 + SpringBone） |
+| `pixi.js` | 6.5.10 | MIT | Live2D 的 2D 渲染基座 |
+| `pixi-live2d-display` | 0.4.0 | MIT | Live2D 模型加载与动作播放 |
+
+**未引入**：Live2D 公司的 `live2dcubismcore.min.js`（Cubism Core）与 `live2d.min.js`（Cubism 2 runtime）。
+两者版权归 Live2D 所有、分发条件受限，本项目**不打包、不内置**，由用户自行取得后放入
+`<userData>/character-runtime/`；缺失时界面会明确提示而不是静默失败。
 
 ---
 
