@@ -153,11 +153,13 @@ def main():
     log(f"本地文件数 = {len(tree_lines)}")
     entries = []
     uploaded = []  # (path, sha, content) —— 建 tree 失败重传时复用
+    local_paths = set()
     for i, line in enumerate(tree_lines):
         meta, path = line.split("\t", 1)
         mode, otype, osha = meta.split()
         if otype != "blob":
             continue
+        local_paths.add(path)
         data = git_bytes(["cat-file", "blob", osha])
         st, blob = req(token, "POST", "/git/blobs",
                        {"content": base64.b64encode(data).decode(), "encoding": "base64"})
@@ -171,6 +173,28 @@ def main():
         uploaded.append((path, osha, data))
         if (i + 1) % 60 == 0:
             log(f"  blob {i + 1}/{len(tree_lines)}")
+
+    # 3.5) 删除远端残留（v3.0.0-beta.1 修补）
+    #      base_tree 叠加本地条目只会「新增/覆盖」，**不会删除**——本地历史删掉的文件会一直留在
+    #      远端仓库里，直到永远。实测残留：旧启动页 public/launch.html、旧光标
+    #      src/components/CustomCursor.tsx、src/utils/dominantColor.ts、scripts/verify-bubble-anim.mjs。
+    #      危害不只是「脏」：本地闸门 verify-launch-cursor.mjs / verify-dye-contrast.mjs 明确断言
+    #      这些文件**不存在**，而 clone 下来的仓库因为远端还留着它们 → 闸门直接失败。
+    #      故此处按「远端有、本地无」显式下发删除条目（tree API 约定：sha=null 即删除该路径）。
+    st, base_full = req(token, "GET", f"/git/trees/{base_tree}?recursive=1")
+    if st == 200 and not base_full.get("truncated"):
+        stale = sorted({e["path"]: e for e in base_full.get("tree", []) if e["type"] == "blob"
+                        and e["path"] not in local_paths}.items())
+        if stale:
+            log(f"远端残留待删除 = {len(stale)}")
+            for path, e in stale:
+                entries.append({"path": path, "mode": e.get("mode", "100644"),
+                                "type": "blob", "sha": None})
+                log(f"  - {path}")
+    elif st == 200:
+        log("⚠️ 远端 tree 过大被截断，跳过残留清理（请手动核对）")
+    else:
+        log(f"⚠️ 取远端 tree 失败（{st}），跳过残留清理")
 
     # 4) 建 tree（base_tree=远端，叠加本地）
     #    422 偶发（GitHub 对刚上传 blob 的可见性延迟，同一 blob 重试即成功）→ 做重试；
@@ -219,8 +243,19 @@ def main():
     if do_tag:
         ver = json.load(open("package.json", encoding="utf-8"))["version"]
         tag = "v" + ver
-        st, _ = req(token, "POST", "/git/refs", {"ref": f"refs/tags/{tag}", "sha": commit["sha"]})
-        log(f"tag {tag} = {st}")
+        st, res = req(token, "POST", "/git/refs", {"ref": f"refs/tags/{tag}", "sha": commit["sha"]})
+        if st in (200, 201):
+            log(f"tag {tag} = {st}")
+        elif st == 422:
+            # 同名 tag 已存在（重复发版 / 补推文档）→ 强制移动到本次 commit。
+            # 旧实现只打一行「tag ... = 422」就继续跑，结果 main 已前进、tag 却停在旧提交，
+            # 打出来的「发版」指向的不是最终代码。
+            st2, res2 = req(token, "PATCH", f"/git/refs/tags/{tag}",
+                            {"sha": commit["sha"], "force": True})
+            log(f"tag {tag} 已存在 → 移动到本次 commit = {st2}"
+                + ("" if st2 == 200 else f" {res2}"))
+        else:
+            log(f"❌ tag {tag} 创建失败: {st} {res}")
 
     # 8) 版权安全闸：校验远端 mp3 = 0
     #    V3 起例外：public/sounds/themes/user/ 下的 5 个 mp3 是**用户自带并明确要求随软件分发**的音效，
