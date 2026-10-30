@@ -209,7 +209,7 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'cat-appearance', key: 'settings.catAppearance', kw: ['外观', '主题', '界面', '动效', 'appearance', 'theme'] },
   // v2.3.102 需求 3：原 cat-generation + cat-translation 合并为 cat-extensions（扩展与工具）。
   { id: 'cat-extensions', key: 'settings.catExtensions', kw: ['扩展', '工具', '生成', '生图', '生视频', '翻译', '音效', '插件', '技能', '联网', 'extension', 'tools', 'generation', 'translation', 'sound'] },
-  { id: 'cat-window', key: 'settings.catWindow', kw: ['窗口', '小窗', '悬浮球', '桌面角色', '捉宠', '系统', 'window', '迷你'] },
+  { id: 'cat-window', key: 'settings.catWindow', kw: ['窗口', '小窗', '悬浮球', '桌面角色', '桌宠', '系统', 'window', '迷你'] },
   { id: 'sec-language', key: 'settings.language', kw: ['语言', 'language', '界面语言', '中文', '英文'] },
   { id: 'sec-animations', key: 'settings.animations', kw: ['动画', 'animation', '动效', '全部开启', '全部关闭', '自定义', '分组', 'all on', 'all off', 'custom', 'group'] },
   // v2.3.97 补：动效分组开关区。**条件渲染**（仅动效「自定义」档存在），
@@ -271,8 +271,8 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-mini', key: 'settings.mini', kw: ['小窗', '迷你', 'mini', '快捷'] },
   { id: 'sec-inactive-chat', key: 'settings.inactiveChatDays', kw: ['不常用', '不常用聊天', '不活跃', '闲置', '归档', '收起来', '多少天', '天数', 'inactive', 'archive', 'folder', 'days', 'stale'] },
   { id: 'sec-floatingball', key: 'settings.floatingBall', kw: ['悬浮球', '浮动球', '球', 'floating', '桌面'] },
-  // V3：桌面角色（捉宠角色）——角色窗开关 / 置顶 / 穿透锁定 / 导入角色包
-  { id: 'sec-desktopcharacter', key: 'settings.desktopCharacter', kw: ['桌面角色', '捉宠角色', '捉宠', '角色窗', '穿透锁定', '置顶人物', '角色包', 'live2d', 'vrm', 'glb', '3d', 'desktop character', 'pet', '角色'] },
+  // V3：桌面角色（桌宠角色）——角色窗开关 / 置顶 / 穿透锁定 / 导入角色包
+  { id: 'sec-desktopcharacter', key: 'settings.desktopCharacter', kw: ['桌面角色', '桌宠角色', '桌宠', '角色窗', '穿透锁定', '置顶人物', '角色包', 'live2d', 'vrm', 'glb', '3d', 'desktop character', 'pet', '角色', '捉宠角色', '捉宠'] },
   { id: 'sec-datapath', key: 'settings.dataPath', kw: ['数据', '路径', 'data', 'path', '存储'] },
   { id: 'sec-closebehavior', key: 'settings.closeBehavior', kw: ['关闭', '退出', 'close', '退出行为'] },
   { id: 'sec-errorlog', key: 'settings.errorLog', kw: ['错误', '日志', 'error', 'log', '报错'] },

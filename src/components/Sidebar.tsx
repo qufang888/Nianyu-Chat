@@ -7,7 +7,7 @@ const items: { key: View; icon: string; labelKey: string }[] = [
   { key: 'chats', icon: '💬', labelKey: 'nav.chats' },
   { key: 'contacts', icon: '👥', labelKey: 'nav.contacts' },
   { key: 'moments', icon: '🌟', labelKey: 'nav.moments' },
-  // V3：桌面角色（捉宠角色）板块入口
+  // V3：桌面角色（桌宠角色）板块入口
   { key: 'characters', icon: '🐾', labelKey: 'nav.characters' },
   { key: 'compare', icon: '⚔️', labelKey: 'nav.compare' },
   { key: 'stats', icon: '📊', labelKey: 'nav.stats' },

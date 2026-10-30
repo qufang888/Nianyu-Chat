@@ -1355,10 +1355,23 @@ export const DEFAULT_SETTINGS: AppSettings = {
   launchOnBoot: true, // 开机自启动默认开启
   hasShownSplash: false,
   floatingBall: { enabled: true, x: 0, y: 0, alwaysOnTop: true, autoHideInFullscreen: true },
-  // V3 桌面角色：默认不自动展示（用户可在「捉宠角色」面板开启），无任何第三方素材
-  desktopCharacters: [],
+  // V3 桌面角色（桌宠角色）：出厂即内置一个原创占位角色「小念」并**默认开启**角色窗，
+  // 否则用户开启功能后桌面一片空白，会误以为功能坏了。无任何第三方素材（几何绘制）。
+  // 用户可随时在「桌宠角色」面板删除/替换/关闭，已添加过角色的用户不受影响（见 db.ts loadSettings）。
+  desktopCharacters: [
+    {
+      id: 'dc_builtin_placeholder',
+      name: '小念',
+      kind: 'placeholder',
+      files: [],
+      enabled: true,
+      scale: 1,
+      behavior: true,
+      bubble: true,
+    },
+  ],
   characterRuntime: {
-    enabled: false,
+    enabled: true,
     x: 0,
     y: 0,
     alwaysOnTop: true,

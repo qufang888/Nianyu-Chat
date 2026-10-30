@@ -573,6 +573,8 @@ export interface NianyuAPI {
   // v2.3.93 内置技能：恢复为随念语附带的版本 / 列出可恢复的被删内置技能
   restoreBuiltinSkill: (id: string) => Promise<{ ok: boolean }>;
   listDismissedBuiltins: () => Promise<{ id: string; name: string; description: string }[]>;
+  // v3.0.1：查询某场对话当前生效的技能名（聊天气泡下方「正在调用 Skill」状态展示用）
+  getActiveSkillNames: (chatType: string, chatId: string, roleId?: string) => Promise<string[]>;
 
   // ===== 软件更新（v2.3.45）=====
   checkUpdate: (manual?: boolean) => Promise<UpdateStatus>;
@@ -1205,6 +1207,9 @@ const api: NianyuAPI = {
   // v2.3.93 内置技能：恢复为随念语附带的版本 / 列出可恢复的被删内置技能
   restoreBuiltinSkill: (id) => ipcRenderer.invoke('skill:restoreBuiltin', id),
   listDismissedBuiltins: () => ipcRenderer.invoke('skill:listDismissedBuiltins'),
+  // v3.0.1：查询某场对话当前生效的技能名（聊天气泡下方「正在调用 Skill」状态展示用）
+  getActiveSkillNames: (chatType, chatId, roleId) =>
+    ipcRenderer.invoke('skill:active', chatType, chatId, roleId || ''),
 
   // ===== 确认对话框 =====
   // ===== 软件更新（v2.3.45）=====

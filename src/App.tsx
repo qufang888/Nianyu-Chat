@@ -23,7 +23,7 @@ import {
 } from './components/QuickImportPreviewModal';
 import { ModelCompare } from './components/ModelCompare';
 import { MomentsView } from './components/MomentsView';
-// V3：桌面角色（捉宠角色）板块——主界面内的角色管理面板。
+// V3：桌面角色（桌宠角色）板块——主界面内的角色管理面板。
 // 用 React.lazy 按需加载：该面板会带出 ModelView / 角色舞台（内含 WebGL 相关代码，约 1MB），
 // 静态引入会让每次冷启动都白白预加载一大块「可能根本不用」的代码。
 const CharacterCollection = React.lazy(() =>
@@ -342,7 +342,7 @@ export default function App() {
   }, []);
 
   // V3：桌面角色窗口发来的两种导航请求
-  // 1) dc:open-collection → 切到「捉宠角色」板块（右键菜单「管理角色」/ 设置里点「管理」）
+  // 1) dc:open-collection → 切到「桌宠角色」板块（右键菜单「管理角色」/ 设置里点「管理」）
   // 2) dc:open-chat       → 角色已绑定对话时，左键点击角色直接跳到那个会话
   // 绑定记录里带了会话名，但可能为空（历史数据），此时回查会话列表补全，避免标题空白。
   useEffect(() => {

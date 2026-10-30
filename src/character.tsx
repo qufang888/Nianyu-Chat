@@ -12,6 +12,11 @@ import { I18nProvider } from './i18n/I18nContext';
 import { CharacterApp } from './character/CharacterApp';
 import './theme/variables.css';
 import './styles/character.css';
+import { installGlobalSoundListeners } from './utils/sound';
+
+// 角色窗是独立渲染进程：主窗 main.tsx 的全局音效监听器覆盖不到这里，
+// 需在本入口各自安装一次，否则角色窗内的点击/弹窗等交互静默。
+installGlobalSoundListeners();
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

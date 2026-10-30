@@ -1,5 +1,5 @@
 @import '../theme/variables.css';
-/* V3 桌面角色：「捉宠角色」面板与角色舞台（主窗专用；角色窗样式见 styles/character.css）*/
+/* V3 桌面角色：「桌宠角色」面板与角色舞台（主窗专用；角色窗样式见 styles/character.css）*/
 @import './character-panel.css';
 
 * {
@@ -1168,6 +1168,63 @@ input[type='range']::-moz-range-thumb {
   margin-top: 4px;
   display: flex;
   gap: 8px;
+}
+
+/* v3.0.1：聊天气泡下方「正在调用 / 已完成 Skill 调用」状态。
+   配色走主题变量（15 套主题下均自适应可读）；背景为半透明面板，不与其他图层文字重叠。
+   淡出用 transition（非 @keyframes）：关动效档时 `transition:none` 直接拉到终值，
+   不会出现「关掉动效仍卡在透明」的坑（与 .msg-action-bar 同款范式）。 */
+.skill-call-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: calc(12px * var(--font-scale));
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, var(--color-panel) 72%, transparent);
+  border: 1px solid var(--color-border, rgba(128, 128, 128, 0.28));
+  max-width: 100%;
+  opacity: 1;
+  transition: opacity 0.4s ease;
+}
+.skill-call-status.fading {
+  opacity: 0;
+}
+.skill-call-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--color-primary, #4a90d9);
+  border-top-color: transparent;
+  flex: 0 0 auto;
+  animation: skill-call-spin 0.7s linear infinite;
+}
+.skill-call-check {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-success, #2e9e5b);
+  font-size: 12px;
+  line-height: 1;
+}
+.skill-call-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@keyframes skill-call-spin {
+  to { transform: rotate(360deg); }
+}
+/* 动效总开关关闭时停止旋转（spinner 是纯装饰，关动效不应再转） */
+.anim-off .skill-call-spinner,
+html[data-anim-off~="panel"] .skill-call-spinner {
+  animation: none;
 }
 .system-msg {
   align-self: center;

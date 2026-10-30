@@ -173,6 +173,8 @@ export const MiniChat: React.FC = () => {
   const pendingSearchRef = useRef<SearchResultItem[] | null>(null);
   // 已完成的 AI 消息 id -> streamId 映射，用于历史消息继续显示其搜索气泡
   const streamMsgIdRef = useRef<Record<string, string>>({});
+  // v3.0.1：聊天气泡下方「正在调用 / 已完成 Skill 调用」状态（按 streamId 分桶；与主窗同构）
+  const [skillCalls, setSkillCalls] = useState<Record<string, { status: 'calling' | 'done' | 'fading'; names: string[] }>>({});
   const autoMemoryRef = useRef(false);
   const [hideReasoning, setHideReasoning] = useState(true);
   // 伪流式输出（v2.3.34；v2.3.36 单一「动画速度」）：on=总开关，speed=动画速度/单字渐显时长（秒），触发间隔=speed/4 自动推导
@@ -777,6 +779,16 @@ export const MiniChat: React.FC = () => {
           } as any,
         };
       });
+      // v3.0.1：若该 stream 对应的角色/作用域有生效中的技能，在 AI 气泡下方展示「正在调用 Skill 名称」
+      {
+        const sep = data.streamId.lastIndexOf(':');
+        const rid = sep >= 0 ? data.streamId.slice(sep + 1) : '';
+        api.getActiveSkillNames(current.chat_type, current.chat_id, rid).then((names: string[]) => {
+          if (Array.isArray(names) && names.length) {
+            setSkillCalls((prev) => ({ ...prev, [data.streamId]: { status: 'calling', names } }));
+          }
+        }).catch(() => {});
+      }
     };
     const onDone = (_e: any, data: any) => {
       if (!belongs(data.streamId)) return;
@@ -789,6 +801,27 @@ export const MiniChat: React.FC = () => {
         remaining = Object.keys(copy).length;
         return copy;
       });
+      // v3.0.1：技能调用状态 -> 已完成；停留 3 秒后渐隐，再移除
+      setSkillCalls((prev) => {
+        const cur = prev[data.streamId];
+        if (!cur) return prev;
+        return { ...prev, [data.streamId]: { ...cur, status: 'done' } };
+      });
+      setTimeout(() => {
+        setSkillCalls((prev) => {
+          const cur = prev[data.streamId];
+          if (!cur) return prev;
+          return { ...prev, [data.streamId]: { ...cur, status: 'fading' } };
+        });
+        setTimeout(() => {
+          setSkillCalls((prev) => {
+            if (!prev[data.streamId]) return prev;
+            const copy = { ...prev };
+            delete copy[data.streamId];
+            return copy;
+          });
+        }, 420);
+      }, 3000);
       if (data.message && !doneStreamIds.current.has(data.streamId)) {
         doneStreamIds.current.add(data.streamId);
         // 记录 消息id -> streamId，让已完成的回复在历史中仍显示自己的搜索气泡
@@ -897,6 +930,7 @@ export const MiniChat: React.FC = () => {
       setNeedSpeaker(data);
     });
     return () => {
+      setSkillCalls({});
       offChunk();
       offStart();
       offDone();
@@ -2394,6 +2428,8 @@ export const MiniChat: React.FC = () => {
           const msgSr = (m as any).search_results as SearchResultItem[] | undefined;
           const sr = msgSr && msgSr.length ? msgSr : sid ? searchResultsByStream[sid] : undefined;
           const expKey = sid || `msg-${m.id}`;
+          // v3.0.1：按 streamId 取本场对话生效技能状态，注入该条 AI 气泡的「正在调用 / 已完成 Skill 调用」展示
+          const skillCall = sid ? (skillCalls[sid] || null) : null;
           return (
             <Fragment key={m.id}>
               <MiniMessageRow
@@ -2442,6 +2478,8 @@ export const MiniChat: React.FC = () => {
                 // v2.3.102 需求 1：打断后重发
                 interruptedAnchorId={interruptedAnchorId}
                 onResendInterrupted={handleResendInterrupted}
+                // v3.0.1：按 streamId 把「正在调用 / 已完成 Skill 调用」状态注入该条 AI 气泡
+                skillCall={skillCall}
               />
               {sr && sr.length > 0 && (
                 <div className="search-result-bubble" key={`sr-${m.id}`}>
@@ -3147,10 +3185,12 @@ const MiniMessageRow: React.FC<{
   // v2.3.102 需求 1：若本条用户消息 id 等于唯一锚点 id，则在其 .msg-body 内渲染「重发」按钮
   interruptedAnchorId?: number | null;
   onResendInterrupted?: (m: ChatMessage) => void;
+  // v3.0.1：聊天气泡下方「正在调用 / 已完成 Skill 调用」状态（由父组件按 streamId 注入；无则 undefined）
+  skillCall?: { status: 'calling' | 'done' | 'fading'; names: string[] } | null;
 }> = ({
   msg, onImage, avatarPath, userAvatarPath, showTts, ttsState, onAiAction, showAiActions, aiActionBusy, hideReasoning, onSpeak, onReplayTts, onRegenerateTts, onReasoningCopied,
   onQuickMemory, onSaveImageMemory, onRollback, onDeleteMsg, onCopy, onTranslate, onMarkNode, onViewPrompt, onForkFromHere, onSelectCopy, failed, searchResults, onOpenSearch,
-  pseudoOn, pseudoSpeed, pseudoKey, prevTimestamp, interruptedAnchorId, onResendInterrupted,
+  pseudoOn, pseudoSpeed, pseudoKey, prevTimestamp, interruptedAnchorId, onResendInterrupted, skillCall,
 }) => {
   const { t } = useI18n();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -3409,6 +3449,19 @@ const MiniMessageRow: React.FC<{
             )}
             {imgs.length > 0 && <ImageGrid paths={imgs} onImage={onImage} failed={!!failed} />}
           </>
+        )}
+        {/* v3.0.1：聊天气泡下方「正在调用 / 已完成 Skill 调用」状态（由父组件按 streamId 注入） */}
+        {!isUser && skillCall && (
+          <div className={`skill-call-status${skillCall.status === 'fading' ? ' fading' : ''}`} title={t('skill.title')}>
+            {skillCall.status === 'calling' ? (
+              <span className="skill-call-spinner" aria-hidden="true" />
+            ) : (
+              <span className="skill-call-check" aria-hidden="true">✓</span>
+            )}
+            <span className="skill-call-text">
+              {skillCall.status === 'calling' ? t('skill.calling', { name: skillCall.names.join('、') }) : t('skill.called')}
+            </span>
+          </div>
         )}
         <div className="msg-meta">
           {/* v2.3.102 需求 2：时间已移到 .msg-avatar-col（头像正下方），此处仅保留 tokens / 操作栏 */}

@@ -11,7 +11,7 @@
  * - 默认整体 `setIgnoreMouseEvents(true, { forward: true })`，由渲染层按命中区域动态切回可交互；
  * - 拖拽由**主进程轮询设备光标**（screen.getCursorScreenPoint）驱动显式弹簧（K=200 / C=30，子步 1/120），
  *   松手后按末速度做惯性滑停；拖拽期间锁定可交互，结束再交还穿透路由；
- * - 「穿透锁定」：锁定后角色恒穿透、不再自动切回可交互（只能在主界面「捉宠角色」面板解锁）；
+ * - 「穿透锁定」：锁定后角色恒穿透、不再自动切回可交互（只能在主界面「桌宠角色」面板解锁）；
  * - 与悬浮球**非重叠**：初始定位与拖拽落点都按悬浮球窗矩形做位移避让。
  */
 import { BrowserWindow, screen, ipcMain } from 'electron';
@@ -324,7 +324,7 @@ export function refreshDesktopCharacter(): void {
   sendState();
 }
 
-/** 供主窗口「捉宠角色」面板读取的完整快照。 */
+/** 供主窗口「桌宠角色」面板读取的完整快照。 */
 export function getDesktopCharacterSnapshot(): {
   runtime: CharacterRuntimeSettings;
   characters: DesktopCharacter[];
@@ -433,7 +433,7 @@ export function registerDesktopCharacterIPC(): void {
     if (chat && chat.id) openBoundChat(chat);
   });
 
-  // 角色窗请求打开主界面的「捉宠角色」面板
+  // 角色窗请求打开主界面的「桌宠角色」面板
   ipcMain.on('dc:open-collection', () => {
     if (!mainWindowRef || mainWindowRef.isDestroyed()) return;
     if (mainWindowRef.isMinimized()) mainWindowRef.restore();

@@ -241,6 +241,9 @@ function mount(): void {
     api.onNotifyData((_e: any, data: any) => {
       if (!data) return;
       if (data.action === 'show') show(data);
+      // v3.0.1：窗口可见（用户正在使用）时主进程只下发提示音、不弹卡片 ——
+      // 此前这类消息完全静音，用户会以为「消息发过来没有提示音」。
+      else if (data.action === 'sound') void playNotifySound(data.chat);
       else hide();
     });
   }

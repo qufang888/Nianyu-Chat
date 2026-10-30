@@ -16,8 +16,13 @@ import { createRoot } from 'react-dom/client';
 import { ThemeProvider } from './theme/ThemeContext';
 import DynamicCursor from './cursor/DynamicCursor';
 import { applyAnimControl, animMs, readAnimSpeed } from './utils/animControl';
+import { installGlobalSoundListeners } from './utils/sound';
 
 const api = (window as any).api;
+
+// 悬浮球三窗（球/面板/菜单）是独立渲染进程，需各自安装全局音效监听，
+// 否则球上的点击/弹窗等交互静默（与主窗、桌宠窗一致的处理）。
+installGlobalSoundListeners();
 
 // ===== v2.3.126：动态光标开关的本窗镜像（修复 Bug A/C：关闭动态光标后球/面板原生光标永久消失）=====
 // 根因：球/面板窗在右键菜单弹出时会加 body.cursor-hidden（隐藏原生光标，让菜单窗动态光标独占）。
@@ -160,7 +165,7 @@ function baseCSS(): string {
   .fb-row.fb-pinned{background:var(--color-hover);}
   .fb-row.fb-dragging{opacity:.45;}
   .fb-row.fb-drag-over{box-shadow:inset 0 2px 0 var(--color-primary);}
-  [data-glass='on'] .fb-row.fb-pinned{background:rgba(255,255,255,0.10);}
+  [data-glass='on'] .fb-row.fb-pinned{background:rgba(255,255,255,0.16);}
   .fb-empty{padding:22px 12px;text-align:center;font-size:12.5px;color:var(--color-text-secondary);}
   .fb-foot{padding:8px 14px 10px;font-size:11px;color:var(--color-text-secondary);text-align:center;border-top:1px solid var(--color-border);}
 
@@ -184,9 +189,9 @@ function baseCSS(): string {
      面板/行悬停/置顶行随开关叠加半透明（color-mix 只降 alpha、保留主题自身配色），
      配合上方 backdrop-filter 形成磨砂；不再有玻璃主题专属的深底/紫色覆写（配色不变）。 */
   [data-glass='on'] .fb-panel{
-    background:color-mix(in srgb, var(--color-panel) 78%, transparent);
+    background:color-mix(in srgb, var(--color-panel) 90%, transparent);
   }
-  [data-glass='on'] .fb-row:hover{ background:rgba(255,255,255,0.10); }
+  [data-glass='on'] .fb-row:hover{ background:rgba(255,255,255,0.16); }
 
   /* 动效开关（animMode='all-off' 时根元素挂 .anim-off）：全局禁用所有 CSS 动画/过渡，
      与主界面 index.css 的 .anim-off 规则同语义（覆盖 .fb-panel/.fb-ctx/.fb-ball 等全部动画）。

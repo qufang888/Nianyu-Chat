@@ -434,7 +434,7 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
     ],
   },
   {
-    // V3：桌面角色窗与「捉宠角色」面板里的动画（呼吸 / 气泡 / 菜单 / 舞台气泡）。
+    // V3：桌面角色窗与「桌宠角色」面板里的动画（呼吸 / 气泡 / 菜单 / 舞台气泡）。
     // 角色窗是第 5 个独立 document（character.html），类名与主窗完全不同，
     // 因此必须用 docSelectors.character 单独登记，否则自定义档的开关对它无效。
     id: 'character',

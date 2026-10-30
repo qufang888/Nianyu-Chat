@@ -1909,6 +1909,11 @@ export const ChatWindow: React.FC<{
 
   // 流式事件监听
 
+  // v3.0.1：聊天气泡下方「正在调用 / 已完成 Skill 调用」状态（按 streamId 分桶）。
+  // 技能是纯提示词注入、没有运行时调用事件，因此以「本场对话命中了哪些启用且匹配的技能」
+  // 作为可见化依据：只要该 stream 对应的角色/作用域有生效技能，即视为本次回复应用了技能。
+  const [skillCalls, setSkillCalls] = useState<Record<string, { status: 'calling' | 'done' | 'fading'; names: string[] }>>({});
+
   useEffect(() => {
 
     const belongs = (streamId: string) => {
@@ -2024,6 +2029,28 @@ export const ChatWindow: React.FC<{
         return copy;
 
       });
+
+      // v3.0.1：技能调用状态 -> 已完成；停留 3 秒后渐隐，再移除（与「3 秒后自动渐隐消失」一致）
+      setSkillCalls((prev) => {
+        const cur = prev[data.streamId];
+        if (!cur) return prev;
+        return { ...prev, [data.streamId]: { ...cur, status: 'done' } };
+      });
+      setTimeout(() => {
+        setSkillCalls((prev) => {
+          const cur = prev[data.streamId];
+          if (!cur) return prev;
+          return { ...prev, [data.streamId]: { ...cur, status: 'fading' } };
+        });
+        setTimeout(() => {
+          setSkillCalls((prev) => {
+            if (!prev[data.streamId]) return prev;
+            const copy = { ...prev };
+            delete copy[data.streamId];
+            return copy;
+          });
+        }, 420);
+      }, 3000);
 
       if (data.message && !doneStreamIds.current.has(data.streamId)) {
 
@@ -2171,6 +2198,17 @@ export const ChatWindow: React.FC<{
 
       });
 
+      // v3.0.1：若该 stream 对应的角色/作用域有生效中的技能，在 AI 气泡下方展示「正在调用 Skill 名称」。
+      {
+        const sep = data.streamId.lastIndexOf(':');
+        const rid = sep >= 0 ? data.streamId.slice(sep + 1) : '';
+        api.getActiveSkillNames(chatType, chatId, rid).then((names) => {
+          if (Array.isArray(names) && names.length) {
+            setSkillCalls((prev) => ({ ...prev, [data.streamId]: { status: 'calling', names } }));
+          }
+        }).catch(() => {});
+      }
+
     };
 
     const onUser = (_e: any, data: ChatMessage) => {
@@ -2302,6 +2340,8 @@ export const ChatWindow: React.FC<{
     });
 
     return () => {
+
+      setSkillCalls({});
 
       offUser();
 
@@ -5945,6 +5985,13 @@ export const ChatWindow: React.FC<{
 
                 onResendInterrupted={handleResendInterrupted}
 
+                // v3.0.1：按 streamId 把「正在调用/已完成 Skill 调用」状态注入该条 AI 气泡
+                skillCall={(() => {
+                  const sid =
+                    (m as any).streamId || (m.id != null ? streamMsgIdRef.current[String(m.id)] : undefined);
+                  return sid ? skillCalls[sid] || null : null;
+                })()}
+
               />
 
               {sr && sr.length > 0 && (
@@ -7364,13 +7411,16 @@ const MessageRow: React.FC<{
 
   onResendInterrupted?: (m: ChatMessage) => void;
 
+  // v3.0.1：聊天气泡下方「正在调用 / 已完成 Skill 调用」状态（由父组件按 streamId 注入；无则 null）
+  skillCall?: { status: 'calling' | 'done' | 'fading'; names: string[] } | null;
+
 }> = ({
 
   msg, onImage, prevTimestamp, avatarPath, userAvatarPath, showTts, ttsState, typing, streaming, hideReasoning, onSpeak, onReplayTts, onRegenerateTts, onReasoningCopied,
 
   onQuickMemory, onSaveImageMemory, onViewPrompt, onForward, onEdit, onRollback, onCopy, onTranslate, onMarkNode, onForkFromHere, onSelectCopy, onDeleteMsg, onAiAction, showAiActions, aiActionBusy, onToggleCollapse, allCollapsed, roleMood, searchResults, onOpenSearch,
 
-  pseudoOn, pseudoSpeed, pseudoKey, interruptedAnchorId, onResendInterrupted,
+  pseudoOn, pseudoSpeed, pseudoKey, interruptedAnchorId, onResendInterrupted, skillCall,
 
 }) => {
 
@@ -7863,6 +7913,26 @@ const MessageRow: React.FC<{
 
           </>
 
+        )}
+
+        {/* v3.0.1：聊天气泡下方「正在调用 / 已完成 Skill 调用」状态。按 streamId 注入；
+            技能为纯提示词注入，无运行时事件，故以「本场对话命中了哪些启用且匹配的技能」作为可见化依据。 */}
+        {!isUser && skillCall && (
+          <div
+            className={`skill-call-status${skillCall.status === 'fading' ? ' fading' : ''}`}
+            title={t('skill.title')}
+          >
+            {skillCall.status === 'calling' ? (
+              <span className="skill-call-spinner" aria-hidden="true" />
+            ) : (
+              <span className="skill-call-check" aria-hidden="true">✓</span>
+            )}
+            <span className="skill-call-text">
+              {skillCall.status === 'calling'
+                ? t('skill.calling', { name: skillCall.names.join('、') })
+                : t('skill.called')}
+            </span>
+          </div>
         )}
 
         <div className="msg-meta">

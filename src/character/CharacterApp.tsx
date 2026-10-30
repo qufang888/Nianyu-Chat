@@ -16,6 +16,7 @@ import type { CharacterExpression } from './PlaceholderCharacter';
 import { ModelView } from './ModelView';
 import { CLICK_TEXTS, DRAG_TEXTS, IDLE_TEXTS, pickIdleAction, pickText } from './behaviors';
 import { applyAnimControl, type AnimSettingsLike } from '../utils/animControl';
+import { playSoundSync } from '../utils/sound';
 
 interface DcState {
   runtime: CharacterRuntimeSettings;
@@ -265,6 +266,8 @@ export const CharacterApp: React.FC = () => {
   };
 
   const onCharacterClick = () => {
+    // 角色本体是 div，不被 CLICK_SOUND_SELECTOR 命中，需手动补点击音
+    playSoundSync('click');
     setExpression('happy');
     showBubble(pickText(CLICK_TEXTS), 2000);
     setTimeout(() => setExpression('neutral'), 1400);

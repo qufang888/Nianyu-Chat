@@ -14,6 +14,7 @@ import type {
   MediaApiConfig,
 } from '../src/types';
 import { DEFAULT_SETTINGS, TTS_PROVIDERS } from '../src/types';
+import type { CharacterRuntimeSettings, DesktopCharacter } from '../src/types';
 import {
   listSkills,
   getSkill,
@@ -1239,6 +1240,24 @@ class DataManager {
             fs.writeFileSync(this.settingsPath, JSON.stringify(merged, null, 2), 'utf-8');
           } catch (e) {
             console.error('写入动态光标热点迁移结果失败', e);
+          }
+        }
+        // V3.0.1：桌宠默认引导。用户尚未添加任何角色（空列表）时，注入出厂占位角色「小念」，
+        // 并在「空列表 + 尚未开启」的初始态下默认开启桌面角色窗——否则桌面永远空白，用户会以为功能坏了。
+        // 已自行添加/删除过角色、或显式关过的用户不受影响（不覆盖其既有 desktopCharacters / enabled）。
+        if (!Array.isArray(merged.desktopCharacters) || merged.desktopCharacters.length === 0) {
+          // 以 DEFAULT_SETTINGS 为单一真源，避免两处默认值各写一份而走偏
+          merged.desktopCharacters = [
+            JSON.parse(JSON.stringify((DEFAULT_SETTINGS.desktopCharacters as DesktopCharacter[])[0])),
+          ];
+          if (!merged.characterRuntime || merged.characterRuntime.enabled === false) {
+            // characterRuntime 在 Settings 类型里是可选字段（可能为 undefined），这里用具体兜底对象
+            // 保证展开后的字段齐全（x/y/alwaysOnTop 等均为必填），避免类型收窄成可选导致赋值报错。
+            const rtBase = (merged.characterRuntime
+              ?? DEFAULT_SETTINGS.characterRuntime
+              ?? { enabled: false, x: 0, y: 0, alwaysOnTop: true, passThroughLocked: false, activeId: '' }
+            ) as CharacterRuntimeSettings;
+            merged.characterRuntime = { ...rtBase, enabled: true };
           }
         }
         return merged;

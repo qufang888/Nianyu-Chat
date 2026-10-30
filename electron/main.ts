@@ -265,6 +265,9 @@ let notifyTimer: ReturnType<typeof setTimeout> | null = null;
 const notifyQueue: any[] = [];
 let lastNotifySig = '';
 let lastNotifyTime = 0;
+// v3.0.1：窗口可见时（用户正在使用）不弹卡片，但仍要响提示音。这条消息先挂起，
+// 等提示窗就绪（ready-to-show）后再下发 action:'sound'，避免首次通知时窗口还没加载完而丢音。
+let pendingNotifySound: any = null;
 
 const DEV_SERVER = 'http://localhost:5173';
 
@@ -929,6 +932,7 @@ function ensureNotifyWindow(): void {
   notifyWindow.once('ready-to-show', () => {
     notifyReady = true;
     processNotifyQueue();
+    flushNotifySound(); // v3.0.1：补发挂起中的「仅提示音」请求
   });
   notifyWindow.on('closed', () => {
     notifyWindow = null;
@@ -947,13 +951,47 @@ function positionNotifyWindow(): void {
 // 主动消息是「没人触发的情况下自己发来的」，漏掉提醒等于凭空消失，必须弹。
 // v2.3.81：item.label 可由调用方指定语义化标签（如生图成功传「图片已生成」），
 // 缺省仍为 NOTIFY_NEW_MESSAGE「新消息」，保持既有行为不变。
+/**
+ * v3.0.1：只放提示音、不弹卡片（窗口可见 = 用户正在使用时走这条路径）。
+ * 修复「消息发过来没有提示音」：此前窗口可见时直接 return，卡片不弹、声音也不响。
+ * 提示窗是懒创建的：首次通知时它可能还没 ready，这里先挂起到 pendingNotifySound，
+ * 由 ready-to-show 回调再补发，保证「第一条消息也有声音」。
+ */
+function flushNotifySound(): void {
+  if (!pendingNotifySound) return;
+  if (!notifyWindow || notifyWindow.isDestroyed()) {
+    ensureNotifyWindow();
+    return;
+  }
+  if (!notifyReady) return;
+  const item = pendingNotifySound;
+  pendingNotifySound = null;
+  safeSend(notifyWindow, 'notify:data', {
+    action: 'sound',
+    chat: {
+      chatType: item.chatType,
+      chatId: item.chatId,
+      name: item.name,
+      soundPath: dm.getSettings().chatSoundPaths?.[`${item.chatType}:${item.chatId}`] || null,
+    },
+  });
+}
+
 function showNotifyCard(item: any, force = false): void {
   // 静默模式：暂停后台消息卡片通知（提示音由渲染进程在播放前拦截）
   if (dm.getSettings().silent === true) return;
   // 窗口可见且未最小化 = 用户正在使用，不弹卡片（主动消息除外，见上方说明）
   if (!force) {
-    if (mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized()) return;
-    if (miniWindow && miniWindow.isVisible() && !miniWindow.isMinimized()) return;
+    if (mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized()) {
+      pendingNotifySound = item;
+      flushNotifySound();
+      return;
+    }
+    if (miniWindow && miniWindow.isVisible() && !miniWindow.isMinimized()) {
+      pendingNotifySound = item;
+      flushNotifySound();
+      return;
+    }
   }
   const sig = `${item.chatType}:${item.chatId}:${String(item.content).slice(0, 40)}`;
   const now = Date.now();
@@ -7496,6 +7534,16 @@ function registerIPC(): void {
 
   ipcMain.handle('skill:list', () => dm.listSkills());
 
+  // v3.0.1：查询某场对话当前生效的技能名（供聊天气泡下方「正在调用 Skill / 已完成 Skill 调用」状态展示）。
+  // 仅读取落盘的 skills.json 并做作用域解析，纯函数、无副作用、不执行任何脚本。
+  ipcMain.handle('skill:active', (_e, chatType: string, chatId: string, roleId: string) =>
+    dm.getSkillsForChat(
+      typeof chatType === 'string' ? chatType : '',
+      typeof chatId === 'string' ? chatId : '',
+      typeof roleId === 'string' ? roleId : ''
+    ).map((s) => s.name)
+  );
+
   ipcMain.handle('skill:remove', (_e, id: string) => ({ ok: dm.deleteSkill(id) }));
 
   ipcMain.handle('skill:toggle', (_e, id: string, enabled: boolean) => ({
@@ -7802,7 +7850,7 @@ app.whenReady().then(() => {
   setBallMainShow(showMainWindow);
   setBallMainWindow(mainWindow);
   createFloatingBall();
-  // V3 桌面角色：注册 IPC 并按设置创建角色窗（默认关闭，由「捉宠角色」面板开启）
+  // V3 桌面角色：注册 IPC 并按设置创建角色窗（默认关闭，由「桌宠角色」面板开启）
   setCharacterMainWindow(mainWindow);
   // 运行时开关由主进程落盘并广播，渲染层只重读、不回写（避免把旧 x/y 覆盖回来）
   setCharacterSettingsSink((patch) => broadcast('settings:changed', patch));
