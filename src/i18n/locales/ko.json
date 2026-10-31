@@ -1123,6 +1123,13 @@
  "characters.menuStage": "스테이지 열기",
  "characters.menuManage": "캐릭터 관리",
  "characters.menuHide": "캐릭터 숨기기",
+ "export.allRules": "Export all rules",
+ "export.characterCard": "Export character card",
+ "export.chat": "Export chat history",
+ "export.exported": "Exported",
+ "export.memories": "Export memories",
+ "export.rule": "Export rule",
+ "export.worldBook": "Export world book",
  "characters.stageTitle": "캐릭터 스테이지",
  "characters.dragRotate": "드래그로 회전 · 휠로 확대",
  "characters.say": "한마디 하기",
@@ -1824,3 +1831,4 @@
  "settings.cursorImageTooLarge": "이미지 파일이 너무 큽니다(최대 4MB). 더 작은 이미지를 선택하세요.",
  "settings.cursorImageDecodeFailed": "이미지를 디코딩할 수 없습니다. 다른 이미지를 사용해 보세요."
 }
+

@@ -1543,6 +1543,13 @@ export const translations: Record<Lang, Dict> = {
     'characters.menuStage': '打开角色舞台',
     'characters.menuManage': '管理角色',
     'characters.menuHide': '隐藏角色',
+    'export.allRules': '导出全部规则',
+    'export.characterCard': '导出角色卡',
+    'export.chat': '导出聊天记录',
+    'export.exported': '已导出',
+    'export.memories': '导出记忆',
+    'export.rule': '导出规则',
+    'export.worldBook': '导出世界书',
     'characters.stageTitle': '角色舞台',
     'characters.dragRotate': '拖动旋转 · 滚轮缩放',
     'characters.say': '说一句',
@@ -3479,6 +3486,13 @@ export const translations: Record<Lang, Dict> = {
     'characters.menuStage': 'Open stage',
     'characters.menuManage': 'Manage characters',
     'characters.menuHide': 'Hide character',
+    'export.allRules': 'Export all rules',
+    'export.characterCard': 'Export character card',
+    'export.chat': 'Export chat history',
+    'export.exported': 'Exported',
+    'export.memories': 'Export memories',
+    'export.rule': 'Export rule',
+    'export.worldBook': 'Export world book',
     'characters.stageTitle': 'Character stage',
     'characters.dragRotate': 'Drag to rotate · wheel to zoom',
     'characters.say': 'Say something',
@@ -3902,3 +3916,4 @@ export function translate(
   }
   return str;
 }
+

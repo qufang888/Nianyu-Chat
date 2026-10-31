@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, Fragment } fr
 import { createPortal } from 'react-dom';
 
 import { api } from '../ipc';
+import { buildChatExport } from '../utils/export';
 
 import { useI18n } from '../i18n/I18nContext';
 
@@ -5587,6 +5588,28 @@ export const ChatWindow: React.FC<{
                   </button>
 
                 )}
+
+                <button
+
+                  className="tool-btn"
+
+                  style={{ width: '100%', justifyContent: 'flex-start', padding: '6px 10px', fontSize: 13 }}
+
+                  onClick={async () => {
+
+                    const msgs = await api.getMessages(chatType, chatId);
+
+                    const content = buildChatExport(msgs);
+
+                    const dest = await api.saveTextFile(content, `chat-${chatId}.json`);
+
+                    if (dest) showToast(t('export.exported'));
+
+                    setMoreOpen(false);
+
+                  }}
+
+                >📤 {t('export.chat')}</button>
 
               </div>,
 

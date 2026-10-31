@@ -8,6 +8,7 @@ import { ImageCropper } from './ImageCropper';
 import { previewSound } from '../utils/sound';
 import SelectMenu from './SelectMenu';
 import { RoleTtsBinding, normalizeRoleTts, isEmptyRoleTts, type RoleTtsDraft } from './RoleTtsBinding';
+import { buildCharacterCard } from '../utils/export';
 
 function emptyRole(): Role {
   const now = new Date().toISOString();
@@ -455,6 +456,17 @@ export const RoleEditor: React.FC<{
             </button>
             <button className="btn-ghost" onClick={pickAvatar}>
               {t('role.chooseAvatar')}
+            </button>
+            <button
+              className="btn-ghost"
+              onClick={async () => {
+                const avatarDataUrl = role.avatar_path ? await api.getImage(role.avatar_path) : null;
+                const content = buildCharacterCard(role, { avatarDataUrl });
+                const dest = await api.saveTextFile(content, `${role.name || 'character'}.json`);
+                if (dest) showToast(t('export.exported'));
+              }}
+            >
+              {t('export.characterCard')}
             </button>
             {role.avatar_path && (
               <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', alignSelf: 'center' }}>

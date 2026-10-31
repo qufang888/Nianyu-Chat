@@ -550,6 +550,7 @@ export interface NianyuAPI {
   dcSetPassThroughLock: (v: boolean) => void;
   dcSetEnabled: (v: boolean) => void;
   dcSetActive: (id: string) => void;
+  dcSetScale: (id: string, scale: number) => void;
   dcGetState: () => Promise<{
     runtime: CharacterRuntimeSettings;
     characters: DesktopCharacter[];
@@ -625,6 +626,7 @@ export const api: NianyuAPI = {
   dcSetPassThroughLock: (v) => raw.dcSetPassThroughLock(v),
   dcSetEnabled: (v) => raw.dcSetEnabled(v),
   dcSetActive: (id) => raw.dcSetActive(id),
+  dcSetScale: (id, scale) => raw.dcSetScale(id, scale),
   dcGetState: () => raw.dcGetState(),
   dcOpenChat: (chat) => raw.dcOpenChat(chat),
   dcOpenCollection: () => raw.dcOpenCollection(),

@@ -1123,6 +1123,13 @@
  "characters.menuStage": "Открыть сцену",
  "characters.menuManage": "Управление персонажами",
  "characters.menuHide": "Скрыть персонажа",
+ "export.allRules": "Export all rules",
+ "export.characterCard": "Export character card",
+ "export.chat": "Export chat history",
+ "export.exported": "Exported",
+ "export.memories": "Export memories",
+ "export.rule": "Export rule",
+ "export.worldBook": "Export world book",
  "characters.stageTitle": "Сцена персонажа",
  "characters.dragRotate": "Тяните для поворота · колесо для масштаба",
  "characters.say": "Сказать что-нибудь",
@@ -1824,3 +1831,4 @@
  "settings.cursorImageTooLarge": "Файл изображения слишком большой (предел 4 МБ). Выберите меньший.",
  "settings.cursorImageDecodeFailed": "Не удалось декодировать изображение. Попробуйте другое."
 }
+

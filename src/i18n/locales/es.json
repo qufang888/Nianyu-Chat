@@ -1123,6 +1123,13 @@
  "characters.menuStage": "Abrir escenario",
  "characters.menuManage": "Gestionar personajes",
  "characters.menuHide": "Ocultar personaje",
+ "export.allRules": "Export all rules",
+ "export.characterCard": "Export character card",
+ "export.chat": "Export chat history",
+ "export.exported": "Exported",
+ "export.memories": "Export memories",
+ "export.rule": "Export rule",
+ "export.worldBook": "Export world book",
  "characters.stageTitle": "Escenario del personaje",
  "characters.dragRotate": "Arrastra para girar · rueda para zoom",
  "characters.say": "Decir algo",
@@ -1824,3 +1831,4 @@
  "settings.cursorImageTooLarge": "La imagen es demasiado grande (límite 4 MB). Elige una más pequeña.",
  "settings.cursorImageDecodeFailed": "No se pudo decodificar la imagen. Prueba con otra."
 }
+

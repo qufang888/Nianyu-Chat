@@ -1123,6 +1123,13 @@
  "characters.menuStage": "開啟角色舞台",
  "characters.menuManage": "管理角色",
  "characters.menuHide": "隱藏角色",
+ "export.allRules": "匯出全部規則",
+ "export.characterCard": "匯出角色卡",
+ "export.chat": "匯出聊天記錄",
+ "export.exported": "已匯出",
+ "export.memories": "匯出記憶",
+ "export.rule": "匯出規則",
+ "export.worldBook": "匯出世界書",
  "characters.stageTitle": "角色舞台",
  "characters.dragRotate": "拖曳旋轉 · 滾輪縮放",
  "characters.say": "說一句",
@@ -1824,3 +1831,4 @@
  "settings.cursorImageTooLarge": "圖片檔案過大（上限 4MB），請選擇較小的圖片",
  "settings.cursorImageDecodeFailed": "圖片解碼失敗，請換一張試試"
 }
+

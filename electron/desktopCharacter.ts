@@ -427,6 +427,24 @@ export function registerDesktopCharacterIPC(): void {
   ipcMain.on('dc:set-enabled', (_e, v: boolean) => setDesktopCharacterEnabled(!!v));
   ipcMain.on('dc:set-active', (_e, id: string) => setDesktopCharacterActive(String(id || '')));
 
+  // 滚轮缩放：持久化该角色的 scale（钳制 0.6~1.6），并广播 settings:changed + dc:state
+  // （角色窗据此即时刷新显示，设置页「桌宠角色」面板同步显示新大小）。
+  ipcMain.on('dc:set-scale', (_e, id: string, scale: number) => {
+    if (!id) return;
+    const s = dm.getSettings();
+    const list = Array.isArray(s.desktopCharacters) ? s.desktopCharacters : [];
+    const idx = list.findIndex((c) => c.id === id);
+    if (idx < 0) return;
+    const clamped = Math.max(0.6, Math.min(1.6, Number(scale) || 1));
+    const next = list.slice();
+    next[idx] = { ...next[idx], scale: clamped };
+    dm.saveSettings({ desktopCharacters: next });
+    // 广播给所有窗口（设置页据此刷新滑块/数值，不会覆盖 x/y 等其它字段）
+    settingsSink?.({ desktopCharacters: next });
+    // 立即刷新角色窗显示
+    sendState();
+  });
+
   ipcMain.handle('dc:get-state', () => getDesktopCharacterSnapshot());
 
   ipcMain.on('dc:open-chat', (_e, chat: { type: 'single' | 'group'; id: string; name?: string }) => {

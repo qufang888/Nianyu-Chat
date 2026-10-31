@@ -1123,6 +1123,13 @@
  "characters.menuStage": "ステージを開く",
  "characters.menuManage": "キャラを管理",
  "characters.menuHide": "キャラを隠す",
+ "export.allRules": "Export all rules",
+ "export.characterCard": "Export character card",
+ "export.chat": "Export chat history",
+ "export.exported": "Exported",
+ "export.memories": "Export memories",
+ "export.rule": "Export rule",
+ "export.worldBook": "Export world book",
  "characters.stageTitle": "キャラステージ",
  "characters.dragRotate": "ドラッグで回転 · ホイールで拡大",
  "characters.say": "ひとこと話す",
@@ -1824,3 +1831,4 @@
  "settings.cursorImageTooLarge": "画像ファイルが大きすぎます（上限 4MB）。より小さい画像を選んでください。",
  "settings.cursorImageDecodeFailed": "画像をデコードできませんでした。別の画像をお試しください。"
 }
+

@@ -265,6 +265,20 @@ export const CharacterApp: React.FC = () => {
     if (d?.from === 'character') onCharacterClick();
   };
 
+  // ===== 滚轮缩放（悬停在角色本体上时调节桌面角色大小；钳制 0.6~1.6，步长 0.05）=====
+  const onCharacterWheel = (e: React.WheelEvent) => {
+    const c = charRefState.current;
+    if (!c) return;
+    const step = e.deltaY < 0 ? 0.05 : -0.05;
+    const cur = c.scale ?? 1;
+    // 四舍五入到两位小数，避免浮点累积误差（0.05 步长在二进制下不精确）
+    const next = Math.max(0.6, Math.min(1.6, Math.round((cur + step) * 100) / 100));
+    if (next === cur) return;
+    // 本地先更新，保证缩放手感跟手；持久化交给主进程广播回写
+    setState((s) => (s.character ? { ...s, character: { ...s.character, scale: next } } : s));
+    api.dcSetScale(c.id, next);
+  };
+
   const onCharacterClick = () => {
     // 角色本体是 div，不被 CLICK_SOUND_SELECTOR 命中，需手动补点击音
     playSoundSync('click');
@@ -361,6 +375,7 @@ export const CharacterApp: React.FC = () => {
         onPointerMove={movePointer}
         onPointerUp={endPointer}
         onPointerCancel={endPointer}
+        onWheel={onCharacterWheel}
         onContextMenu={onContextMenu}
         title={state.character.name}
       >

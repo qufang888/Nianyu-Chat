@@ -9,6 +9,7 @@ import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
 import type { Rule } from '../types';
 import { useToast } from './Toast';
+import { buildRegexScripts } from '../utils/export';
 
 export const RuleEditor: React.FC<{ rule: Rule; onClose: () => void; onSaved: () => void }> = ({
   rule,
@@ -53,6 +54,16 @@ export const RuleEditor: React.FC<{ rule: Rule; onClose: () => void; onSaved: ()
         </button>
         <button className="btn-ghost" onClick={onClose}>
           {t('library.cancel')}
+        </button>
+        <button
+          className="btn-ghost"
+          onClick={async () => {
+            const content = buildRegexScripts([draft]);
+            const dest = await api.saveTextFile(content, `${draft.name || 'rule'}.json`);
+            if (dest) showToast(t('export.exported'));
+          }}
+        >
+          {t('export.rule')}
         </button>
       </div>
     </div>

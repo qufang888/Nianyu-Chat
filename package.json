@@ -1,6 +1,6 @@
 {
   "name": "nianyu-client",
-  "version": "3.0.1-beta.1",
+  "version": "3.0.1-beta.2",
   "description": "念语 - AI 数字人聊天客户端 (Electron + React + TypeScript)",
   "main": "dist-electron/electron/main.js",
   "author": "前方",
@@ -21,7 +21,8 @@
     "verify:cursor-cover-state": "node scripts/verify-cursor-cover-state.mjs",
     "verify:cursor-engine": "node scripts/verify-cursor-engine.mjs",
     "dist": "electron-builder --win",
-    "verify:desktop-character": "node scripts/verify-desktop-character.mjs"
+    "verify:desktop-character": "node scripts/verify-desktop-character.mjs",
+    "verify:export": "node scripts/verify-export.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

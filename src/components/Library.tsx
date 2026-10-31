@@ -9,6 +9,7 @@ import SelectMenu from './SelectMenu';
 // 本组件的调用方式与 props 均未变化，WorldBookTab 行为零变化。
 import { WorldBookEditor } from './WorldBookEditor';
 import { RuleEditor } from './RuleEditor';
+import { buildRegexScripts } from '../utils/export';
 
 // 世界书排序：按 settings.worldBookOrder（拖拽顺序）排，缺失的按原顺序追加在末尾
 function sortWorldBooks(list: WorldBook[], order?: string[]): WorldBook[] {
@@ -399,6 +400,17 @@ const RuleTab: React.FC = () => {
         </button>
         <button className="btn-ghost" onClick={onImport}>
           📥 {t('library.importRule')}
+        </button>
+        <button
+          className="btn-ghost"
+          disabled={!list.length}
+          onClick={async () => {
+            const content = buildRegexScripts(list);
+            const dest = await api.saveTextFile(content, 'regex-scripts.json');
+            if (dest) showToast(t('export.exported'));
+          }}
+        >
+          📤 {t('export.allRules')}
         </button>
       </div>
       {list.length === 0 ? (

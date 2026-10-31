@@ -14,6 +14,7 @@ import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
 import type { WorldBook, WorldBookEntry } from '../types';
 import { useToast } from './Toast';
+import { buildWorldBook } from '../utils/export';
 
 export const WorldBookEditor: React.FC<{
   wb: WorldBook;
@@ -92,6 +93,16 @@ export const WorldBookEditor: React.FC<{
         </button>
         <button className="btn-ghost" onClick={onClose}>
           {t('library.cancel')}
+        </button>
+        <button
+          className="btn-ghost"
+          onClick={async () => {
+            const content = buildWorldBook(draft);
+            const dest = await api.saveTextFile(content, `${draft.name || 'worldbook'}.json`);
+            if (dest) showToast(t('export.exported'));
+          }}
+        >
+          {t('export.worldBook')}
         </button>
       </div>
     </div>

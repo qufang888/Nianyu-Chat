@@ -489,6 +489,7 @@ export interface NianyuAPI {
   dcSetPassThroughLock: (v: boolean) => void;
   dcSetEnabled: (v: boolean) => void;
   dcSetActive: (id: string) => void;
+  dcSetScale: (id: string, scale: number) => void;
   dcGetState: () => Promise<{ runtime: any; characters: any[]; active: any | null }>;
   dcOpenChat: (chat: { type: 'single' | 'group'; id: string; name?: string }) => void;
   dcOpenCollection: () => void;
@@ -1075,6 +1076,7 @@ const api: NianyuAPI = {
   dcSetPassThroughLock: (v) => ipcRenderer.send('dc:set-pass-through-lock', v),
   dcSetEnabled: (v) => ipcRenderer.send('dc:set-enabled', v),
   dcSetActive: (id) => ipcRenderer.send('dc:set-active', id),
+  dcSetScale: (id, scale) => ipcRenderer.send('dc:set-scale', id, scale),
   dcGetState: () => ipcRenderer.invoke('dc:get-state'),
   dcOpenChat: (chat) => ipcRenderer.send('dc:open-chat', chat),
   dcOpenCollection: () => ipcRenderer.send('dc:open-collection'),

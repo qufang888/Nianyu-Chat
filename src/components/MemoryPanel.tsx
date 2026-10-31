@@ -7,6 +7,7 @@ import { useToast, ToastView } from './Toast';
 // v2.3.112 F9：高亮改走唯一真源 highlightParts（与 rankCandidates 共用归一化口径）
 import { rankCandidates, highlightParts } from '../utils/fuzzySearch';
 import { flashElement } from '../utils/flash';
+import { buildMemories } from '../utils/export';
 
 // 记忆面板：展示并手动编辑某角色的记忆（AI 自动提炼的记忆也会出现在列表中，可手动修改/删除）
 export const MemoryPanel: React.FC<{ roleId: string }> = ({ roleId }) => {
@@ -158,6 +159,17 @@ export const MemoryPanel: React.FC<{ roleId: string }> = ({ roleId }) => {
             {t('library.cancel')}
           </button>
         )}
+        <button
+          className="btn-ghost"
+          disabled={!mems.length}
+          onClick={async () => {
+            const content = buildMemories(mems);
+            const dest = await api.saveTextFile(content, `memories-${roleId}.json`);
+            if (dest) showToast(t('export.exported'));
+          }}
+        >
+          {t('export.memories')}
+        </button>
       </div>
       {mems.length > 0 && (
         <div className="mem-search">
