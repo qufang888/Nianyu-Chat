@@ -22,14 +22,14 @@ export const AboutModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           </span>
         </div>
         <div className="modal-body" style={{ textAlign: 'center' }}>
-          <div className="about-logo">念语</div>
-          <div className="about-sub">NIANYU</div>
-          <div className="about-author">made by 前方</div>
+          <div className="about-logo">{t('about.logo')}</div>
+          <div className="about-sub">{t('about.sub')}</div>
+          <div className="about-author">{t('about.author')}</div>
           <div className="about-lines">
-            <div>一款面向深度情感交互的 AI 数字人对话网站。</div>
-            <div>不追逐流水线模板，不盲从通用框架。</div>
-            <div>以对话为媒介，搭建虚拟与现实的边界。</div>
-            <div>万物皆可对话，心意自有回响。</div>
+            <div>{t('about.line1')}</div>
+            <div>{t('about.line2')}</div>
+            <div>{t('about.line3')}</div>
+            <div>{t('about.line4')}</div>
           </div>
         </div>
       </div>

@@ -132,6 +132,8 @@ export interface NianyuAPI {
   onQueueChanged: (cb: (data: QueueSnapshot) => void) => () => void;
   // 当前聊天参与限速的代表模型 id（单聊=角色模型；群聊=默认模型）
   getChatModelId: (chatType: string, chatId: string) => Promise<string>;
+  /** v3.0.1-beta.4：当前聊天所用模型能否看图（发图时提示用户） */
+  getChatVisionCapable: (chatType: string, chatId: string) => Promise<boolean>;
   // 翻译文本（右键菜单翻译）
   translate: (text: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
   // 打断生成
@@ -674,6 +676,7 @@ const api: NianyuAPI = {
     return () => ipcRenderer.removeListener('queue:changed', listener);
   },
   getChatModelId: (chatType, chatId) => ipcRenderer.invoke('chats:activeModel', chatType, chatId),
+  getChatVisionCapable: (chatType, chatId) => ipcRenderer.invoke('chats:visionCapable', chatType, chatId),
   translate: (text) => ipcRenderer.invoke('chats:translate', text),
   interruptStream: (chatId) => ipcRenderer.invoke('chats:interrupt', chatId),
   groupContinue: (p) => ipcRenderer.invoke('chats:groupContinue', p),

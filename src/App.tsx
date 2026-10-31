@@ -373,7 +373,7 @@ export default function App() {
     if (typeof api.onMomentsAutoPosted !== 'function') return;
     const off = api.onMomentsAutoPosted((_e, data) => {
       const name = data?.roleName || t('moments.unknownAuthor');
-      showToast(`「${name}」发布了 ${data?.count || 0} 条朋友圈`);
+      showToast(t('moment.postedTo', { name, count: data?.count || 0 }));
     });
     return off;
   }, []);

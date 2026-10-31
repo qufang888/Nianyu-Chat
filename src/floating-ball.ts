@@ -16,6 +16,7 @@ import { createRoot } from 'react-dom/client';
 import { ThemeProvider } from './theme/ThemeContext';
 import DynamicCursor from './cursor/DynamicCursor';
 import { applyAnimControl, animMs, readAnimSpeed } from './utils/animControl';
+import { translate, type Lang } from './i18n/translations';
 import { installGlobalSoundListeners } from './utils/sound';
 
 const api = (window as any).api;
@@ -31,6 +32,11 @@ installGlobalSoundListeners();
 // 修法：把 settings.customCursor.enabled 镜像到本窗（初始化拉一次 + 设置变更时刷新），
 // 菜单弹出处理器仅在动态光标启用时才加 cursor-hidden；关闭动态光标时原生光标始终可见。
 let dynCursorEnabled = false; // 动态光标总开关（settings.customCursor.enabled）的本窗镜像
+
+// v3.0.1-beta.4：本窗是独立 document（无 React 上下文 → 无 useI18n），
+// 故直接用 translate(lang, key) 取文案；lang 由 settings.lang 镜像而来。
+let curLang: Lang = 'zh';
+const tr = (key: string, vars?: Record<string, string | number>): string => translate(curLang, key, vars);
 function setupCursorEnabled(): void {
   const pull = (): void => {
     if (api?.getSettings) {
@@ -271,6 +277,8 @@ function setupTheme(onChanged?: () => void): void {
           applyTheme(s?.theme);
           applyGlass(s);
           applyAnim(s);
+          // v3.0.1-beta.4：本窗语言镜像（面板/菜单文案走 translate()，需与主界面一致）
+          if (s?.lang) curLang = s.lang as Lang;
         })
         .catch(() => {});
     }
@@ -574,9 +582,9 @@ function mountPanel(): void {
 
   function renderPanel(): void {
     if (chatList.length === 0) {
-      panel.innerHTML = `<div class="fb-panel-h"><span>快捷聊天</span></div>
-        <div class="fb-empty">暂无可切换的聊天</div>
-        <div class="fb-foot">滚轮可滚动查看更多 · 右键悬浮球可退出念语</div>`;
+      panel.innerHTML = `<div class="fb-panel-h"><span>${tr('fb.quickChat')}</span></div>
+        <div class="fb-empty">${tr('fb.noChats')}</div>
+        <div class="fb-foot">${tr('fb.scrollHint')}</div>`;
     } else {
       const pinSet = new Set(pinnedChats || []);
       const rows = chatList
@@ -595,13 +603,13 @@ function mountPanel(): void {
               <div class="fb-row-name">${escapeHTML(name)}</div>
               <div class="fb-row-content">${isGroup ? '👥 ' : '💬 '}${escapeHTML(tag)}${it.last_message ? ' · ' + escapeHTML(it.last_message) : ''}</div>
             </div>
-            ${pinSet.has(key) ? '<span class="fb-pin" title="置顶">📌</span>' : ''}
+            ${pinSet.has(key) ? `<span class="fb-pin" title="${tr('fb.pinItem')}">📌</span>` : ''}
           </div>`;
         })
         .join('');
-      panel.innerHTML = `<div class="fb-panel-h"><span>快捷聊天</span><span class="cnt">${chatList.length}</span></div>
+      panel.innerHTML = `<div class="fb-panel-h"><span>${tr('fb.quickChat')}</span><span class="cnt">${chatList.length}</span></div>
         <div class="fb-list">${rows}</div>
-        <div class="fb-foot">拖动可调整顺序 · 右键条目可置顶 · 滚轮查看更多</div>`;
+        <div class="fb-foot">${tr('fb.dragHint')}</div>`;
 
       panel.querySelectorAll<HTMLElement>('.fb-av').forEach((el) => {
         const p = el.getAttribute('data-av');
@@ -829,11 +837,11 @@ function mountMenu(): void {
     }).catch(() => {});
   }
   ctx.innerHTML = `
-    <div class="fb-ctx-item" data-act="quit">退出念语</div>
-    <div class="fb-ctx-item" data-act="close">本次关闭悬浮球</div>
+    <div class="fb-ctx-item" data-act="quit">${tr('fb.quit')}</div>
+    <div class="fb-ctx-item" data-act="close">${tr('fb.closeBall')}</div>
     <label class="fb-ctx-item fb-ctx-aot-row">
       <input type="checkbox" class="fb-ctx-aot" ${aot ? 'checked' : ''}/>
-      <span>悬浮球置顶</span>
+      <span>${tr('fb.pinBall')}</span>
     </label>`;
   ctx.style.left = '10px';
   ctx.style.top = '10px';

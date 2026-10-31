@@ -3,6 +3,7 @@
 // 卡片自动适配系统主题（浅色/深色），色调与主界面一致。
 import { playSoundSync, invalidateSoundCache } from './utils/sound';
 import { applyAnimControl } from './utils/animControl';
+import { translate, type Lang } from './i18n/translations';
 const api = (window as any).api;
 
 const CARD_W = 340;
@@ -14,6 +15,11 @@ const CARD_H = 96;
 //（前代 'liquid' 已随 v2.3.107 整体删除；'glass' 主题已随 v2.3.122 删除——
 // 其磨砂观感改为每主题开关 settings.glassEffect，不再是独立主题。）
 const DARK_THEMES = new Set(['dark', 'galaxy', 'cyber', 'ember', 'aura']);
+
+// v3.0.1-beta.4：本窗是独立 document（无 React 上下文 → 无 useI18n），
+// 故直接用 translate(lang, key) 取文案；lang 由 settings.lang 镜像而来。
+let curLang: Lang = 'zh';
+const tr = (key: string, vars?: Record<string, string | number>): string => translate(curLang, key, vars);
 
 /** 根据主题名判断是否深色 */
 function isDarkTheme(theme?: string): boolean {
@@ -121,9 +127,9 @@ function buildCard(): HTMLElement {
   card.className = 'ny-card';
   card.innerHTML = `
     <div class="ny-avatar" id="ny-avatar">?</div>
-    <div class="ny-close" title="关闭">×</div>
+    <div class="ny-close" title="${tr('notify.close')}">×</div>
     <div class="ny-body">
-      <div class="ny-label" id="ny-label">新消息</div>
+      <div class="ny-label" id="ny-label">${tr('notify.newMessage')}</div>
       <div class="ny-name" id="ny-name"></div>
       <div class="ny-content" id="ny-content"></div>
     </div>
@@ -213,6 +219,8 @@ function mount(): void {
     if (api && api.getSettings) {
       api.getSettings()
         .then((s: any) => {
+          // v3.0.1-beta.4：同步本窗语言（通知卡片文案走 translate()）
+          if (s?.lang) curLang = s.lang as Lang;
           // 高级动画控制（v2.3.90）：总控 / 单控互斥。通知窗是独立 document，
           // 总控关闭 → 上面注入的 `.anim-off` 全局 kill 生效（卡片直接跳到终态）；
           // 单控模式 → 改用 `html[data-anim-off~="toast"]` + 自动生成的 <style> 关掉 .ny-card 过渡。

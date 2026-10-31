@@ -2952,7 +2952,13 @@ function buildUserContent(text: string, images: string[], vision: boolean): stri
     }
     if (parts.length) return parts;
   }
-  return images.length ? `[用户发送了一张图片]${text || ''}` : text || '';
+  // v3.0.1-beta.4：降级占位文本**明确告知模型看不到图片**。
+  //   旧文案「[用户发送了一张图片]」会让模型以为自己"知道"用户发了图 → 只能凭空编造内容
+  //   （用户实测「模型根本看都没看，随便瞎编」）。现改为要求模型**主动询问**图片内容，
+  //   不猜、不编。
+  return images.length
+    ? `[用户发送了 ${images.length} 张图片，但当前模型不支持视觉输入，无法读取图片内容。请直接询问用户图片里是什么，不要猜测或编造图片内容。]${text || ''}`
+    : text || '';
 }
 
 function historyToMessages(history: ChatMessage[], vision = false): AIMessage[] {
@@ -5503,6 +5509,22 @@ function registerIPC(): void {
       return '';
     }
     return settings.models.find((m) => m.id === settings.defaultModel && m.enabled)?.id || '';
+  });
+  // v3.0.1-beta.4：当前聊天**能否看图**（前端在用户发图时给出提示）。
+  // 判定口径与发送链路完全一致（见 generateAIResponses）：设了识图模型 → 能看；
+  // 否则看当前模型自身 supportsImages。两者都不满足 → 图片会被降级成纯文本占位，
+  // 模型看不见图片内容（此前前端完全无感知，用户只会觉得「模型在瞎编」）。
+  ipcMain.handle('chats:visionCapable', (_e, chatType: string, chatId: string) => {
+    const settings = dm.getSettings();
+    if (getVisionModelConfig(settings)) return true;
+    let cfg: ModelConfig | undefined;
+    if (chatType === 'single') {
+      const role = dm.getRole(dm.resolveSingleRoleId(chatType, chatId));
+      if (role) cfg = resolveChatModel(chatType, chatId, role, settings);
+    } else {
+      cfg = settings.models.find((m) => m.id === settings.defaultModel && m.enabled);
+    }
+    return !!cfg?.supportsImages;
   });
   // 生图 / 生视频提示词 AI 自动补全：调用默认模型，受 QPS 限速约束。
   // 超限速则直接返回 rateLimited（不消耗请求额度），由前端提示「暂时不可用」；成功才 rateMark。

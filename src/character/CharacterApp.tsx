@@ -37,6 +37,9 @@ const DRAG_THRESHOLD = 5;
 
 export const CharacterApp: React.FC = () => {
   const { t } = useI18n();
+
+  // v3.0.1-beta.4：角色气泡文案原先是中文原文（src/character/behaviors.ts 现只存 i18n 键），
+  // 导致非中文界面下角色仍说中文 → 统一用 t() 解析，台词随界面语言切换。
   const [state, setState] = useState<DcState>({ runtime: DEFAULT_RUNTIME, character: null });
   const [expression, setExpression] = useState<CharacterExpression>('neutral');
   const [blink, setBlink] = useState(false);
@@ -131,7 +134,7 @@ export const CharacterApp: React.FC = () => {
         if (!draggingRef.current && !menuOpenRef.current && c?.behavior !== false) {
           const a = pickIdleAction();
           setExpression(a.expression);
-          if (a.text) showBubble(a.text, 2600);
+          if (a.text) showBubble(t(a.text), 2600);
           if (actionTimer.current) clearTimeout(actionTimer.current);
           actionTimer.current = setTimeout(() => {
             if (!draggingRef.current) setExpression('neutral');
@@ -157,7 +160,7 @@ export const CharacterApp: React.FC = () => {
         if (!alive) return;
         const c = charRefState.current;
         if (!draggingRef.current && !menuOpenRef.current && c?.behavior !== false && c?.bubble !== false) {
-          showBubble(pickText(IDLE_TEXTS), 4200);
+          showBubble(t(pickText(IDLE_TEXTS)), 4200);
           setExpression('happy');
           setTimeout(() => setExpression((e) => (e === 'happy' ? 'neutral' : e)), 1800);
         }
@@ -246,7 +249,7 @@ export const CharacterApp: React.FC = () => {
     d.started = true;
     setDragging(true);
     setExpression('dragged');
-    if (Math.random() < 0.6) showBubble(pickText(DRAG_TEXTS), 1600);
+    if (Math.random() < 0.6) showBubble(t(pickText(DRAG_TEXTS)), 1600);
     api.dcDragStart(d.gdx, d.gdy);
   };
 
@@ -283,7 +286,7 @@ export const CharacterApp: React.FC = () => {
     // 角色本体是 div，不被 CLICK_SOUND_SELECTOR 命中，需手动补点击音
     playSoundSync('click');
     setExpression('happy');
-    showBubble(pickText(CLICK_TEXTS), 2000);
+    showBubble(t(pickText(CLICK_TEXTS)), 2000);
     setTimeout(() => setExpression('neutral'), 1400);
     const bound = charRefState.current?.boundChat;
     if (bound) {

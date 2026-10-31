@@ -1,5 +1,9 @@
 // 桌面角色的自主行为数据（V3）。
 //
+// v3.0.1-beta.4：本文件只存 **i18n 键**（不含中文原文）——
+//   角色气泡是用户可见文案，须随界面语言切换，故由 CharacterApp 用 translate() 解析。
+//   （IDLE_ACTIONS.text / IDLE_TEXTS / CLICK_TEXTS / DRAG_TEXTS 全部为键名）
+//
 // 合规：以下气泡文案均为念语原创，不含任何第三方桌面陪伴产品的提示语/品牌名；
 // 动作只描述「情绪类别」这一通用行为语义，不对应任何第三方角色的具体动画序列。
 import type { CharacterExpression } from './PlaceholderCharacter';
@@ -17,39 +21,50 @@ export interface IdleAction {
 
 /** 随机待机动作池：覆盖通用情绪类别，按权重抽取。 */
 export const IDLE_ACTIONS: IdleAction[] = [
-  { id: 'happy', expression: 'happy', weight: 3, text: '嘿嘿。', holdMs: 2200 },
-  { id: 'shy', expression: 'shy', weight: 2, text: '别一直盯着我啦。', holdMs: 2600 },
-  { id: 'surprised', expression: 'surprised', weight: 1, text: '诶？', holdMs: 1600 },
-  { id: 'thinking', expression: 'thinking', weight: 2, text: '我在想一件事。', holdMs: 2800 },
+  { id: 'happy', expression: 'happy', weight: 3, text: 'character.bubble.happy', holdMs: 2200 },
+  { id: 'shy', expression: 'shy', weight: 2, text: 'character.bubble.shy', holdMs: 2600 },
+  { id: 'surprised', expression: 'surprised', weight: 1, text: 'character.bubble.surprised', holdMs: 1600 },
+  { id: 'thinking', expression: 'thinking', weight: 2, text: 'character.bubble.thinking', holdMs: 2800 },
   { id: 'wave', expression: 'wave', weight: 2, holdMs: 2000 },
   { id: 'nod', expression: 'nod', weight: 2, holdMs: 1400 },
   { id: 'shake', expression: 'shake', weight: 1, holdMs: 1400 },
-  { id: 'yawn', expression: 'yawn', weight: 1, text: '哈啊——有点困。', holdMs: 2400 },
-  { id: 'angry', expression: 'angry', weight: 1, text: '哼。', holdMs: 1800 },
-  { id: 'greet', expression: 'greet', weight: 1, text: '你来啦。', holdMs: 2200 },
+  { id: 'yawn', expression: 'yawn', weight: 1, text: 'character.bubble.yawn', holdMs: 2400 },
+  { id: 'angry', expression: 'angry', weight: 1, text: 'character.bubble.angry', holdMs: 1800 },
+  { id: 'greet', expression: 'greet', weight: 1, text: 'character.bubble.greet', holdMs: 2200 },
 ];
 
 /** 本地主动开口的原创短句（不依赖联网社区/在线内容）。 */
 export const IDLE_TEXTS: string[] = [
-  '我在这儿。',
-  '今天也一起待着吧。',
-  '你忙你的，我不吵你。',
-  '刚刚走神了一下。',
-  '要不要休息一会儿？',
-  '窗外好像有风。',
-  '我一直都在。',
-  '有点想说话了。',
-  '伸个懒腰。',
-  '你回来啦。',
-  '喝口水吧。',
-  '时间过得真快。',
+  'character.idle.1',
+  'character.idle.2',
+  'character.idle.3',
+  'character.idle.4',
+  'character.idle.5',
+  'character.idle.6',
+  'character.idle.7',
+  'character.idle.8',
+  'character.idle.9',
+  'character.idle.10',
+  'character.idle.11',
+  'character.idle.12',
 ];
 
 /** 点击反馈文案（原创）。 */
-export const CLICK_TEXTS: string[] = ['嗯？', '我在。', '怎么啦？', '摸摸头。', '有事找我？'];
+export const CLICK_TEXTS: string[] = [
+  'character.click.1',
+  'character.click.2',
+  'character.click.3',
+  'character.click.4',
+  'character.click.5',
+];
 
 /** 被拖拽时的原创文案（不引用任何第三方语音/音效素材）。 */
-export const DRAG_TEXTS: string[] = ['哇——', '轻一点啦。', '要带我去哪儿？', '晕乎乎的。'];
+export const DRAG_TEXTS: string[] = [
+  'character.drag.1',
+  'character.drag.2',
+  'character.drag.3',
+  'character.drag.4',
+];
 
 /** 按权重抽取一个待机动作。 */
 export function pickIdleAction(): IdleAction {

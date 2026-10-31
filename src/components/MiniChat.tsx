@@ -48,6 +48,7 @@ import { startCompanionTimer } from '../utils/companionTimer';
 import { applyAnimControl } from '../utils/animControl';
 import { resolveWantStream, resolveStreamInfo, persistStreamToggle, type StreamPref } from '../utils/chatStream';
 import { usePseudoReveal, markPseudoPending, isPseudoPending, clearPseudoPending } from '../utils/pseudoStream';
+import { createStickToBottom, isNearBottom, type StickToBottom } from '../utils/stickToBottom';
 import {
   nextReplyKey,
   pushReplyKey,
@@ -706,23 +707,34 @@ export const MiniChat: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.chat_type, current?.chat_id]);
 
+  // v3.0.1-beta.4：粘底跟随器 —— 用户向上翻看历史时不再被强制拉回底部
+  const stickRef = useRef<StickToBottom | null>(null);
+  if (!stickRef.current) {
+    stickRef.current = createStickToBottom(() => scrollRef.current);
+  }
+
   // 滚动监听：显示/隐藏回到底部按钮
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const onScroll = () => {
-      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+      const nearBottom = isNearBottom(el);
       setShowScrollBtn(!nearBottom);
+      // 记录用户当前是否贴底：向上翻 → 停止跟随；滚回底部 → 恢复跟随
+      stickRef.current?.onUserScroll();
     };
     el.addEventListener('scroll', onScroll);
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+    // v3.0.1-beta.4：仅当用户本来就贴着底部时才跟随（否则回复期间无法上翻看历史）
+    stickRef.current?.followOnContentChange();
   }, [messages, streamingMsgs]);
 
   const scrollToBottom = () => {
+    // v3.0.1-beta.4：手动回底 → 恢复跟随
+    stickRef.current?.resumeFollowing();
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   };
 
@@ -3448,7 +3460,7 @@ const MiniMessageRow: React.FC<{
           </div>
         ) : (
           <>
-            {(!isUser && msg.reasoning) || hasText ? (
+            {(!isUser && msg.reasoning) || hasText || imgs.length > 0 ? (
               <div
                 className={`bubble ${failed ? 'bubble-failed' : ''}`}
                 style={pseudoActive ? ({ ['--pseudo-char-dur' as any]: pseudoCharDur }) : undefined}
@@ -3471,6 +3483,11 @@ const MiniMessageRow: React.FC<{
                   pseudoTailCount: pseudoActive ? PSEUDO_QUEUE : 0,
                   streamTailClass: pseudoActive ? 'pseudo-char' : streamTailClass,
                 })}
+                {/* v3.0.1-beta.4：图片**放进气泡内部**（此前渲染在气泡外，导致图片显示在气泡下方）。
+                    仅图片消息（无文本）时也要渲染本气泡 —— 否则会落进下面的 bubble-loading 分支，
+                    表现为「发完图对方都回完了，用户气泡还在转圈加载」。 */}
+                {imgs.length > 0 && <ImageGrid paths={imgs} onImage={onImage} failed={!!failed} />}
+
                 {/* F6 修复：流式进行中始终在气泡内显示加载动画 */}
                 {streaming && (
                   <span className="typing-inline" aria-label={t('chat.replying')} />
@@ -3483,7 +3500,6 @@ const MiniMessageRow: React.FC<{
                 </div>
               </div>
             )}
-            {imgs.length > 0 && <ImageGrid paths={imgs} onImage={onImage} failed={!!failed} />}
           </>
         )}
         {/* v3.0.1：聊天气泡下方「正在调用 / 已完成 Skill 调用」状态（由父组件按 streamId 注入） */}

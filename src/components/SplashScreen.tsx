@@ -25,7 +25,7 @@ export const SplashScreen: React.FC<{ onDone: () => void }> = ({ onDone }) => {
 
   return (
     <div className={`splash ${hide ? 'hide' : ''}`} onClick={() => onDone()}>
-      <div className="splash-logo">念语</div>
+      <div className="splash-logo">{t('splash.logo')}</div>
       <div className="splash-sub">NIANYU</div>
       <div className="splash-line" />
       <div className="splash-welcome">{t('splash.welcome')}</div>

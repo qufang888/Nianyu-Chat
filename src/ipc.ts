@@ -113,6 +113,8 @@ export interface NianyuAPI {
   onQueueChanged: (cb: (data: QueueSnapshot) => void) => () => void;
   // 当前聊天参与限速的代表模型 id（单聊=角色模型；群聊=默认模型）
   getChatModelId: (chatType: string, chatId: string) => Promise<string>;
+  /** v3.0.1-beta.4：当前聊天所用模型能否看图（发图时提示用户） */
+  getChatVisionCapable: (chatType: string, chatId: string) => Promise<boolean>;
   // 当前聊天生效模型配置（单聊=角色绑定/默认模型，已应用全局参数回退；群聊=null）
   getChatModel: (chatType: string, chatId: string) => Promise<ModelConfig | null>;
   // MCP 服务器管理
@@ -649,6 +651,7 @@ export const api: NianyuAPI = {
   // v2.3.81：异步场景生图三态订阅（started / success / failed）
   onSceneImageStatus: (cb) => raw.onSceneImageStatus(cb),
   getChatModelId: (chatType, chatId) => raw.getChatModelId(chatType, chatId),
+  getChatVisionCapable: (chatType, chatId) => raw.getChatVisionCapable(chatType, chatId),
   getChatModel: (chatType, chatId) => raw.getChatModel(chatType, chatId),
   mcpStatus: () => raw.mcpStatus(),
   mcpAdd: (p) => raw.mcpAdd(p),

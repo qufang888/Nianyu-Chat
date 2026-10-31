@@ -77,6 +77,7 @@ import { resolveWantStream, resolveStreamInfo, persistStreamToggle, type StreamP
 // v2.3.108：原 dominantColor 取色染色子系统已随 liquid 主题删除而整体移除（v2.3.101-105 功能）。
 
 import { usePseudoReveal, markPseudoPending, isPseudoPending, clearPseudoPending } from '../utils/pseudoStream';
+import { createStickToBottom, isNearBottom, type StickToBottom } from '../utils/stickToBottom';
 import {
   nextReplyKey,
   pushReplyKey,
@@ -173,8 +174,30 @@ export const ChatWindow: React.FC<{
   const [sending, setSending] = useState(false);
 
   const [pendingImages, setPendingImages] = useState<string[]>([]);
+  // v3.0.1-beta.4：当前模型能否看图（发图但模型看不见时给提示，避免模型凭空编造）
+  const [visionWarn, setVisionWarn] = useState(false);
 
   const pendingImagesRef = useRef(pendingImages);
+  // v3.0.1-beta.4：待发图片有变化时查询「当前模型能否看图」，据此提示用户。
+  // 判定口径与主进程发送链路一致（设了识图模型 → 能看；否则看模型自身 supportsImages）。
+  useEffect(() => {
+    if (pendingImages.length === 0) {
+      setVisionWarn(false);
+      return;
+    }
+    let alive = true;
+    api
+      .getChatVisionCapable(chatType, chatId)
+      .then((ok) => {
+        if (alive) setVisionWarn(!ok);
+      })
+      .catch(() => {
+        if (alive) setVisionWarn(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [pendingImages.length, chatType, chatId]);
 
   pendingImagesRef.current = pendingImages;
 
@@ -1899,6 +1922,15 @@ export const ChatWindow: React.FC<{
 
 
 
+  // v3.0.1-beta.4：粘底跟随器 —— 用户向上翻看历史时不再被强制拉回底部
+  const stickRef = useRef<StickToBottom | null>(null);
+
+  if (!stickRef.current) {
+
+    stickRef.current = createStickToBottom(() => scrollRef.current);
+
+  }
+
   useEffect(() => {
 
     const el = scrollRef.current;
@@ -1907,9 +1939,12 @@ export const ChatWindow: React.FC<{
 
     const onScroll = () => {
 
-      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+      const nearBottom = isNearBottom(el);
 
       setShowScrollBtn(!nearBottom);
+
+      // 记录用户当前是否贴底：向上翻 → 停止跟随；滚回底部 → 恢复跟随
+      stickRef.current?.onUserScroll();
 
     };
 
@@ -1923,11 +1958,8 @@ export const ChatWindow: React.FC<{
 
   useEffect(() => {
 
-    const el = scrollRef.current;
-
-    if (!el) return;
-
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    // v3.0.1-beta.4：仅当用户本来就贴着底部时才跟随（否则回复期间无法上翻看历史）
+    stickRef.current?.followOnContentChange();
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
 
@@ -3793,6 +3825,9 @@ export const ChatWindow: React.FC<{
 
 
   const scrollToBottom = () => {
+
+    // v3.0.1-beta.4：手动回底 → 恢复跟随（后续新内容继续自动跟随）
+    stickRef.current?.resumeFollowing();
 
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
 
@@ -6333,6 +6368,19 @@ export const ChatWindow: React.FC<{
 
             ))}
 
+            {/* v3.0.1-beta.4：当前模型**看不了图**时给出明确提示。
+                此前图片会被静默降级成纯文本占位（「[用户发送了一张图片]」），
+                模型收不到图像内容 → 只能凭空编造，用户完全无从察觉。 */}
+            {visionWarn && (
+
+              <span className="img-preview-warn" title={t('chat.imageNoVisionTip')}>
+
+                ⚠ {t('chat.imageNoVision')}
+
+              </span>
+
+            )}
+
           </div>
 
         )}
@@ -7914,7 +7962,7 @@ const MessageRow: React.FC<{
 
           <>
 
-            {(!isUser && msg.reasoning?.trim()) || hasText ? (
+            {(!isUser && msg.reasoning?.trim()) || hasText || imgs.length > 0 ? (
 
               <div
 
@@ -7960,6 +8008,11 @@ const MessageRow: React.FC<{
 
                 })}
 
+                {/* v3.0.1-beta.4：图片**放进气泡内部**（此前渲染在气泡外，导致图片显示在气泡下方）。
+                    仅图片消息（无文本）时也要渲染本气泡 —— 否则会落进下面的 bubble-loading 分支，
+                    表现为「发完图对方都回完了，用户气泡还在转圈加载」。 */}
+                {imgs.length > 0 && <ImageGrid paths={imgs} onImage={onImage} failed={!!failed} />}
+
                 {/* F6 修复：流式进行中始终在气泡内显示加载动画，避免「只有顶部横幅显示 AI 正在回复」 */}
 
                 {streaming && (
@@ -7983,8 +8036,6 @@ const MessageRow: React.FC<{
               </div>
 
             )}
-
-            {imgs.length > 0 && <ImageGrid paths={imgs} onImage={onImage} failed={!!failed} />}
 
             {failed && !hasText && imgs.length === 0 && (
 

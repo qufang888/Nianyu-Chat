@@ -972,9 +972,13 @@ input[type='range']::-moz-range-thumb {
   outline-offset: 2px;
   border-radius: 10px;
 }
+/* v3.0.1-beta.4：图片移进气泡内部后，.img-loading（图片加载中的占位文案）的承载面
+   由「面板底」变为「气泡底」。--color-text-secondary 是按面板底调的，压气泡底可能不足 4.5:1
+   （深色主题实测 3.99）→ 改用 currentColor（= 所在气泡的文字色，与气泡底天然高对比）。 */
 .img-loading {
   font-size: calc(12px * var(--font-scale));
-  color: var(--color-text-secondary);
+  color: currentColor;
+  opacity: 0.75;
 }
 
 /* 对方正在回复：顶部提示条 */
@@ -1029,12 +1033,19 @@ input[type='range']::-moz-range-thumb {
   align-items: center;
   min-width: 130px;
 }
+/* v3.0.1-beta.4：加载条改为**随所在气泡自适应**，不再写死中性灰。
+   此前底槽写死 rgba(128,128,128,0.18) —— 该灰不随主题走，在部分主题的气泡底色上
+   与气泡几乎同色（「加载动画与背景融为一体，根本看不清」，用户实测）。
+   现用 currentColor（= 所在气泡的文字色，由 .bubble 的 color 决定）按比例混合：
+   底槽 = 文字色 30% 叠在气泡底上 → 必然与气泡底色可分辨；
+   前景 = 文字色 100% → 与底槽、与气泡底色都是最高对比。
+   这样**任何主题**都自动满足 WCAG，无需逐主题硬编码色值。 */
 .typing .typing-bar {
   position: relative;
   flex: 1;
   height: 6px;
   border-radius: 3px;
-  background: rgba(128, 128, 128, 0.18);
+  background: color-mix(in srgb, currentColor 30%, transparent);
   overflow: hidden;
 }
 .typing .typing-bar::after {
@@ -1045,7 +1056,7 @@ input[type='range']::-moz-range-thumb {
   height: 100%;
   width: 40%;
   border-radius: 3px;
-  background: var(--color-primary);
+  background: currentColor;
   animation: typing-slide 1.1s ease-in-out infinite;
 }
 @keyframes typing-slide {
@@ -1053,12 +1064,13 @@ input[type='range']::-moz-range-thumb {
   100% { transform: translateX(320%); }
 }
 /* F6 修复：流式进行中气泡内联加载动画（与 .typing 滑块同源） */
+/* v3.0.1-beta.4：同 .typing-bar —— 底槽改用 currentColor 混合，随所在气泡自适应 */
 .typing-inline {
   display: inline-block;
   width: 90px;
   height: 6px;
   border-radius: 3px;
-  background: rgba(128, 128, 128, 0.18);
+  background: color-mix(in srgb, currentColor 30%, transparent);
   overflow: hidden;
   vertical-align: middle;
   margin-left: 8px;
@@ -1072,7 +1084,7 @@ input[type='range']::-moz-range-thumb {
   height: 100%;
   width: 40%;
   border-radius: 3px;
-  background: var(--color-primary);
+  background: currentColor;
   animation: typing-slide 1.1s ease-in-out infinite;
 }
 /* ===== 异步场景生图状态条（v2.3.81）：会话内「正在生图中…」轻量内联指示 =====

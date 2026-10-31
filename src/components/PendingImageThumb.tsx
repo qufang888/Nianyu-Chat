@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useI18n } from '../i18n/I18nContext';
 
 const api = (window as any).api;
 
@@ -10,6 +11,7 @@ interface Props {
 // 发送前「图片预览缩略图」：加载本地图片 data URL 并渲染，带移除按钮。
 // 由 ChatWindow / MiniChat 在输入框正上方复用。
 export default function PendingImageThumb({ path, onRemove }: Props) {
+  const { t } = useI18n();
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
@@ -28,7 +30,7 @@ export default function PendingImageThumb({ path, onRemove }: Props) {
   return (
     <div className="img-thumb">
       {url ? <img src={url} alt="" /> : <div className="img-thumb-loading">…</div>}
-      <button type="button" className="img-thumb-x" title="移除" onClick={onRemove}>
+      <button type="button" className="img-thumb-x" title={t('chat.removeImage')} onClick={onRemove}>
         ✕
       </button>
     </div>
