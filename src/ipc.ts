@@ -466,7 +466,7 @@ export interface NianyuAPI {
   restoreBuiltinSkill: (id: string) => Promise<{ ok: boolean }>;
   /** v2.3.93：已被用户删除、但仍可一键恢复的内置技能 */
   listDismissedBuiltins: () => Promise<{ id: string; name: string; description: string }[]>;
-  /** v3.0.1：查询某场对话当前生效的技能名（聊天气泡下方「正在调用 Skill / 已完成 Skill 调用」状态展示用） */
+  /** v3.0.1：查询某场对话当前生效的技能名（聊天气泡下方「本轮已注入 Skill」状态展示用） */
   getActiveSkillNames: (chatType: string, chatId: string, roleId?: string) => Promise<string[]>;
 
   // ===== 软件更新（v2.3.45）=====

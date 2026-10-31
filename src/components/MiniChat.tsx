@@ -48,6 +48,21 @@ import { startCompanionTimer } from '../utils/companionTimer';
 import { applyAnimControl } from '../utils/animControl';
 import { resolveWantStream, resolveStreamInfo, persistStreamToggle, type StreamPref } from '../utils/chatStream';
 import { usePseudoReveal, markPseudoPending, isPseudoPending, clearPseudoPending } from '../utils/pseudoStream';
+import {
+  nextReplyKey,
+  pushReplyKey,
+  takeReplyKey,
+  clearReplyKeys,
+  resolveSkillCallForMessage,
+  applySkillNames,
+  markSkillDone,
+  markSkillFading,
+  removeSkillCall,
+  beginSkillCall,
+  SKILL_STATUS_LINGER_MS,
+  SKILL_STATUS_FADE_MS,
+  type SkillCallMap,
+} from '../utils/skillStatus';
 import { clampPseudoSpeed, PSEUDO_QUEUE } from '../types';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { ClearChatModal } from './ClearChatModal';
@@ -173,8 +188,16 @@ export const MiniChat: React.FC = () => {
   const pendingSearchRef = useRef<SearchResultItem[] | null>(null);
   // 已完成的 AI 消息 id -> streamId 映射，用于历史消息继续显示其搜索气泡
   const streamMsgIdRef = useRef<Record<string, string>>({});
-  // v3.0.1：聊天气泡下方「正在调用 / 已完成 Skill 调用」状态（按 streamId 分桶；与主窗同构）
-  const [skillCalls, setSkillCalls] = useState<Record<string, { status: 'calling' | 'done' | 'fading'; names: string[] }>>({});
+  // v3.0.1-beta.2：每轮回复的唯一键（replyKey），用于「Skill 状态」分桶（与主窗同构）。
+  //   为什么不能用 streamId：streamId = `${chatId}:${roleId}` **跨轮复用**（同一会话 + 同一角色的
+  //   每一轮都是同一个字符串），用它做 key 会让新一轮的状态命中**本会话所有历史 AI 气泡**
+  //   → 满屏都在显示「正在调用 Skill」（v3.0.1 的真实缺陷）。
+  const replySeqRef = useRef(0);
+  // v3.0.1-beta.2：streamId -> 待结束的 replyKey 队列（FIFO），理由同主窗 ChatWindow
+  const pendingReplyKeysRef = useRef<Record<string, string[]>>({});
+  const msgReplyKeyRef = useRef<Record<string, string>>({});       // 消息 id -> replyKey
+  // v3.0.1：聊天气泡下方「Skill 状态」（按每轮 replyKey 分桶；与主窗同构）
+  const [skillCalls, setSkillCalls] = useState<SkillCallMap>({});
   const autoMemoryRef = useRef(false);
   const [hideReasoning, setHideReasoning] = useState(true);
   // 伪流式输出（v2.3.34；v2.3.36 单一「动画速度」）：on=总开关，speed=动画速度/单字渐显时长（秒），触发间隔=speed/4 自动推导
@@ -727,6 +750,9 @@ export const MiniChat: React.FC = () => {
           delete copy[data.streamId];
           return copy;
         });
+        // v3.0.1-beta.2：本轮出错不会收到 stream:done → 清掉待结束队列，
+        // 否则队首会卡住，后续正常轮的 done 配对到错误的 key。
+        pendingReplyKeysRef.current = clearReplyKeys(pendingReplyKeysRef.current, data.streamId);
         setFailed({
           content: lastSentRef.current.content,
           imagePaths: lastSentRef.current.imagePaths,
@@ -761,6 +787,11 @@ export const MiniChat: React.FC = () => {
         pendingSearchRef.current = null;
         setSearchResultsByStream((prev) => ({ ...prev, [data.streamId]: payload }));
       }
+      // v3.0.1-beta.2：为**本轮**回复分配唯一 replyKey（streamId 跨轮复用，用它分桶会误命中历史气泡）
+      const replyKey = nextReplyKey(data.streamId, ++replySeqRef.current);
+      pendingReplyKeysRef.current = pushReplyKey(pendingReplyKeysRef.current, data.streamId, replyKey);
+      // 立即建立本轮条目（status 先落 'calling'，技能名随后由 IPC 补齐）
+      setSkillCalls((prev) => beginSkillCall(prev, replyKey));
       setStreamingMsgs((prev) => {
         if (prev[data.streamId]) return prev;
         return {
@@ -776,17 +807,23 @@ export const MiniChat: React.FC = () => {
             token_used: 0,
             timestamp: new Date().toISOString(),
             streamId: data.streamId,
+            // v3.0.1-beta.2：占位气泡带上本轮 replyKey
+            replyKey,
           } as any,
         };
       });
-      // v3.0.1：若该 stream 对应的角色/作用域有生效中的技能，在 AI 气泡下方展示「正在调用 Skill 名称」
+      // v3.0.1：若该 stream 对应的角色/作用域有生效中的技能，在 AI 气泡下方展示「本轮已注入 Skill 名称」
       {
         const sep = data.streamId.lastIndexOf(':');
         const rid = sep >= 0 ? data.streamId.slice(sep + 1) : '';
         api.getActiveSkillNames(current.chat_type, current.chat_id, rid).then((names: string[]) => {
-          if (Array.isArray(names) && names.length) {
-            setSkillCalls((prev) => ({ ...prev, [data.streamId]: { status: 'calling', names } }));
-          }
+          if (!Array.isArray(names) || !names.length) return;
+          setSkillCalls((prev) => {
+            // v3.0.1-beta.2：竞态修复 —— IPC 返回可能晚于本轮结束；
+            //   条目已移除 → 不复活；只补 names，不改 status（保持 done/fading 终态）。
+            const r = applySkillNames(prev, replyKey, names);
+            return r.map;
+          });
         }).catch(() => {});
       }
     };
@@ -802,30 +839,24 @@ export const MiniChat: React.FC = () => {
         return copy;
       });
       // v3.0.1：技能调用状态 -> 已完成；停留 3 秒后渐隐，再移除
-      setSkillCalls((prev) => {
-        const cur = prev[data.streamId];
-        if (!cur) return prev;
-        return { ...prev, [data.streamId]: { ...cur, status: 'done' } };
-      });
+      // v3.0.1-beta.2：按**本轮 replyKey** 定位状态（streamId 跨轮复用，用它会误改/误显历史气泡）
+      // FIFO 出队：取最早开始的那一轮（多轮严格按开始顺序结束）；取不到则退回 streamId
+      const [takenKey, nextQueue] = takeReplyKey(pendingReplyKeysRef.current, data.streamId);
+      pendingReplyKeysRef.current = nextQueue;
+      const doneKey = takenKey || data.streamId;
+      setSkillCalls((prev) => markSkillDone(prev, doneKey));
       setTimeout(() => {
-        setSkillCalls((prev) => {
-          const cur = prev[data.streamId];
-          if (!cur) return prev;
-          return { ...prev, [data.streamId]: { ...cur, status: 'fading' } };
-        });
+        setSkillCalls((prev) => markSkillFading(prev, doneKey));
         setTimeout(() => {
-          setSkillCalls((prev) => {
-            if (!prev[data.streamId]) return prev;
-            const copy = { ...prev };
-            delete copy[data.streamId];
-            return copy;
-          });
-        }, 420);
-      }, 3000);
+          setSkillCalls((prev) => removeSkillCall(prev, doneKey));
+        }, SKILL_STATUS_FADE_MS);
+      }, SKILL_STATUS_LINGER_MS);
       if (data.message && !doneStreamIds.current.has(data.streamId)) {
         doneStreamIds.current.add(data.streamId);
         // 记录 消息id -> streamId，让已完成的回复在历史中仍显示自己的搜索气泡
         if (data.message.id != null) streamMsgIdRef.current[String(data.message.id)] = data.streamId;
+        // v3.0.1-beta.2：记录 消息id -> 本轮 replyKey，把 Skill 状态挂到**本轮这一条**消息上
+        if (data.message.id != null) msgReplyKeyRef.current[String(data.message.id)] = doneKey;
         // 伪流式打标（v2.3.36）：非流式回复也经 stream:done 广播整段到齐，此通道是非流式回复
         // 到达的唯一可靠路径——伪流式开启且当前流式生效值关闭时打标；打标与 setMessages 同帧，
         // 气泡挂载即从首字开始渐显。真实流式（streamOnRef=true）不打标，正文已实时输出。
@@ -1133,6 +1164,9 @@ export const MiniChat: React.FC = () => {
     setExpandedStreams({});
     pendingSearchRef.current = null;
     streamMsgIdRef.current = {};
+    // v3.0.1-beta.2：切换对话时一并清空 replyKey 映射，避免上一聊天的 key 残留
+    msgReplyKeyRef.current = {};
+    pendingReplyKeysRef.current = {};
     if (!current) return;
     const off = api.onSearchResults((_e, data: any) => {
       if (!data || data.chatType !== current.chat_type || data.chatId !== current.chat_id) return;
@@ -2428,8 +2462,10 @@ export const MiniChat: React.FC = () => {
           const msgSr = (m as any).search_results as SearchResultItem[] | undefined;
           const sr = msgSr && msgSr.length ? msgSr : sid ? searchResultsByStream[sid] : undefined;
           const expKey = sid || `msg-${m.id}`;
-          // v3.0.1：按 streamId 取本场对话生效技能状态，注入该条 AI 气泡的「正在调用 / 已完成 Skill 调用」展示
-          const skillCall = sid ? (skillCalls[sid] || null) : null;
+          // v3.0.1-beta.2：按**本条消息自己的 replyKey** 取技能状态（每轮唯一）。
+          //   流式占位气泡自带 replyKey 字段；落库后的真实消息靠 msgReplyKeyRef 反查。
+          //   不能用 streamId —— 它跨轮复用，会让本会话**所有历史 AI 气泡**一起显示状态条。
+          const skillCall = resolveSkillCallForMessage(skillCalls, m as any, msgReplyKeyRef.current);
           return (
             <Fragment key={m.id}>
               <MiniMessageRow
@@ -2478,7 +2514,7 @@ export const MiniChat: React.FC = () => {
                 // v2.3.102 需求 1：打断后重发
                 interruptedAnchorId={interruptedAnchorId}
                 onResendInterrupted={handleResendInterrupted}
-                // v3.0.1：按 streamId 把「正在调用 / 已完成 Skill 调用」状态注入该条 AI 气泡
+                // v3.0.1：按本条消息的 replyKey 把「本轮已注入 Skill」状态注入该条 AI 气泡
                 skillCall={skillCall}
               />
               {sr && sr.length > 0 && (
@@ -3185,7 +3221,7 @@ const MiniMessageRow: React.FC<{
   // v2.3.102 需求 1：若本条用户消息 id 等于唯一锚点 id，则在其 .msg-body 内渲染「重发」按钮
   interruptedAnchorId?: number | null;
   onResendInterrupted?: (m: ChatMessage) => void;
-  // v3.0.1：聊天气泡下方「正在调用 / 已完成 Skill 调用」状态（由父组件按 streamId 注入；无则 undefined）
+  // v3.0.1：聊天气泡下方「本轮已注入 Skill」状态（由父组件按本条消息的 replyKey 注入；无则 undefined）
   skillCall?: { status: 'calling' | 'done' | 'fading'; names: string[] } | null;
 }> = ({
   msg, onImage, avatarPath, userAvatarPath, showTts, ttsState, onAiAction, showAiActions, aiActionBusy, hideReasoning, onSpeak, onReplayTts, onRegenerateTts, onReasoningCopied,
@@ -3452,7 +3488,7 @@ const MiniMessageRow: React.FC<{
         )}
         {/* v3.0.1：聊天气泡下方「正在调用 / 已完成 Skill 调用」状态（由父组件按 streamId 注入） */}
         {!isUser && skillCall && (
-          <div className={`skill-call-status${skillCall.status === 'fading' ? ' fading' : ''}`} title={t('skill.title')}>
+          <div className={`skill-call-status${skillCall.status === 'fading' ? ' fading' : ''}`} title={t('skill.callTip')}>
             {skillCall.status === 'calling' ? (
               <span className="skill-call-spinner" aria-hidden="true" />
             ) : (

@@ -1170,7 +1170,7 @@ input[type='range']::-moz-range-thumb {
   gap: 8px;
 }
 
-/* v3.0.1：聊天气泡下方「正在调用 / 已完成 Skill 调用」状态。
+/* v3.0.1：聊天气泡下方「本轮已注入 Skill」状态。
    配色走主题变量（15 套主题下均自适应可读）；背景为半透明面板，不与其他图层文字重叠。
    淡出用 transition（非 @keyframes）：关动效档时 `transition:none` 直接拉到终值，
    不会出现「关掉动效仍卡在透明」的坑（与 .msg-action-bar 同款范式）。 */
