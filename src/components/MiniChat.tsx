@@ -400,6 +400,7 @@ export const MiniChat: React.FC = () => {
     imagePaths: string[];
     phase: 'full' | 'ai';
     error: string;
+    proactive?: boolean;
   } | null>(null);
   const [members, setMembers] = useState<Role[]>([]);
   // 观察者私密小窗标记：以 obs:<groupId>:<roleId> 打开时为 true，强制显示思维链
@@ -770,6 +771,7 @@ export const MiniChat: React.FC = () => {
           imagePaths: lastSentRef.current.imagePaths,
           phase: 'ai',
           error: String(data.error),
+          proactive: !!data.proactive,
         });
         return;
       }
@@ -1612,6 +1614,18 @@ export const MiniChat: React.FC = () => {
   const resend = () => {
     if (!failed || sending) return;
     pendingAutoChain.current = false;
+    // 主动消息失败：重试 = 重新触发一条主动消息（经 chats:proactive），
+    // 不能走用户消息的 performSend —— 主动消息没有用户输入，拿空内容重生成必然失效。
+    if (failed.proactive) {
+      if (!current) return;
+      setFailed(null);
+      setSending(true);
+      api
+        .proactive({ chatType: current.chat_type, chatId: current.chat_id })
+        .catch(() => {})
+        .finally(() => setSending(false));
+      return;
+    }
     performSend(failed.content, failed.imagePaths, failed.phase);
   };
 
@@ -2595,7 +2609,7 @@ export const MiniChat: React.FC = () => {
                 padding: '6px 10px',
               }}
             >
-              <span title={failed.error}>⚠ {t('chat.sendFailedShort')}</span>
+              <span title={failed.proactive ? undefined : failed.error}>⚠ {failed.proactive ? t('chat.proactiveError', { error: failed.error }) : t('chat.sendFailedShort')}</span>
               <button
                 className="btn-ghost"
                 style={{ padding: '2px 10px', fontSize: 12, color: 'var(--color-primary-ink)' }}

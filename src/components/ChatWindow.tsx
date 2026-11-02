@@ -1230,6 +1230,8 @@ export const ChatWindow: React.FC<{
 
     error: string;
 
+    proactive?: boolean;
+
   } | null>(null);
 
   // 语音输入 / TTS
@@ -2037,6 +2039,8 @@ export const ChatWindow: React.FC<{
           phase: 'ai',
 
           error: String(data.error),
+
+          proactive: !!data.proactive,
 
         });
 
@@ -4362,6 +4366,22 @@ export const ChatWindow: React.FC<{
 
     pendingAutoChain.current = false;
 
+    // 主动消息失败：重试 = 重新触发一条主动消息（经 chats:proactive），
+    // 不能走用户消息的 performSend —— 主动消息没有用户输入，拿空内容重生成必然失效。
+    if (failed.proactive) {
+      setFailed(null);
+      setSending(true);
+      sendingRef.current = true;
+      api
+        .proactive({ chatType, chatId })
+        .catch(() => {})
+        .finally(() => {
+          setSending(false);
+          sendingRef.current = false;
+        });
+      return;
+    }
+
     performSend(failed.content, failed.imagePaths, failed.phase);
 
   };
@@ -6242,7 +6262,7 @@ export const ChatWindow: React.FC<{
 
             >
 
-              <span title={failed.error}>⚠ {t('chat.sendFailedShort')}</span>
+              <span title={failed.proactive ? undefined : failed.error}>⚠ {failed.proactive ? t('chat.proactiveError', { error: failed.error }) : t('chat.sendFailedShort')}</span>
 
               <button
 

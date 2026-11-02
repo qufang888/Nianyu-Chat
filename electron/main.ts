@@ -4290,7 +4290,9 @@ async function handleProactive(p: {
     if (res.error) {
       // 模型回复错误：不进聊天框、不进记忆；用气泡通知用户（主动消息无需重发面板，仅移除占位）
       notifyModelError(res.error, role.name);
-      sendStreamChunk(streamId, { content: '', done: true, error: res.error.message, seq: 1 });
+      // 标记 proactive：前端据此把失败当作「主动消息生成失败」，重试按钮重新触发一条主动消息，
+      // 而不是错误地复用用户消息的「重发」路径（主动消息没有用户输入，拿空内容重生成必然失效）。
+      sendStreamChunk(streamId, { content: '', done: true, error: res.error.message, seq: 1, proactive: true });
       return { ok: false, roleId: role.id, roleName: role.name, error: res.error.message };
     }
     dm.recordModelUsage(cfg.id, cfg.name, res.promptTokens, res.completionTokens);
@@ -5425,7 +5427,7 @@ function clearGroupEditorLockByWindow(windowId: number): void {
 
 function sendStreamChunk(
   streamId: string,
-  chunk: { content: string; done: boolean; error: string; reasoning?: string; seq?: number }
+  chunk: { content: string; done: boolean; error: string; reasoning?: string; seq?: number; proactive?: boolean }
 ): void {
   broadcast('stream:chunk', { streamId, ...chunk });
 }
