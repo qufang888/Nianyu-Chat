@@ -225,7 +225,7 @@ export const MiniChat: React.FC = () => {
   const [editingNodeId, setEditingNodeId] = useState<number | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [forking, setForking] = useState(false);
-  const { open: showStories, setOpen: setShowStories, top: storiesTop, dragging: storiesDragging, storiesRef, onTabEnter, onPanelEnter, onWrapperEnter, onWrapperLeave, onTabPointerDown } = useStoriesPanel(editingNodeId !== null);
+  const { open: showStories, setOpen: setShowStories, top: storiesTop, bottom: storiesBottom, dragging: storiesDragging, storiesRef, onTabEnter, onPanelEnter, onWrapperLeave, onWrapperEnter, onTabPointerDown } = useStoriesPanel(editingNodeId !== null);
   useEffect(() => {
     if (!current) return;
     api.getStoryEnabled(current.chat_type, current.chat_id).then(setStoryOn);
@@ -3118,7 +3118,7 @@ export const MiniChat: React.FC = () => {
         <div
           ref={storiesRef}
           className={`stories${storiesDragging ? ' dragging' : ''}`}
-          style={{ top: storiesTop }}
+          style={{ top: storiesTop, bottom: storiesBottom }}
           data-dragging={storiesDragging ? '' : undefined}
           onMouseEnter={onWrapperEnter}
           onMouseLeave={onWrapperLeave}

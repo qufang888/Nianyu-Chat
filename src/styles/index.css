@@ -3846,21 +3846,21 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   border-radius: 0 10px 10px 0;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   overflow: hidden;
-  /* v2.3.38 弹入/弹出过渡（面板常驻 DOM，open 类切换显隐）；
-     「动效开关」关闭时 .anim-off 全局禁用所有 transition/animation
-     v2.3.97：**去掉 scale(0.97)** —— 用户已两次明确否定「先很小再放大」的表现，
-     只保留横向位移；缓动一并改为 linear。 */
+  /* 弹入/弹出过渡（面板常驻 DOM，open 类切换显隐）；「动效开关」关闭时 .anim-off 全局禁用。
+     v3.0.1-beta.7：改为「抽屉式左滑 + 淡出」——收起时整个面板左滑 100%（隐入开关手柄之后），
+     彻底解决「缩回时卡在剧情节点图标中间」的观感；缓动用柔和 ease-out（非线性），更自然流畅。
+     仍不使用 scale（用户已两次否定「先很小再放大」）。 */
   opacity: 0;
-  transform: translateX(-10px);
+  transform: translateX(-100%);
   visibility: hidden;
-  transition: opacity calc(0.2s * var(--anim-speed, 1)) linear, transform calc(0.2s * var(--anim-speed, 1)) linear, visibility calc(0.2s * var(--anim-speed, 1)), pointer-events 0s calc(0.2s * var(--anim-speed, 1));
+  transition: opacity calc(0.24s * var(--anim-speed, 1)) cubic-bezier(0.22, 0.61, 0.36, 1), transform calc(0.24s * var(--anim-speed, 1)) cubic-bezier(0.22, 0.61, 0.36, 1), visibility calc(0.24s * var(--anim-speed, 1)), pointer-events 0s calc(0.24s * var(--anim-speed, 1));
 }
 .stories-panel.open {
   opacity: 1;
-  transform: none;
+  transform: translateX(0);
   visibility: visible;
   pointer-events: auto;
-  transition: opacity calc(0.2s * var(--anim-speed, 1)) linear, transform calc(0.2s * var(--anim-speed, 1)) linear, visibility calc(0.2s * var(--anim-speed, 1)), pointer-events 0s;
+  transition: opacity calc(0.24s * var(--anim-speed, 1)) cubic-bezier(0.22, 0.61, 0.36, 1), transform calc(0.24s * var(--anim-speed, 1)) cubic-bezier(0.22, 0.61, 0.36, 1), visibility calc(0.24s * var(--anim-speed, 1)), pointer-events 0s;
 }
 .stories-head {
   display: flex;

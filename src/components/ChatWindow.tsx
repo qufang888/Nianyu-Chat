@@ -276,7 +276,7 @@ export const ChatWindow: React.FC<{
 
   const [forking, setForking] = useState(false);
 
-  const { open: showStories, setOpen: setShowStories, top: storiesTop, dragging: storiesDragging, storiesRef, onTabEnter, onPanelEnter, onWrapperEnter, onWrapperLeave, onTabPointerDown } = useStoriesPanel(editingNodeId !== null);
+  const { open: showStories, setOpen: setShowStories, top: storiesTop, bottom: storiesBottom, dragging: storiesDragging, storiesRef, onTabEnter, onPanelEnter, onWrapperEnter, onWrapperLeave, onTabPointerDown } = useStoriesPanel(editingNodeId !== null);
 
   useEffect(() => {
 
@@ -7284,7 +7284,7 @@ export const ChatWindow: React.FC<{
           ref={storiesRef}
 
           className={`stories${storiesDragging ? ' dragging' : ''}`}
-          style={{ top: storiesTop }}
+          style={{ top: storiesTop, bottom: storiesBottom }}
           data-dragging={storiesDragging ? '' : undefined}
 
           onMouseEnter={onWrapperEnter}
