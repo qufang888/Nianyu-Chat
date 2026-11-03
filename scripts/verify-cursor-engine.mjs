@@ -241,10 +241,9 @@ ok(/x >= w - \(bandW \+ EDGE_BAND_HYSTERESIS_PX\)/.test(engine),
 ok(/private updateEdgeBand\(x: number, y: number\): boolean/.test(engine),
   '边缘带判定独立成方法（指针进入右/下边缘带时让位给原生光标）');
 
-// 右键菜单隐藏
-ok(/private onContextMenu = \(\): void => \{/.test(engine) &&
-   /onContextMenu[\s\S]{0,800}?classList\.remove\(HIDDEN_CLASS\)/.test(engine),
-  '右键菜单唤起即隐藏字形并露出原生光标');
+// 右键菜单：动态光标保持显示（不隐藏、不切原生光标）
+ok(!/private onContextMenu/.test(engine),
+  '引擎已移除 onContextMenu —— 右键也保持动态光标（不再闪回原生光标）');
 
 // 空闲隐藏
 ok(/private scheduleIdleHide\(\): void/.test(engine) &&

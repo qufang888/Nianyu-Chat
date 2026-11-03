@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react';
+import { useStoriesPanel } from '../hooks/useStoriesPanel';
 import { createPortal } from 'react-dom';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
@@ -218,13 +219,13 @@ export const MiniChat: React.FC = () => {
   // 自适应故事线：开关 / 节点列表 / 侧栏（与主界面同步）
   const [storyOn, setStoryOn] = useState(false);
   const [storyNodes, setStoryNodes] = useState<{ id: number; msg_id: number; title: string; timestamp: string }[]>([]);
-  const [showStories, setShowStories] = useState(false);
+  // 剧情节点侧栏的 showStories / storiesRef / 垂直拖动 统一由 useStoriesPanel 管理（见 editingNodeId 之后）
   // 节点横幅 / 内联改名 / 分叉（v2.3.37）
   const [nodeBanner, setNodeBanner] = useState<{ title: string; subtitle?: string } | null>(null);
   const [editingNodeId, setEditingNodeId] = useState<number | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [forking, setForking] = useState(false);
-  const storiesRef = useRef<HTMLDivElement | null>(null);
+  const { open: showStories, setOpen: setShowStories, top: storiesTop, dragging: storiesDragging, storiesRef, onTabEnter, onPanelEnter, onWrapperEnter, onWrapperLeave, onTabPointerDown } = useStoriesPanel(editingNodeId !== null);
   useEffect(() => {
     if (!current) return;
     api.getStoryEnabled(current.chat_type, current.chat_id).then(setStoryOn);
@@ -3116,12 +3117,14 @@ export const MiniChat: React.FC = () => {
       {storyOn && (
         <div
           ref={storiesRef}
-          className="stories"
-          onMouseEnter={() => setShowStories(true)}
-          onMouseLeave={() => { if (editingNodeId === null) setShowStories(false); }}
+          className={`stories${storiesDragging ? ' dragging' : ''}`}
+          style={{ top: storiesTop }}
+          data-dragging={storiesDragging ? '' : undefined}
+          onMouseEnter={onWrapperEnter}
+          onMouseLeave={onWrapperLeave}
         >
-          <div className="stories-tab" title={t('chat.stories')}>{t('chat.stories')}</div>
-          <div className={`stories-panel${showStories ? ' open' : ''}`}>
+          <div className="stories-tab" title={t('chat.stories')} onMouseEnter={onTabEnter} onPointerDown={onTabPointerDown} data-dragging={storiesDragging ? '' : undefined}>{t('chat.stories')}</div>
+          <div className={`stories-panel${showStories ? ' open' : ''}`} onMouseEnter={onPanelEnter}>
               <div className="stories-head">
                 <span>{t('chat.stories')}</span>
                 <span className="stories-count">{storyNodes.length}</span>

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react';
+import { useStoriesPanel } from '../hooks/useStoriesPanel';
 
 import { createPortal } from 'react-dom';
 
@@ -263,7 +264,7 @@ export const ChatWindow: React.FC<{
 
   const [storyNodes, setStoryNodes] = useState<{ id: number; msg_id: number; title: string; timestamp: string }[]>([]);
 
-  const [showStories, setShowStories] = useState(false);
+  // 剧情节点侧栏的 showStories / storiesRef / 垂直拖动 统一由 useStoriesPanel 管理（见 editingNodeId 之后）
 
   // 节点横幅 / 内联改名（v2.3.37）
 
@@ -275,7 +276,7 @@ export const ChatWindow: React.FC<{
 
   const [forking, setForking] = useState(false);
 
-  const storiesRef = useRef<HTMLDivElement | null>(null);
+  const { open: showStories, setOpen: setShowStories, top: storiesTop, dragging: storiesDragging, storiesRef, onTabEnter, onPanelEnter, onWrapperEnter, onWrapperLeave, onTabPointerDown } = useStoriesPanel(editingNodeId !== null);
 
   useEffect(() => {
 
@@ -7282,17 +7283,19 @@ export const ChatWindow: React.FC<{
 
           ref={storiesRef}
 
-          className="stories"
+          className={`stories${storiesDragging ? ' dragging' : ''}`}
+          style={{ top: storiesTop }}
+          data-dragging={storiesDragging ? '' : undefined}
 
-          onMouseEnter={() => setShowStories(true)}
+          onMouseEnter={onWrapperEnter}
 
-          onMouseLeave={() => { if (editingNodeId === null) setShowStories(false); }}
+          onMouseLeave={onWrapperLeave}
 
         >
 
-          <div className="stories-tab" title={t('chat.stories')}>{t('chat.stories')}</div>
+          <div className="stories-tab" title={t('chat.stories')} onMouseEnter={onTabEnter} onPointerDown={onTabPointerDown} data-dragging={storiesDragging ? '' : undefined}>{t('chat.stories')}</div>
 
-          <div className={`stories-panel${showStories ? ' open' : ''}`}>
+          <div className={`stories-panel${showStories ? ' open' : ''}`} onMouseEnter={onPanelEnter}>
 
             <div className="stories-head">
 

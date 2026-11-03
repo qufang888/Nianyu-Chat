@@ -1039,29 +1039,6 @@ export class CursorEngine {
     if (this.fadeState !== 'out') this.hideCursor();
   };
 
-  /** 右键菜单唤起 → 立即隐藏字形（露出原生光标便于操作菜单），菜单关闭后恢复 */
-  private onContextMenu = (): void => {
-    this.cancelIdleHide();
-    this.hidden = true;
-    this.edgeNative = false;
-    this.resetParticles();
-    this.clearFx();
-    document.body.classList.remove(HIDDEN_CLASS);
-    this.refreshGlyphVisibility();
-    this.stopLoop();
-    window.setTimeout(() => {
-      // 引擎已卸载 → 不再恢复（否则会重启 rAF 循环并残留 cursor-hidden）
-      if (!this.elements) return;
-      this.hidden = false;
-      this.lastMoveTime = performance.now();
-      if (this.cfg.enabled && !this.isGated()) {
-        document.body.classList.add(HIDDEN_CLASS);
-      }
-      this.refreshGlyphVisibility();
-      if (!this.running) this.startLoop();
-    }, 150);
-  };
-
   private onResize = (): void => {
     this.setupCanvas();
     this.repositionGlyph();
@@ -1130,7 +1107,6 @@ export class CursorEngine {
     document.addEventListener('mouseup', this.onMouseUp, { passive: true });
     window.addEventListener('blur', this.onBlur);
     window.addEventListener('focus', this.onFocus);
-    document.addEventListener('contextmenu', this.onContextMenu, { passive: true });
     window.addEventListener('resize', this.onResize, { passive: true });
     document.addEventListener('visibilitychange', this.onVisibilityChange);
     window.addEventListener('pagehide', this.onPageHide);
@@ -1159,7 +1135,6 @@ export class CursorEngine {
     document.removeEventListener('mouseup', this.onMouseUp);
     window.removeEventListener('blur', this.onBlur);
     window.removeEventListener('focus', this.onFocus);
-    document.removeEventListener('contextmenu', this.onContextMenu);
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     window.removeEventListener('pagehide', this.onPageHide);

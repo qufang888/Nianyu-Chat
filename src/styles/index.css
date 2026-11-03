@@ -3822,13 +3822,17 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   border: 1px solid var(--color-border);
   border-left: none;
   border-radius: 0 8px 8px 0;
-  cursor: pointer;
+  cursor: grab;
   user-select: none;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
   transition: background var(--transition);
 }
 .stories-tab:hover {
   background: var(--color-hover);
+}
+/* 拖动中：抓手光标（动态光标关闭时也能看出可拖动） */
+.stories.dragging .stories-tab {
+  cursor: grabbing;
 }
 .stories-panel {
   pointer-events: none; /* 收起时不拦截点击（展开由 .open 恢复） */
