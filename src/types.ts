@@ -750,6 +750,7 @@ export interface AppSettings {
   updatePopupShownVersion?: string; // 已弹过更新提醒弹窗的版本号（每版本只弹一次）
   modelTagMode?: 'api' | 'model'; // v2.3.44：聊天界面模型标签显示模式——'api'=显示 API 配置名（默认）/'model'=显示实际模型名；点击标签即可切换
   queueDockY?: number; // 请求队列贴边图标的纵坐标 px（v2.3.46，仅主界面右缘可上下拖动；缺省=视口垂直偏上 40%）
+  storiesDockTop?: number; // 剧情节点侧栏开关（tab）的纵坐标 px（相对 offsetParent 顶部；v3.0.1-beta.8，主窗/小窗可上下拖动，位置记忆）
   // ===== 首启向导与自我身份 =====
   firstRunDone: boolean; // 是否已走过初始设置（老用户读取到旧 settings 时由 db 强制置 true）
   tutorialDone: boolean; // v2.3.90：是否已完成/已跳过「新手引导」（添加人物卡 → 开启第一个聊天）；与 firstRunDone 独立，二者互斥触发

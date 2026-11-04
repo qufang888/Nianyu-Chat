@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -73,6 +74,8 @@ export interface StoriesPanelApi {
   onTabPointerDown: (e: ReactPointerEvent) => void;
   /** 直接设置展开态（如改名结束后的即时收起） */
   setOpen: (v: boolean) => void;
+  /** 外部恢复记忆位置（如 settings.storiesDockTop，异步读取后回灌） */
+  restoreTop: (top: number) => void;
 }
 
 function findBound(doc: Document, selectors: string[]): HTMLElement | null {
@@ -83,12 +86,23 @@ function findBound(doc: Document, selectors: string[]): HTMLElement | null {
   return null;
 }
 
-export function useStoriesPanel(isEditing: boolean): StoriesPanelApi {
+export function useStoriesPanel(
+  isEditing: boolean,
+  opts?: { initialTop?: number; onCommitTop?: (top: number) => void }
+): StoriesPanelApi {
   const [open, setOpen] = useState(false);
-  const [top, setTop] = useState(64);
+  const [top, setTop] = useState(opts?.initialTop ?? 64);
   const [bottom, setBottom] = useState(120); // 兜底值，mount 后由地标动态计算
   const [dragging, setDragging] = useState(false);
   const storiesRef = useRef<HTMLDivElement>(null);
+  // 实时镜像 top，供全局 pointerup 等闭包读取最新值（避免闭包拿到过期 state）
+  const topRef = useRef(opts?.initialTop ?? 64);
+  useEffect(() => {
+    topRef.current = top;
+  }, [top]);
+  // onCommitTop 可能在 effect 闭包里被读取，用 ref 承载最新值
+  const commitRef = useRef(opts?.onCommitTop);
+  commitRef.current = opts?.onCommitTop;
   const peekTimer = useRef<number | null>(null);
   const drag = useRef<{ active: boolean; startY: number; startTop: number }>({
     active: false,
@@ -112,6 +126,13 @@ export function useStoriesPanel(isEditing: boolean): StoriesPanelApi {
   const doClose = useCallback(() => {
     enteredRef.current = false;
     setOpen(false);
+  }, []);
+
+  /** 外部（如异步读取 settings.storiesDockTop 后）恢复记忆位置；立即按当前边界钳制。
+   *  之后 mount 的 fonts.ready / [open] 重算会再次钳到已稳定边界，故无二次跳位。 */
+  const restoreTop = useCallback((next: number) => {
+    const { minTop, maxTop } = bounds.current;
+    setTop(Math.min(maxTop, Math.max(minTop, next)));
   }, []);
 
   /** 计算上下边界 + 动态 bottom（基于 offsetParent 坐标系） */
@@ -229,6 +250,10 @@ export function useStoriesPanel(isEditing: boolean): StoriesPanelApi {
       } else if (!enteredRef.current) {
         schedulePeek(); // 松手仍在开关上、没进过面板 → 1.5s 收
       }
+      // 拖动结束且确有位移 → 落盘记忆位置（主窗/小窗各自由 opts.onCommitTop 写 settings）
+      if (topRef.current !== drag.current.startTop) {
+        commitRef.current?.(topRef.current);
+      }
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -238,12 +263,26 @@ export function useStoriesPanel(isEditing: boolean): StoriesPanelApi {
     };
   }, [doClose, schedulePeek]);
 
-  // mount：首次计算边界；resize：布局变化时重算
-  useEffect(() => {
+  // mount：首次计算边界；resize：布局变化时重算。
+  // 关键：改用 useLayoutEffect —— 首次 paint 前完成钳制，避免「默认 64 → 悬停才钳紧」的可见瞬移；
+  // 并补 fonts.ready 与 rAF 各重算一次，规避 Web 字体加载导致「首帧地标高度未定 → 二次跳位」。
+  // 这样 mount 钳制结果 == 悬停时（[open] 分支）的钳制结果，悬停不再触发可见瞬移。
+  useLayoutEffect(() => {
     recomputeBounds();
+    const raf = requestAnimationFrame(() => recomputeBounds());
+    let cancelled = false;
+    if (typeof document !== 'undefined' && 'fonts' in document) {
+      document.fonts.ready.then(() => {
+        if (!cancelled) recomputeBounds();
+      }).catch(() => {});
+    }
     const onResize = () => recomputeBounds();
     window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', onResize);
+    };
   }, [recomputeBounds]);
 
   // 展开时刷新边界（切换聊天 / 输入栏高度变化等）
@@ -276,6 +315,7 @@ export function useStoriesPanel(isEditing: boolean): StoriesPanelApi {
     onWrapperLeave,
     onTabPointerDown,
     setOpen,
+    restoreTop,
   };
 }
 

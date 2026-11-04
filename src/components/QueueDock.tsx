@@ -157,9 +157,39 @@ export default function QueueDock() {
     return remain <= 0 ? t('queue.etaNow') : t('queue.eta', { sec: remain });
   };
 
+  // ===== 面板自动收回：鼠标离开面板（或把手）1.5s 后自动缩回；移入任一控件即取消 =====
+  // 弹出/缩回动画走既有 .queue-dock-panel / .expanded 的 CSS 过渡（受「动效总开关 / queue 分组」控制）。
+  const retractTimerRef = useRef<number | null>(null);
+  const clearRetract = (): void => {
+    if (retractTimerRef.current !== null) {
+      window.clearTimeout(retractTimerRef.current);
+      retractTimerRef.current = null;
+    }
+  };
+  const scheduleRetract = useCallback((): void => {
+    if (dragging) return; // 拖动中绝不自动收
+    clearRetract();
+    // 1.5s（用户明确要求）：离开面板后延迟收回，给出「把鼠标移回面板」的余量
+    retractTimerRef.current = window.setTimeout(() => {
+      retractTimerRef.current = null;
+      setExpanded(false);
+    }, 1500);
+  }, [dragging]);
+  const cancelRetract = useCallback((): void => {
+    clearRetract();
+  }, []);
+  // 组件卸载清理，避免对已卸载组件 setState
+  useEffect(
+    () => () => {
+      if (retractTimerRef.current !== null) window.clearTimeout(retractTimerRef.current);
+    },
+    []
+  );
+
   // ===== 贴边图标拖动（仅垂直方向，right 恒 0）=====
   const onHandlePointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
+    clearRetract(); // 开始拖动/点击前清掉任何待收回计时
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     dragRef.current = { startY: e.clientY, startDockY: dockY, moved: false };
   };
@@ -323,6 +353,8 @@ export default function QueueDock() {
         onPointerMove={onHandlePointerMove}
         onPointerUp={onHandlePointerUp}
         onPointerCancel={onHandlePointerCancel}
+        onMouseEnter={cancelRetract}
+        onMouseLeave={scheduleRetract}
       >
         <span aria-hidden="true">🕒</span>
         {total > 0 && (
@@ -343,6 +375,8 @@ export default function QueueDock() {
         role="dialog"
         aria-modal="false"
         aria-label={t('queue.title')}
+        onMouseEnter={cancelRetract}
+        onMouseLeave={scheduleRetract}
       >
         <div className="queue-dock-head">
           <span aria-hidden="true">⏳</span>

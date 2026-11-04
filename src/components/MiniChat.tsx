@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { useStoriesPanel } from '../hooks/useStoriesPanel';
-import { createPortal } from 'react-dom';
+import { CtxMenuPortal } from './CtxMenuPortal';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
 import { useTheme } from '../theme/ThemeContext';
@@ -225,7 +225,35 @@ export const MiniChat: React.FC = () => {
   const [editingNodeId, setEditingNodeId] = useState<number | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [forking, setForking] = useState(false);
-  const { open: showStories, setOpen: setShowStories, top: storiesTop, bottom: storiesBottom, dragging: storiesDragging, storiesRef, onTabEnter, onPanelEnter, onWrapperLeave, onWrapperEnter, onTabPointerDown } = useStoriesPanel(editingNodeId !== null);
+  const storiesApi = useStoriesPanel(editingNodeId !== null, {
+    initialTop: typeof settings?.storiesDockTop === 'number' ? settings.storiesDockTop : undefined,
+    onCommitTop: (top) => {
+      api.saveSettings({ storiesDockTop: top }).catch(() => {});
+    },
+  });
+  const {
+    open: showStories,
+    setOpen: setShowStories,
+    top: storiesTop,
+    bottom: storiesBottom,
+    dragging: storiesDragging,
+    storiesRef,
+    onTabEnter,
+    onPanelEnter,
+    onWrapperLeave,
+    onWrapperEnter,
+    onTabPointerDown,
+  } = storiesApi;
+
+  // v3.0.1-beta.8：进入聊天时恢复剧情节点侧栏的记忆位置（settings 就绪后回灌；仅恢复一次，避免覆盖拖拽中位置）
+  const storiesRestoredRef = useRef(false);
+  useEffect(() => {
+    if (storiesRestoredRef.current) return;
+    if (typeof settings?.storiesDockTop === 'number') {
+      storiesApi.restoreTop(settings.storiesDockTop);
+      storiesRestoredRef.current = true;
+    }
+  }, [settings?.storiesDockTop]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!current) return;
     api.getStoryEnabled(current.chat_type, current.chat_id).then(setStoryOn);
@@ -3642,40 +3670,20 @@ const MiniMessageRow: React.FC<{
       {/* 右键菜单：Portal 到 body，脱离 .app-root 的 transform/filter 包含块，避免 fixed 坐标相对祖先偏移。
           v2.3.104 R3：key={menuRelocate.seq} —— 同气泡二次右键重定位时 seq+1 强制重挂载，
           重放 popupLinearIn（跨气泡路径由 useRetract 既有 leaving 分支天然并行，不经此处）。 */}
-      {ctxMenu.shown && createPortal(
-        <div
-          key={menuRelocate.seq}
-          className={`ctx-menu${ctxMenu.leaving ? ' leaving' : ''}`}
-          style={{
-            position: 'fixed',
-            left: Math.min(ctxMenu.shown.x, window.innerWidth - 160),
-            top: Math.min(ctxMenu.shown.y, window.innerHeight - 200),
-            zIndex: 300,
-          }}
-        >
+      {ctxMenu.shown && (
+        <CtxMenuPortal key={menuRelocate.seq} anchor={ctxMenu.shown} leaving={ctxMenu.leaving}>
           {menuItems}
-        </div>,
-        document.body
+        </CtxMenuPortal>
       )}
       {/* v2.3.104 R3：同气泡重定位的「退役快照」——旧坐标处的静态退场实例。
           className 命中 index.css 既有 `.ctx-menu.leaving`（popupLinearOut 0.15s forwards +
           pointer-events:none），零新增动画 CSS；内容与活菜单共用 menuItems 保证尺寸一致。
           卸载由 useMenuRelocate 的 scaledRetractMs(160) 定时器负责（不依赖 animationend）；
           zIndex 299 使其垫在活菜单（300）之下，旧隐新弹并行时新菜单始终在上。 */}
-      {menuRelocate.retiring && createPortal(
-        <div
-          className="ctx-menu leaving"
-          style={{
-            position: 'fixed',
-            left: Math.min(menuRelocate.retiring.x, window.innerWidth - 160),
-            top: Math.min(menuRelocate.retiring.y, window.innerHeight - 200),
-            zIndex: 299,
-            pointerEvents: 'none',
-          }}
-        >
+      {menuRelocate.retiring && (
+        <CtxMenuPortal anchor={menuRelocate.retiring} leaving zIndex={299}>
           {menuItems}
-        </div>,
-        document.body
+        </CtxMenuPortal>
       )}
     </div>
   );

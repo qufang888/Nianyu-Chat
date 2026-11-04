@@ -18,6 +18,7 @@ import SearchSuggest from './SearchSuggest';
 import { useRetract } from '../hooks/useRetract';
 import { useToast, ToastView } from './Toast';
 import { flashElement } from '../utils/flash';
+import { CtxMenuPortal } from './CtxMenuPortal';
 
 export const ChatList: React.FC<{
   selectedId: string | null;
@@ -32,8 +33,29 @@ export const ChatList: React.FC<{
   const { toast, showToast } = useToast();
   const [items, setItems] = useState<ChatListItem[]>([]);
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  // 菜单在视口坐标系的锚点（⋯ 按钮右下角 / 右键点），供 CtxMenuPortal 贴合并翻转防溢出
+  const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   // v2.3.90：关闭时先播缩入动画再卸载（此前为 setState(null) 直接消失，与弹出不对称）
   const listMenu = useRetract(menuOpen);
+  // v3.0.1-beta.8：菜单已 portal 到 document.body（脱离 .list-pane 的 overflow:hidden），
+  // 故原 list-scroll 的 onClick 关菜单逻辑对「点菜单以外区域」失效，这里补全局关闭（点菜单内不关 + Esc）
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const tgt = e.target as HTMLElement | null;
+      if (tgt && tgt.closest('.list-menu')) return;
+      setMenuOpen(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(null);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameVal, setRenameVal] = useState('');
   // 拖拽排序状态：dragKey=被拖动聊天，overKey=当前悬停目标（用于高亮指示）
@@ -215,6 +237,7 @@ export const ChatList: React.FC<{
         onContextMenu={(e) => {
           // 右键聊天卡片：弹出与「⋯」一致的操作菜单（含置顶）
           e.preventDefault();
+          setMenuAnchor({ x: e.clientX, y: e.clientY });
           setMenuOpen(menuOpen === it.chat_id ? null : it.chat_id);
         }}
         draggable={!renaming}
@@ -293,15 +316,19 @@ export const ChatList: React.FC<{
               title={t('chats.more')}
               onClick={(e) => {
                 e.stopPropagation();
+                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                setMenuAnchor({ x: r.right, y: r.top });
                 setMenuOpen(menuOpen === it.chat_id ? null : it.chat_id);
               }}
             >
               ⋯
             </button>
             {listMenu.shown === it.chat_id && (
-              <div
-                className={`list-menu${listMenu.leaving ? ' leaving' : ''}`}
-                onClick={(e) => e.stopPropagation()}
+              <CtxMenuPortal
+                anchor={menuAnchor ?? { x: 0, y: 0 }}
+                leaving={listMenu.leaving}
+                className="list-menu"
+                extraStyle={{ right: 'auto' }}
               >
                 <button onClick={() => handleTogglePin(it)}>
                   {pinnedHere ? t('chats.unpin') : t('chats.pin')}
@@ -318,7 +345,7 @@ export const ChatList: React.FC<{
                 ) : (
                   <button onClick={() => handleMoveInactive(it)}>{t('chats.moveInInactive')}</button>
                 )}
-              </div>
+              </CtxMenuPortal>
             )}
           </>
         )}
