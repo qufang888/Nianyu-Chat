@@ -575,6 +575,8 @@ export interface NianyuAPI {
   onDcState: (cb: (data: { runtime: CharacterRuntimeSettings; character: DesktopCharacter | null }) => void) => () => void;
   onDcOpenChat: (cb: (chat: { type: 'single' | 'group'; id: string; name?: string }) => void) => () => void;
   onDcOpenCollection: (cb: () => void) => () => void;
+  /** 主进程推送：全局光标相对角色窗左上角的 DIP 坐标（≈30Hz），渲染层据此让眼神全屏跟随。 */
+  onDcCursor: (cb: (data: { x: number; y: number }) => void) => () => void;
 
   // ===== 主进程错误推送 =====
   onAppError?: (cb: (data: { message: string; cause: string; solution: string; lang: string }) => void) => () => void;

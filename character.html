@@ -4,6 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>念语 · 桌面角色</title>
+    <style>
+      /* 透明窗首帧白闪修复：内联关键样式，确保 HTML 解析第一帧即透明，
+         不依赖 JS 注入的 character.css（避免 Electron 透明窗在 CSS 就绪前的白底闪烁）。 */
+      html, body, #root { margin: 0; padding: 0; background: transparent !important; }
+    </style>
   </head>
   <body>
     <div id="root"></div>

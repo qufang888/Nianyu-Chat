@@ -510,6 +510,8 @@ export interface NianyuAPI {
   onDcState: (cb: (data: any) => void) => () => void;
   onDcOpenChat: (cb: (chat: any) => void) => () => void;
   onDcOpenCollection: (cb: () => void) => () => void;
+  // 主进程推送：全局光标相对角色窗左上角的 DIP 坐标（≈30Hz），渲染层据此让眼神全屏跟随。
+  onDcCursor: (cb: (data: { x: number; y: number }) => void) => () => void;
   setActiveChat: (type: string, id: string) => void; // 通知主进程当前聊天（主动消息未读判断）
   // v2.3.88：上报主窗当前一级视图（'chats' | 'contacts' | ... | 'moments'）。
   // 供朋友圈自动配图 / 配视频的状态提醒判断「用户此刻是否正停在朋友圈页」——
@@ -1108,6 +1110,11 @@ const api: NianyuAPI = {
     const listener = () => cb();
     ipcRenderer.on('dc:open-collection', listener);
     return () => ipcRenderer.removeListener('dc:open-collection', listener);
+  },
+  onDcCursor: (cb) => {
+    const listener = (_e: any, d: { x: number; y: number }) => cb(d);
+    ipcRenderer.on('dc:cursor', listener);
+    return () => ipcRenderer.removeListener('dc:cursor', listener);
   },
   setActiveChat: (type, id) => ipcRenderer.send('app:active-chat', { type, id }),
     // v2.3.88：上报主窗当前一级视图（供朋友圈配图 / 配视频提醒判断用户是否正停在朋友圈页）

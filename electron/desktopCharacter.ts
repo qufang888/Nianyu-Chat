@@ -37,6 +37,8 @@ const SUBSTEP = 1 / 120;
 const TICK_MS = 16;
 /** 与悬浮球避让的间距 */
 const BALL_GAP = 16;
+/** 眼神跟随采样周期（毫秒，≈30Hz）：主进程轮询全局光标并推给角色窗，实现全屏跟随。 */
+const CURSOR_TICK_MS = 33;
 
 let dcWindow: BrowserWindow | null = null;
 let mainWindowRef: BrowserWindow | null = null;
@@ -60,6 +62,8 @@ let dragging = false;
 let inertia = false;
 let dragTimer: ReturnType<typeof setInterval> | null = null;
 let inertiaTimer: ReturnType<typeof setInterval> | null = null;
+/** 全局光标广播定时器（眼神全屏跟随用）。 */
+let cursorTimer: ReturnType<typeof setInterval> | null = null;
 /** 渲染层上报的可交互意愿（指针是否落在 drag/interactive 命中区） */
 let wantInteractive = false;
 
@@ -144,6 +148,26 @@ function stopInertia(): void {
     inertiaTimer = null;
   }
   inertia = false;
+}
+
+/** 全局光标广播：把屏幕光标换算成「相对角色窗左上角的 DIP 坐标」推给渲染层，
+ *  让眼神在整个屏幕范围跟随光标（窗口默认整体穿透，窗内 mousemove 收不到屏外光标）。
+ *  与拖拽弹簧共用 screen.getCursorScreenPoint()，其返回的 DIP 坐标已与窗口 getBounds 对齐。 */
+function startCursorBroadcast(): void {
+  if (cursorTimer) return;
+  cursorTimer = setInterval(() => {
+    if (!dcWindow || dcWindow.isDestroyed() || !dcWindow.isVisible()) return;
+    const b = dcWindow.getBounds();
+    const p = screen.getCursorScreenPoint();
+    dcWindow.webContents.send('dc:cursor', { x: p.x - b.x, y: p.y - b.y });
+  }, CURSOR_TICK_MS);
+}
+
+function stopCursorBroadcast(): void {
+  if (cursorTimer) {
+    clearInterval(cursorTimer);
+    cursorTimer = null;
+  }
 }
 
 function persistPos(): void {
@@ -278,6 +302,7 @@ export function createDesktopCharacter(): void {
     // 桌宠窗显示后立刻把悬浮球三窗提到同层 Z 序顶部（Windows 兜底）。
     reassertFloatingBallOnTop('dc-ready');
     sendState();
+    startCursorBroadcast();
   });
   dcWindow.on('closed', () => {
     dcWindow = null;
@@ -297,6 +322,7 @@ export function createDesktopCharacter(): void {
 export function destroyDesktopCharacter(): void {
   stopDragLoop();
   stopInertia();
+  stopCursorBroadcast();
   dragging = false;
   if (dcWindow && !dcWindow.isDestroyed()) dcWindow.destroy();
   dcWindow = null;

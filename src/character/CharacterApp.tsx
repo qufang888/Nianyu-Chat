@@ -286,6 +286,22 @@ export const CharacterApp: React.FC = () => {
     return () => window.removeEventListener('mousemove', onMove);
   }, [applyInteractive, runtime.passThroughLocked]);
 
+  // ===== 视线全屏跟随（主进程轮询全局光标，约 30Hz 推送；窗口整体穿透，窗内 mousemove 收不到屏外光标）=====
+  useEffect(() => {
+    const off = api.onDcCursor(({ x, y }) => {
+      const el = charRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      setEye({
+        x: Math.max(-1, Math.min(1, (x - cx) / 170)),
+        y: Math.max(-1, Math.min(1, (y - cy) / 170)),
+      });
+    });
+    return off;
+  }, []);
+
   // 菜单打开时保持可交互；关闭后若光标不在命中区则恢复穿透
   useEffect(() => {
     if (menuOpen) applyInteractive(true);
@@ -361,19 +377,6 @@ export const CharacterApp: React.FC = () => {
     }
   };
 
-  // ===== 视线跟随 =====
-  const onMouseMoveEye = (e: React.MouseEvent) => {
-    const el = charRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const cx = r.left + r.width / 2;
-    const cy = r.top + r.height / 2;
-    setEye({
-      x: Math.max(-1, Math.min(1, (e.clientX - cx) / 170)),
-      y: Math.max(-1, Math.min(1, (e.clientY - cy) / 170)),
-    });
-  };
-
   // ===== 右键菜单 =====
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -417,7 +420,7 @@ export const CharacterApp: React.FC = () => {
   }
 
   return (
-    <div className="dc-root" onMouseMove={onMouseMoveEye}>
+    <div className="dc-root">
       {bubble && (
         <div
           className="dc-bubble"
