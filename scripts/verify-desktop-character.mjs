@@ -10,10 +10,11 @@
 // 协议安全、渲染器分发、i18n 10 处、动画分组登记、合规措辞。
 //
 // ── 可证伪性（G 段自证）────────────────────────────────────────────────────
-//   · 去掉 `screen-saver` → A 段红
+//   · 把桌宠 level 抬回 `screen-saver`（与悬浮球同级）→ A 段红
 //   · 去掉路径穿越判断 → C 段红
 //   · 把 dynamic import 改成静态 → D 段红
 //   · 删掉 character 动画分组 → F 段红
+//   · 某处置顶说明写回「与悬浮球同级」→ G2 段红
 // ============================================================================
 import fs from 'node:fs';
 import path from 'node:path';
@@ -62,6 +63,10 @@ const preload = read('electron/preload.ts');
 const electronMain = read('electron/main.ts');
 const types = read('src/types.ts');
 const trans = read('src/i18n/translations.ts');
+const windowLevels = read('electron/windowLevels.ts');
+const floatingBall = read('electron/floatingBall.ts');
+const chatWin = read('src/components/ChatWindow.tsx');
+const miniChat = read('src/components/MiniChat.tsx');
 
 // ============================================================================
 section('A. 窗口与物理层（electron/desktopCharacter.ts）');
@@ -71,7 +76,16 @@ check('vite 多页入口登记 character.html', /character:\s*path\.resolve\(__d
 check('透明无边框无阴影且不占任务栏',
   /transparent:\s*true/.test(mainDc) && /frame:\s*false/.test(mainDc) &&
   /hasShadow:\s*false/.test(mainDc) && /skipTaskbar:\s*true/.test(mainDc));
-check("置顶层级与悬浮球同级（'screen-saver'）", /setAlwaysOnTop\([^)]*'screen-saver'\)/.test(mainDc));
+// v3.0.1-beta.9：不再要求「与悬浮球同级」，改为锁定稳定的三层契约。
+check('置顶层级走统一常量：悬浮球 > 桌宠 > 小窗（windowLevels.ts）',
+  /applyAlwaysOnTop\([^)]*DESKTOP_CHARACTER_LEVEL\)/.test(mainDc) &&
+  /FLOATING_BALL_LEVEL:\s*AlwaysOnTopLevel\s*=\s*'screen-saver'/.test(windowLevels) &&
+  /DESKTOP_CHARACTER_LEVEL:\s*AlwaysOnTopLevel\s*=\s*'pop-up-menu'/.test(windowLevels) &&
+  /MINI_WINDOW_LEVEL:\s*AlwaysOnTopLevel\s*=\s*'floating'/.test(windowLevels));
+check('悬浮球三窗与桌宠不再同 level（level 字面量不散落在业务文件）',
+  /applyAlwaysOnTop\([^)]*FLOATING_BALL_LEVEL\)/.test(floatingBall) &&
+  !/setAlwaysOnTop\([^)]*'screen-saver'\)/.test(floatingBall) &&
+  !/setAlwaysOnTop\([^)]*'screen-saver'\)/.test(mainDc));
 check('默认整体穿透且开启 forward', /setIgnoreMouseEvents\(true,\s*\{\s*forward:\s*true\s*\}\)/.test(mainDc));
 check('弹簧参数 K=200 / C=30 / 子步 1/120',
   /SPRING_K\s*=\s*200/.test(mainDc) && /SPRING_C\s*=\s*30/.test(mainDc) && /SUBSTEP\s*=\s*1\s*\/\s*120/.test(mainDc));
@@ -84,6 +98,98 @@ check('拖拽期间锁定可交互（dragging 分支先于 ignore 判定）',
 check('穿透锁定期间忽略一切可交互请求',
   /if\s*\(rt\.passThroughLocked\)\s*\{[\s\S]{0,120}setIgnoreMouseEvents\(true,\s*\{\s*forward:\s*true\s*\}\)/.test(mainDc));
 check('重新开启会 showInactive 隐藏中的窗口', /isVisible\(\)\)\s*w\.showInactive\(\)/.test(mainDc));
+
+// ============================================================================
+section('A2. Windows Z 序兜底（moveTop）+ QA Round 1 返工契约 + Round 2 N1 可见性守卫');
+// ============================================================================
+// Windows 上 Electron 的 level 不参与 z_order 计算（base_window.cc 里
+// z_order = top ? kFloatingWindow : kNormal），只靠 level 无法保证「悬浮球压住桌宠」。
+// 以下断言锁定构造性兜底：实现存在 + 每条关键路径都真的调用了重申。
+// v3.0.1-beta.9 QA Round 2 N1：MoveTop() 的 Windows flags 含 SWP_SHOWWINDOW，
+// 对隐藏窗口调用会把 WS_VISIBLE 置位、令窗口可见但 Chromium visible_ 不同步 →
+// 空白浮窗 + 收起功能失效。故必须「只对可见窗口 moveTop()」，并把启动期 create 重申
+// 延后到球窗 ready-to-show 之后、ball-show 重申移到 showInactive() 之后。
+const zPlatformDocOk = (src) =>
+  /macOS/.test(src) && /Windows/.test(src) &&
+  /不参与/.test(src) && /moveTop\(\)/.test(src) &&
+  !/由系统保证顺序/.test(src) && !/不再依赖创建顺序/.test(src);
+check('windowLevels.ts 如实标注 macOS/Windows 差异且要求 moveTop 兜底', zPlatformDocOk(windowLevels));
+check('reassertFloatingBallOnTop 对悬浮球三窗调用 moveTop()（构造性兜底）',
+  /export function reassertFloatingBallOnTop\(reason: string\)/.test(floatingBall) &&
+  /ballWindow\.moveTop\(\)/.test(floatingBall) &&
+  /panelWindow\.moveTop\(\)/.test(floatingBall) &&
+  /menuWindow\.moveTop\(\)/.test(floatingBall));
+const Z_BALL_REASONS = ['create', 'ball-aot-on', 'ball-show', 'poll'];
+const Z_DC_REASONS = ['dc-ready', 'dc-enable', 'dc-aot-on', 'dc-show-window'];
+for (const r of Z_BALL_REASONS) {
+  check(`Z 序兜底覆盖悬浮球关键路径「${r}」（确有调用，非仅函数定义）`,
+    floatingBall.includes(`reassertFloatingBallOnTop('${r}')`));
+}
+for (const r of Z_DC_REASONS) {
+  check(`Z 序兜底覆盖桌宠关键路径「${r}」（确有调用，非仅函数定义）`,
+    mainDc.includes(`reassertFloatingBallOnTop('${r}')`));
+}
+check('轮询里 1s 节流 + probe 条件（覆盖点击桌宠抬升焦点）',
+  /Z_ORDER_REASSERT_MS\s*=\s*1000/.test(floatingBall) &&
+  /Z_ORDER_REASSERT_MS\s*&&\s*ballPeerOnTopProbe\?\.\(\)/.test(floatingBall) &&
+  /reassertFloatingBallOnTop\('poll'\)/.test(floatingBall));
+check('main.ts 作为协调层注入 probe（避免 floatingBall ↔ desktopCharacter 成环）',
+  /setBallPeerOnTopProbe\(/.test(electronMain) && /getDesktopCharacterWindow\(\)/.test(electronMain) &&
+  !/from '\.\/desktopCharacter'/.test(floatingBall));
+check('桌宠分支有 streamControllers busy guard（不中断用户正在进行的 AI 回复）',
+  /if \(streamControllers\.has\(p\.chatId\)\)\s*\{[\s\S]{0,180}error: 'busy'/.test(electronMain));
+check('stream:done 载荷透传 silent，失败清理带 noMemory',
+  /broadcast\('stream:done', \{ streamId, message, silent \}\)/.test(electronMain) &&
+  /noMemory: true/.test(electronMain));
+check('主窗 / 小窗 onDone 均有 silent 与 noMemory 守卫',
+  /!data\.silent/.test(chatWin) && /!data\.noMemory/.test(chatWin) &&
+  /!data\.silent/.test(miniChat) && /!data\.noMemory/.test(miniChat));
+
+// ---------- v3.0.1-beta.9 QA Round 2 N1：moveTop() 可见性守卫 + 启动期时序 ----------
+// 花括号配对抽取函数体，避免命中文件里其它 isVisible()（单光标仲裁 / setHover 等）。
+function extractFnBody(src, header) {
+  const i = src.indexOf(header);
+  if (i < 0) return '';
+  const open = src.indexOf('{', i);
+  let depth = 0;
+  for (let k = open; k < src.length; k++) {
+    if (src[k] === '{') depth++;
+    else if (src[k] === '}') {
+      depth--;
+      if (depth === 0) return src.slice(open, k + 1);
+    }
+  }
+  return '';
+}
+const zVisGuardOk = (src) => {
+  const body = extractFnBody(src, 'export function reassertFloatingBallOnTop(');
+  return (
+    /!ballWindow\.isDestroyed\(\)\s*&&\s*ballWindow\.isVisible\(\)\)\s*ballWindow\.moveTop\(\)/.test(body) &&
+    /!panelWindow\.isDestroyed\(\)\s*&&\s*panelWindow\.isVisible\(\)\)\s*panelWindow\.moveTop\(\)/.test(body) &&
+    /!menuWindow\.isDestroyed\(\)\s*&&\s*menuWindow\.isVisible\(\)\)\s*menuWindow\.moveTop\(\)/.test(body)
+  );
+};
+check('N1：三窗 moveTop() 均带 isVisible() 可见性守卫（隐藏窗口一律跳过）', zVisGuardOk(floatingBall));
+// create 重申必须延后到球窗 ready-to-show 的 showInactive() 之后，且不得再位于 loadURL 之前的隐藏期。
+const zCreateDeferredOk = (src) => {
+  const c = src.indexOf("reassertFloatingBallOnTop('create')");
+  const r = src.indexOf("ballWindow.once('ready-to-show'");
+  const show = src.indexOf('ballWindow.showInactive()', r);
+  const load = src.indexOf('ballWindow.loadURL');
+  return r > 0 && load > 0 && c > r && show > r && c > show && c > load;
+};
+check("N1：create 重申延后到 ready-to-show 的 showInactive() 之后（不在 loadURL 之前的隐藏期）",
+  zCreateDeferredOk(floatingBall));
+// ball-show 从全屏 / 托盘恢复时，reassert 必须在 showInactive() 之后才不会空转。
+const zBallShowBody = extractFnBody(floatingBall, 'export function showFloatingBall()');
+check("N1：ball-show 重申位于 showFloatingBall() 内 showInactive() 之后（守卫下仍生效）",
+  /ballWindow\.showInactive\(\)/.test(zBallShowBody) &&
+  zBallShowBody.indexOf("reassertFloatingBallOnTop('ball-show')") > zBallShowBody.indexOf('ballWindow.showInactive()'));
+check('N1：poll 重申前置门控球窗可见（守卫后该路径不会空转）',
+  /if \(!ballWindow \|\| ballWindow\.isDestroyed\(\) \|\| !ballWindow\.isVisible\(\)\) return;/.test(floatingBall));
+check('N1：注释写明 SWP_SHOWWINDOW / WS_VISIBLE / 状态机失同步来由（防后续误删守卫）',
+  /SWP_SHOWWINDOW/.test(floatingBall) && /WS_VISIBLE/.test(floatingBall) &&
+  /状态机/.test(floatingBall) && /请勿删除/.test(floatingBall));
 
 // ============================================================================
 section('B. 命中路由与交互（src/character/CharacterApp.tsx）');
@@ -199,13 +305,74 @@ for (const lang of ['de', 'es', 'fr', 'ja', 'ko', 'pt', 'ru', 'zh-Hant']) {
 
 // 可证伪性：篡改源串后，对应断言必须变红
 {
-  const broken1 = mainDc.replaceAll("'screen-saver'", "'normal'");
-  check('（可证伪）去掉 screen-saver 后 A 段断言失效', !/setAlwaysOnTop\([^)]*'screen-saver'\)/.test(broken1));
+  const broken1 = windowLevels.replace(
+    "DESKTOP_CHARACTER_LEVEL: AlwaysOnTopLevel = 'pop-up-menu'",
+    "DESKTOP_CHARACTER_LEVEL: AlwaysOnTopLevel = 'screen-saver'"
+  );
+  check('（可证伪）把桌宠 level 抬回 screen-saver 后层级契约断言失效',
+    !/DESKTOP_CHARACTER_LEVEL:\s*AlwaysOnTopLevel\s*=\s*'pop-up-menu'/.test(broken1));
   const broken2 = assets.replace('!abs.startsWith(root + path.sep)', 'true');
   check('（可证伪）去掉穿越判断后 C 段断言失效', !/startsWith\(root \+ path\.sep\)/.test(broken2));
   const broken3 = threeView.replace("await import('three')", "import * as three from 'three'");
   check('（可证伪）改成静态 import 后 D 段断言失效', !/await import\('three'\)/.test(broken3));
+  // v3.0.1-beta.9 P0：变异后 A2 段「实现存在 / 路径覆盖」断言必须同时失效
+  const brokenZ1 = floatingBall.replaceAll('.moveTop()', '/* stripped */');
+  check('（可证伪）去掉 moveTop 后 Z 序兜底实现断言失效', !/ballWindow\.moveTop\(\)/.test(brokenZ1));
+  const brokenZ2 = floatingBall.replace("reassertFloatingBallOnTop('poll')", '/* stripped */');
+  check('（可证伪）删掉轮询路径调用后路径覆盖断言失效',
+    !brokenZ2.includes("reassertFloatingBallOnTop('poll')"));
+  const brokenZ3 = windowLevels.replace('不参与', '参与');
+  check('（可证伪）抹掉「level 不参与 z_order」后平台注释断言失效', !zPlatformDocOk(brokenZ3));
+  const brokenZ4 = windowLevels.replace(
+    '**不要把本文件的 level 当作跨平台的 Z 序保证。**',
+    '不同 level 由系统保证顺序，不再依赖创建顺序 / 焦点。'
+  );
+  check('（可证伪）写回「由系统保证顺序」旧表述后平台注释断言失效', !zPlatformDocOk(brokenZ4));
+  // v3.0.1-beta.9 QA Round 2 N1：删掉守卫 / 把 create 挪回隐藏期，A2 段断言必须同时失效
+  const brokenN1a = floatingBall.replace(' && ballWindow.isVisible()', '');
+  check('（可证伪）删掉球窗 isVisible() 守卫后 N1 守卫断言失效', !zVisGuardOk(brokenN1a));
+  const brokenN1b = floatingBall
+    .replace("    reassertFloatingBallOnTop('create');\n    broadcastUnread();", '    broadcastUnread();')
+    .replace('  startCursorPoll();', "  reassertFloatingBallOnTop('create');\n  startCursorPoll();");
+  check('（可证伪）把 create 重申挪回 loadURL 之前后 N1 时序断言失效', !zCreateDeferredOk(brokenN1b));
 }
+
+// ============================================================================
+section('G2. 置顶人物说明文案与三层层级契约一致（10 处 value，QA Round 1 尾审补漏）');
+// ============================================================================
+// Bug 1 把桌宠从「与悬浮球同层 screen-saver」降到 pop-up-menu，Windows 另加 moveTop 兜底。
+// 但 settings.dcAlwaysOnTopDesc 是「置顶人物」开关上用户可见的 Hint（Settings.tsx），
+// 曾仍写「与悬浮球同级」，与修复后的行为直接矛盾。此处锁死 10 处文案都表达「悬浮球之下」，
+// 且不含任何「同级 / same level」旧措辞，防止改 level 时漏改用户可见文案。
+const AOT_DESC_KEY = 'settings.dcAlwaysOnTopDesc';
+const aotDescValues = [];
+const transAotRe = new RegExp(`'${AOT_DESC_KEY.replace('.', '\\.')}':\\s*'([^']*)'`, 'g');
+let aotMatch;
+while ((aotMatch = transAotRe.exec(trans)) !== null) {
+  aotDescValues.push(['translations.ts', aotMatch[1]]);
+}
+for (const lang of ['de', 'es', 'fr', 'ja', 'ko', 'pt', 'ru', 'zh-Hant']) {
+  let value = '';
+  try {
+    value = JSON.parse(read(`src/i18n/locales/${lang}.json`))[AOT_DESC_KEY] || '';
+  } catch {
+    value = '';
+  }
+  aotDescValues.push([`locales/${lang}.json`, value]);
+}
+check('settings.dcAlwaysOnTopDesc 在 10 处齐全且非空',
+  aotDescValues.length === 10 && aotDescValues.every(([, v]) => typeof v === 'string' && v.trim().length > 0),
+  `实得 ${aotDescValues.length} 处`);
+// 10 种语言里「与悬浮球同级」的旧措辞（可证伪：任一处回归即红）
+const STALE_SAME_LEVEL = /同级|同級|same level|mismo nivel|même niveau|gleiche ebene|mesmo nível|тот же уровень|同じ階層|같은 층/i;
+check('10 处置顶说明均不再宣称「与悬浮球同级」（旧契约清零）',
+  aotDescValues.every(([, v]) => !STALE_SAME_LEVEL.test(v)),
+  aotDescValues.filter(([, v]) => STALE_SAME_LEVEL.test(v)).map(([f]) => f).join(','));
+check('zh 写明「悬浮球之下」、en 写明「below the floating ball」（与新层级一致）',
+  /悬浮球之下/.test(trans) && /below the floating ball/i.test(trans));
+check('（可证伪）某处置顶说明写回「同级」后旧契约断言失效',
+  !aotDescValues.map(([f, v], i) => (i === 0 ? '与悬浮球同级，始终浮在其它窗口之上。' : v))
+    .every((v) => !STALE_SAME_LEVEL.test(v)));
 
 // ============================================================================
 section('H. 合规：无第三方品牌资产与「复刻」措辞');
@@ -216,6 +383,7 @@ const NEW_FILES = [
   'src/character/PlaceholderCharacter.tsx', 'src/character/behaviors.ts',
   'src/components/CharacterCollection.tsx', 'src/components/CharacterStage.tsx',
   'src/styles/character.css', 'src/styles/character-panel.css',
+  'electron/windowLevels.ts',
 ];
 const DENY_BRAND = ['shimeji', 'shizuku', '伪春菜', '桌宠模拟器', '桌面宠物大师', 'desktop goose', 'goosegoose'];
 const DENY_WORD = ['模仿', '仿制', '复刻', '照搬', '复现某'];

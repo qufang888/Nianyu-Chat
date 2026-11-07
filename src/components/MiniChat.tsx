@@ -914,7 +914,8 @@ export const MiniChat: React.FC = () => {
         if (ttsEnabledRef.current && voiceCfg.auto && data.message.content) speak(data.message);
       }
       // 后台消息提醒：主窗/小窗均隐藏且软件在后台时，弹出 Steam 风格卡片
-      if (data.message?.sender_type === 'ai' && data.message.content) {
+      // v3.0.1-beta.9 P2：silent（桌宠语句）不弹渲染端通知卡片（与主进程守卫互补）。
+      if (data.message?.sender_type === 'ai' && data.message.content && !data.silent) {
         if (typeof api.notifyCard === 'function') {
           api.notifyCard({
             chatType: current.chat_type,
@@ -926,7 +927,8 @@ export const MiniChat: React.FC = () => {
         }
       }
       // 流式全部完成 → 自动提炼记忆（若开启）
-      if (remaining === 0) maybeAutoMemory();
+      // v3.0.1-beta.9 P4：失败清理广播带 noMemory（本轮无新消息），不触发自动记忆轮次计数。
+      if (remaining === 0 && !data.noMemory) maybeAutoMemory();
       // 注意：AI 主动续聊（maybeChain）由主进程 roundDone 广播触发，避免群聊串行时首个成员 done 即触发。
       // 一轮对话完成 → 按设置自动触发随机事件（仅发送消息的窗口触发）
       if (remaining === 0) {

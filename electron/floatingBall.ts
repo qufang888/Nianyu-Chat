@@ -1,6 +1,8 @@
 import { BrowserWindow, screen, ipcMain, app } from 'electron';
 import path from 'node:path';
 import { getDataManager } from './db';
+// v3.0.1-beta.9：置顶层级统一由 windowLevels 定义（悬浮球 > 桌宠 > 小窗）。
+import { applyAlwaysOnTop, FLOATING_BALL_LEVEL } from './windowLevels';
 // v2.3.126（QA P1/P2-A）：覆盖关系（covered）与面板可交互态的**单一真源**纯函数模块。
 // 谓词同源 + 只在变化沿推送 = 根治「hover 推 true / 轮询推 false」5Hz 永久振荡（光标闪烁）。
 import {
@@ -58,6 +60,12 @@ const COLLAPSE_DEBOUNCE_MS = 160; // hover 全部离开后的收起防抖（覆�
 const HIDE_ANIM_MS = 180; // panel:hide 后等渲染端 160ms linear 收回动画播完再 hide 窗口的余量
 const REFHIP_PHASE_MS = 200; // 拖动中换向第一阶段（收回动画）与第二阶段（换向重弹）的间隔
 const CURSOR_POLL_MS = 200; // 光标轮询间隔（动态光标残留兜底 + hover 电平兜底）
+/**
+ * Windows Z 序兜底的重申间隔（毫秒）：复用上面 200ms 光标轮询，约每 1s 执行一次。
+ * 取 1s 是「用户点击桌宠→焦点/Z 序抬升」的可接受修正延迟与调用成本折中；
+ * moveTop() 不抢焦点、不改变位置/尺寸、不触发内容重绘，1s 三次调用成本可忽略。
+ */
+const Z_ORDER_REASSERT_MS = 1000;
 const MENU_OFF_TICKS = 2; // 菜单自动关闭：光标连续在菜单/球/面板窗外的采样次数（200ms × 2 = 400ms）
 // 拖拽 mouseup 丢失自愈阈值：球被钳制贴屏边而光标继续移出球窗时，窗外 mouseup 穿透丢失，
 // 渲染端 onUp 永不触发，球将持续吸附光标。正常拖拽中窗口每 16ms 贴合光标（光标恒在球窗内），
@@ -201,7 +209,8 @@ function rectsOverlap(a: Electron.Rectangle, b: Electron.Rectangle): boolean {
 // 计算菜单窗放置位置：每个候选的 x/y 先 clamp 进工作区（反侧出界时拉回屏幕内边缘 = 球旁边，
 // 永不出屏、永不跑远），「不与面板窗矩形重叠」为优先项而非硬条件——存在不重叠候选则用之；
 // 全部候选均与面板重叠时取第一个候选（clamp 后紧靠球旁），接受与面板短暂共存（菜单窗创建序
-// 最后、同 'screen-saver' 层内后显示者居上，Z 序恒在面板之上，可见性有保障）——
+// 最后、由 reassertFloatingBallOnTop() 按球→面板→菜单依次 moveTop()；此时三窗均可见，
+// N1 的 isVisible() 守卫不会跳过，菜单 Z 序恒在面板之上，可见性有保障）——
 // 「菜单跑到很远」远比「与面板短暂共存」糟糕。
 // 候选序列：
 //   面板可见：水平反侧（面板右弹→菜单在球左 / 左弹→球右）→ 垂直反侧（面板下弹→球上 / 上弹→球下）→ 兜底
@@ -342,6 +351,14 @@ function calcPanelDir(): { h: 'right' | 'left'; v: 'down' | 'up' } {
 // 2) hover 电平兜底：轮询结果与渲染端 mouseenter/leave 上报融合（同一入口 setHoverBall/
 //    setHoverPanel），覆盖「跨窗间隙内 DOM 事件时序抖动」导致的漏报。
 let cursorPollTimer: ReturnType<typeof setInterval> | null = null;
+/** Windows Z 序兜底上次重申时间戳（毫秒），按 Z_ORDER_REASSERT_MS 节流。 */
+let lastZOrderReassertAt = 0;
+/**
+ * 「桌宠窗存在且置顶」探测器，由 main.ts 注入。
+ * 选注入而非 import desktopCharacter：后者已 import 本模块的 getBallWindowBounds，
+ * 若本模块反向 import 会形成循环依赖；main.ts 同时持有两侧引用，作为协调层最稳。
+ */
+let ballPeerOnTopProbe: (() => boolean) | null = null;
 // v2.3.117：单光标所有权（'ball' | 'panel' | 'menu' | null）。取代旧的 lastCursorInside，
 // 只有 owner 窗显示动态光标，其余窗隐藏——保证整机只有一个光标。
 let lastCursorOwner: 'ball' | 'panel' | 'menu' | 'mini' | 'main' | null = null;
@@ -451,10 +468,24 @@ function pushPanelInteractive(): void {
 function pointInRect(px: number, py: number, b: Electron.Rectangle): boolean {
   return px >= b.x && px < b.x + b.width && py >= b.y && py < b.y + b.height;
 }
+/** 注入「桌宠窗存在且置顶」探测器（由 main.ts 启动时调用，避免循环依赖）。 */
+export function setBallPeerOnTopProbe(fn: (() => boolean) | null): void {
+  ballPeerOnTopProbe = fn;
+}
+
 function startCursorPoll(): void {
   if (cursorPollTimer) clearInterval(cursorPollTimer);
   cursorPollTimer = setInterval(() => {
     if (!ballWindow || ballWindow.isDestroyed() || !ballWindow.isVisible()) return;
+    // v3.0.1-beta.9 P0（Windows）：level 不参与 z_order，点击桌宠会把它的焦点 / Z 序抬上来，
+    // 这类动态情形无法枚举 → 在既有 200ms 光标轮询里以 1s 节流低频重申悬浮球三窗 Z 序。
+    // 仅在「节流到期 且 桌宠窗存在且置顶」时执行（&& 短路，probe 每 1s 才被调一次）。
+    // 本分支完全独立于下方 try 块的单光标仲裁逻辑，不改变 owner / covered / hover 判定。
+    const now = Date.now();
+    if (now - lastZOrderReassertAt >= Z_ORDER_REASSERT_MS && ballPeerOnTopProbe?.()) {
+      lastZOrderReassertAt = now;
+      reassertFloatingBallOnTop('poll');
+    }
     try {
       const p = screen.getCursorScreenPoint();
       // ⚠️ 仅用于 hover 电平 / 收起防抖；owner 与 covered 一律以 computeCoveredStateNow() 的
@@ -584,8 +615,9 @@ function startCursorPoll(): void {
 
 /**
  * V3：对外暴露悬浮球窗矩形，供「桌面角色」做**非重叠**避让。
- * 只读快照；窗口不存在/已销毁返回 null。桌面角色与悬浮球同为 'screen-saver' 层，
- * 同层内若不避让会互相遮挡，故桌面角色在初始定位与拖拽落点都调用本函数做位移避让。
+ * 只读快照；窗口不存在/已销毁返回 null。桌面角色与悬浮球都置顶显示（macOS 按 level 分层，
+ * Windows 同属一个 topmost band、靠 moveTop() 显式排序），不避让会互相遮挡，故桌面角色在
+ * 初始定位与拖拽落点都调用本函数做位移避让。
  */
 export function getBallWindowBounds(): Electron.Rectangle | null {
   if (ballWindow && !ballWindow.isDestroyed()) {
@@ -833,9 +865,10 @@ export function createFloatingBall(): void {
   });
   // 透明窗默认整体穿透鼠标，仅不透明区域（球/角标）由渲染端动态切回可交互
   ballWindow.setIgnoreMouseEvents(true, { forward: true });
-  // 置顶分层（v2.3.37）：悬浮球用 'screen-saver'（最高层），恒高于小窗的 'floating' 层——
-  // 期望顺序：悬浮球 > 小窗 > 其他软件窗口（构造参数不支持 level，创建后显式设置）
-  ballWindow.setAlwaysOnTop(aot, 'screen-saver');
+  // 置顶分层（v3.0.1-beta.9，见 windowLevels.ts）：悬浮球取 'screen-saver'。
+  // macOS 按 level 排序；Windows 上 level 不参与 z_order，最终顺序由
+  // reassertFloatingBallOnTop() 的 moveTop() 显式兜底（构造参数不支持 level，创建后显式设置）。
+  applyAlwaysOnTop(ballWindow, aot, FLOATING_BALL_LEVEL);
 
   // ----- 面板窗：320x460，独立定位/独立动画，不抢焦点 -----
   panelWindow = new BrowserWindow({
@@ -856,11 +889,12 @@ export function createFloatingBall(): void {
     webPreferences: webPrefs,
   });
   panelWindow.setIgnoreMouseEvents(true, { forward: true });
-  panelWindow.setAlwaysOnTop(aot, 'screen-saver');
+  applyAlwaysOnTop(panelWindow, aot, FLOATING_BALL_LEVEL);
 
   // ----- 菜单窗：180x140，球右键应用菜单（退出/本次关闭/置顶），独立于面板窗 -----
-  // focusable:false 不抢焦点；创建顺序在球/面板之后 → 同 'screen-saver' 层内后显示者居上，
-  // showInactive 时菜单恒盖在面板之上。初始整体穿透，菜单 DOM 悬停由渲染端经 menu:ignore 切回。
+  // focusable:false 不抢焦点；创建顺序在球/面板之后，且 reassertFloatingBallOnTop() 按
+  // 球→面板→菜单依次 moveTop() → 菜单 Z 序恒在面板之上（Windows 上不依赖 level 排序）。
+  // 初始整体穿透，菜单 DOM 悬停由渲染端经 menu:ignore 切回。
   menuWindow = new BrowserWindow({
     width: MENU_W,
     height: MENU_H,
@@ -879,9 +913,13 @@ export function createFloatingBall(): void {
     webPreferences: webPrefs,
   });
   menuWindow.setIgnoreMouseEvents(true, { forward: true });
-  menuWindow.setAlwaysOnTop(aot, 'screen-saver');
+  applyAlwaysOnTop(menuWindow, aot, FLOATING_BALL_LEVEL);
 
   startCursorPoll(); // 光标轮询（动态光标残留兜底 + hover 电平兜底）
+  // v3.0.1-beta.9 QA Round 2 N1：不再在 loadURL 之前对三个 show:false 的隐藏窗做启动期
+  // Z 序重申 —— moveTop() 的 SWP_SHOWWINDOW 会把它们显示成空白浮窗。
+  // 加 isVisible() 守卫后该次调用对隐藏窗本来就是空操作，故整体延后到球窗 ready-to-show
+  // （showInactive 之后）执行，见下方 once 回调；启动竞态由该回调 + 1s poll 覆盖。
 
   // 三窗加载同一 floating-ball.html，query 区分 role（ball / panel / menu）
   if (dev) {
@@ -896,6 +934,11 @@ export function createFloatingBall(): void {
 
   ballWindow.once('ready-to-show', () => {
     if (ballWindow && !ballWindow.isDestroyed()) ballWindow.showInactive(); // 不抢焦点
+    // N1：启动期 Z 序重申延后到此处（球窗 showInactive 后 isVisible()===true 才生效）。
+    // 此刻面板 / 菜单仍隐藏 → 守卫跳过，不会被 SWP_SHOWWINDOW 误显示。
+    // 覆盖「桌宠后创建压住球」：本回调在球窗首次可见时立即重申一次，随后每 1s 由 poll
+    // 持续兜底；桌宠侧 dc-ready / dc-enable / dc-aot-on / dc-show-window 亦会重申。
+    reassertFloatingBallOnTop('create');
     broadcastUnread(); // 首屏推送当前未读
   });
   // 面板窗保持隐藏，首次 hover 展开时才 showInactive
@@ -968,11 +1011,60 @@ export function setBallSessionClosed(v: boolean): void {
 }
 
 // 切换悬浮球置顶并持久化（三窗同步）
+// v3.0.1-beta.9：统一走 applyAlwaysOnTop，保证置顶开关开/关后 level 仍是 'screen-saver'。
 export function setBallAlwaysOnTop(v: boolean): void {
-  if (ballWindow && !ballWindow.isDestroyed()) ballWindow.setAlwaysOnTop(v, 'screen-saver'); // 最高层，恒高于小窗 'floating'（v2.3.37）
-  if (panelWindow && !panelWindow.isDestroyed()) panelWindow.setAlwaysOnTop(v, 'screen-saver');
-  if (menuWindow && !menuWindow.isDestroyed()) menuWindow.setAlwaysOnTop(v, 'screen-saver');
+  if (ballWindow && !ballWindow.isDestroyed()) applyAlwaysOnTop(ballWindow, v, FLOATING_BALL_LEVEL);
+  if (panelWindow && !panelWindow.isDestroyed()) applyAlwaysOnTop(panelWindow, v, FLOATING_BALL_LEVEL);
+  if (menuWindow && !menuWindow.isDestroyed()) applyAlwaysOnTop(menuWindow, v, FLOATING_BALL_LEVEL);
   persistBallPos(v);
+  // 置顶开关「开」后立刻重申 Z 序（Windows 上 level 变化本身不重排同 band 窗口）。
+  if (v) reassertFloatingBallOnTop('ball-aot-on');
+}
+
+/**
+ * 把悬浮球三窗提到「同层 Z 序顶部」—— Windows 上的**构造性兜底**。
+ *
+ * electron 32.x Windows 实现里 setAlwaysOnTop 的 level 不参与 z_order 计算，
+ * 所有 topmost 窗口同属 kFloatingWindow band，Z 序由创建顺序 / 焦点决定；
+ * 故光靠 windowLevels.ts 的 level 无法保证「悬浮球压住桌宠」。
+ * moveTop() 不激活窗口、不改变位置 / 尺寸，只调整同层 Z 序，不触发内容重绘；
+ * 每次仅 3 次轻量调用，配合调用点的低频节流，成本可忽略。
+ *
+ * ⚠️ v3.0.1-beta.9 QA Round 2 N1：**必须只对可见窗口调用 moveTop()**。
+ * electron 32.3.3 Windows 的 BaseWindow::MoveTop() → NativeWindowViews::MoveTop() 走
+ *   ::SetWindowPos(hwnd, HWND_TOP, ..., SWP_NOACTIVATE|SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
+ * 其中 SWP_SHOWWINDOW 的语义是 "Displays the window"：会把隐藏窗口 HWND 的 WS_VISIBLE
+ * 置位、令窗口变为可见，但 Chromium Widget 内部维护的 visible_ 标志并不同步 →
+ * panelVisible / menuVisible 状态机与 HWND 实际可见性失同步：
+ *   · 启动时凭空多出空白 / 透明浮窗（面板 320×460、菜单 180×140，二者以 show:false 创建）；
+ *   · doCollapse() / menu:hide-done 用 .hide() 收起后，1s 一次的光标轮询会把它们重新显示，收起功能失效；
+ *   · showFloatingBall() / doCollapse() 的可见性判断错乱。
+ * SWP_SHOWWINDOW 是 Electron MoveTop() 的固有 flags，调用方无法用参数关闭；
+ * 因此「跳过隐藏窗口」是唯一正解。展开中的面板 / 菜单 isVisible()===true，照常重申 Z 序，
+ * 悬浮球 > 桌宠 的 P0 兜底不受影响（球窗可见时由 poll / ball-show / dc-* 各路径持续重申）。
+ * 后续维护者请勿删除下面三个 isVisible() 守卫。
+ *
+ * @param reason 触发路径标签，仅用于开发者模式下排查；同时作为静态回归闸门
+ *               （verify-desktop-character.mjs）核对「所有关键路径都调用了重申」的锚点。
+ */
+export function reassertFloatingBallOnTop(reason: string): void {
+  if (dm.getSettings().floatingBall?.alwaysOnTop === false) return;
+  if (process.env.NIANYU_DEV === '1') {
+    console.debug('[nianyu] z-order reassert:', reason);
+  }
+  // N1：moveTop() 带 SWP_SHOWWINDOW，隐藏窗口一律跳过（详见上方注释）。
+  if (ballWindow && !ballWindow.isDestroyed() && ballWindow.isVisible()) ballWindow.moveTop();
+  if (panelWindow && !panelWindow.isDestroyed() && panelWindow.isVisible()) panelWindow.moveTop();
+  if (menuWindow && !menuWindow.isDestroyed() && menuWindow.isVisible()) menuWindow.moveTop();
+}
+
+/** 悬浮球被重新显示（全屏退出 / 托盘唤回）时重申层级，避免系统 Z 序重排后掉层。 */
+function reassertFloatingBallLevels(): void {
+  const s = dm.getSettings();
+  const aot = s.floatingBall?.alwaysOnTop !== false;
+  if (ballWindow && !ballWindow.isDestroyed()) applyAlwaysOnTop(ballWindow, aot, FLOATING_BALL_LEVEL);
+  if (panelWindow && !panelWindow.isDestroyed()) applyAlwaysOnTop(panelWindow, aot, FLOATING_BALL_LEVEL);
+  if (menuWindow && !menuWindow.isDestroyed()) applyAlwaysOnTop(menuWindow, aot, FLOATING_BALL_LEVEL);
 }
 
 // 主窗口全屏时隐藏、退出全屏时恢复（由 main.ts 监听主窗口 fullscreen 事件调用；三窗联动）
@@ -989,6 +1081,8 @@ export function showFloatingBall(): void {
   const s = dm.getSettings();
   if (s.floatingBall?.enabled === false) return;
   if (sessionClosed) return;
+  // v3.0.1-beta.9：从全屏 / 托盘恢复显示后重申三窗层级 + 显式 moveTop 兜底（Windows）。
+  reassertFloatingBallLevels();
   if (ballWindow && !ballWindow.isDestroyed()) ballWindow.showInactive();
   if (panelVisible && panelWindow && !panelWindow.isDestroyed()) {
     // v2.3.x：与主窗全屏退出恢复同理，面板重新显示前先复位为整体穿透（见 expandPanel 注释）
@@ -1000,6 +1094,10 @@ export function showFloatingBall(): void {
     panelWindow.webContents.send('panel:show', { h: panelDir, v: panelVDir });
   }
   // 菜单不随恢复重新弹出（menuVisible 已在 hideFloatingBall 复位为 false）
+  // N1：ball-show 重申必须在 showInactive() 之后 —— 加 isVisible() 守卫后，若放在显示之前，
+  // 三窗此时全为隐藏态，该次调用会整体空转（恢复显示后失去显式兜底）。移到此处后，
+  // 球窗与展开中的面板 isVisible()===true，moveTop() 生效；菜单仍隐藏 → 守卫跳过，不误显示。
+  reassertFloatingBallOnTop('ball-show');
 }
 
 // ===== 悬浮球相关 IPC =====

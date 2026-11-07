@@ -136,7 +136,9 @@ export interface NianyuAPI {
   proactive: (p: {
     chatType: string;
     chatId: string;
-  }) => Promise<{ ok: boolean; roleId?: string; roleName?: string; error?: string }>;
+    /** 'character'：桌宠气泡语句（静默降级 / 不打扰 / 主进程额外节流），v3.0.1-beta.9。 */
+    source?: 'character';
+  }) => Promise<{ ok: boolean; roleId?: string; roleName?: string; content?: string; error?: string }>;
   // ===== 随机事件 =====
   randomEvent: (p: { chatType: string; chatId: string; theme?: string; window?: string }) => Promise<
     | { busy: true; window?: string }

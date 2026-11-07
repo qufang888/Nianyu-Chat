@@ -1122,7 +1122,7 @@
  "settings.dcEnable": "Activer le personnage de bureau",
  "settings.dcDesc": "Affiche sur le bureau un personnage déplaçable, qui respire et parle. Ajoutez ou importez ensuite des personnages dans « Compagnon ».",
  "settings.dcAlwaysOnTop": "Toujours au premier plan",
- "settings.dcAlwaysOnTopDesc": "Même niveau que la boule flottante, toujours au-dessus des autres fenêtres. Désactivez pour revenir à une fenêtre normale.",
+ "settings.dcAlwaysOnTopDesc": "Toujours au-dessus des autres fenêtres, mais affiché sous la boule flottante. Désactivez pour revenir à une fenêtre normale.",
  "settings.dcPassThrough": "Verrouiller le clic traversant",
  "settings.dcPassThroughDesc": "Verrouillé, le personnage ignore totalement la souris et ne masque jamais la fenêtre du dessous. Déverrouillez ici ou via son menu contextuel.",
  "settings.dcManage": "Gérer les personnages",

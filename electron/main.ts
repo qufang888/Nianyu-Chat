@@ -49,6 +49,8 @@ import {
   ModelApiError,
 } from './ai';
 import { createBackup, restoreBackup, peekBackupVersion } from './backup';
+// v3.0.1-beta.9：所有置顶窗口的 level 统一由 windowLevels 定义（悬浮球 > 桌宠 > 小窗）。
+import { applyAlwaysOnTop, MINI_WINDOW_LEVEL } from './windowLevels';
 // v2.3.97：自绘弹窗桥。接管原先 2 处 dialog.showMessageBox + 9 处
 // dialog.showOpenDialog/showSaveDialog —— 全部改为「推给渲染层弹主题内弹窗 + 等回传」。
 import {
@@ -124,6 +126,7 @@ import {
   sendBallVideoProgress,
   setBallSessionClosed,
   isViewingChat,
+  setBallPeerOnTopProbe,
 } from './floatingBall';
 import {
   createDesktopCharacter,
@@ -132,6 +135,7 @@ import {
   registerDesktopCharacterIPC,
   setCharacterMainWindow,
   setCharacterSettingsSink,
+  getDesktopCharacterWindow,
 } from './desktopCharacter';
 // V3 桌面角色素材层：角色包导入/解压、nychar:// 私有协议、运行库目录
 import { registerCharacterAssetIPC, registerCharacterProtocol } from './characterAssets';
@@ -795,9 +799,9 @@ function createMiniWindow(): void {
   } else {
     miniWindow.loadFile(path.join(__dirname, '../../dist/index.html'), { hash: 'mini' });
   }
-  // 置顶分层（v2.3.37）：小窗用 'floating' 层，低于悬浮球的 'screen-saver' 层——
-  // 悬浮球恒在最顶，小窗在悬浮球之下、仍高于其他软件窗口（构造参数不支持 level，创建后显式设置）
-  miniWindow.setAlwaysOnTop(s.miniWindow?.alwaysOnTop !== false, 'floating');
+  // 置顶分层（v3.0.1-beta.9，见 windowLevels.ts）：小窗取 'floating'，
+  // 低于桌宠 'pop-up-menu' 与悬浮球 'screen-saver'，仍高于其他普通软件窗口。
+  applyAlwaysOnTop(miniWindow, s.miniWindow?.alwaysOnTop !== false, MINI_WINDOW_LEVEL);
   // v2.3.83：把小窗引用注入悬浮球模块，供 isViewingChat 判断「小窗是否真的可见」。
   // 未注入时该判定会偏保守（认为小窗不可见 → 退化为弹卡片），属安全方向：宁可多提醒、不可静默。
   setBallMiniWindow(miniWindow);
@@ -1416,7 +1420,7 @@ function applyMiniSettings(): void {
   const s = dm.getSettings();
   const mw = s.miniWindow;
   if (mw?.alwaysOnTop !== undefined && miniWindow && !miniWindow.isDestroyed()) {
-    miniWindow.setAlwaysOnTop(!!mw.alwaysOnTop, 'floating');
+    applyAlwaysOnTop(miniWindow, !!mw.alwaysOnTop, MINI_WINDOW_LEVEL);
   }
   if (!mw?.enabled || !mw.hotkey) return;
   try {
@@ -4208,14 +4212,21 @@ async function handleProactive(p: {
   chatType: string;
   chatId: string;
   extraInstruction?: string; // NHPP 定向回访：附加上下文指令（普通主动消息不传，行为不变）
-}): Promise<{ ok: boolean; roleId?: string; roleName?: string; error?: string }> {
+  /** 'character'：桌宠气泡语句来源，须静默降级 / 不打扰（v3.0.1-beta.9）。 */
+  source?: 'character';
+}): Promise<{ ok: boolean; roleId?: string; roleName?: string; content?: string; error?: string }> {
+  // 'character' 分支的全部行为差异集中在此开关，普通主动消息路径逐字保持不变。
+  const isCharacter = p.source === 'character';
   const settings = dm.getSettings();
-  // 全局主开关 + 按聊天单独开关：任一关闭则不主动发消息
-  const globalOn = settings.idleEnabled !== false;
-  const perChat = (settings.chatIdleEnabled || {})[`${p.chatType}:${p.chatId}`];
-  const chatOn = perChat === undefined ? true : !!perChat;
-  if (!globalOn || !chatOn) {
-    return { ok: false, error: '主动消息已关闭' };
+  // 桌宠语句是「绑定对话」这一显式授权下的独立功能，不受「空闲主动消息」总开关 /
+  // 单聊开关影响；其余来源（NHPP 引擎 / 经典引擎 / 失败重试）保持既有门控不变。
+  if (!isCharacter) {
+    const globalOn = settings.idleEnabled !== false;
+    const perChat = (settings.chatIdleEnabled || {})[`${p.chatType}:${p.chatId}`];
+    const chatOn = perChat === undefined ? true : !!perChat;
+    if (!globalOn || !chatOn) {
+      return { ok: false, error: '主动消息已关闭' };
+    }
   }
   const memberRoles = resolveMembers(p.chatType, p.chatId, '');
   if (memberRoles.length === 0) {
@@ -4244,11 +4255,19 @@ async function handleProactive(p: {
   const worldBook = obs?.freezeMemory ? '' : resolveWorldBook(p.chatType, p.chatId, settings);
   // 主动发言指令：贴合刚才的对话氛围与「当前心情」，自然开口；不等待用户提问。
   // NHPP 定向回访时 extraInstruction 提供具体回访语境（覆盖默认泛化指令）。
+  // 桌宠气泡只放得下一句话：用「短句模式」指令约束模型输出形态。
+  // 注意这是**喂给模型的生成指令**，不是给用户看的文案，绝不会被当作兜底显示。
+  const CHARACTER_LINE_INSTRUCTION =
+    '（桌宠气泡·短句模式）请完全用你所扮演角色的口吻，随口说一句此刻想说的话：' +
+    '可以是有趣的碎碎念、撒娇、吐槽、一个小发现，或一句轻轻的问候。只用一句话，' +
+    '30 字以内，自然口语，不要加引号、括号说明、动作描写、表情符号或任何前缀。';
   const instruction =
     p.extraInstruction ||
-    '（主动发起）你注意到用户暂时没有说话。请结合刚才的对话氛围与你当前的【情绪】，' +
-    '主动向用户发一条自然、贴合情境的消息：可以延续刚才的话题，也可以自然地开启一个新话题。' +
-    '直接说话，不要加任何前缀、括号说明或「用户不在」之类的元描述。';
+    (isCharacter
+      ? CHARACTER_LINE_INSTRUCTION
+      : '（主动发起）你注意到用户暂时没有说话。请结合刚才的对话氛围与你当前的【情绪】，' +
+        '主动向用户发一条自然、贴合情境的消息：可以延续刚才的话题，也可以自然地开启一个新话题。' +
+        '直接说话，不要加任何前缀、括号说明或「用户不在」之类的元描述。');
 
   const isPrivate = !isGroup && p.chatId.startsWith('obs:');
   const messages = isGroup
@@ -4280,6 +4299,12 @@ async function handleProactive(p: {
       );
 
   const cfg = resolveChatModel(p.chatType, p.chatId, role, settings) as ModelConfig;
+  // v3.0.1-beta.9 P1：桌宠来源**不加**独立 streamId 前缀，源码级论证：
+  // ① dispatchProactive 已加 streamControllers busy guard，消除并发（状态竞争的前提不存在）；
+  // ② ChatWindow / MiniChat 的 belongs() 用 lastIndexOf(':') 取 sid，加前缀会得到
+  //    "character:<chatId>" ≠ chatId → 消息不进列表，直接违反「语句在对话中可见」；
+  // ③ sendStreamDone 用 indexOf(':') 取 chatId，加前缀会得到 "character" → 未读 / 通知解析错。
+  // 故维持既有 `${chatId}:${roleId}`，靠 onStart 的 doneStreamIds.delete() 支持跨轮复用。
   const streamId = `${p.chatId}:${role.id}`;
   sendStreamStart(streamId, role.id, role.name);
   const controller = new AbortController();
@@ -4288,6 +4313,12 @@ async function handleProactive(p: {
     await enqueueAndWait(cfg.id, cfg.qps, '主动消息');
     const res = await queryAI(cfg, messages, 1024);
     if (res.error) {
+      if (isCharacter) {
+        // 桌宠来源静默降级：不弹模型错误气泡、不写失败消息、不广播 failed 横幅，
+        // 只发静默清理事件撤掉「正在输入」占位（silent 挡卡片、noMemory 挡自动记忆轮次）。
+        sendCharacterSilentDone(streamId);
+        return { ok: false, roleId: role.id, roleName: role.name };
+      }
       // 模型回复错误：不进聊天框、不进记忆；用气泡通知用户（主动消息无需重发面板，仅移除占位）
       notifyModelError(res.error, role.name);
       // 标记 proactive：前端据此把失败当作「主动消息生成失败」，重试按钮重新触发一条主动消息，
@@ -4296,7 +4327,10 @@ async function handleProactive(p: {
       return { ok: false, roleId: role.id, roleName: role.name, error: res.error.message };
     }
     dm.recordModelUsage(cfg.id, cfg.name, res.promptTokens, res.completionTokens);
-    if (controller.signal.aborted) return { ok: false, roleId: role.id, roleName: role.name };
+    if (controller.signal.aborted) {
+      if (isCharacter) sendCharacterSilentDone(streamId);
+      return { ok: false, roleId: role.id, roleName: role.name };
+    }
     const aiMsg = dm.addMessage({
       chat_type: p.chatType as any,
       chat_id: p.chatId,
@@ -4309,15 +4343,27 @@ async function handleProactive(p: {
       timestamp: new Date().toISOString(),
       from_proactive: true,
     } as any);
-    sendStreamDone(streamId, aiMsg);
-    // 主动消息冷却：记录该聊天等待用户回复（idleCooldownUntilReply 开启时阻止下一条主动消息）
-    // v2.3.93：走 tracker.mark，顺带广播 proactive:awaiting → 各窗口立即显示「正在等你回复」提示
-    awaitingReplyTracker.mark(`${p.chatType}:${p.chatId}`);
-    void requestMoodJudge(p.chatType, p.chatId, role.id);
-    void requestRelationshipAndMoments(p.chatType, p.chatId, role.id);
-    void triggerSceneImage(p.chatType, p.chatId, role.id);
-    return { ok: true, roleId: role.id, roleName: role.name };
+    // silent=true：桌宠语句不弹后台通知卡片（不打扰）；消息本身仍经 stream:done 广播，
+    // 主窗 / 小窗会把它加入绑定对话的消息列表，满足「语句在对话中可以看到」。
+    sendStreamDone(streamId, aiMsg, isCharacter);
+    // 桌宠语句只是角色随口一句，不参与「等你回复」冷却、心情/关系判定与场景配图：
+    // 避免额外模型 QPS、避免污染 NHPP 调度状态与剧情节点。
+    if (!isCharacter) {
+      // 主动消息冷却：记录该聊天等待用户回复（idleCooldownUntilReply 开启时阻止下一条主动消息）
+      // v2.3.93：走 tracker.mark，顺带广播 proactive:awaiting → 各窗口立即显示「正在等你回复」提示
+      awaitingReplyTracker.mark(`${p.chatType}:${p.chatId}`);
+      void requestMoodJudge(p.chatType, p.chatId, role.id);
+      void requestRelationshipAndMoments(p.chatType, p.chatId, role.id);
+      void triggerSceneImage(p.chatType, p.chatId, role.id);
+    }
+    return { ok: true, roleId: role.id, roleName: role.name, content: res.content };
   } catch (e: any) {
+    if (isCharacter) {
+      // 离线 / 模型未配置 / 调用异常：一律静默降级。不写「⚠️」错误消息、
+      // 不报错弹窗，更不使用固定文案兜底冒充模型输出；仅发静默清理事件撤占位。
+      sendCharacterSilentDone(streamId);
+      return { ok: false, roleId: role.id, roleName: role.name };
+    }
     const errMsg = dm.addMessage({
       chat_type: p.chatType as any,
       chat_id: p.chatId,
@@ -4332,6 +4378,47 @@ async function handleProactive(p: {
     return { ok: false, roleId: role.id, roleName: role.name, error: e?.message || String(e) };
   } finally {
     unregisterStream(p.chatId, controller);
+  }
+}
+
+// ===== 桌宠互动语句：主进程侧节流 / 并发锁（v3.0.1-beta.9）=====
+// 渲染层已做最小间隔 + 并发锁；这里是第二道防线，防止桌宠窗重建、多窗口并存或
+// 异常重入时绕过渲染层节流，造成未经用户操作的高频模型调用（QPS 风暴）。
+/** 桌宠语句两次生成之间的主进程最小间隔（毫秒）。 */
+const CHARACTER_LINE_MIN_GAP_MS = 30_000;
+let characterLineLastAt = 0;
+let characterLineInFlight = false;
+
+/**
+ * chats:proactive 统一入口：按 source 分流。
+ * 非桌宠来源（NHPP / 经典引擎 / 失败重试）直连 handleProactive，行为逐字不变；
+ * 桌宠来源额外套一层最小间隔 + 并发锁，且锁在 finally 中必定释放。
+ */
+async function dispatchProactive(p: {
+  chatType: string;
+  chatId: string;
+  extraInstruction?: string;
+  source?: 'character';
+}): Promise<{ ok: boolean; roleId?: string; roleName?: string; content?: string; error?: string }> {
+  if (p.source !== 'character') return handleProactive(p);
+  // v3.0.1-beta.9 P1：与经典 idle（:7306 `if (streamControllers.has(chatId)) continue;`）/
+  // NHPP（:7921 `isBusy: (chatId) => streamControllers.has(chatId)`）同口径让路。
+  // 桌宠 15s 试探频率远高于经典 idle / NHPP，若不检查，registerStream 的 prev.abort()
+  // 会中断用户正在进行的 AI 回复；返回 ok:false 走既有静默降级（不弹提示、不写消息、无兜底文案）。
+  // 放在节流之前：busy 不应占用 30s 最小间隔窗口，下一轮可直接重试。
+  if (streamControllers.has(p.chatId)) {
+    return { ok: false, error: 'busy' };
+  }
+  const now = Date.now();
+  if (characterLineInFlight || now - characterLineLastAt < CHARACTER_LINE_MIN_GAP_MS) {
+    return { ok: false, error: 'throttled' };
+  }
+  characterLineInFlight = true;
+  characterLineLastAt = now;
+  try {
+    return await handleProactive(p);
+  } finally {
+    characterLineInFlight = false;
   }
 }
 
@@ -5436,8 +5523,20 @@ function sendStreamStart(streamId: string, roleId: string, roleName: string): vo
   broadcast('stream:start', { streamId, roleId, roleName });
 }
 
-function sendStreamDone(streamId: string, message: ChatMessage): void {
-  broadcast('stream:done', { streamId, message });
+/**
+ * 桌宠来源失败 / 中断时的静默清理广播。
+ * 撤掉聊天窗可能残留的「正在输入」占位；silent 挡渲染端通知卡片，noMemory 挡
+ * onDone 尾部的 maybeAutoMemory()（失败没有新增消息，不该让自动记忆轮次计数 +1）。
+ */
+function sendCharacterSilentDone(streamId: string): void {
+  broadcast('stream:done', { streamId, message: null, silent: true, noMemory: true });
+}
+
+function sendStreamDone(streamId: string, message: ChatMessage, silent = false): void {
+  // silent 随载荷透传：渲染端 onDone 据此跳过 notifyCard（主进程侧只挡住 showNotifyCard 一路，
+  // 渲染端还有 api.notifyCard → notify:card → showNotifyCard 的互补路径，必须同时挡）。
+  // 其余调用方不传 silent → 载荷为 false，行为逐字不变。
+  broadcast('stream:done', { streamId, message, silent });
   // 悬浮球未读同步：主窗隐藏时，把本次 AI 回复计入未读并实时广播给悬浮球
   try {
     const idx = streamId.indexOf(':');
@@ -5459,7 +5558,10 @@ function sendStreamDone(streamId: string, message: ChatMessage): void {
           ? ((dm.getGroup(chatId)?.group_name as string) || chatId)
           : ((role?.name as string) || chatId);
       const isProactive = (message as any).from_proactive === true;
-      showNotifyCard({ chatType, chatId, name, roleName: message.sender_name, content: message.content }, isProactive);
+      // silent（桌宠语句）：消息仍入库并可在对话里查看，但不弹后台桌面通知卡片（不打扰）。
+      if (!silent) {
+        showNotifyCard({ chatType, chatId, name, roleName: message.sender_name, content: message.content }, isProactive);
+      }
     }
   } catch {
     /* 未读统计/通知卡片失败时静默，不影响消息下发 */
@@ -5570,7 +5672,7 @@ function registerIPC(): void {
     return { ok: true };
   });
   ipcMain.handle('chats:groupContinue', (e, p) => handleGroupContinue(e, p));
-  ipcMain.handle('chats:proactive', async (_e, p) => handleProactive(p));
+  ipcMain.handle('chats:proactive', async (_e, p) => dispatchProactive(p));
   ipcMain.handle('chats:randomEvent', async (_e, p) => handleRandomEvent(p));
   ipcMain.handle('chats:chooseEvent', async (_e, p) => handleChooseEvent(p));
   ipcMain.handle('chats:eventClosed', (_e, p: { chatId: string }) => {
@@ -7106,7 +7208,7 @@ function registerIPC(): void {
     if (miniWindow && !miniWindow.isDestroyed()) miniWindow.hide();
   });
   ipcMain.handle('mini:setOnTop', (_e, v: boolean) => {
-    if (miniWindow && !miniWindow.isDestroyed()) miniWindow.setAlwaysOnTop(!!v, 'floating');
+    if (miniWindow && !miniWindow.isDestroyed()) applyAlwaysOnTop(miniWindow, !!v, MINI_WINDOW_LEVEL);
   });
   // ===== 空闲主动回复：主进程维护全局权威计时基准（跨窗口唯一数据源）=====
   // 两窗口各自渲染进程独立，无法共享模块变量，因此由主进程统一持有 lastActivity
@@ -7873,6 +7975,18 @@ app.whenReady().then(() => {
   // 桌面悬浮球：注入主窗引用/唤出函数，并按设置创建悬浮球窗口
   setBallMainShow(showMainWindow);
   setBallMainWindow(mainWindow);
+  // v3.0.1-beta.9 P0：注入「桌宠窗存在且置顶」探测，供悬浮球 200ms 轮询以 1s 节流
+  // 决定是否 moveTop() 重申 Z 序。由 main.ts 同时持有两侧引用作为协调层，
+  // 避免 floatingBall ↔ desktopCharacter 循环依赖（后者已 import 前者）。
+  setBallPeerOnTopProbe(() => {
+    const w = getDesktopCharacterWindow();
+    return (
+      !!w &&
+      !w.isDestroyed() &&
+      w.isVisible() &&
+      dm.getSettings().characterRuntime?.alwaysOnTop !== false
+    );
+  });
   createFloatingBall();
   // V3 桌面角色：注册 IPC 并按设置创建角色窗（默认关闭，由「桌宠角色」面板开启）
   setCharacterMainWindow(mainWindow);

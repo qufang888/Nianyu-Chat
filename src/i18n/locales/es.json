@@ -1122,7 +1122,7 @@
  "settings.dcEnable": "Activar personaje de escritorio",
  "settings.dcDesc": "Muestra en el escritorio un personaje que puedes arrastrar, que descansa y habla. Después añade o importa personajes en «Compañero».",
  "settings.dcAlwaysOnTop": "Mantener arriba",
- "settings.dcAlwaysOnTopDesc": "Mismo nivel que la bola flotante, siempre sobre otras ventanas. Desactívalo para usar una capa normal.",
+ "settings.dcAlwaysOnTopDesc": "Siempre sobre otras ventanas, pero se muestra por debajo de la bola flotante. Desactívalo para usar una capa normal.",
  "settings.dcPassThrough": "Bloquear clics",
  "settings.dcPassThroughDesc": "Bloqueado, el personaje ignora los clics y nunca tapa la ventana de abajo. Desbloquéalo aquí o en su menú contextual.",
  "settings.dcManage": "Gestionar personajes",

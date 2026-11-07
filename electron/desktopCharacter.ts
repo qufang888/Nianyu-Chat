@@ -7,7 +7,7 @@
  * - 默认角色由渲染层用原创几何图形绘制（见 src/character/PlaceholderCharacter.tsx），非任何商业角色。
  *
  * 物理与穿透（对应需求「第一层」）：
- * - 透明 / 无边框 / 无阴影 / 置顶（'screen-saver'，与悬浮球同级）/ 跳过任务栏；
+ * - 透明 / 无边框 / 无阴影 / 置顶（'pop-up-menu'；Windows 上由悬浮球 moveTop() 保证球在上）/ 跳过任务栏；
  * - 默认整体 `setIgnoreMouseEvents(true, { forward: true })`，由渲染层按命中区域动态切回可交互；
  * - 拖拽由**主进程轮询设备光标**（screen.getCursorScreenPoint）驱动显式弹簧（K=200 / C=30，子步 1/120），
  *   松手后按末速度做惯性滑停；拖拽期间锁定可交互，结束再交还穿透路由；
@@ -17,7 +17,11 @@
 import { BrowserWindow, screen, ipcMain } from 'electron';
 import path from 'node:path';
 import { getDataManager } from './db';
-import { getBallWindowBounds } from './floatingBall';
+// v3.0.1-beta.9 P0：本模块已 import floatingBall（同向依赖），再引入其 Z 序兜底函数
+// 不会形成环；反向（floatingBall → desktopCharacter）则改用 main.ts 注入 probe 规避。
+import { getBallWindowBounds, reassertFloatingBallOnTop } from './floatingBall';
+// v3.0.1-beta.9：置顶层级统一由 windowLevels 定义（悬浮球 > 桌宠 > 小窗）。
+import { applyAlwaysOnTop, DESKTOP_CHARACTER_LEVEL } from './windowLevels';
 import type { CharacterRuntimeSettings, DesktopCharacter } from '../src/types';
 
 const dm = getDataManager();
@@ -258,8 +262,10 @@ export function createDesktopCharacter(): void {
   });
   // 透明窗默认整体穿透；命中区由渲染层动态切回可交互。
   dcWindow.setIgnoreMouseEvents(true, { forward: true });
-  // 与悬浮球同级：'screen-saver'（最高层）
-  dcWindow.setAlwaysOnTop(rt.alwaysOnTop !== false, 'screen-saver');
+  // v3.0.1-beta.9：桌宠用 'pop-up-menu'（macOS 上低于悬浮球 'screen-saver'、高于小窗 'floating'）。
+  // Windows 上 level 不参与 z_order，实际顺序由下方 ready-to-show 与悬浮球轮询里的
+  // reassertFloatingBallOnTop()（moveTop）显式兜底，详见 windowLevels.ts。
+  applyAlwaysOnTop(dcWindow, rt.alwaysOnTop !== false, DESKTOP_CHARACTER_LEVEL);
 
   if (dev) {
     dcWindow.loadURL('http://localhost:5173/character.html');
@@ -269,6 +275,8 @@ export function createDesktopCharacter(): void {
 
   dcWindow.once('ready-to-show', () => {
     if (dcWindow && !dcWindow.isDestroyed()) dcWindow.showInactive();
+    // 桌宠窗显示后立刻把悬浮球三窗提到同层 Z 序顶部（Windows 兜底）。
+    reassertFloatingBallOnTop('dc-ready');
     sendState();
   });
   dcWindow.on('closed', () => {
@@ -301,7 +309,10 @@ export function setDesktopCharacterEnabled(v: boolean): void {
     // 之前用右键菜单「隐藏角色」只是 hide()，窗口还在；重新开启时必须显式 show，
     // 否则用户会以为开关失灵（窗口存在但不可见）。
     const w = getDesktopCharacterWindow();
+    // v3.0.1-beta.9：重新启用 / 唤回后重申层级，避免窗口重建或 showInactive 后掉层。
+    if (w) applyAlwaysOnTop(w, readRuntime().alwaysOnTop !== false, DESKTOP_CHARACTER_LEVEL);
     if (w && !w.isVisible()) w.showInactive();
+    reassertFloatingBallOnTop('dc-enable');
     sendState();
   } else {
     destroyDesktopCharacter();
@@ -411,8 +422,10 @@ export function registerDesktopCharacterIPC(): void {
   ipcMain.on('dc:set-always-on-top', (_e, v: boolean) => {
     patchRuntime({ alwaysOnTop: !!v });
     if (dcWindow && !dcWindow.isDestroyed()) {
-      dcWindow.setAlwaysOnTop(!!v, 'screen-saver');
+      applyAlwaysOnTop(dcWindow, !!v, DESKTOP_CHARACTER_LEVEL);
     }
+    // 桌宠重新置顶后立刻把悬浮球提到同层 Z 序顶部（Windows 兜底）。
+    if (v) reassertFloatingBallOnTop('dc-aot-on');
     sendState();
   });
 
@@ -465,8 +478,12 @@ export function registerDesktopCharacterIPC(): void {
     if (dcWindow && !dcWindow.isDestroyed()) dcWindow.hide();
   });
   ipcMain.on('dc:show-window', () => {
-    if (dcWindow && !dcWindow.isDestroyed()) dcWindow.showInactive();
-    else createDesktopCharacter();
+    if (dcWindow && !dcWindow.isDestroyed()) {
+      // v3.0.1-beta.9：从托盘唤回时重申层级，保证仍恒在悬浮球之下。
+      applyAlwaysOnTop(dcWindow, readRuntime().alwaysOnTop !== false, DESKTOP_CHARACTER_LEVEL);
+      dcWindow.showInactive();
+      reassertFloatingBallOnTop('dc-show-window');
+    } else createDesktopCharacter();
   });
 
   // 面板主动重定位（例如从收藏面板把角色拉回主屏）

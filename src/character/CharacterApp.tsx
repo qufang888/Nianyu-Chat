@@ -6,7 +6,7 @@
 //   落在命中区 → 请求切可交互；离开 → 恢复穿透。透明区永远穿透，不产生「空气墙」。
 // - 拖拽：只有角色命中箱 pointerdown 才算抓取；越 5px 门槛后通知主进程开始弹簧跟随
 //   （主进程轮询设备光标 + K200/C30 + 1/120 子步），松手由主进程做惯性滑停。
-// - 行为：呼吸/眨眼/视线跟随 + 加权随机动作 + 定时主动气泡 + 自主游走。
+// - 行为：呼吸/眨眼/视线跟随 + 加权随机动作 + 自主游走；互动语句由绑定对话的模型生成。
 // - 右键菜单：穿透锁定 / 置顶人物 / 绑定跳转 / 舞台 / 隐藏 / 管理（配色走主题变量，全主题可读）。
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../ipc';
@@ -14,7 +14,7 @@ import { useI18n } from '../i18n/I18nContext';
 import type { CharacterRuntimeSettings, DesktopCharacter } from '../types';
 import type { CharacterExpression } from './PlaceholderCharacter';
 import { ModelView } from './ModelView';
-import { CLICK_TEXTS, DRAG_TEXTS, IDLE_TEXTS, pickIdleAction, pickText } from './behaviors';
+import { pickIdleAction } from './behaviors';
 import { applyAnimControl, type AnimSettingsLike } from '../utils/animControl';
 import { playSoundSync } from '../utils/sound';
 
@@ -34,6 +34,32 @@ const DEFAULT_RUNTIME: CharacterRuntimeSettings = {
 
 const HIT_SELECTOR = '.dc-character, .dc-bubble, .dc-menu';
 const DRAG_THRESHOLD = 5;
+
+// ===== 桌宠互动语句生成参数（v3.0.1-beta.9）=====
+// 这些值只控制「触发节奏 / 展示形态」，不参与任何文案内容；文案一律由模型输出。
+/** 试探周期（毫秒）：每次到期才检查是否满足生成条件，未绑定时不发任何请求。 */
+const CHARACTER_LINE_TICK_MS = 15_000;
+/** 两次生成请求之间的最小间隔（毫秒）：防止高频模型调用造成 QPS 风暴。 */
+const CHARACTER_LINE_MIN_INTERVAL_MS = 45_000;
+/** 单次生成请求的软超时（毫秒）：超时后静默放弃并释放并发锁，不显示任何气泡。 */
+const CHARACTER_LINE_TIMEOUT_MS = 20_000;
+/** 气泡展示的最大字符数：仅裁剪展示文本，写入绑定对话的仍是模型原文。 */
+const CHARACTER_BUBBLE_MAX_CHARS = 80;
+/** 模型语句气泡的停留时长（毫秒）。 */
+const CHARACTER_BUBBLE_MS = 4200;
+
+/**
+ * 只裁剪「气泡展示」文本；写入绑定对话的仍是模型原文，不做任何改写。
+ * 合并空白、去掉模型偶尔包裹的成对引号、超长截断，避免气泡被撑出角色窗。
+ */
+function sanitizeBubbleText(raw: string): string {
+  let s = raw.replace(/\s+/g, ' ').trim();
+  s = s.replace(/^["'「『“‘]+|["'」』”’]+$/g, '').trim();
+  if (s.length > CHARACTER_BUBBLE_MAX_CHARS) {
+    s = `${s.slice(0, CHARACTER_BUBBLE_MAX_CHARS)}…`;
+  }
+  return s;
+}
 
 export const CharacterApp: React.FC = () => {
   const { t } = useI18n();
@@ -59,6 +85,10 @@ export const CharacterApp: React.FC = () => {
   const draggingRef = useRef(false);
   const menuOpenRef = useRef(false);
   const charRefState = useRef<DesktopCharacter | null>(null);
+  /** 桌宠语句生成的并发锁：同一时刻只允许一个模型请求在途。 */
+  const lineInFlightRef = useRef(false);
+  /** 上次发起桌宠语句生成的时间戳（毫秒），用于最小间隔节流。 */
+  const lineLastAtRef = useRef(0);
 
   draggingRef.current = dragging;
   menuOpenRef.current = menuOpen;
@@ -73,6 +103,47 @@ export const CharacterApp: React.FC = () => {
     if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
     bubbleTimer.current = setTimeout(() => setBubble(null), ms);
   }, []);
+
+  /**
+   * 向绑定对话请求一句由模型按该对话人物人设生成的互动语句。
+   * 复用 api.proactive（→ chats:proactive → handleProactive）：主进程会把原句以
+   * from_proactive 消息写入绑定对话，并把内容通过返回值回传给桌宠气泡。
+   * 失败 / 超时 / 无内容一律静默降级，绝不使用固定文案兜底。
+   */
+  const requestCharacterLine = useCallback(
+    async (bound: { type: 'single' | 'group'; id: string }) => {
+      const now = Date.now();
+      // 并发锁 + 最小间隔：重复触发 / 多定时器叠加 / 窗口重建都不会造成 QPS 风暴。
+      if (lineInFlightRef.current) return;
+      if (now - lineLastAtRef.current < CHARACTER_LINE_MIN_INTERVAL_MS) return;
+      lineInFlightRef.current = true;
+      lineLastAtRef.current = now;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      try {
+        // 软超时：模型长时间无响应不会把后续语句永久堵死；到点静默放弃本次结果。
+        const timeout = new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), CHARACTER_LINE_TIMEOUT_MS);
+        });
+        const res = await Promise.race([
+          api.proactive({ chatType: bound.type, chatId: bound.id, source: 'character' }),
+          timeout,
+        ]);
+        if (!res || !res.ok) return;
+        const text = sanitizeBubbleText(res.content || '');
+        if (!text) return;
+        showBubble(text, CHARACTER_BUBBLE_MS);
+        setExpression('happy');
+        setTimeout(() => setExpression((e) => (e === 'happy' ? 'neutral' : e)), 1800);
+      } catch {
+        // 静默降级：模型未配置 / 调用失败 / 离线时不显示气泡、不报错弹窗，
+        // 绝不使用固定文案兜底冒充模型输出。
+      } finally {
+        if (timer) clearTimeout(timer);
+        lineInFlightRef.current = false;
+      }
+    },
+    [showBubble],
+  );
 
   // ===== 状态同步 =====
   useEffect(() => {
@@ -134,7 +205,7 @@ export const CharacterApp: React.FC = () => {
         if (!draggingRef.current && !menuOpenRef.current && c?.behavior !== false) {
           const a = pickIdleAction();
           setExpression(a.expression);
-          if (a.text) showBubble(t(a.text), 2600);
+          // v3.0.1-beta.9：待机动作只切换表情，不再弹出任何本地文案气泡。
           if (actionTimer.current) clearTimeout(actionTimer.current);
           actionTimer.current = setTimeout(() => {
             if (!draggingRef.current) setExpression('neutral');
@@ -151,28 +222,24 @@ export const CharacterApp: React.FC = () => {
     };
   }, [showBubble]);
 
-  // ===== 主动开口（本地定时，不依赖联网） =====
+  // ===== 桌宠互动语句（绑定对话后由模型生成，v3.0.1-beta.9）=====
+  // 固定句子池已全部移除：未绑定对话时完全不生成语句、也不显示任何文案气泡；
+  // 绑定后按该对话人物的人设，复用主动消息链路 api.proactive 生成，原句同时
+  // 作为 from_proactive 消息写入绑定对话（在该对话的消息列表里可以看到）。
+  // 点击 / 拖拽不触发模型请求：它们是高频即时反馈，模型有秒级延迟且会放大 QPS，
+  // 只保留表情 / 动作 / 音效等非语言反馈，不显示任何文案气泡。
   useEffect(() => {
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout>;
-    const loop = () => {
-      timer = setTimeout(() => {
-        if (!alive) return;
-        const c = charRefState.current;
-        if (!draggingRef.current && !menuOpenRef.current && c?.behavior !== false && c?.bubble !== false) {
-          showBubble(t(pickText(IDLE_TEXTS)), 4200);
-          setExpression('happy');
-          setTimeout(() => setExpression((e) => (e === 'happy' ? 'neutral' : e)), 1800);
-        }
-        loop();
-      }, 22000 + Math.random() * 30000);
-    };
-    loop();
-    return () => {
-      alive = false;
-      clearTimeout(timer);
-    };
-  }, [showBubble]);
+    const timer = setInterval(() => {
+      const c = charRefState.current;
+      const bound = c?.boundChat;
+      // 未绑定 / 关闭自主行为 / 关闭气泡 / 拖拽中 / 菜单打开 → 不发起任何模型请求。
+      if (!bound?.id) return;
+      if (c?.behavior === false || c?.bubble === false) return;
+      if (draggingRef.current || menuOpenRef.current) return;
+      void requestCharacterLine(bound);
+    }, CHARACTER_LINE_TICK_MS);
+    return () => clearInterval(timer);
+  }, [requestCharacterLine]);
 
   // ===== 自主游走（时长触发，窗口小幅位移） =====
   useEffect(() => {
@@ -249,7 +316,7 @@ export const CharacterApp: React.FC = () => {
     d.started = true;
     setDragging(true);
     setExpression('dragged');
-    if (Math.random() < 0.6) showBubble(t(pickText(DRAG_TEXTS)), 1600);
+    // v3.0.1-beta.9：拖拽只给表情反馈，不触发模型请求、不显示文案气泡。
     api.dcDragStart(d.gdx, d.gdy);
   };
 
@@ -286,7 +353,7 @@ export const CharacterApp: React.FC = () => {
     // 角色本体是 div，不被 CLICK_SOUND_SELECTOR 命中，需手动补点击音
     playSoundSync('click');
     setExpression('happy');
-    showBubble(t(pickText(CLICK_TEXTS)), 2000);
+    // v3.0.1-beta.9：点击只给表情 / 音效反馈，不触发模型请求、不显示文案气泡。
     setTimeout(() => setExpression('neutral'), 1400);
     const bound = charRefState.current?.boundChat;
     if (bound) {

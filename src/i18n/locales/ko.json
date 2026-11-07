@@ -1122,7 +1122,7 @@
  "settings.dcEnable": "데스크톱 캐릭터 사용",
  "settings.dcDesc": "바탕화면에 드래그할 수 있는 캐릭터를 표시합니다. 대기 동작과 말풍선이 동작하며, 켠 뒤 「펫」에서 추가하거나 가져올 수 있습니다.",
  "settings.dcAlwaysOnTop": "캐릭터 항상 위",
- "settings.dcAlwaysOnTopDesc": "플로팅 볼과 같은 층으로 항상 다른 창 위에 표시합니다. 끄면 일반 창 층으로 돌아갑니다.",
+ "settings.dcAlwaysOnTopDesc": "항상 다른 창 위에 표시되지만 플로팅 볼 아래에 표시됩니다. 끄면 일반 창 층으로 돌아갑니다.",
  "settings.dcPassThrough": "클릭 통과 잠금",
  "settings.dcPassThroughDesc": "잠그면 클릭이 완전히 통과되어 아래 창을 가리지 않습니다. 여기 또는 캐릭터 오른쪽 메뉴에서 해제하세요.",
  "settings.dcManage": "캐릭터 관리",

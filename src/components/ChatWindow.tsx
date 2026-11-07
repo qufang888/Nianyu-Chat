@@ -2192,7 +2192,9 @@ export const ChatWindow: React.FC<{
 
         // 后台消息提醒：主窗/小窗均隐藏且软件在后台时，弹出 Steam 风格卡片
 
-        if (data.message.sender_type === 'ai' && data.message.content) {
+        // v3.0.1-beta.9 P2：silent（桌宠语句）不弹渲染端通知卡片。主进程 showNotifyCard
+        // 只是两条触发路径之一，渲染端 onDone 的 api.notifyCard 是互补路径，必须同时挡住。
+        if (data.message.sender_type === 'ai' && data.message.content && !data.silent) {
 
           if (typeof api.notifyCard === 'function') {
 
@@ -2222,7 +2224,9 @@ export const ChatWindow: React.FC<{
 
       // 流式全部完成 → 自动提炼记忆（若开启）
 
-      if (remaining === 0) maybeAutoMemory();
+      // v3.0.1-beta.9 P4：失败清理广播带 noMemory（message 为 null、本轮无新消息），
+      // 不应触发自动记忆轮次计数；成功路径无此标记，行为不变。
+      if (remaining === 0 && !data.noMemory) maybeAutoMemory();
 
       // 注意：AI 主动续聊（maybeChain）由主进程 roundDone 广播触发，避免群聊串行时首个成员 done 即触发。
 

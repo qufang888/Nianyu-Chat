@@ -1122,7 +1122,7 @@
  "settings.dcEnable": "啟用桌面角色",
  "settings.dcDesc": "在桌面上顯示一個可拖曳、會待機、能說話的角色；開啟後可在「捉寵角色」裡新增或匯入角色。",
  "settings.dcAlwaysOnTop": "置頂人物",
- "settings.dcAlwaysOnTopDesc": "與懸浮球同級，始終浮在其它視窗之上；關掉後回到一般視窗層。",
+ "settings.dcAlwaysOnTopDesc": "始終浮在其它視窗之上，但會顯示在懸浮球之下；關掉後回到一般視窗層。",
  "settings.dcPassThrough": "穿透鎖定",
  "settings.dcPassThroughDesc": "鎖定後角色完全穿透滑鼠點擊，不會擋住下面的視窗；只能在這裡或角色右鍵選單解除。",
  "settings.dcManage": "管理角色",

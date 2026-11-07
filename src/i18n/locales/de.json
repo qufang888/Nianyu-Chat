@@ -1122,7 +1122,7 @@
  "settings.dcEnable": "Desktop-Charakter aktivieren",
  "settings.dcDesc": "Zeigt einen ziehbaren Charakter auf dem Desktop, der sich bewegt und spricht. Danach unter „Begleiter“ hinzufügen oder importieren.",
  "settings.dcAlwaysOnTop": "Charakter im Vordergrund",
- "settings.dcAlwaysOnTopDesc": "Gleiche Ebene wie die schwebende Kugel, immer über anderen Fenstern. Ausschalten für eine normale Fensterebene.",
+ "settings.dcAlwaysOnTopDesc": "Immer über anderen Fenstern, aber unter der schwebenden Kugel angezeigt. Ausschalten für eine normale Fensterebene.",
  "settings.dcPassThrough": "Klick-Durchlassen sperren",
  "settings.dcPassThroughDesc": "Gesperrt ignoriert der Charakter Mausklicks vollständig und verdeckt keine Fenster darunter. Entsperren hier oder im Kontextmenü des Charakters.",
  "settings.dcManage": "Charaktere verwalten",

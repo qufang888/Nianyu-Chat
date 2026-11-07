@@ -653,7 +653,7 @@ export interface CharacterRuntimeSettings {
   /** 角色窗左上角屏幕坐标（DIP） */
   x: number;
   y: number;
-  /** 角色是否置顶（与悬浮球同级 'screen-saver'） */
+  /** 角色是否置顶（level 'pop-up-menu'；Windows 上靠悬浮球 moveTop() 保证球在桌宠之上） */
   alwaysOnTop: boolean;
   /** 穿透锁定：锁定后角色不再自动切回可交互（仅右键菜单可解除） */
   passThroughLocked: boolean;

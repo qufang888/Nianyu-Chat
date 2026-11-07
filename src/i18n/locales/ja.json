@@ -1122,7 +1122,7 @@
  "settings.dcEnable": "デスクトップキャラを有効化",
  "settings.dcDesc": "デスクトップにドラッグ可能なキャラを表示します。待機モーションや吹き出しで話しかけます。有効化後は「ペット」で追加・読み込みできます。",
  "settings.dcAlwaysOnTop": "キャラを最前面に固定",
- "settings.dcAlwaysOnTopDesc": "フローティングボールと同じ階層で、常に他のウィンドウより前面に表示します。オフにすると通常のウィンドウ階層になります。",
+ "settings.dcAlwaysOnTopDesc": "常に他のウィンドウより前面に表示しますが、フローティングボールの下に表示されます。オフにすると通常のウィンドウ階層になります。",
  "settings.dcPassThrough": "クリックスルーを固定",
  "settings.dcPassThroughDesc": "固定中はクリックを完全に透過し、下のウィンドウを遮りません。解除はこの画面かキャラの右クリックメニューから。",
  "settings.dcManage": "キャラを管理",

@@ -1122,7 +1122,7 @@
  "settings.dcEnable": "Ativar personagem de desktop",
  "settings.dcDesc": "Mostra no desktop um personagem arrastável, que descansa e fala. Depois adicione ou importe personagens em «Companheiro».",
  "settings.dcAlwaysOnTop": "Manter no topo",
- "settings.dcAlwaysOnTopDesc": "Mesmo nível da bola flutuante, sempre acima das outras janelas. Desligue para usar uma camada normal.",
+ "settings.dcAlwaysOnTopDesc": "Sempre acima das outras janelas, mas exibido abaixo da bola flutuante. Desligue para usar uma camada normal.",
  "settings.dcPassThrough": "Bloquear clique através",
  "settings.dcPassThroughDesc": "Bloqueado, o personagem ignora totalmente o mouse e nunca cobre a janela de baixo. Desbloqueie aqui ou no menu de contexto dele.",
  "settings.dcManage": "Gerenciar personagens",
