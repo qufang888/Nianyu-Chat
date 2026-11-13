@@ -245,15 +245,9 @@ export const MiniChat: React.FC = () => {
     onTabPointerDown,
   } = storiesApi;
 
-  // v3.0.1-beta.8：进入聊天时恢复剧情节点侧栏的记忆位置（settings 就绪后回灌；仅恢复一次，避免覆盖拖拽中位置）
-  const storiesRestoredRef = useRef(false);
-  useEffect(() => {
-    if (storiesRestoredRef.current) return;
-    if (typeof settings?.storiesDockTop === 'number') {
-      storiesApi.restoreTop(settings.storiesDockTop);
-      storiesRestoredRef.current = true;
-    }
-  }, [settings?.storiesDockTop]); // eslint-disable-line react-hooks/exhaustive-deps
+  // v3.0.1-beta.11：删除 beta.8 的「[settings?.storiesDockTop] effect → restoreTop」回灌，
+  // 与主窗统一为「initialTop 同步传入 + Hook 内 useLayoutEffect 在 paint 前补齐」。
+  // 这样两窗恢复路径完全一致，且不存在渲染后再写 top 造成的二次跳位。
   useEffect(() => {
     if (!current) return;
     api.getStoryEnabled(current.chat_type, current.chat_id).then(setStoryOn);

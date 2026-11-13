@@ -32,8 +32,17 @@ import {
  *   坐标系：top/bottom 是相对 offsetParent 的，故地标与边界均换算到 offsetParent
  *   的 getBoundingClientRect，确保与 CSS 的 top/bottom 同一参照系。
  *
- * 动画：面板显隐沿用 index.css `.stories-panel` 的过渡（抽屉式左滑 + 淡入淡出，受
- * 「动效总开关 / 分组」控制）；本 Hook 只切换 `.open` 类、计时器与 top/bottom，不触碰过渡。
+ * 动画：面板显隐沿用 index.css `.stories-panel` 的过渡（v3.0.1-beta.11 起改为「以图标为
+ * 锚点」的 scale + opacity 弹出，与请求队列一致，受「动效总开关 / panel 分组」控制）；
+ * 本 Hook 只切换 `.open` 类、计时器与 top/bottom，不触碰过渡。
+ *
+ * ── 首帧定位（v3.0.1-beta.11 修复）──
+ *   调用方按异步 IPC 结果（storyOn）条件渲染 `.stories`，本 Hook mount 时该节点通常还不存在。
+ *   旧版把首次钳制放在带 [recomputeBounds] 依赖的 mount useLayoutEffect 里，节点为 null 时
+ *   直接 early-return 且此后不再重跑 → 首次真正钳制被推迟到用户 hover（[open] 分支）或
+ *   pointerdown（拖动分支），即「首帧卡在分隔线中间、交互后才瞬移到下方」。
+ *   现改为「无依赖 useLayoutEffect + 节点挂载感知」：节点一出现就在 paint 前同步钳制，
+ *   再用 rAF / document.fonts.ready / ResizeObserver 在布局稳定后兜底，全程不依赖用户交互。
  */
 export const STORIES_PEEK_MS = 1500; // 悬停开关后若始终未移入面板，自动收回的时长
 
@@ -92,9 +101,22 @@ export function useStoriesPanel(
 ): StoriesPanelApi {
   const [open, setOpen] = useState(false);
   const [top, setTop] = useState(opts?.initialTop ?? 64);
-  const [bottom, setBottom] = useState(120); // 兜底值，mount 后由地标动态计算
+  const [bottom, setBottom] = useState(120); // 兜底值，.stories 节点挂载钳制后由地标动态计算
   const [dragging, setDragging] = useState(false);
   const storiesRef = useRef<HTMLDivElement>(null);
+  // ── v3.0.1-beta.11：节点挂载感知（首帧正确定位的核心）──
+  // `.stories` 由调用方按 storyOn（异步 IPC 结果）条件渲染，本 Hook mount 时节点常常还不存在。
+  // attachedElRef 记住「已钳制过的节点」，避免每次 render 重复计算；detachSettledRef 负责在
+  // 节点卸载 / Hook 卸载时清理 rAF / ResizeObserver / resize 监听，防止监听器泄漏。
+  const attachedElRef = useRef<HTMLDivElement | null>(null);
+  const detachSettledRef = useRef<(() => void) | null>(null);
+  // 用户是否在本挂载周期内手动拖动过：拖动后不再被外部记忆值回灌覆盖，
+  // 避免「刚拖好又被 settings 广播里的旧值冲掉」（切聊天重挂载后会复位，仍读到最新记忆）。
+  const userMovedRef = useRef(false);
+  const disposeSettled = useCallback(() => {
+    detachSettledRef.current?.();
+    detachSettledRef.current = null;
+  }, []);
   // 实时镜像 top，供全局 pointerup 等闭包读取最新值（避免闭包拿到过期 state）
   const topRef = useRef(opts?.initialTop ?? 64);
   useEffect(() => {
@@ -128,12 +150,32 @@ export function useStoriesPanel(
     setOpen(false);
   }, []);
 
-  /** 外部（如异步读取 settings.storiesDockTop 后）恢复记忆位置；立即按当前边界钳制。
-   *  之后 mount 的 fonts.ready / [open] 重算会再次钳到已稳定边界，故无二次跳位。 */
+  /** 外部命令式恢复记忆位置（Hook 公开 API 保留）；立即按当前边界钳制。
+   *  v3.0.1-beta.11：主窗 / 小窗已改为「initialTop 同步传入 + useLayoutEffect」，
+   *  两处都不再调用本方法 —— 保留它是给将来需要命令式回灌的调用方用的逃生口，
+   *  正常首帧定位路径不经过它（避免渲染后 setTop 造成可见跳位）。
+   *  首帧挂载钳制已在 paint 前算好 bounds.current，故此处拿到的是稳定边界；
+   *  随后 fonts.ready / rAF / ResizeObserver 与 [open] 重算会再次钳到同一边界，幂等。 */
   const restoreTop = useCallback((next: number) => {
     const { minTop, maxTop } = bounds.current;
     setTop(Math.min(maxTop, Math.max(minTop, next)));
   }, []);
+
+  // 【记忆位置参与首帧】v3.0.1-beta.11：位置记忆不再靠「渲染后异步回灌 restoreTop」。
+  // 主窗 / 小窗统一把 settings.storiesDockTop 作为 initialTop **同步传入**（useState 初始值即记忆值）；
+  // 若 settings 在挂载后才就绪（小窗冷启动 / 跨窗口设置广播），本 useLayoutEffect 会在
+  // 「记忆值到达的那次 commit」的 paint 前按当前边界钳好，而不是等 useEffect 之后再跳一次。
+  // 与节点挂载感知 effect 的先后：本 effect 声明在前，先写记忆值，随后的挂载钳制再用
+  // 真实地标边界二次 clamp，两次都发生在同一帧 paint 之前，用户看不到任何中间位置。
+  useLayoutEffect(() => {
+    const remembered = opts?.initialTop;
+    if (typeof remembered !== 'number' || userMovedRef.current) return;
+    const { minTop, maxTop } = bounds.current;
+    setTop((t) => {
+      const next = Math.min(maxTop, Math.max(minTop, remembered));
+      return t === next ? t : next;
+    });
+  }, [opts?.initialTop]);
 
   /** 计算上下边界 + 动态 bottom（基于 offsetParent 坐标系） */
   const recomputeBounds = useCallback(() => {
@@ -252,6 +294,7 @@ export function useStoriesPanel(
       }
       // 拖动结束且确有位移 → 落盘记忆位置（主窗/小窗各自由 opts.onCommitTop 写 settings）
       if (topRef.current !== drag.current.startTop) {
+        userMovedRef.current = true; // 之后的记忆值广播不得覆盖用户刚拖好的位置
         commitRef.current?.(topRef.current);
       }
     };
@@ -263,27 +306,68 @@ export function useStoriesPanel(
     };
   }, [doClose, schedulePeek]);
 
-  // mount：首次计算边界；resize：布局变化时重算。
-  // 关键：改用 useLayoutEffect —— 首次 paint 前完成钳制，避免「默认 64 → 悬停才钳紧」的可见瞬移；
-  // 并补 fonts.ready 与 rAF 各重算一次，规避 Web 字体加载导致「首帧地标高度未定 → 二次跳位」。
-  // 这样 mount 钳制结果 == 悬停时（[open] 分支）的钳制结果，悬停不再触发可见瞬移。
+  // 【首帧钳制】无依赖 useLayoutEffect：每次 commit 的 paint 前检查 `.stories` 是否刚挂载。
+  // React 在 commit 阶段先把 ref 挂到新建的 DOM 节点，再执行父组件的 useLayoutEffect，
+  // 故此处 storiesRef.current 已可用；同步 recomputeBounds() 触发的 setState 会被 React
+  // 在 paint 前同步 flush —— 第一帧就带正确 top/bottom，用户看不到「分隔线中间」或瞬移。
+  // 节点按 storyOn 卸载后复位，下次挂载（切换聊天 / 开小窗）重新钳制，不依赖 hover / click。
   useLayoutEffect(() => {
+    const el = storiesRef.current;
+    if (!el) {
+      attachedElRef.current = null;
+      disposeSettled();
+      return;
+    }
+    // React 18 StrictMode 会把 effect「setup → cleanup → setup」跑两遍：第二遍时节点没变，
+    // 但卸载 effect 的 cleanup 已把 rAF / ResizeObserver / resize 释放掉了。故守卫除比对节点
+    // 身份外，还要求「兜底回调仍存活」；否则重新登记一遍，避免开发模式下兜底失效。
+    if (attachedElRef.current === el && detachSettledRef.current !== null) return;
+    attachedElRef.current = el;
+    disposeSettled();
+
+    // ① 同步钳制（paint 前完成）——首帧位置的唯一来源，绝不延后到交互。
     recomputeBounds();
-    const raf = requestAnimationFrame(() => recomputeBounds());
+
+    // ② 布局稳定兜底：Web 字体加载 / 地标高度晚定，均在用户交互前再校一次，
+    //    且 rAF / ResizeObserver 回调都在 paint 前，不会产生可见跳位。
     let cancelled = false;
+    const raf = requestAnimationFrame(() => {
+      if (!cancelled) recomputeBounds();
+    });
     if (typeof document !== 'undefined' && 'fonts' in document) {
-      document.fonts.ready.then(() => {
-        if (!cancelled) recomputeBounds();
-      }).catch(() => {});
+      document.fonts.ready
+        .then(() => {
+          if (!cancelled) recomputeBounds();
+        })
+        .catch(() => {});
+    }
+
+    // ③ 地标尺寸变化（切换聊天 / 输入栏高度变化 / 字体加载）不需等窗口 resize：
+    //    ResizeObserver 在 paint 前回调，重算同样在 paint 前完成。
+    const doc = el.ownerDocument;
+    const op = (el.offsetParent as HTMLElement | null) ?? doc.documentElement;
+    const topEl = findBound(doc, TOP_BOUND_SELECTORS);
+    const botEl = findBound(doc, BOTTOM_BOUND_SELECTORS);
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => recomputeBounds());
+      ro.observe(op);
+      if (topEl) ro.observe(topEl);
+      if (botEl) ro.observe(botEl);
     }
     const onResize = () => recomputeBounds();
     window.addEventListener('resize', onResize);
-    return () => {
+
+    detachSettledRef.current = () => {
       cancelled = true;
       cancelAnimationFrame(raf);
+      ro?.disconnect();
       window.removeEventListener('resize', onResize);
     };
-  }, [recomputeBounds]);
+  });
+
+  // 卸载清理：避免 rAF / ResizeObserver / resize 监听泄漏到已卸载组件。
+  useEffect(() => () => disposeSettled(), [disposeSettled]);
 
   // 展开时刷新边界（切换聊天 / 输入栏高度变化等）
   useEffect(() => {

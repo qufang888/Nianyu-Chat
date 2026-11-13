@@ -3846,21 +3846,40 @@ body.cursor-hidden ::-webkit-scrollbar-thumb {
   border-radius: 0 10px 10px 0;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   overflow: hidden;
-  /* 弹入/弹出过渡（面板常驻 DOM，open 类切换显隐）；「动效开关」关闭时 .anim-off 全局禁用。
-     v3.0.1-beta.7：改为「抽屉式左滑 + 淡出」——收起时整个面板左滑 100%（隐入开关手柄之后），
-     彻底解决「缩回时卡在剧情节点图标中间」的观感；缓动用柔和 ease-out（非线性），更自然流畅。
-     仍不使用 scale（用户已两次否定「先很小再放大」）。 */
+  /* ===== v3.0.1-beta.11：与请求队列（.queue-dock-panel）同款「从图标弹出」动效 =====
+     用户反馈：旧版 translateX(-100%) 的抽屉式左滑是「突兀地从后方突然进来」，
+     要求改成「从这个剧情节点图标开始弹出去」。
+     1) transform-origin: left center —— 面板左缘紧邻 .stories-tab 图标，缩放/位移都以
+        「图标那一侧」为轴心，视觉上从图标边缘撑开（不是从背后滑入，也不是窗口边缘长出）。
+        同时**保留 v3.0.1-beta.7「收起不卡在图标中间」的正确语义**：收起是朝图标侧
+        收拢 + 淡出，不是朝面板中心缩成一个点（那才会卡在图标中间）。
+     2) 基态 = 收起态（transform / opacity 都写在基态），展开态只写 none / 1 ——
+        「基态陷阱」的正确写法：动效被 .anim-off 或 data-anim-off~="panel" 门禁 kill 时
+        元素直接落到基态（收起），不会出现「停在展开末态、面板关不掉」。
+     3) scale 只取 0.92（轻微），不是用户此前否定的「先很小再放大」；
+        配合 opacity 淡入与朝图标的 6px 微移，给出「弹出」感而非大位移滑入。
+     4) 时长沿用 beta.7 的 0.24s 柔和 ease-out，并乘 var(--anim-speed, 1) 受
+        「动效速度」倍率控制（时长类乘倍率）；panel 分组可在高级动画设置里独立开关。 */
   opacity: 0;
-  transform: translateX(-100%);
+  transform-origin: left center;
+  transform: translateX(-6px) scale(0.92);
   visibility: hidden;
-  transition: opacity calc(0.24s * var(--anim-speed, 1)) cubic-bezier(0.22, 0.61, 0.36, 1), transform calc(0.24s * var(--anim-speed, 1)) cubic-bezier(0.22, 0.61, 0.36, 1), visibility calc(0.24s * var(--anim-speed, 1)), pointer-events 0s calc(0.24s * var(--anim-speed, 1));
+  transition:
+    opacity calc(0.24s * var(--anim-speed, 1)) cubic-bezier(0.22, 0.61, 0.36, 1),
+    transform calc(0.24s * var(--anim-speed, 1)) cubic-bezier(0.22, 0.61, 0.36, 1),
+    visibility 0s linear calc(0.24s * var(--anim-speed, 1)),
+    pointer-events 0s linear calc(0.24s * var(--anim-speed, 1));
 }
 .stories-panel.open {
   opacity: 1;
-  transform: translateX(0);
+  transform: none;
   visibility: visible;
   pointer-events: auto;
-  transition: opacity calc(0.24s * var(--anim-speed, 1)) cubic-bezier(0.22, 0.61, 0.36, 1), transform calc(0.24s * var(--anim-speed, 1)) cubic-bezier(0.22, 0.61, 0.36, 1), visibility calc(0.24s * var(--anim-speed, 1)), pointer-events 0s;
+  transition:
+    opacity calc(0.24s * var(--anim-speed, 1)) cubic-bezier(0.22, 0.61, 0.36, 1),
+    transform calc(0.24s * var(--anim-speed, 1)) cubic-bezier(0.22, 0.61, 0.36, 1),
+    visibility 0s linear 0s,
+    pointer-events 0s linear 0s;
 }
 .stories-head {
   display: flex;

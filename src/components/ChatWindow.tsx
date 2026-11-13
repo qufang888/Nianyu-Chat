@@ -9,6 +9,8 @@ import { buildChatExport } from '../utils/export';
 
 import { useI18n } from '../i18n/I18nContext';
 
+import { useTheme } from '../theme/ThemeContext';
+
 import type { ChatListItem, ChatMessage, ChatType, Role, SelfRole, UpdateStatus, WorldBook } from '../types';
 
 
@@ -168,6 +170,9 @@ export const ChatWindow: React.FC<{
 }> = ({ chatType, chatId, name, members, onSent, onChatDeleted, onConvertedToSingle, onGroupUpdated, onForked }) => {
 
   const { t } = useI18n();
+  // v3.0.1-beta.11：位置记忆统一走 ThemeContext 的 settings（与小窗同口径），
+  // 在首次 render 就把 storiesDockTop 交给 Hook，不再渲染后异步回灌。
+  const { settings: appSettings } = useTheme();
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
@@ -278,6 +283,10 @@ export const ChatWindow: React.FC<{
   const [forking, setForking] = useState(false);
 
   const storiesApi = useStoriesPanel(editingNodeId !== null, {
+    // 与小窗完全一致：记忆位置在首帧 useState 初始化时即参与定位（同步，非渲染后回灌）。
+    // settings 尚未就绪时传 undefined，Hook 的 useLayoutEffect 会在 settings 到达那次
+    // commit 的 paint 前补齐记忆值；切聊天因 key 变化重挂载，仍读到最新记忆 → 不重置。
+    initialTop: typeof appSettings?.storiesDockTop === 'number' ? appSettings.storiesDockTop : undefined,
     onCommitTop: (top) => {
       api.saveSettings({ storiesDockTop: top }).catch(() => {});
     },
@@ -296,18 +305,9 @@ export const ChatWindow: React.FC<{
     onTabPointerDown,
   } = storiesApi;
 
-  // v3.0.1-beta.8：进入聊天时恢复剧情节点侧栏的记忆位置（异步读取 settings，落盘后回灌；仅恢复一次）
-  const storiesRestoredRef = useRef(false);
-  useEffect(() => {
-    if (storiesRestoredRef.current) return;
-    api.getSettings().then((s) => {
-      if (storiesRestoredRef.current) return;
-      if (typeof s.storiesDockTop === 'number') storiesApi.restoreTop(s.storiesDockTop);
-      storiesRestoredRef.current = true;
-    }).catch(() => {
-      storiesRestoredRef.current = true;
-    });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // v3.0.1-beta.11：删除 beta.8 的「api.getSettings().then(restoreTop)」异步回灌。
+  // 那会在首帧 paint 之后再次 setTop，形成第二条可见跳位（默认位置 → 记忆位置）。
+  // 现由上面的 initialTop（同步）+ useStoriesPanel 内的 useLayoutEffect（paint 前）统一承担。
 
   useEffect(() => {
 

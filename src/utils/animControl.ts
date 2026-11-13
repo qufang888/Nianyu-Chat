@@ -70,6 +70,10 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
     labelKey: 'animCtl.groupPanel',
     selectors: [
       '.stories-panel',
+      // v3.0.1-beta.11：剧情节点面板改为「以图标为锚点」的 scale+opacity 弹出后，
+      // 展开态 .stories-panel.open 自己也写了 transition（与 .queue-dock-panel.expanded 同理），
+      // 只登记基类会让「展开态的 transition」漏出自定义档门禁，故两个都登记。
+      '.stories-panel.open',
       // v2.3.94 需求 2：消息下方按钮组曾改为「线性弹出」，动画载体是 .msg-action-bar 本身
       //（transition: transform），因此登记在本组以便被独立开关。
       // v2.3.94 修正：用户否掉了「先很小再放大」的表现方式，该元素改为无动画直接出现。
