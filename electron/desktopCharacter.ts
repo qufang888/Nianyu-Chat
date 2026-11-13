@@ -350,6 +350,61 @@ export function setDesktopCharacterActive(id: string): void {
   sendState();
 }
 
+/**
+ * 右键菜单「隐藏角色」：关闭**当前激活角色**的桌面显示（enabled=false），
+ * 使「桌宠角色」面板里该角色的「显示」勾同步取消。
+ *
+ * 行为约定（与用户预期一致）：
+ * - 仍有其它启用角色 → 切到下一个启用角色并继续显示窗口；
+ * - 无剩余启用角色 → 清空 activeId 并隐藏窗口（主开关 runtime.enabled 不变，
+ *   用户在面板重新勾选「显示」即可经由 refreshDesktopCharacter 唤回）。
+ *
+ * **本函数只动单角色的 enabled 与 activeId，绝不改主开关 runtime.enabled**
+ * （那是「桌面显示」总开关，见 setDesktopCharacterEnabled）。
+ */
+export function hideActiveCharacter(): void {
+  const s = dm.getSettings();
+  const list = Array.isArray(s.desktopCharacters) ? s.desktopCharacters : [];
+  const rt = readRuntime();
+  const target = rt.activeId ? list.find((c) => c.id === rt.activeId) : activeCharacter();
+  if (!target) {
+    if (dcWindow && !dcWindow.isDestroyed()) dcWindow.hide();
+    return;
+  }
+  const idx = list.findIndex((c) => c.id === target.id);
+  if (idx < 0) {
+    if (dcWindow && !dcWindow.isDestroyed()) dcWindow.hide();
+    return;
+  }
+  const next = list.slice();
+  next[idx] = { ...next[idx], enabled: false };
+  const remaining = next.filter((c) => c.enabled);
+  let activeId: string;
+  let showWindow: boolean;
+  if (remaining.length) {
+    // 与 activeCharacter() 的回退一致：取首个启用角色，窗口继续显示。
+    activeId = remaining[0].id;
+    showWindow = true;
+  } else {
+    activeId = '';
+    showWindow = false;
+  }
+  const nextRuntime: CharacterRuntimeSettings = { ...rt, activeId };
+  dm.saveSettings({ desktopCharacters: next, characterRuntime: nextRuntime });
+  // 广播给所有窗口（面板据此刷新「显示」勾，不会覆盖 x/y）
+  settingsSink?.({ desktopCharacters: next, characterRuntime: nextRuntime });
+  if (showWindow) {
+    if (dcWindow && !dcWindow.isDestroyed()) {
+      if (!dcWindow.isVisible()) dcWindow.showInactive();
+    } else {
+      createDesktopCharacter();
+    }
+  } else if (dcWindow && !dcWindow.isDestroyed()) {
+    dcWindow.hide();
+  }
+  sendState();
+}
+
 /** 设置页/收藏面板改动了角色数据后，主进程据此刷新角色窗与状态。 */
 export function refreshDesktopCharacter(): void {
   const rt = readRuntime();
@@ -465,6 +520,8 @@ export function registerDesktopCharacterIPC(): void {
 
   ipcMain.on('dc:set-enabled', (_e, v: boolean) => setDesktopCharacterEnabled(!!v));
   ipcMain.on('dc:set-active', (_e, id: string) => setDesktopCharacterActive(String(id || '')));
+  // 右键菜单「隐藏角色」：关闭当前激活角色的桌面显示（enabled=false），让面板「显示」勾同步取消；主开关不动
+  ipcMain.on('dc:hide-character', () => hideActiveCharacter());
 
   // 滚轮缩放：持久化该角色的 scale（钳制 0.6~1.6），并广播 settings:changed + dc:state
   // （角色窗据此即时刷新显示，设置页「桌宠角色」面板同步显示新大小）。
@@ -499,10 +556,6 @@ export function registerDesktopCharacterIPC(): void {
     mainWindowRef.webContents.send('dc:open-collection');
   });
 
-  // 角色窗隐藏/显示自身（右键菜单「隐藏角色」）
-  ipcMain.on('dc:hide-window', () => {
-    if (dcWindow && !dcWindow.isDestroyed()) dcWindow.hide();
-  });
   ipcMain.on('dc:show-window', () => {
     if (dcWindow && !dcWindow.isDestroyed()) {
       // v3.0.1-beta.9：从托盘唤回时重申层级，保证仍恒在悬浮球之下。

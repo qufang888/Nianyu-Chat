@@ -497,8 +497,9 @@ export interface NianyuAPI {
   dcGetState: () => Promise<{ runtime: any; characters: any[]; active: any | null }>;
   dcOpenChat: (chat: { type: 'single' | 'group'; id: string; name?: string }) => void;
   dcOpenCollection: () => void;
-  dcHideWindow: () => void;
   dcShowWindow: () => void;
+  /** 右键菜单「隐藏角色」：关闭当前激活角色的桌面显示（enabled=false），面板「显示」勾同步取消；主开关不动 */
+  dcHideCharacter: () => void;
   dcReposition: (x: number, y: number) => void;
   // 素材层（V3）：角色包导入 / 删除 / 运行库
   dcPickImport: (mode: 'file' | 'folder') => Promise<{ canceled: boolean; results: CharacterImportResult[] }>;
@@ -1087,8 +1088,8 @@ const api: NianyuAPI = {
   dcGetState: () => ipcRenderer.invoke('dc:get-state'),
   dcOpenChat: (chat) => ipcRenderer.send('dc:open-chat', chat),
   dcOpenCollection: () => ipcRenderer.send('dc:open-collection'),
-  dcHideWindow: () => ipcRenderer.send('dc:hide-window'),
   dcShowWindow: () => ipcRenderer.send('dc:show-window'),
+  dcHideCharacter: () => ipcRenderer.send('dc:hide-character'),
   dcReposition: (x, y) => ipcRenderer.send('dc:reposition', x, y),
   dcPickImport: (mode) => ipcRenderer.invoke('dc:pick-import', mode),
   dcImportPaths: (paths) => ipcRenderer.invoke('dc:import-paths', paths),

@@ -410,7 +410,7 @@ export const CharacterApp: React.FC = () => {
       },
       { key: 'stage', label: t('characters.menuStage'), onClick: () => api.dcOpenCollection() },
       { key: 'manage', label: t('characters.menuManage'), onClick: () => api.dcOpenCollection() },
-      { key: 'hide', label: t('characters.menuHide'), onClick: () => api.dcHideWindow() },
+      { key: 'hide', label: t('characters.menuHide'), onClick: () => api.dcHideCharacter() },
     ];
   }, [runtime.passThroughLocked, runtime.alwaysOnTop, state.character?.boundChat, t]);
 

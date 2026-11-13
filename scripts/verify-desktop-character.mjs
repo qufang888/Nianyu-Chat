@@ -67,6 +67,7 @@ const windowLevels = read('electron/windowLevels.ts');
 const floatingBall = read('electron/floatingBall.ts');
 const chatWin = read('src/components/ChatWindow.tsx');
 const miniChat = read('src/components/MiniChat.tsx');
+const ipcTs = read('src/ipc.ts');
 
 // ============================================================================
 section('A. 窗口与物理层（electron/desktopCharacter.ts）');
@@ -397,6 +398,34 @@ check('默认角色为原创几何绘制（无外链图片/模型）',
   /<svg/.test(read('src/character/PlaceholderCharacter.tsx')) && !/https?:\/\//.test(read('src/character/PlaceholderCharacter.tsx')));
 check('软件不打包第三方 Live2D 运行时（public 下无 cubism core）',
   !fs.existsSync(path.join(ROOT, 'public/live2d')) && !fs.existsSync(path.join(ROOT, 'public/character-runtime')));
+
+// ============================================================================
+section('A3. 隐藏角色与「显示」勾同步（v3.0.1-beta.12）');
+// ============================================================================
+// 根因：右键菜单「隐藏角色」原来只 dcWindow.hide() 整个窗口，从不改 enabled，
+// 导致「桌宠角色」面板里该角色的「显示」勾保持不变。修复：新增 dc:hide-character，
+// 隐藏时把当前激活角色的 enabled 置 false，使面板「显示」勾同步取消；
+// 主开关 runtime.enabled（桌面显示）不动，仅改单角色 enabled 与 activeId。
+check('新增 hideActiveCharacter 函数（隐藏角色时关闭当前角色桌面显示）',
+  /export function hideActiveCharacter\(\)/.test(mainDc));
+check('hideActiveCharacter 核心：把当前角色 enabled 置 false',
+  /export function hideActiveCharacter\(\)[\s\S]{0,900}enabled:\s*false/.test(mainDc));
+check('dc:hide-character IPC 已注册且调用 hideActiveCharacter',
+  /ipcMain\.on\('dc:hide-character',\s*\(\)\s*=>\s*hideActiveCharacter\(\)\)/.test(mainDc));
+check('「隐藏角色」不动主开关 runtime.enabled（仅改单角色 enabled 与 activeId，不调 setDesktopCharacterEnabled）',
+  /export function hideActiveCharacter\(\)[\s\S]{0,1100}characterRuntime:\s*nextRuntime/.test(mainDc) &&
+  !/setDesktopCharacterEnabled/.test(
+    mainDc.slice(
+      mainDc.indexOf('export function hideActiveCharacter('),
+      mainDc.indexOf('export function hideActiveCharacter(') + 1100,
+    ),
+  ));
+check('CharacterApp 菜单 menuHide 调用 api.dcHideCharacter()（而非仅 hide 窗口）',
+  /menuHide[\s\S]{0,80}api\.dcHideCharacter\(\)/.test(appTsx));
+check('preload 暴露 dcHideCharacter 通道（指向 dc:hide-character）',
+  /dcHideCharacter:\s*\(\)\s*=>\s*ipcRenderer\.send\('dc:hide-character'\)/.test(preload));
+check('src/ipc.ts 暴露 dcHideCharacter 通道',
+  /dcHideCharacter:\s*\(\)\s*=>\s*raw\.dcHideCharacter\(\)/.test(ipcTs));
 
 // ---------- 汇总 ----------
 console.log('\n' + '─'.repeat(70));

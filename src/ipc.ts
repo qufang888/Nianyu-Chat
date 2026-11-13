@@ -562,8 +562,9 @@ export interface NianyuAPI {
   }>;
   dcOpenChat: (chat: { type: 'single' | 'group'; id: string; name?: string }) => void;
   dcOpenCollection: () => void;
-  dcHideWindow: () => void;
   dcShowWindow: () => void;
+  /** 右键菜单「隐藏角色」：关闭当前激活角色的桌面显示（enabled=false），面板「显示」勾同步取消；主开关不动 */
+  dcHideCharacter: () => void;
   dcReposition: (x: number, y: number) => void;
   // ===== 素材层（V3）=====
   dcPickImport: (mode: 'file' | 'folder') => Promise<{ canceled: boolean; results: CharacterImportResult[] }>;
@@ -636,8 +637,8 @@ export const api: NianyuAPI = {
   dcGetState: () => raw.dcGetState(),
   dcOpenChat: (chat) => raw.dcOpenChat(chat),
   dcOpenCollection: () => raw.dcOpenCollection(),
-  dcHideWindow: () => raw.dcHideWindow(),
   dcShowWindow: () => raw.dcShowWindow(),
+  dcHideCharacter: () => raw.dcHideCharacter(),
   dcReposition: (x, y) => raw.dcReposition(x, y),
   dcPickImport: (mode) => raw.dcPickImport(mode),
   dcImportPaths: (paths) => raw.dcImportPaths(paths),
