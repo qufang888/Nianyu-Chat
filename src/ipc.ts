@@ -555,16 +555,19 @@ export interface NianyuAPI {
   dcSetEnabled: (v: boolean) => void;
   dcSetActive: (id: string) => void;
   dcSetScale: (id: string, scale: number) => void;
-  dcGetState: () => Promise<{
+  dcGetState: (id?: string) => Promise<{
     runtime: CharacterRuntimeSettings;
     characters: DesktopCharacter[];
     active: DesktopCharacter | null;
+    character?: DesktopCharacter | null;
   }>;
   dcOpenChat: (chat: { type: 'single' | 'group'; id: string; name?: string }) => void;
   dcOpenCollection: () => void;
+  /** 右键菜单「打开角色舞台」：带角色 id 唤起主窗，自动打开该角色的 CharacterStage */
+  dcOpenStage: (id: string) => void;
   dcShowWindow: () => void;
-  /** 右键菜单「隐藏角色」：关闭当前激活角色的桌面显示（enabled=false），面板「显示」勾同步取消；主开关不动 */
-  dcHideCharacter: () => void;
+  /** 右键菜单「隐藏角色」：关闭本窗对应角色的桌面显示（enabled=false），面板「显示」勾同步取消；主开关不动 */
+  dcHideCharacter: (id: string) => void;
   dcReposition: (x: number, y: number) => void;
   // ===== 素材层（V3）=====
   dcPickImport: (mode: 'file' | 'folder') => Promise<{ canceled: boolean; results: CharacterImportResult[] }>;
@@ -576,6 +579,7 @@ export interface NianyuAPI {
   onDcState: (cb: (data: { runtime: CharacterRuntimeSettings; character: DesktopCharacter | null }) => void) => () => void;
   onDcOpenChat: (cb: (chat: { type: 'single' | 'group'; id: string; name?: string }) => void) => () => void;
   onDcOpenCollection: (cb: () => void) => () => void;
+  onDcOpenStage: (cb: (id: string) => void) => () => void;
   /** 主进程推送：全局光标相对角色窗左上角的 DIP 坐标（≈30Hz），渲染层据此让眼神全屏跟随。 */
   onDcCursor: (cb: (data: { x: number; y: number }) => void) => () => void;
 
@@ -634,11 +638,12 @@ export const api: NianyuAPI = {
   dcSetEnabled: (v) => raw.dcSetEnabled(v),
   dcSetActive: (id) => raw.dcSetActive(id),
   dcSetScale: (id, scale) => raw.dcSetScale(id, scale),
-  dcGetState: () => raw.dcGetState(),
+  dcGetState: (id) => raw.dcGetState(id),
   dcOpenChat: (chat) => raw.dcOpenChat(chat),
   dcOpenCollection: () => raw.dcOpenCollection(),
+  dcOpenStage: (id) => raw.dcOpenStage(id),
   dcShowWindow: () => raw.dcShowWindow(),
-  dcHideCharacter: () => raw.dcHideCharacter(),
+  dcHideCharacter: (id) => raw.dcHideCharacter(id),
   dcReposition: (x, y) => raw.dcReposition(x, y),
   dcPickImport: (mode) => raw.dcPickImport(mode),
   dcImportPaths: (paths) => raw.dcImportPaths(paths),
@@ -649,6 +654,7 @@ export const api: NianyuAPI = {
   onDcState: (cb) => raw.onDcState(cb),
   onDcOpenChat: (cb) => raw.onDcOpenChat(cb),
   onDcOpenCollection: (cb) => raw.onDcOpenCollection(cb),
+  onDcOpenStage: (cb) => raw.onDcOpenStage(cb),
   rateInfo: (modelId) => raw.rateInfo(modelId),
   queueSnapshot: () => raw.queueSnapshot(),
   queueReorder: (key, orderedIds) => raw.queueReorder(key, orderedIds),

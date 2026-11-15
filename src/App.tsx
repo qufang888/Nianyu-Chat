@@ -52,6 +52,9 @@ export default function App() {
   const { settings, reloadSettings } = useTheme();
   const { toast, showToast } = useToast();
   const [view, setView] = useState<View>('chats');
+  // Bug 1：角色窗右键「打开角色舞台」带来的舞台请求（带 nonce 保证同一角色可重复打开）。
+  // 传给 CharacterCollection，由其 effect 打开对应角色的 CharacterStage。
+  const [dcStageRequest, setDcStageRequest] = useState<{ id: string; nonce: number } | null>(null);
   const [selected, setSelected] = useState<Selected | null>(null);
   const [showGroup, setShowGroup] = useState(false);
   // 开屏动画：仅「进程冷启动」（双击 exe / 开始菜单 / 命令行）播放一次；
@@ -348,6 +351,11 @@ export default function App() {
   useEffect(() => {
     if (typeof api.onDcOpenCollection !== 'function') return;
     const offCollection = api.onDcOpenCollection(() => setView('characters'));
+    // Bug 1：带角色 id 的舞台请求——切到角色面板并让面板自动打开该角色的 CharacterStage
+    const offStage = api.onDcOpenStage((id) => {
+      setView('characters');
+      setDcStageRequest({ id, nonce: Date.now() });
+    });
     const offChat = api.onDcOpenChat(async (chat) => {
       let name = chat.name || '';
       if (!name) {
@@ -363,6 +371,7 @@ export default function App() {
     });
     return () => {
       offCollection();
+      offStage();
       offChat();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -569,7 +578,7 @@ export default function App() {
       {view === 'stats' && <StatsView />}
       {view === 'characters' && (
         <React.Suspense fallback={<div className="main-pane" />}>
-          <CharacterCollection />
+          <CharacterCollection stageRequest={dcStageRequest} />
         </React.Suspense>
       )}
       {view === 'moments' && <MomentsView />}

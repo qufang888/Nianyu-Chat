@@ -623,6 +623,10 @@ export interface DesktopCharacter {
   boundChat?: { type: 'single' | 'group'; id: string; name: string } | null;
   /** 是否在桌面显示 */
   enabled: boolean;
+  /** 桌面窗口左上角屏幕坐标（DIP）；缺省时回退到 runtime.x/y 或右下角默认位 */
+  x?: number;
+  /** 桌面窗口左上角屏幕坐标（DIP）；缺省时回退到 runtime.x/y 或右下角默认位 */
+  y?: number;
   /** 显示缩放（0.6~1.6） */
   scale: number;
   /** 是否启用自主行为（随机动作 / 主动气泡） */

@@ -98,7 +98,12 @@ check('拖拽期间锁定可交互（dragging 分支先于 ignore 判定）',
   /if\s*\(dragging\)\s*\{[\s\S]{0,80}setIgnoreMouseEvents\(false\)/.test(mainDc));
 check('穿透锁定期间忽略一切可交互请求',
   /if\s*\(rt\.passThroughLocked\)\s*\{[\s\S]{0,120}setIgnoreMouseEvents\(true,\s*\{\s*forward:\s*true\s*\}\)/.test(mainDc));
-check('重新开启会 showInactive 隐藏中的窗口', /isVisible\(\)\)\s*w\.showInactive\(\)/.test(mainDc));
+// v3.0.1-beta.13 多窗口：主开关开启时应为「每个 enabled 角色」各建一个窗口，
+// 不再有「隐藏窗口 showInactive」的单窗重开语义（createDesktopCharacter 已对隐藏窗口 showInactive，
+// 但那是单角色补窗逻辑，不是全局开关契约）。改为断言 setDesktopCharacterEnabled 链式建窗。
+check('主开关开启会为每个 enabled 角色建窗（setDesktopCharacterEnabled → showAllDesktopCharacters → createDesktopCharacter(id)）',
+  /export function setDesktopCharacterEnabled\(v: boolean\)[\s\S]{0,600}showAllDesktopCharacters\(\)/.test(mainDc) &&
+  /export function showAllDesktopCharacters\(\)[\s\S]{0,300}createDesktopCharacter\(c\.id\)/.test(mainDc));
 
 // ============================================================================
 section('A2. Windows Z 序兜底（moveTop）+ QA Round 1 返工契约 + Round 2 N1 可见性守卫');
@@ -263,6 +268,9 @@ check('面板/舞台样式已被主窗样式表 @import（否则面板裸样式�
 check('角色窗样式由角色入口引入', /styles\/character\.css/.test(charEntry));
 check('面板支持导入文件/导入文件夹/删除/绑定/舞台',
   ['dcPickImport', 'dcDeleteCharacter', 'boundChat', 'CharacterStage'].every((k) => coll.includes(k)));
+check('角色面板「显示」勾 = 该角色实际在桌面出现（受总开关「桌面显示」门控：关时为空且不可点）',
+  /checked=\{\s*c\.enabled && snap\.runtime\.enabled\s*\}/.test(coll) &&
+  /disabled=\{\s*!snap\.runtime\.enabled\s*\}/.test(coll));
 check('舞台支持拖动旋转与滚轮缩放', /rotateY\(/.test(stage) && /onWheel/.test(stage) && /setZoom/.test(stage));
 check('舞台用 AnalyserNode 驱动口型', /createAnalyser/.test(stage) && /getByteFrequencyData/.test(stage));
 check('舞台 TTS 复用既有 api.textToSpeech', /api\.textToSpeech\(/.test(stage));
@@ -338,6 +346,40 @@ for (const lang of ['de', 'es', 'fr', 'ja', 'ko', 'pt', 'ru', 'zh-Hant']) {
   check('（可证伪）把 create 重申挪回 loadURL 之前后 N1 时序断言失效', !zCreateDeferredOk(brokenN1b));
 }
 
+// 可证伪性（v3.0.1-beta.13 多窗口）：变异源串后，A 段建窗契约 / A4 段多窗口断言必须变红
+{
+  // 回退到单例 dcWindow：A4「窗口集合为多窗口 Map」断言应失效
+  const brokenMw1 = mainDc
+    .replace('const dcWindows = new Map<string, BrowserWindow>();', 'let dcWindow: BrowserWindow | null = null;');
+  check('（可证伪）回退到单例 dcWindow 后多窗口 Map 断言失效',
+    !/const dcWindows = new Map<string, BrowserWindow>\(\)/.test(brokenMw1) && /let dcWindow/.test(brokenMw1));
+  // createDesktopCharacter 去掉 id 形参：A4 签名断言失效
+  const brokenMw2 = mainDc.replace('export function createDesktopCharacter(id: string)', 'export function createDesktopCharacter()');
+  check('（可证伪）createDesktopCharacter 去掉 id 形参后签名断言失效',
+    !/export function createDesktopCharacter\(id: string\)/.test(brokenMw2));
+  // refreshDesktopCharacter 不再按 id 建窗：A 段建窗链 / A4 遍历断言失效
+  const brokenMw3 = mainDc.replaceAll('createDesktopCharacter(c.id);', '/* no per-id create */');
+  check('（可证伪）refresh 不再逐一建窗后建窗链断言失效',
+    !/export function refreshDesktopCharacter\(\)[\s\S]{0,700}createDesktopCharacter\(c\.id\)/.test(brokenMw3) &&
+    !/export function showAllDesktopCharacters\(\)[\s\S]{0,300}createDesktopCharacter\(c\.id\)/.test(brokenMw3));
+  // hideActiveCharacter 改成关全部窗口：A4「仅关闭一个窗口」断言失效
+  const brokenMw4 = mainDc.replaceAll('destroyDesktopCharacter(id);', 'destroyDesktopCharacter();');
+  check('（可证伪）hideActiveCharacter 改成关全部窗口后单窗销毁断言失效',
+    !/destroyDesktopCharacter\(id\)/.test(brokenMw4));
+  // sendState 不再遍历 dcWindows：A4 遍历断言失效
+  const brokenMw5 = mainDc.replaceAll('for (const [cid, w] of dcWindows)', '/* single window */');
+  check('（可证伪）sendState 不再遍历 dcWindows 后遍历断言失效',
+    !/for \(const \[cid, w\] of dcWindows\)/.test(brokenMw5));
+  // 删除 dc-ready Z 序重申：A2 路径覆盖断言失效
+  const brokenMw6 = mainDc.replace("reassertFloatingBallOnTop('dc-ready')", '/* stripped */');
+  check('（可证伪）删除 dc-ready Z 序重申后 A2 路径覆盖断言失效',
+    !brokenMw6.includes("reassertFloatingBallOnTop('dc-ready')"));
+  // setDesktopCharacterEnabled 不再建窗：A 段主开关建窗断言失效
+  const brokenMw7 = mainDc.replace('showAllDesktopCharacters();', '/* no create */');
+  check('（可证伪）setDesktopCharacterEnabled 不再建窗后 A 段断言失效',
+    !/export function setDesktopCharacterEnabled\(v: boolean\)[\s\S]{0,600}showAllDesktopCharacters\(\)/.test(brokenMw7));
+}
+
 // ============================================================================
 section('G2. 置顶人物说明文案与三层层级契约一致（10 处 value，QA Round 1 尾审补漏）');
 // ============================================================================
@@ -406,26 +448,184 @@ section('A3. 隐藏角色与「显示」勾同步（v3.0.1-beta.12）');
 // 导致「桌宠角色」面板里该角色的「显示」勾保持不变。修复：新增 dc:hide-character，
 // 隐藏时把当前激活角色的 enabled 置 false，使面板「显示」勾同步取消；
 // 主开关 runtime.enabled（桌面显示）不动，仅改单角色 enabled 与 activeId。
-check('新增 hideActiveCharacter 函数（隐藏角色时关闭当前角色桌面显示）',
-  /export function hideActiveCharacter\(\)/.test(mainDc));
+check('新增 hideActiveCharacter 函数（隐藏角色时关闭当前角色桌面显示，可收 sender）',
+  /export function hideActiveCharacter\(/.test(mainDc));
 check('hideActiveCharacter 核心：把当前角色 enabled 置 false',
-  /export function hideActiveCharacter\(\)[\s\S]{0,900}enabled:\s*false/.test(mainDc));
-check('dc:hide-character IPC 已注册且调用 hideActiveCharacter',
-  /ipcMain\.on\('dc:hide-character',\s*\(\)\s*=>\s*hideActiveCharacter\(\)\)/.test(mainDc));
-check('「隐藏角色」不动主开关 runtime.enabled（仅改单角色 enabled 与 activeId，不调 setDesktopCharacterEnabled）',
-  /export function hideActiveCharacter\(\)[\s\S]{0,1100}characterRuntime:\s*nextRuntime/.test(mainDc) &&
+  /export function hideActiveCharacter\([\s\S]{0,1700}enabled:\s*false/.test(mainDc));
+check('dc:hide-character IPC 已注册且把 sender 转交 hideActiveCharacter',
+  /ipcMain\.on\('dc:hide-character',\s*\(e\)\s*=>\s*hideActiveCharacter\(e\.sender\)\)/.test(mainDc));
+check('「隐藏角色」只改单角色 enabled、不动主开关 runtime.enabled（且不调 setDesktopCharacterEnabled）',
+  /export function hideActiveCharacter\([\s\S]{0,1700}desktopCharacters: next/.test(mainDc) &&
   !/setDesktopCharacterEnabled/.test(
     mainDc.slice(
       mainDc.indexOf('export function hideActiveCharacter('),
-      mainDc.indexOf('export function hideActiveCharacter(') + 1100,
+      mainDc.indexOf('export function hideActiveCharacter(') + 1700,
+    ),
+  ) &&
+  !/patchRuntime\(\{ enabled:/.test(
+    mainDc.slice(
+      mainDc.indexOf('export function hideActiveCharacter('),
+      mainDc.indexOf('export function hideActiveCharacter(') + 1700,
     ),
   ));
-check('CharacterApp 菜单 menuHide 调用 api.dcHideCharacter()（而非仅 hide 窗口）',
-  /menuHide[\s\S]{0,80}api\.dcHideCharacter\(\)/.test(appTsx));
-check('preload 暴露 dcHideCharacter 通道（指向 dc:hide-character）',
-  /dcHideCharacter:\s*\(\)\s*=>\s*ipcRenderer\.send\('dc:hide-character'\)/.test(preload));
-check('src/ipc.ts 暴露 dcHideCharacter 通道',
-  /dcHideCharacter:\s*\(\)\s*=>\s*raw\.dcHideCharacter\(\)/.test(ipcTs));
+check('CharacterApp 菜单 menuHide 调用 api.dcHideCharacter(charId)（而非仅 hide 窗口）',
+  /menuHide[\s\S]{0,160}api\.dcHideCharacter\(charId\)/.test(appTsx));
+check('preload 暴露 dcHideCharacter 通道（指向 dc:hide-character，带 id）',
+  /dcHideCharacter:\s*\(id[^)]*\)\s*=>\s*ipcRenderer\.send\('dc:hide-character',\s*id\)/.test(preload));
+check('src/ipc.ts 暴露 dcHideCharacter 通道（透传 id）',
+  /dcHideCharacter:\s*\(id[^)]*\)\s*=>\s*raw\.dcHideCharacter\(id\)/.test(ipcTs));
+
+// ============================================================================
+section('A4. 多窗口同显（v3.0.1-beta.13 架构重构）');
+// ============================================================================
+// 旧版是单例 `let dcWindow`，只显示 activeCharacter() 那一个角色；现改为每个 enabled
+// 角色各拥独立窗口（Map<id, BrowserWindow>），可同时出现。以下锁死多窗口核心契约：
+// 集合类型、按 id 建窗入口、refresh 遍历建窗、hide 只关单窗、state/cursor 按窗遍历、身份反查。
+check('窗口集合为多窗口 Map（dcWindows = Map<id, BrowserWindow>）',
+  /const dcWindows = new Map<string, BrowserWindow>\(\)/.test(mainDc));
+check('已无单例残留（无 let dcWindow 全局单例）', !/\blet dcWindow\b/.test(mainDc));
+check('createDesktopCharacter 按 id 建窗（多窗口入口，签名带 id）',
+  /export function createDesktopCharacter\(id: string\)/.test(mainDc));
+check('refreshDesktopCharacter 按 enabled 遍历逐一建窗（勾=建窗、空=关窗）',
+  /export function refreshDesktopCharacter\(\)[\s\S]{0,700}createDesktopCharacter\(c\.id\)/.test(mainDc));
+check('showAllDesktopCharacters 为每个 enabled 角色建窗（已存在则跳过）',
+  /export function showAllDesktopCharacters\(\)[\s\S]{0,300}createDesktopCharacter\(c\.id\)/.test(mainDc));
+check('hideActiveCharacter 仅关闭一个窗口（destroyDesktopCharacter(id)，不调无参全关）',
+  /export function hideActiveCharacter\([\s\S]{0,2200}destroyDesktopCharacter\(id\)/.test(mainDc) &&
+  !/destroyDesktopCharacter\(\);/.test(
+    mainDc.slice(
+      mainDc.indexOf('export function hideActiveCharacter('),
+      mainDc.indexOf('export function hideActiveCharacter(') + 2200,
+    ),
+  ));
+check('sendState 按窗口遍历各发各自角色（非单窗广播）',
+  /function sendState\(id\?/.test(mainDc) &&
+  /for \(const \[cid, w\] of dcWindows\)/.test(mainDc));
+check('startCursorBroadcast 按窗口遍历推光标（多窗口眼神跟随）',
+  /function startCursorBroadcast\(\)/.test(mainDc) &&
+  /for \(const \[, w\] of dcWindows\)/.test(mainDc));
+check('窗口对象挂 _charId 以便从 IPC sender 反查角色',
+  /\(win as unknown as \{ _charId: string \}\)\._charId = id/.test(mainDc));
+check('winToId 用 BrowserWindow.fromWebContents 反查归属角色',
+  /function winToId\(sender: unknown\)/.test(mainDc) &&
+  /BrowserWindow\.fromWebContents\(sender as/.test(mainDc));
+check('每角色独立拖拽状态（dragStates = Map<id, DragState>）且单一全局 60Hz 定时器驱动',
+  /const dragStates = new Map<string, DragState>\(\)/.test(mainDc) &&
+  /function dragTick\(\)/.test(mainDc) &&
+  /for \(const \[id, st\] of dragStates\)/.test(mainDc));
+check('级联偏移常量存在（多角色避免完全重叠）', /CASCADE_OFFSET\s*=\s*28/.test(mainDc));
+
+// ============================================================================
+section('A5. 桌宠 4 bug 修复（菜单响应 / 拖拽贴边 / 拖动收尾 / Z 序动画）');
+// ============================================================================
+// Bug 1：右键菜单「绑定 / 舞台 / 管理」点击无反应。真因是 onMove 在光标掠过角色→菜单间透明
+// 缝隙时 applyInteractive(false)+setMenuOpen(false)，窗口变穿透后收不到 mousemove、菜单被卸载。
+check('Bug1 菜单打开期间 onMove 不关闭菜单（menuOpenRef 分支不调 setMenuOpen(false)）',
+  /if \(menuOpenRef\.current\) \{[\s\S]{0,240}applyInteractive\(true\);[\s\S]{0,60}return;/.test(appTsx) &&
+  !/if \(!hit && menuOpenRef\.current\) setMenuOpen\(false\)/.test(appTsx));
+check('Bug1 菜单关闭走显式 outside-pointerdown + Escape（捕获期监听）',
+  /document\.addEventListener\('pointerdown',\s*onOutsideDown,\s*true\)/.test(appTsx) &&
+  /window\.addEventListener\('keydown',\s*onKey\)/.test(appTsx) &&
+  /e\.key === 'Escape'/.test(appTsx));
+check('Bug1 舞台入口走带 id 的 dcOpenStage（真正打开该角色 CharacterStage，非仅面板）',
+  /key: 'stage'[\s\S]{0,140}api\.dcOpenStage\(/.test(appTsx) &&
+  /dcOpenStage:\s*\(id[^)]*\)\s*=>\s*ipcRenderer\.send\('dc:open-stage',\s*id\)/.test(preload) &&
+  /ipcMain\.on\('dc:open-stage'/.test(mainDc) &&
+  /webContents\.send\('dc:open-stage'/.test(mainDc));
+check('Bug1 主窗接 dc:open-stage → 切角色面板 + 带 nonce 舞台请求；面板按 id 打开 stageChar',
+  /api\.onDcOpenStage\(/.test(appRoot) &&
+  /setDcStageRequest\(\{ id, nonce: Date\.now\(\) \}\)/.test(appRoot) &&
+  /stageRequest=\{dcStageRequest\}/.test(appRoot) &&
+  /snap\.characters\.find\(\(x\) => x\.id === stageRequest\.id\)/.test(coll) &&
+  /setStageChar\(c\)/.test(coll));
+check('Bug1 绑定/管理两条路径仍在（bound→dcOpenChat，unbound→dcOpenCollection）',
+  /if \(bound\) api\.dcOpenChat\(bound\);\s*else api\.dcOpenCollection\(\)/.test(appTsx));
+
+// Bug 2：拖不到上半部 + 贴不到左边沿。真因是 clampPos 按整窗 340×420 矩形钳制。
+check('Bug2 clampPos 按角色可见区（CHAR_BODY_W/H + scale）钳制，允许透明窗越出 workArea',
+  /function clampPos\(x: number, y: number, id\?: string\)/.test(mainDc) &&
+  /CHAR_BODY_W\s*=\s*190/.test(mainDc) && /CHAR_BODY_H\s*=\s*228/.test(mainDc) &&
+  /const halfW = \(CHAR_BODY_W \* scale\) \/ 2/.test(mainDc) &&
+  /const minX = wa\.x - \(centerX - halfW\)/.test(mainDc) &&
+  /const minY = wa\.y - \(bodyBottom - bodyH\)/.test(mainDc));
+check('Bug2 clampPos 传入角色 id（创建/移动/弹簧/惯性/重定位全部带 id，用各自 scale）',
+  /clampPos\(avoided\.x, avoided\.y, id\)/.test(mainDc) &&
+  /clampPos\(b\.x, b\.y, id\)/.test(mainDc) &&
+  /clampPos\(st\.curX, st\.curY, id\)/.test(mainDc) &&
+  /clampPos\(nx, ny, id\)/.test(mainDc) &&
+  /clampPos\(Number\(x\) \|\| 0, Number\(y\) \|\| 0, id\)/.test(mainDc));
+check('Bug2 保留 avoidBall 悬浮球避让且 clamp 在其后（不冲突）',
+  /const avoided = avoidBall\(x, y\);[\s\S]{0,80}clampPos\(avoided\.x, avoided\.y, id\)/.test(mainDc));
+
+// Bug 3：偶发松开仍处拖动状态。renderer window 级兜底 + 主进程看门狗。
+check('Bug3 renderer pointer capture 设在 currentTarget（稳定元素，非 e.target）',
+  /\(e\.currentTarget as HTMLElement\)\.setPointerCapture\?\.\(e\.pointerId\)/.test(appTsx));
+check('Bug3 window 级 pointerup/pointercancel/blur 兜底发 dc:drag-end',
+  /window\.addEventListener\('pointerup',\s*forceEnd\)/.test(appTsx) &&
+  /window\.addEventListener\('pointercancel',\s*forceEnd\)/.test(appTsx) &&
+  /window\.addEventListener\('blur',\s*forceEnd\)/.test(appTsx) &&
+  /dragRef\.current = null;[\s\S]{0,120}api\.dcDragEnd\(\)/.test(appTsx));
+check('Bug3 主进程看门狗：drag-start 起算 + 超时强制 endDragState + 幂等收尾',
+  /DRAG_WATCHDOG_MS\s*=\s*9000/.test(mainDc) &&
+  /st\.dragStartedAt = Date\.now\(\)/.test(mainDc) &&
+  /now - st\.dragStartedAt >= DRAG_WATCHDOG_MS/.test(mainDc) &&
+  /function endDragState\(id: string\): void \{[\s\S]{0,120}if \(!st \|\| !st\.dragging\) return;/.test(mainDc) &&
+  /ipcMain\.on\('dc:drag-end'[\s\S]{0,180}endDragState\(id\)/.test(mainDc));
+
+// Bug 4：面板展开动画期间被桌宠盖住。showInactive 后立即重申 Z 序。
+check('Bug4 expandPanel 在 showInactive 之后立即 reassertFloatingBallOnTop(panel-expand)',
+  /panelWindow\.showInactive\(\);[\s\S]{0,320}reassertFloatingBallOnTop\('panel-expand'\)/.test(floatingBall));
+check('Bug4 undoCollapse 重播动画路径同样立即重申 Z 序',
+  /function undoCollapse\(\)[\s\S]{0,600}panelWindow\.webContents\.send\('panel:show'[\s\S]{0,400}reassertFloatingBallOnTop\('panel-expand'\)/.test(floatingBall));
+check('Bug4 未触碰单光标仲裁链（owner/covered 判定与 cursor-gate 门控保持）',
+  /function computeCoveredStateNow/.test(floatingBall) &&
+  /onMainCursorWindow/.test(appRoot) && /onMiniCursorWindow/.test(miniChat));
+
+// P2-1：历史 boundChat.name 为空/缺失/undefined 时，右键菜单显示 chat id 兜底，不出现「回到「」/undefined」
+check('P2-1 状态同步两处（dcGetState / onDcState）用 normalizeBoundChat 规范化 boundChat.name',
+  /function normalizeBoundChat\(/.test(appTsx) &&
+  /boundChat:\s*\{\s*\.\.\.b,\s*name:\s*b\.id\s*\}/.test(appTsx) &&
+  /character:\s*normalizeBoundChat\(s\.character \|\| s\.active\)/.test(appTsx) &&
+  /character:\s*normalizeBoundChat\(d\.character\)/.test(appTsx));
+check('P2-1 右键菜单 label 显示层以 bound.name || bound.id 双保险兜底',
+  /t\('characters\.menuBackTo',\s*\{\s*name:\s*bound\.name \|\| bound\.id\s*\}\)/.test(appTsx));
+
+// P2-2：看门狗按「光标物理位移」心跳，正常长按 ≥9s 不被误伤；只有光标静止才累计超时
+check('P2-2 DragState 含 watchdogCursorX/Y 心跳字段（声明 + 初始化 + 收尾清理）',
+  /watchdogCursorX:\s*number/.test(mainDc) && /watchdogCursorY:\s*number/.test(mainDc) &&
+  /watchdogCursorX:\s*0/.test(mainDc) && /watchdogCursorY:\s*0/.test(mainDc));
+check('P2-2 drag-start 初始化心跳基线为当时物理光标位置',
+  /const cur = screen\.getCursorScreenPoint\(\);[\s\S]{0,120}st\.watchdogCursorX = cur\.x[\s\S]{0,120}st\.watchdogCursorY = cur\.y/.test(mainDc));
+check('P2-2 看门狗轮询采样光标位移：动则刷新 dragStartedAt + 采样并 continue，静则累计超时',
+  /const p = screen\.getCursorScreenPoint\(\);/.test(mainDc) &&
+  /p\.x !== st\.watchdogCursorX \|\| p\.y !== st\.watchdogCursorY/.test(mainDc) &&
+  /st\.dragStartedAt = now;/.test(mainDc) &&
+  /p\.x !== st\.watchdogCursorX \|\| p\.y !== st\.watchdogCursorY[\s\S]{0,200}st\.dragStartedAt = now;[\s\S]{0,80}continue;/.test(mainDc));
+check('P2-2 心跳只在看门狗内刷新；springStep 绝不刷新 dragStartedAt（否则 pointerup 丢失后永不兜底）',
+  !/dragStartedAt/.test(extractFnBody(mainDc, 'function springStep(')) &&
+  /st\.dragStartedAt = 0;\s*st\.watchdogCursorX = 0;\s*st\.watchdogCursorY = 0;/.test(mainDc));
+
+// 可证伪：把 4 项修复各自回退，对应断言必须变红
+{
+  const b1 = appTsx.replace(/if \(menuOpenRef\.current\) \{[\s\S]{0,120}return;\s*\}/, '');
+  check('（可证伪）回退菜单打开守卫后 Bug1 断言失效',
+    !/if \(menuOpenRef\.current\) \{[\s\S]{0,240}applyInteractive\(true\);[\s\S]{0,60}return;/.test(b1));
+  const b2 = mainDc.replace('const minY = wa.y - (bodyBottom - bodyH);', 'const minY = wa.y;');
+  check('（可证伪）回退整窗钳制后 Bug2 断言失效',
+    !/const minY = wa\.y - \(bodyBottom - bodyH\)/.test(b2));
+  const b3 = mainDc.replace('now - st.dragStartedAt >= DRAG_WATCHDOG_MS', 'false');
+  check('（可证伪）去掉看门狗超时后 Bug3 断言失效',
+    !/now - st\.dragStartedAt >= DRAG_WATCHDOG_MS/.test(b3));
+  const b4 = floatingBall.replaceAll("reassertFloatingBallOnTop('panel-expand')", '/* stripped */');
+  check('（可证伪）删掉 panel-expand 重申后 Bug4 断言失效',
+    !b4.includes("reassertFloatingBallOnTop('panel-expand')"));
+  const bP21 = appTsx.replace('name: bound.name || bound.id', 'name: bound.name');
+  check('（可证伪）回退右键 label 的 id 兜底后 P2-1 断言失效',
+    !/name:\s*bound\.name \|\| bound\.id/.test(bP21));
+  const bP22 = mainDc.replace('p.x !== st.watchdogCursorX || p.y !== st.watchdogCursorY', 'false');
+  check('（可证伪）回退看门狗光标位移心跳后 P2-2 断言失效',
+    !/p\.x !== st\.watchdogCursorX \|\| p\.y !== st\.watchdogCursorY/.test(bP22));
+}
 
 // ---------- 汇总 ----------
 console.log('\n' + '─'.repeat(70));

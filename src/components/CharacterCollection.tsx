@@ -8,7 +8,7 @@
 // - Live2D / 3D 的真实渲染由 ModelView 分发（图片与原创占位直接渲染，3D/Live2D 按需加载运行时）。
 //
 // 合规：默认角色为原创几何占位；软件不内置任何第三方角色素材，导入内容由用户自备并自负授权。
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
 import { useToast } from './Toast';
@@ -31,13 +31,19 @@ const DEFAULT_RUNTIME: CharacterRuntimeSettings = {
   activeId: '',
 };
 
-export const CharacterCollection: React.FC = () => {
+interface CharacterCollectionProps {
+  /** 角色窗右键「打开角色舞台」带来的请求（含 nonce：同一角色可重复打开）。 */
+  stageRequest?: { id: string; nonce: number } | null;
+}
+
+export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageRequest }) => {
   const { t } = useI18n();
   const { showToast } = useToast();
   const [snap, setSnap] = useState<Snapshot>({ runtime: DEFAULT_RUNTIME, characters: [], active: null });
   const [chats, setChats] = useState<ChatListItem[]>([]);
   const [stageChar, setStageChar] = useState<DesktopCharacter | null>(null);
   const [rtStatus, setRtStatus] = useState<{ dir: string; cubism4: boolean; cubism2: boolean } | null>(null);
+  const lastStageNonceRef = useRef(0);
 
   const refresh = useCallback(async () => {
     const s = await api.dcGetState();
@@ -55,6 +61,18 @@ export const CharacterCollection: React.FC = () => {
       offSettings();
     };
   }, [refresh]);
+
+  // Bug 1：角色窗右键「打开角色舞台」→ 本面板自动打开该角色的 CharacterStage。
+  // 依赖 nonce（而非 id）保证同一角色重复点击也能再次打开；用 ref 去重避免 refresh 重跑时
+  // 反复重置用户已手动关闭的舞台。角色列表异步到达时，snap.characters 变化会重试直至命中。
+  useEffect(() => {
+    if (!stageRequest || !stageRequest.id) return;
+    if (stageRequest.nonce === lastStageNonceRef.current) return;
+    const c = snap.characters.find((x) => x.id === stageRequest.id);
+    if (!c) return;
+    lastStageNonceRef.current = stageRequest.nonce;
+    setStageChar(c);
+  }, [stageRequest, snap.characters]);
 
   const persist = useCallback(
     async (next: DesktopCharacter[]) => {
@@ -223,7 +241,12 @@ export const CharacterCollection: React.FC = () => {
                   />
                   <div className="dc-coll-toggles">
                     <label>
-                      <input type="checkbox" checked={c.enabled} onChange={(e) => void patchCharacter(c.id, { enabled: e.target.checked })} />
+                      <input
+                        type="checkbox"
+                        checked={c.enabled && snap.runtime.enabled}
+                        disabled={!snap.runtime.enabled}
+                        onChange={(e) => void patchCharacter(c.id, { enabled: e.target.checked })}
+                      />
                       {t('characters.enabled')}
                     </label>
                     <label>

@@ -494,12 +494,14 @@ export interface NianyuAPI {
   dcSetEnabled: (v: boolean) => void;
   dcSetActive: (id: string) => void;
   dcSetScale: (id: string, scale: number) => void;
-  dcGetState: () => Promise<{ runtime: any; characters: any[]; active: any | null }>;
+  dcGetState: (id?: string) => Promise<{ runtime: any; characters: any[]; active: any | null; character?: any | null }>;
   dcOpenChat: (chat: { type: 'single' | 'group'; id: string; name?: string }) => void;
   dcOpenCollection: () => void;
+  /** 右键菜单「打开角色舞台」：带角色 id 唤起主窗，自动打开该角色的 CharacterStage */
+  dcOpenStage: (id: string) => void;
   dcShowWindow: () => void;
-  /** 右键菜单「隐藏角色」：关闭当前激活角色的桌面显示（enabled=false），面板「显示」勾同步取消；主开关不动 */
-  dcHideCharacter: () => void;
+  /** 右键菜单「隐藏角色」：关闭本窗对应角色的桌面显示（enabled=false），面板「显示」勾同步取消；主开关不动 */
+  dcHideCharacter: (id: string) => void;
   dcReposition: (x: number, y: number) => void;
   // 素材层（V3）：角色包导入 / 删除 / 运行库
   dcPickImport: (mode: 'file' | 'folder') => Promise<{ canceled: boolean; results: CharacterImportResult[] }>;
@@ -511,6 +513,7 @@ export interface NianyuAPI {
   onDcState: (cb: (data: any) => void) => () => void;
   onDcOpenChat: (cb: (chat: any) => void) => () => void;
   onDcOpenCollection: (cb: () => void) => () => void;
+  onDcOpenStage: (cb: (id: string) => void) => () => void;
   // 主进程推送：全局光标相对角色窗左上角的 DIP 坐标（≈30Hz），渲染层据此让眼神全屏跟随。
   onDcCursor: (cb: (data: { x: number; y: number }) => void) => () => void;
   setActiveChat: (type: string, id: string) => void; // 通知主进程当前聊天（主动消息未读判断）
@@ -1085,11 +1088,12 @@ const api: NianyuAPI = {
   dcSetEnabled: (v) => ipcRenderer.send('dc:set-enabled', v),
   dcSetActive: (id) => ipcRenderer.send('dc:set-active', id),
   dcSetScale: (id, scale) => ipcRenderer.send('dc:set-scale', id, scale),
-  dcGetState: () => ipcRenderer.invoke('dc:get-state'),
+  dcGetState: (id) => ipcRenderer.invoke('dc:get-state', id),
   dcOpenChat: (chat) => ipcRenderer.send('dc:open-chat', chat),
   dcOpenCollection: () => ipcRenderer.send('dc:open-collection'),
+  dcOpenStage: (id) => ipcRenderer.send('dc:open-stage', id),
   dcShowWindow: () => ipcRenderer.send('dc:show-window'),
-  dcHideCharacter: () => ipcRenderer.send('dc:hide-character'),
+  dcHideCharacter: (id) => ipcRenderer.send('dc:hide-character', id),
   dcReposition: (x, y) => ipcRenderer.send('dc:reposition', x, y),
   dcPickImport: (mode) => ipcRenderer.invoke('dc:pick-import', mode),
   dcImportPaths: (paths) => ipcRenderer.invoke('dc:import-paths', paths),
@@ -1111,6 +1115,11 @@ const api: NianyuAPI = {
     const listener = () => cb();
     ipcRenderer.on('dc:open-collection', listener);
     return () => ipcRenderer.removeListener('dc:open-collection', listener);
+  },
+  onDcOpenStage: (cb) => {
+    const listener = (_e: any, id: string) => cb(id);
+    ipcRenderer.on('dc:open-stage', listener);
+    return () => ipcRenderer.removeListener('dc:open-stage', listener);
   },
   onDcCursor: (cb) => {
     const listener = (_e: any, d: { x: number; y: number }) => cb(d);

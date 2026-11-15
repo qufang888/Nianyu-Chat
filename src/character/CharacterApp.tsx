@@ -23,6 +23,19 @@ interface DcState {
   character: DesktopCharacter | null;
 }
 
+/**
+ * 历史数据 boundChat.name 可能为空串/缺失（甚至字面量 "undefined"），
+ * 会让右键菜单渲染成「回到「」」/「回到「undefined」」。写入 state 前统一用 chat id 兜底。
+ */
+function normalizeBoundChat(ch: DesktopCharacter | null | undefined): DesktopCharacter | null {
+  if (!ch) return null;
+  const b = ch.boundChat;
+  if (b && typeof b === 'object' && (!b.name || b.name === 'undefined')) {
+    return { ...ch, boundChat: { ...b, name: b.id } };
+  }
+  return ch;
+}
+
 const DEFAULT_RUNTIME: CharacterRuntimeSettings = {
   enabled: false,
   x: 0,
@@ -63,6 +76,9 @@ function sanitizeBubbleText(raw: string): string {
 
 export const CharacterApp: React.FC = () => {
   const { t } = useI18n();
+  // 多窗口（v3.0.1-beta.13）：每个角色窗由 ?id=<角色id> 独立打开，本窗只负责自己的角色；
+  // 面板（无 id）仍走无参 dcGetState 拿 active 用于高亮。
+  const charId = new URLSearchParams(location.search).get('id') || '';
 
   // v3.0.1-beta.4：角色气泡文案原先是中文原文（src/character/behaviors.ts 现只存 i18n 键），
   // 导致非中文界面下角色仍说中文 → 统一用 t() 解析，台词随界面语言切换。
@@ -148,12 +164,13 @@ export const CharacterApp: React.FC = () => {
   // ===== 状态同步 =====
   useEffect(() => {
     let alive = true;
-    api.dcGetState().then((s) => {
+    api.dcGetState(charId).then((s) => {
       if (!alive) return;
-      setState({ runtime: s.runtime || DEFAULT_RUNTIME, character: s.active });
+      // 角色窗走 id 拿自身角色；面板（无 id）回退到 active 用于高亮
+      setState({ runtime: s.runtime || DEFAULT_RUNTIME, character: normalizeBoundChat(s.character || s.active) });
     });
     const off = api.onDcState((d) => {
-      setState({ runtime: d.runtime || DEFAULT_RUNTIME, character: d.character });
+      setState({ runtime: d.runtime || DEFAULT_RUNTIME, character: normalizeBoundChat(d.character) });
     });
     return () => {
       alive = false;
@@ -277,14 +294,41 @@ export const CharacterApp: React.FC = () => {
     const onMove = (e: MouseEvent) => {
       // 穿透锁定/拖拽期间不改路由（拖拽由主进程锁定可交互）
       if (runtime.passThroughLocked || draggingRef.current) return;
+      // Bug 1：右键菜单打开期间，光标从角色移向菜单项途中会掠过「透明缝隙」（不在 HIT_SELECTOR 内）。
+      // 旧逻辑此处 applyInteractive(false)+setMenuOpen(false)：窗口一旦变穿透就再也收不到 mousemove，
+      // 菜单被卸载，菜单项 onClick 根本不触发（=「绑定/舞台/管理点了没反应」）。
+      // 修正：菜单打开时整窗保持可交互、不关闭菜单；关闭只走下方显式 outside-pointerdown / Escape。
+      if (menuOpenRef.current) {
+        applyInteractive(true);
+        return;
+      }
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const hit = !!el?.closest(HIT_SELECTOR);
       applyInteractive(hit);
-      if (!hit && menuOpenRef.current) setMenuOpen(false);
     };
     window.addEventListener('mousemove', onMove);
     return () => window.removeEventListener('mousemove', onMove);
   }, [applyInteractive, runtime.passThroughLocked]);
+
+  // Bug 1：菜单关闭只走显式路径——点击菜单外部 / Escape，不再由 mousemove 误判关闭。
+  // 捕获期监听保证即使菜单项阻止冒泡也能先判断目标是否在 .dc-menu 内；菜单内部点击交给按钮 onClick。
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onOutsideDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('.dc-menu')) return;
+      setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', onOutsideDown, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onOutsideDown, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
 
   // ===== 视线全屏跟随（主进程轮询全局光标，约 30Hz 推送；窗口整体穿透，窗内 mousemove 收不到屏外光标）=====
   useEffect(() => {
@@ -311,7 +355,9 @@ export const CharacterApp: React.FC = () => {
   const beginPointer = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     if (runtime.passThroughLocked) return;
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    // Bug 3：capture 设在稳定的监听元素（currentTarget）而非e.target。窗口随光标快速移动时，
+    // e.target（子元素/文本节点）可能被重建或不再是命中元素，导致 pointerup/cancel 丢失。
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     const from: 'character' | 'bubble' = (e.currentTarget as HTMLElement).classList.contains('dc-character')
       ? 'character'
       : 'bubble';
@@ -339,7 +385,7 @@ export const CharacterApp: React.FC = () => {
   const endPointer = (e: React.PointerEvent) => {
     const d = dragRef.current;
     dragRef.current = null;
-    (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
     if (d?.started) {
       setDragging(false);
       api.dcDragEnd();
@@ -350,6 +396,33 @@ export const CharacterApp: React.FC = () => {
     // 点在气泡上只由气泡自身处理（文字区点击即收起），不触发跳转。
     if (d?.from === 'character') onCharacterClick();
   };
+
+  // Bug 3：window 级兜底——pointerup/pointercancel/blur 任一发生都确保「一次拖动必定且仅一次」
+  // 发出 dc:drag-end。窗口随光标快速移动时元素级 pointer capture 可能丢失、pointerup 收不到，
+  // 导致主进程 st.dragging 恒 true、窗口永久跟随光标。元素级 onPointerUp 先于本监听触发
+  // （React 事件挂在根节点，冒泡到 window 之前已把 dragRef 清空），故不会重复发送；
+  // 主进程 handler 也有 if(!st.dragging) return 幂等保护，双保险。
+  useEffect(() => {
+    const forceEnd = () => {
+      const d = dragRef.current;
+      if (!d) return;
+      dragRef.current = null;
+      if (d.started) {
+        setDragging(false);
+        api.dcDragEnd();
+        setTimeout(() => setExpression('neutral'), 260);
+      }
+      // 未越过门槛的「单击」语义交给元素级 endPointer，此处不重复触发 onCharacterClick。
+    };
+    window.addEventListener('pointerup', forceEnd);
+    window.addEventListener('pointercancel', forceEnd);
+    window.addEventListener('blur', forceEnd);
+    return () => {
+      window.removeEventListener('pointerup', forceEnd);
+      window.removeEventListener('pointercancel', forceEnd);
+      window.removeEventListener('blur', forceEnd);
+    };
+  }, []);
 
   // ===== 滚轮缩放（悬停在角色本体上时调节桌面角色大小；钳制 0.6~1.6，步长 0.05）=====
   const onCharacterWheel = (e: React.WheelEvent) => {
@@ -402,15 +475,17 @@ export const CharacterApp: React.FC = () => {
       },
       {
         key: 'chat',
-        label: bound ? t('characters.menuBackTo', { name: bound.name }) : t('characters.menuBind'),
+        label: bound ? t('characters.menuBackTo', { name: bound.name || bound.id }) : t('characters.menuBind'),
         onClick: () => {
           if (bound) api.dcOpenChat(bound);
           else api.dcOpenCollection();
         },
       },
-      { key: 'stage', label: t('characters.menuStage'), onClick: () => api.dcOpenCollection() },
+      // Bug 1「打开角色舞台」：带 id 唤起主窗并直接进入该角色的 CharacterStage，
+      // 不再只 dcOpenCollection 停在列表页（面板无跨窗舞台机制，故新增 dc:open-stage 通道）。
+      { key: 'stage', label: t('characters.menuStage'), onClick: () => api.dcOpenStage(state.character?.id || charId) },
       { key: 'manage', label: t('characters.menuManage'), onClick: () => api.dcOpenCollection() },
-      { key: 'hide', label: t('characters.menuHide'), onClick: () => api.dcHideCharacter() },
+      { key: 'hide', label: t('characters.menuHide'), onClick: () => api.dcHideCharacter(charId) },
     ];
   }, [runtime.passThroughLocked, runtime.alwaysOnTop, state.character?.boundChat, t]);
 

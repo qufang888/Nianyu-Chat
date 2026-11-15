@@ -129,7 +129,6 @@ import {
   setBallPeerOnTopProbe,
 } from './floatingBall';
 import {
-  createDesktopCharacter,
   getDesktopCharacterSnapshot,
   refreshDesktopCharacter,
   registerDesktopCharacterIPC,
@@ -7999,7 +7998,8 @@ app.whenReady().then(() => {
     refreshDesktopCharacter();
     broadcast('settings:changed', { desktopCharacters: getDesktopCharacterSnapshot().characters });
   });
-  createDesktopCharacter();
+  // 启动按设置刷新角色窗集合（每个 enabled 角色各一个窗口；旧版只建单个激活角色窗）
+  refreshDesktopCharacter();
   // 启动即处于全屏时，按设置隐藏悬浮球
   if (mainWindow && mainWindow.isFullScreen()) {
     const s = dm.getSettings();

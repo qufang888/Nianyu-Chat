@@ -136,6 +136,9 @@ function undoCollapse(): void {
     collapseTimer2 = null;
     if (panelVisible && panelWindow && !panelWindow.isDestroyed()) {
       panelWindow.webContents.send('panel:show', { h: panelDir, v: panelVDir });
+      // v3.0.1-beta.13：重播弹出动画路径同样立即重申 Z 序。此时面板仍可见（isVisible=true，
+      // collapseTimer2 未触发才进本分支），N1 守卫放行；否则动画期间会被桌宠盖住直到 poll 兜底。
+      reassertFloatingBallOnTop('panel-expand');
     }
   }
 }
@@ -168,6 +171,10 @@ function expandPanel(): void {
   // mouseenter/mouseleave 在光标真正进入/离开面板时再切回可交互，行为正确。
   panelWindow.setIgnoreMouseEvents(true, { forward: true });
   panelWindow.showInactive(); // 不抢焦点（focusable:false 双保险）
+  // v3.0.1-beta.13（Bug 4）：立即重申 Z 序，别等 200ms 轮询里 1s 节流的 poll 兜底——
+  // 否则面板 160ms 弹出动画期间被置顶桌宠盖住，动画完才突然跳上来。此时面板已 showInactive，
+  // isVisible()===true，N1 守卫放行（仅对可见窗口 moveTop）。
+  reassertFloatingBallOnTop('panel-expand');
   panelVisible = true;
   panelWindow.webContents.send('panel:show', { h: panelDir, v: panelVDir });
 }
