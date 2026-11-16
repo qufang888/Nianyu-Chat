@@ -4,10 +4,8 @@
  "about.logo": "니아뉴",
  "about.sub": "NIANYU",
  "about.author": "made by 前方",
- "about.line1": "깊은 정서적 교감을 위한 AI 디지털 휴먼 채팅 앱.",
- "about.line2": "파이프라인 템플릿을 따라가지 않고, 범용 프레임워크를 맹목적으로 따르지도 않습니다.",
- "about.line3": "대화를 매개로 가상의 현실 경계를 만듭니다.",
  "about.line4": "모든 것은 대화할 수 있고, 감정은 울림을 찾습니다.",
+ "about.github": "GitHub 열기",
  "chat.removeImage": "이미지 제거",
  "splash.logo": "니아뉴",
  "fb.quickChat": "빠른 채팅",
@@ -1200,11 +1198,15 @@
  "characters.stageZoom": "모델 크기",
  "characters.speakRate": "자발적 발화 빈도",
 
- "characters.speakRateUnit": "{n}개/분",
+ "characters.speakRateUnit": "{n}/{unit}",
+ "characters.speakRateUnitLabel": "시간 단위",
+ "characters.speakRateUnitMin": "분",
+ "characters.speakRateUnitHour": "시간",
+ "characters.speakRateUnitDay": "일",
 
  "characters.speakRateOff": "꺼짐",
 
- "characters.speakRateHint": "1분에 자발적으로 말할 최대 개수, 0 = 말하지 않음",
+ "characters.speakRateHint": "선택한 시간 단위당 발화 수, 0 = 발화 없음",
 
  "characters.speakRateWarn": "빈도가 높을수록 모델 호출과 비용이 증가합니다",
 

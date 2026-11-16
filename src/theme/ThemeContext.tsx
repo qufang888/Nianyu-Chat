@@ -20,7 +20,18 @@ const Ctx = createContext<ThemeCtx>({
 
 export const useTheme = () => useContext(Ctx);
 
-export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+/**
+ * v3.0.4：animDocKind 决定本窗口用哪套动效门禁选择器。
+ * - 主窗/小窗/悬浮球走默认 'main'（沿用原行为）；
+ * - **角色窗必须传 'character'**：此前角色窗的 ThemeProvider 无条件以 'main' 调用
+ *   applyAnimControl，而 CharacterApp 又以 'character' 调用，同一 document 的两套门禁样式
+ *   互相覆盖（缓存按 document 单例），导致 character 分组对菜单/气泡的门控静默失效。
+ *   传 'character' 后本组件不再重复注入，统一交给 CharacterApp 处理。
+ */
+export const ThemeProvider: React.FC<{
+  children: React.ReactNode;
+  animDocKind?: 'main' | 'character';
+}> = ({ children, animDocKind = 'main' }) => {
   const [theme, setThemeState] = useState<ThemeName>('wechat');
   const [settings, setSettings] = useState<AppSettings | null>(null);
 
@@ -83,7 +94,9 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // 现统一走 applyAnimControl —— 'all-off' 档挂 `.anim-off`；'custom' 档改挂
     // `html[data-anim-off~="<id>"]` 并由自动生成的 <style> 精确关掉对应分组；
     // 'custom' 档永不挂 `.anim-off`，以保证仍开启的分组动画与「流式豁免」不被误杀。
-    applyAnimControl(document, settings, 'main');
+    // v3.0.4：角色窗不在这里注入（CharacterApp 以 'character' 注入），
+    // 避免同 document 两套门禁样式互相覆盖导致菜单/气泡动画门控失效。
+    if (animDocKind !== 'character') applyAnimControl(document, settings, 'main');
     // v2.3.122：毛玻璃效果开关（原「毛玻璃（glass）」主题已删除，其磨砂观感改为每主题开关）。
     // 本处只负责在 <html> 上置/摘 data-glass='on'；半透明承载面 + 模糊令牌 + 丝滑过渡全部由
     // CSS 的 [data-glass='on'] 规则承担（variables.css / index.css），**当前主题配色不变**。
@@ -107,7 +120,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       root.style.removeProperty('--color-primary');
       root.style.removeProperty('--color-primary-text');
     }
-  }, [settings, theme]);
+  }, [settings, theme, animDocKind]);
 
   const setTheme = (t: ThemeName) => {
     setThemeState(t);

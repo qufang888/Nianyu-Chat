@@ -4,10 +4,8 @@
  "about.logo": "Nianyu",
  "about.sub": "NIANYU",
  "about.author": "made by Qianfang",
- "about.line1": "Una aplicación de chat con personajes digitales de IA para una interacción emocional profunda.",
- "about.line2": "Sin plantillas en serie ni obediencia ciega a marcos genéricos.",
- "about.line3": "Usando la conversación como medio para construir el límite entre lo virtual y lo real.",
  "about.line4": "Todo se puede conversar; los sentimientos encuentran su eco.",
+ "about.github": "Visitar GitHub",
  "chat.removeImage": "Quitar imagen",
  "splash.logo": "Nianyu",
  "fb.quickChat": "Chat rápido",
@@ -1200,11 +1198,15 @@
  "characters.stageZoom": "Tamaño del modelo",
  "characters.speakRate": "Frecuencia de habla proactiva",
 
- "characters.speakRateUnit": "{n}/min",
+ "characters.speakRateUnit": "{n}/{unit}",
+ "characters.speakRateUnitLabel": "Unidad de tiempo",
+ "characters.speakRateUnitMin": "min",
+ "characters.speakRateUnitHour": "h",
+ "characters.speakRateUnitDay": "d",
 
  "characters.speakRateOff": "Desactivada",
 
- "characters.speakRateHint": "Máximo de frases activas por minuto; 0 = nunca",
+ "characters.speakRateHint": "Cuántas frases por unidad de tiempo elegida; 0 = nunca",
 
  "characters.speakRateWarn": "Una frecuencia alta genera más llamadas al modelo y más coste",
 

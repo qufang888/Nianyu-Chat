@@ -20,7 +20,7 @@ installGlobalSoundListeners();
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <ThemeProvider>
+    <ThemeProvider animDocKind="character">
       <I18nProvider>
         <CharacterApp />
       </I18nProvider>

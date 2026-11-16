@@ -4,10 +4,8 @@
  "about.logo": "Nianyu",
  "about.sub": "NIANYU",
  "about.author": "made by Qianfang",
- "about.line1": "Чат-приложение с ИИ-цифровыми персонажами для глубокого эмоционального общения.",
- "about.line2": "Без конвейерных шаблонов и без слепого подчинения общим фреймворкам.",
- "about.line3": "Разговор как среда, строящая границу между виртуальным и реальным.",
  "about.line4": "Обо всём можно поговорить; чувства находят свой отзвук.",
+ "about.github": "Открыть GitHub",
  "chat.removeImage": "Убрать изображение",
  "splash.logo": "Nianyu",
  "fb.quickChat": "Быстрый чат",
@@ -1200,11 +1198,15 @@
  "characters.stageZoom": "Размер модели",
  "characters.speakRate": "Частота активных реплик",
 
- "characters.speakRateUnit": "{n}/мин",
+ "characters.speakRateUnit": "{n}/{unit}",
+ "characters.speakRateUnitLabel": "Единица времени",
+ "characters.speakRateUnitMin": "мин",
+ "characters.speakRateUnitHour": "ч",
+ "characters.speakRateUnitDay": "д",
 
  "characters.speakRateOff": "Выкл",
 
- "characters.speakRateHint": "Сколько реплик в минуту питомец говорит сам; 0 = не говорит",
+ "characters.speakRateHint": "Фраз за выбранную единицу времени; 0 = никогда",
 
  "characters.speakRateWarn": "Высокая частота увеличивает число вызовов модели и расходы",
 

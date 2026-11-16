@@ -167,9 +167,22 @@
   font-size: calc(11px * var(--font-scale));
   color: var(--color-text-secondary);
 }
+/* v3.0.4：单位选择器（分钟/小时/天），与数值同排 */
+.dc-coll-rate-unit {
+  padding: 1px 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-panel);
+  color: var(--color-text-secondary);
+  font-size: calc(10px * var(--font-scale));
+  line-height: 1.4;
+  cursor: pointer;
+}
 .dc-coll-rate-value {
   font-variant-numeric: tabular-nums;
   color: var(--color-text);
+  margin-left: auto;
+  white-space: nowrap;
 }
 /* 频率偏高时数值转警示色（提示只讲成本，不讲"实际速率"） */
 .dc-coll-rate-value.warn {

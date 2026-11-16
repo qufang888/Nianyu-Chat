@@ -4,10 +4,8 @@
  "about.logo": "念語",
  "about.sub": "NIANYU",
  "about.author": "made by 前方",
- "about.line1": "一款面向深度情感互動的 AI 數位人對話網站。",
- "about.line2": "不追逐流水線模板，不盲從通用框架。",
- "about.line3": "以對話為媒介，搭建虛擬與現實的邊界。",
  "about.line4": "萬物皆可對話，心意自有回響。",
+ "about.github": "造訪 GitHub",
  "chat.removeImage": "移除圖片",
  "splash.logo": "念語",
  "fb.quickChat": "快捷聊天",
@@ -1200,11 +1198,15 @@
  "characters.stageZoom": "模型大小",
  "characters.speakRate": "主動說話頻率",
 
- "characters.speakRateUnit": "{n} 條/分鐘",
+ "characters.speakRateUnit": "{n}/{unit}",
+ "characters.speakRateUnitLabel": "計時單位",
+ "characters.speakRateUnitMin": "分鐘",
+ "characters.speakRateUnitHour": "小時",
+ "characters.speakRateUnitDay": "天",
 
  "characters.speakRateOff": "已關閉",
 
- "characters.speakRateHint": "每分鐘最多主動說幾句，0 = 不主動說話",
+ "characters.speakRateHint": "依所選單位設定主動說話條數，0 = 不主動說話",
 
  "characters.speakRateWarn": "頻率較高會產生較多模型呼叫與費用",
 

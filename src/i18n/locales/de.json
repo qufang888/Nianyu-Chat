@@ -4,10 +4,8 @@
  "about.logo": "Nianyu",
  "about.sub": "NIANYU",
  "about.author": "made by Qianfang",
- "about.line1": "Eine KI-Digitalcharakter-Chat-App für tiefe emotionale Interaktion.",
- "about.line2": "Keine Pipeline-Vorlagen, kein blindes Befolgen allgemeiner Frameworks.",
- "about.line3": "Mit Gesprächen als Medium, um die Grenze zwischen virtuell und real zu bauen.",
  "about.line4": "Alles lässt sich besprechen; Gefühle finden ihr Echo.",
+ "about.github": "GitHub besuchen",
  "chat.removeImage": "Bild entfernen",
  "splash.logo": "Nianyu",
  "fb.quickChat": "Schnellchat",
@@ -1200,11 +1198,15 @@
  "characters.stageZoom": "Modellgröße",
  "characters.speakRate": "Aktive Sprechrate",
 
- "characters.speakRateUnit": "{n}/Min.",
+ "characters.speakRateUnit": "{n}/{unit}",
+ "characters.speakRateUnitLabel": "Zeiteinheit",
+ "characters.speakRateUnitMin": "Min.",
+ "characters.speakRateUnitHour": "Std.",
+ "characters.speakRateUnitDay": "T",
 
  "characters.speakRateOff": "Aus",
 
- "characters.speakRateHint": "Wie viele Sätze pro Minute aktiv gesagt werden dürfen; 0 = nie",
+ "characters.speakRateHint": "Wie viele Sätze pro gewählter Zeiteinheit aktiv gesagt werden; 0 = nie",
 
  "characters.speakRateWarn": "Eine hohe Rate erzeugt mehr Modellaufrufe und Kosten",
 

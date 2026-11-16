@@ -70,6 +70,8 @@ const preload = read('electron/preload.ts');
 const electronMain = read('electron/main.ts');
 const types = read('src/types.ts');
 const trans = read('src/i18n/translations.ts');
+const themeCtx = read('src/theme/ThemeContext.tsx');
+const aboutModal = read('src/components/AboutModal.tsx');
 const windowLevels = read('electron/windowLevels.ts');
 const floatingBall = read('electron/floatingBall.ts');
 const chatWin = read('src/components/ChatWindow.tsx');
@@ -552,7 +554,7 @@ check('Bug1 主窗接 dc:open-stage → 切角色面板 + 带 nonce 舞台请求
   /api\.onDcOpenStage\(/.test(appRoot) &&
   /setDcStageRequest\(\{ id, nonce: Date\.now\(\) \}\)/.test(appRoot) &&
   /stageRequest=\{dcStageRequest\}/.test(appRoot) &&
-  /snap\.characters\.find\(\(x\) => x\.id === stageRequest\.id\)/.test(coll) &&
+  /snap\.characters\.find\(\(x\) => x\.id === (id|stageRequest\.id)\)/.test(coll) &&
   /setStageChar\(c\)/.test(coll));
 check('Bug1 绑定/管理两条路径仍在（bound→dcOpenChat，unbound→dcOpenCollection）',
   /if \(bound\) api\.dcOpenChat\(bound\);\s*else api\.dcOpenCollection\(\)/.test(appTsx));
@@ -765,11 +767,20 @@ section('J. QA 复检发现的 2 个 P2 + 新增「新消息实时弹气泡」�
 // 根因：App 只清了 dcStageRequest（prop），面板内部已 set 的 stageChar 未清，
 // 面板不重挂载 → CharacterStage 继续盖在面板上，表现为「管理角色却停在舞台」。
 check('J1 舞台请求被撤销时同步关闭已打开的 CharacterStage（否则「管理角色」停在舞台）',
-  /if \(!stageRequest \|\| !stageRequest\.id\) \{[\s\S]{0,200}setStageChar\(null\);[\s\S]{0,80}return;/.test(coll));
+  /if \(!stageRequest \|\| !stageRequest\.id\) \{[\s\S]{0,240}setStageChar\(null\);/.test(coll));
 check('J1 关闭舞台不破坏既有 nonce 去重与异步重试逻辑',
-  /if \(stageRequest\.nonce === lastStageNonceRef\.current\) return;/.test(coll) &&
-  /lastStageNonceRef\.current = stageRequest\.nonce;/.test(coll) &&
-  /snap\.characters\.find\(\(x\) => x\.id === stageRequest\.id\)/.test(coll));
+  /stageRequest\.nonce !== lastStageNonceRef\.current/.test(coll) &&
+  /lastStageNonceRef\.current = stageRequest\?\.nonce/.test(coll) &&
+  /pendingStageIdRef/.test(coll));
+// v3.0.4 P1：舞台拖动缩放时窗口突然消失 —— 缩放广播触发 refresh 后误跑关闭分支。
+// 修法：关闭只依赖 stageRequest，打开由 pendingStageIdRef 承接，且关闭分支不得依赖 snap.characters。
+check('v3.0.4 舞台开关 effect 已拆分：关闭只认 stageRequest，不被 snap.characters 碰动',
+  /if \(!stageRequest \|\| !stageRequest\.id\) \{[\s\S]{0,160}setStageChar\(null\);/.test(coll) &&
+  /\}, \[stageRequest\]\);/.test(coll) &&
+  /pendingStageIdRef/.test(coll) &&
+  /\}, \[snap\.characters, stageRequest\?\.nonce\]\);/.test(coll));
+check('v3.0.4 仅 scale 变化广播跳过 reload（降低缩放期间重渲染）',
+  /changed\[0\] === 'scale'/.test(coll) && /if \(keys\.length === 1/.test(coll));
 
 // J2（P2-2）：主窗重建后「第一次」点击仍可能丢 IPC —— 裸 ipcRenderer.on 无缓存重放。
 // 修法：preload 层给 dc:open-chat / dc:open-collection / dc:open-stage 做「意图缓存 + 订阅后重放」。
@@ -1001,11 +1012,42 @@ check('K7 3D / Live2D 渲染分辨率随 zoom 提升（缺省 1 ⇒ 桌宠窗行
   /targetResolution/.test(l2dView));
 
 // ---------- K8. 角色面板频率滑块 ----------
-check('K8 角色卡片有频率滑块（0~60 / 步长 1）',
+check('K8 角色卡片有频率滑块（单位化范围 / 步长 1）',
   /min=\{0\}/.test(coll) &&
-  /max=\{60\}/.test(coll) &&
+  /max=\{displayMax\}/.test(coll) &&
   /step=\{1\}/.test(coll) &&
   /speakRate/.test(coll));
+// v3.0.4：多单位（分钟/小时/天）——单位只作视图换算，真源仍是条/分钟
+check('v3.0.4 lineSchedule 提供单位换算函数且保留小数精度',
+  /export type SpeakRateUnit = 'min' \| 'hour' \| 'day'/.test(lineScheduleSrc) &&
+  /export function rateToPerMinute/.test(lineScheduleSrc) &&
+  /export function rateForUnit/.test(lineScheduleSrc) &&
+  /export function rateMaxForUnit/.test(lineScheduleSrc) &&
+  /Math\.round\(raw \* RATE_PRECISION\) \/ RATE_PRECISION/.test(lineScheduleSrc));
+check('v3.0.4 角色卡片有单位选择器（分钟/小时/天，无秒档）',
+  /dc-coll-rate-unit/.test(coll) &&
+  /value="min"/.test(coll) && /value="hour"/.test(coll) && /value="day"/.test(coll) &&
+  !/value="sec"/.test(coll));
+check('v3.0.4 滑块显示值与写入值都经共享单位换算函数',
+  /rateForUnit\(rate, rateUnit\)/.test(coll) &&
+  /rateToPerMinute\(Number\(e\.target\.value\), rateUnit\)/.test(coll));
+// v3.0.4 P1 动画：prefers-reduced-motion 不再一刀切 kill 菜单/气泡动画
+check('v3.0.4 reduced-motion 不再对菜单/气泡用 animation:none!important',
+  /@media \(prefers-reduced-motion: reduce\)/.test(charCss) &&
+  /animation-duration: 0\.01ms !important/.test(charCss) &&
+  !/\.dc-bubble,[\s\S]{0,80}\.dc-menu \{\s*animation: none !important/.test(charCss));
+check('v3.0.4 气泡/菜单弹入动画补 both 填充模式',
+  /animation: dcBubbleIn calc\([^;]+\) linear both/.test(charCss) &&
+  /animation: dcMenuIn calc\([^;]+\) linear both/.test(charCss));
+check('v3.0.4 角色窗不再以 main kind 注入动画门禁（避免覆盖 character 门禁）',
+  /animDocKind="character"/.test(charEntry) &&
+  /animDocKind !== 'character'\) applyAnimControl\(document, settings, 'main'\)/.test(themeCtx));
+check('v3.0.4 关于页删除旧长句、只保留标语，并带版本徽标与 GitHub 按钮',
+  !/about\.line1|about\.line2|about\.line3/.test(aboutModal) &&
+  /about\.line4/.test(aboutModal) &&
+  /updateStatus\(\)/.test(aboutModal) &&
+  /openExternal\(/.test(aboutModal) &&
+  !/一款面向深度情感交互/.test(trans));
 check('K8 频率缺省回落 2 条/分（存量用户升级行为不回退）',
   /normalizeSpeakRate\(c\.speakRate\)/.test(coll));
 check('K8 滑块滚轮不改数值（避免与页面滚动打架）',
@@ -1041,6 +1083,10 @@ const NEW_KEYS = [
   'animCtl.bubbleHoldBase', 'animCtl.bubbleHoldStep', 'animCtl.bubbleHoldMax',
   'animCtl.bubbleHoldPreview', 'animCtl.bubbleHoldDesc',
   'animCtl.groupCharacterDetailOff',
+  // v3.0.4：多单位 + 关于页
+  'characters.speakRateUnitLabel', 'characters.speakRateUnitMin',
+  'characters.speakRateUnitHour', 'characters.speakRateUnitDay',
+  'about.github',
 ];
 for (const k of NEW_KEYS) {
   const n = (trans.match(new RegExp(`'${k.replace(/\./g, '\\.')}':`, 'g')) || []).length;
@@ -1054,7 +1100,7 @@ for (const lang of LOCALE_CODES) {
     json = {};
   }
   const miss = NEW_KEYS.filter((k) => typeof json[k] !== 'string' || !json[k].trim());
-  check(`locales/${lang}.json 含 15 个新增桌宠键且非空`, miss.length === 0, miss.join(','));
+  check(`locales/${lang}.json 含 20 个新增桌宠/关于键且非空`, miss.length === 0, miss.join(','));
 }
 check('K10 未新增「实际约 N 条/分」类折中提示（用户拍板取消）',
   !/实际约|实际生效|受请求耗时限制|实际速率/.test(trans) &&
@@ -1143,6 +1189,18 @@ check('O3 30s 兜底只在两路都缺失时触发且带告警（非静默回归
   const brokenK = threeView.replace(/Math\.max\(0\.6, zoom\)/g, 'Math.max(1, zoom)');
   check('（可证伪）O1 恢复 Math.max(1, zoom) 后 K12 断言失效',
     /Math\.max\(1,\s*zoom\)/.test(brokenK));
+  // 变异 12：把多单位换算改回 Math.round（每天 1 条被抹成 0）⇒ v3.0.4 断言失效
+  const brokenL = lineScheduleSrc.replace('Math.round(raw * RATE_PRECISION) / RATE_PRECISION', 'Math.round(raw)');
+  check('（可证伪）频率归一改回 Math.round 后多单位断言失效',
+    !/Math\.round\(raw \* RATE_PRECISION\) \/ RATE_PRECISION/.test(brokenL));
+  // 变异 13：把 reduced-motion 改回 animation:none ⇒ 动画断言失效
+  const brokenM = charCss.replace(/animation-duration: 0\.01ms !important;/g, 'animation: none !important;');
+  check('（可证伪）reduced-motion 改回 animation:none 后动画断言失效',
+    !/animation-duration: 0\.01ms !important/.test(brokenM));
+  // 变异 14：关于页改回旧长句 ⇒ 断言失效
+  const brokenN = aboutModal.replace("{t('about.line4')}", "'一款面向深度情感交互的 AI 数字人对话网站'");
+  check('（可证伪）关于页恢复旧长句后断言失效',
+    /一款面向深度情感交互/.test(brokenN));
 }
 
 // ---------- 汇总 ----------

@@ -317,6 +317,8 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       '.modal-mask',
       '.modal',
       '.modal-card',
+      // v3.0.4：关于页强调线的呼吸滑动（伪元素动画，登记父选择器即可被分组开关关掉）
+      '.about-accent',
       // 事件弹窗：只列真正带过渡/动画的具体类。**禁用通配 `*`**（否则该弹窗内将来出现的
       // .stream-char/.pseudo-char 会被 theme 组静默关掉，破坏「流式恒开」承诺）。
       '.event-overlay',

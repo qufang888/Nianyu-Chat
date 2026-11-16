@@ -635,6 +635,8 @@ export interface DesktopCharacter {
   bubble: boolean;
   /**
    * 主动说话频率（条/分钟，0~60；缺省 2；0 = 完全不主动说话）。
+   * v3.0.4：允许小数——「每天 1 条」= 1/1440 ≈ 0.000694 条/分；单位（分钟/小时/天）
+   * 只是 UI 换算视图，存储真源恒为条/分钟。
    * 持久化于 settings.desktopCharacters[]，写入遵守「整数组覆盖」语义。
    * 缺省值由 src/utils/lineSchedule.ts 的 deriveLineSchedule 统一兜底。
    */

@@ -4,10 +4,8 @@
  "about.logo": "念語",
  "about.sub": "NIANYU",
  "about.author": "made by 前方",
- "about.line1": "深い感情の交流のための、AI デジタル-human チャットアプリ。",
- "about.line2": "流れ作業の型には頼らず、汎用フレームワークを鵜呑みにもしない。",
- "about.line3": "会話を媒介として、仮想と現実の境界をつくる。",
  "about.line4": "すべてに語りが可能。感情は、共鳴を見つける。",
+ "about.github": "GitHub を開く",
  "chat.removeImage": "画像を削除",
  "splash.logo": "念語",
  "fb.quickChat": "クイックチャット",
@@ -1200,11 +1198,15 @@
  "characters.stageZoom": "モデルのサイズ",
  "characters.speakRate": "自発的な発話頻度",
 
- "characters.speakRateUnit": "{n} 本/分",
+ "characters.speakRateUnit": "{n}/{unit}",
+ "characters.speakRateUnitLabel": "時間単位",
+ "characters.speakRateUnitMin": "分",
+ "characters.speakRateUnitHour": "時間",
+ "characters.speakRateUnitDay": "日",
 
  "characters.speakRateOff": "オフ",
 
- "characters.speakRateHint": "1 分間に自発的に話す最大本数。0 = 話さない",
+ "characters.speakRateHint": "選択した時間単位ごとの発話数。0 = 発話なし",
 
  "characters.speakRateWarn": "頻度が高いほどモデル呼び出しと費用が増えます",
 

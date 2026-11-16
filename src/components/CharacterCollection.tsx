@@ -15,7 +15,14 @@ import { useToast } from './Toast';
 import type { CharacterRuntimeSettings, ChatListItem, DesktopCharacter } from '../types';
 import { PlaceholderCharacter } from '../character/PlaceholderCharacter';
 import { CharacterStage } from './CharacterStage';
-import { normalizeSpeakRate, SPEAK_RATE_MAX, SPEAK_RATE_MIN } from '../utils/lineSchedule';
+import {
+  normalizeSpeakRate,
+  normalizeSpeakRateUnit,
+  rateForUnit,
+  rateMaxForUnit,
+  rateToPerMinute,
+  type SpeakRateUnit,
+} from '../utils/lineSchedule';
 
 /** 频率达到该值时数值转警示色并追加成本提示（只讲成本，不讲"实际速率"）。 */
 const SPEAK_RATE_WARN_THRESHOLD = 20;
@@ -48,6 +55,8 @@ export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageR
   const [stageChar, setStageChar] = useState<DesktopCharacter | null>(null);
   const [rtStatus, setRtStatus] = useState<{ dir: string; cubism4: boolean; cubism2: boolean } | null>(null);
   const lastStageNonceRef = useRef(0);
+  /** v3.0.4：频率单位（分钟/小时/天）为视图偏好，真源仍是条/分钟；缺省分钟，存量行为不变。 */
+  const [rateUnit, setRateUnit] = useState<SpeakRateUnit>('min');
 
   const refresh = useCallback(async () => {
     const s = await api.dcGetState();
@@ -59,7 +68,19 @@ export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageR
     void refresh();
     api.getChatList().then((list) => setChats(list || []));
     const off = api.onDcState(() => void refresh());
-    const offSettings = api.onSettingsChanged(() => void refresh());
+    // v3.0.4：舞台拖动时的「仅 scale 变化」广播无需刷新整个快照（舞台已本地回声同步），
+    // 跳过它能避免高频重渲染，进一步降低缩放期间舞台被误关/闪烁的概率。
+    const offSettings = api.onSettingsChanged((_e: any, patch: any) => {
+      const keys = patch && typeof patch === 'object' ? Object.keys(patch) : [];
+      if (keys.length === 1 && keys[0] === 'desktopCharacters') {
+        const list = patch.desktopCharacters;
+        if (Array.isArray(list) && list.length > 0 && list.every((c: any) => c && typeof c === 'object')) {
+          const changed = Object.keys(list[0]).filter((k) => k !== 'id');
+          if (changed.length === 1 && changed[0] === 'scale') return;
+        }
+      }
+      void refresh();
+    });
     return () => {
       off();
       offSettings();
@@ -73,19 +94,35 @@ export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageR
   // P2-1：stageRequest 被清空（如右键「管理角色」，App.tsx 会 setDcStageRequest(null)）时，
   // 必须同时关掉已打开的 CharacterStage。否则面板不重挂载、stageChar 仍非 null，
   // 舞台会继续盖在面板上，表现为「点管理角色却停在角色舞台」。
+  // v3.0.4 P1：把「撤销即关闭」与「列表到达才打开」拆成两个 effect。
+  // 旧实现把两者塞进同一个 [stageRequest, snap.characters] effect，
+  // 而缩放提交会全局广播 settings:changed ⇒ refresh() ⇒ snap.characters 换新数组 ⇒ effect 重跑，
+  // 于是「拖动舞台滑块」竟会执行 setStageChar(null) ⇒ 舞台窗口突然消失。
+  // 拆开后：关闭只认 stageRequest（不再被 snap.characters 碰动）；打开由 pending ref 承接异步列表。
+  const pendingStageIdRef = useRef<string | null>(null);
+
+  // (a) 只负责「撤销请求 → 关闭舞台」，只依赖 stageRequest
   useEffect(() => {
     if (!stageRequest || !stageRequest.id) {
-      // 请求已撤销 → 关闭舞台，让「管理角色」真正落到角色面板列表。
-      // 首次挂载时 stageRequest 本就是 null，此处 setStageChar(null) 是幂等 no-op。
+      lastStageNonceRef.current = 0; // 允许同 nonce 之后重开
+      pendingStageIdRef.current = null;
       setStageChar(null);
-      return;
+    } else if (stageRequest.nonce !== lastStageNonceRef.current) {
+      // (b) 只负责登记待打开的新请求
+      pendingStageIdRef.current = stageRequest.id;
     }
-    if (stageRequest.nonce === lastStageNonceRef.current) return;
-    const c = snap.characters.find((x) => x.id === stageRequest.id);
-    if (!c) return;
-    lastStageNonceRef.current = stageRequest.nonce;
+  }, [stageRequest]);
+
+  // (c) 只负责「快照到达 → 兑现待打开」，依赖 snap.characters 但绝不 setStageChar(null)
+  useEffect(() => {
+    const id = pendingStageIdRef.current;
+    if (!id) return;
+    const c = snap.characters.find((x) => x.id === id);
+    if (!c) return; // 快照还没到，等下次 refresh
+    pendingStageIdRef.current = null;
+    lastStageNonceRef.current = stageRequest?.nonce ?? 0;
     setStageChar(c);
-  }, [stageRequest, snap.characters]);
+  }, [snap.characters, stageRequest?.nonce]);
 
   const persist = useCallback(
     async (next: DesktopCharacter[]) => {
@@ -221,6 +258,9 @@ export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageR
             const lightPreview = c.kind === 'placeholder' || c.kind === 'image' || c.kind === 'sprite';
             // 频率缺省回落 2 条/分（与主进程护栏同值），保证老角色升级后行为不回退
             const rate = normalizeSpeakRate(c.speakRate);
+            // v3.0.4：按当前单位换算显示值；真源 rate 恒为条/分钟
+            const displayRate = rateForUnit(rate, rateUnit);
+            const displayMax = rateMaxForUnit(rateUnit);
             return (
               <div className={`dc-coll-card${isActive ? ' active' : ''}`} key={c.id}>
                 <div className="dc-coll-preview">
@@ -273,36 +313,44 @@ export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageR
                       {t('characters.bubble')}
                     </label>
                   </div>
-                  {/* v3.0.3：主动说话频率（条/分钟）。0 = 完全不主动说话。
-                      写入走 patchCharacter（整数组覆盖），与其它角色字段同一路径。 */}
+                  {/* v3.0.4：主动说话频率，支持分钟/小时/天三种单位。
+                      真源仍是条/分钟（DesktopCharacter.speakRate），单位只是视图换算；
+                      0 = 完全不主动说话。写入走 patchCharacter（整数组覆盖）。 */}
                   <div className="dc-coll-rate">
                     <div className="dc-coll-rate-head">
                       <span className="dc-coll-rate-label">{t('characters.speakRate')}</span>
+                      <select
+                        className="dc-coll-rate-unit"
+                        value={rateUnit}
+                        aria-label={t('characters.speakRateUnitLabel')}
+                        onChange={(e) => setRateUnit(normalizeSpeakRateUnit(e.target.value))}
+                      >
+                        <option value="min">{t('characters.speakRateUnitMin')}</option>
+                        <option value="hour">{t('characters.speakRateUnitHour')}</option>
+                        <option value="day">{t('characters.speakRateUnitDay')}</option>
+                      </select>
                       <span
                         className={`dc-coll-rate-value${rate >= SPEAK_RATE_WARN_THRESHOLD ? ' warn' : ''}`}
                       >
                         {rate === 0
                           ? t('characters.speakRateOff')
-                          : t('characters.speakRateUnit', { n: String(rate) })}
+                          : t('characters.speakRateUnit', { n: String(displayRate), unit: t(`characters.speakRateUnit${rateUnit === 'min' ? 'Min' : rateUnit === 'hour' ? 'Hour' : 'Day'}`) })}
                       </span>
                     </div>
                     <input
                       className="dc-coll-rate-range"
                       type="range"
                       min={0}
-                      max={60}
+                      max={displayMax}
                       step={1}
-                      value={rate}
+                      value={displayRate}
                       aria-label={t('characters.speakRate')}
                       // 滚轮在滑块上不得改数值（避免与页面滚动打架）
                       onWheel={(e) => e.preventDefault()}
                       onChange={(e) =>
                         void patchCharacter(c.id, {
-                          // 写入时按共享常量钳制，避免越界值进 settings
-                          speakRate: Math.min(
-                            SPEAK_RATE_MAX,
-                            Math.max(SPEAK_RATE_MIN, Number(e.target.value))
-                          ),
+                          // 把当前单位下的整数值换算回条/分钟真源（共享函数，精度归一）
+                          speakRate: rateToPerMinute(Number(e.target.value), rateUnit),
                         })
                       }
                     />

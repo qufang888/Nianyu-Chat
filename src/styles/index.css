@@ -2509,30 +2509,97 @@ body.cursor-hidden * {
   color: var(--color-text-secondary);
 }
 
-/* 关于软件弹窗 */
+/* ===== 关于软件弹窗（v3.0.4 改版）=====
+   设计：品牌区（Logo + 副名 + 强调线）→ 标语主角 → 作者/版本 → GitHub 入口。
+   所有颜色走主题变量；沿用 .modal「无投影」约定，层次靠描边 + 留白节奏。 */
+.about .modal-body,
+.about .about-body {
+  padding: 30px 32px 26px;
+  text-align: center;
+}
+.about .about-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
 .about .about-logo {
-  font-size: calc(40px * var(--font-scale));
+  font-size: calc(46px * var(--font-scale));
   font-weight: 800;
-  letter-spacing: 8px;
+  letter-spacing: 10px;
+  line-height: 1.2;
   color: var(--color-text);
+  /* 极轻的渐变文字：主色 → 主色墨色，避免纯色大字的呆板感 */
+  background: linear-gradient(120deg, var(--color-text), var(--color-primary-ink));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 .about .about-sub {
-  font-size: calc(14px * var(--font-scale));
-  letter-spacing: 10px;
+  font-size: calc(12px * var(--font-scale));
+  letter-spacing: 12px;
   color: var(--color-text-secondary);
-  margin-top: 2px;
+  margin-top: 4px;
+  text-indent: 12px; /* 抵消末字字距，保持视觉居中 */
+}
+/* 强调线：复用启动屏的呼吸线思路，但按 reduced-motion 降级为静态 */
+.about .about-accent {
+  position: relative;
+  width: 200px;
+  height: 3px;
+  margin-top: 16px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--color-primary) 22%, transparent);
+  overflow: hidden;
+}
+.about .about-accent::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 42%;
+  border-radius: 2px;
+  background: var(--color-primary);
+  animation: about-accent-slide 2.4s linear infinite;
+}
+@keyframes about-accent-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(340%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .about .about-accent::after { animation: none; width: 100%; }
+}
+.about .about-slogan {
+  margin-top: 24px;
+  font-size: calc(19px * var(--font-scale));
+  font-weight: 600;
+  line-height: 1.7;
+  letter-spacing: 2px;
+  color: var(--color-text);
+  /* 标语下方浅色承载块，让唯一文案成为视觉中心 */
+  padding: 18px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-primary) 6%, transparent);
+}
+.about .about-meta {
+  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 .about .about-author {
-  margin-top: 16px;
   color: var(--color-primary-ink);
   font-weight: 600;
-  font-size: calc(14px * var(--font-scale));
+  font-size: calc(13px * var(--font-scale));
 }
-.about .about-lines {
-  margin-top: 18px;
-  line-height: 2.1;
-  color: var(--color-text);
-  font-size: calc(14px * var(--font-scale));
+.about .about-actions {
+  margin-top: 22px;
+  display: flex;
+  justify-content: center;
+}
+.about .about-actions .btn-ghost {
+  min-width: 160px;
 }
 .theme-options {
   display: grid;

@@ -163,7 +163,8 @@ body {
        --anim-speed      = 动效速度倍率（applyAnimControl 写入；自定义档下由 character 分组规则覆盖）
      JS 侧的卸载等待用 bubbleAnimMs() = bubbleSec × 1000 × getGroupAnimSpeed(settings,'character')，
      与这里的 calc(...) 严格对得上 ⇒ 不会出现「闪一下消失 / 卡住不消失」。 */
-  animation: dcBubbleIn calc(var(--dc-bubble-anim, 0.18s) * var(--anim-speed, 1)) linear;
+  /* v3.0.4：补 both——动画被某档位 kill 时仍保留明确的起始/结束形态，避免「基态直接可见⇒看不出动画」。 */
+  animation: dcBubbleIn calc(var(--dc-bubble-anim, 0.18s) * var(--anim-speed, 1)) linear both;
 }
 /* 收回态：播放 dcBubbleOut 后再由 JS 卸载。
    pointer-events:none 保证收回期间不接收点击（避免"缩回中还能点"导致的误触）。 */
@@ -222,7 +223,8 @@ body {
   /* 时长来源与气泡同构：--dc-menu-anim（设置里的基准秒数，默认 0.20s）× --anim-speed（倍率）。
      JS 侧的卸载等待用 menuAnimMs() = menuSec × 1000 × getGroupAnimSpeed(settings,'character')，
      与这里的 calc(...) 严格对得上 ⇒ 速度调快/调慢时两侧始终一致。 */
-  animation: dcMenuIn calc(var(--dc-menu-anim, 0.20s) * var(--anim-speed, 1)) linear;
+  /* v3.0.4：补 both，理由同气泡 */
+  animation: dcMenuIn calc(var(--dc-menu-anim, 0.20s) * var(--anim-speed, 1)) linear both;
 }
 /* 收回动画：React 先加 .closing 播完再卸载，pointer-events:none 保证收回期间不挡操作。
    linear 与弹入一致；forwards 保持末帧透明，避免卸载前闪回。 */
@@ -313,10 +315,43 @@ html[data-anim-off~='character'] .dc-err {
   animation: none !important;
   transition: none !important;
 }
+/* v3.0.4（P1 动画失效根因）：
+   旧实现在这里对 .dc-bubble/.dc-menu 一律 `animation:none!important`，
+   而两者的基态本来就是完全可见（opacity:1、无位移），于是 Windows 关掉系统动画后
+   菜单/气泡「瞬现瞬隐」，用户感知为「完全没有线性动画」。
+   现在改为：无限循环的呼吸/游走(.dc-svg/.dc-modelimg)继续彻底关闭；
+   菜单与气泡保留**极短**的线性淡入淡出（0.01ms，只留一帧的可见性过渡），
+   既尊重 reduced-motion 的「减少大幅运动」诉求，又不丢失弹出的视觉反馈。
+   位移/缩放在 reduced-motion 下也一并归零，避免明显运动。 */
 @media (prefers-reduced-motion: reduce) {
   .dc-svg,
-  .dc-bubble,
-  .dc-menu {
+  .dc-modelimg {
     animation: none !important;
   }
+  .dc-bubble,
+  .dc-bubble.closing,
+  .dc-menu,
+  .dc-menu.closing {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+/* v3.0.4：动效被三档开关彻底关掉时，给出明确的可见终态兜底
+   （与 index.css 的 .qip-item 同范式），避免元素卡在动画首帧。 */
+html.anim-off .dc-bubble,
+html.anim-off .dc-bubble.closing,
+html.anim-off .dc-menu,
+html.anim-off .dc-menu.closing,
+html[data-anim-off~='character'] .dc-bubble,
+html[data-anim-off~='character'] .dc-bubble.closing,
+html[data-anim-off~='character'] .dc-menu,
+html[data-anim-off~='character'] .dc-menu.closing {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0) scale(1);
+}
+html.anim-off .dc-menu,
+html.anim-off .dc-menu.closing,
+html[data-anim-off~='character'] .dc-menu,
+html[data-anim-off~='character'] .dc-menu.closing {
+  transform: none;
 }
