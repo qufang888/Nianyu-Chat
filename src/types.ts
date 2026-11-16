@@ -1,5 +1,10 @@
 // 共享类型定义（渲染进程与主进程通用）
 import { DEFAULT_MEMORY_SUMMARIZE_PROMPT, DEFAULT_MEMORY_INJECT_PROMPT } from './utils/builtinPrompts';
+// v3.0.4 P1：主动说话频率的展示单位是「用户偏好」，生命周期与角色一致，
+// 故类型直接复用 lineSchedule 的判据（单一真源，避免两处字面量联合类型漂移）。
+// 安全说明：lineSchedule.ts **零 import**（见其文件头注释），且这里只是 `import type`
+// （编译期擦除），因此不会给 types.ts ↔ utils 之间引入任何运行时循环依赖。
+import type { SpeakRateUnit } from './utils/lineSchedule';
 
 export type Gender = 'male' | 'female' | 'other' | 'unknown';
 
@@ -641,6 +646,17 @@ export interface DesktopCharacter {
    * 缺省值由 src/utils/lineSchedule.ts 的 deriveLineSchedule 统一兜底。
    */
   speakRate?: number;
+  /**
+   * 主动说话频率的**展示单位偏好**（v3.0.4 P1 修复：单位必须随角色持久化）。
+   * - 缺省（undefined）= 'min'，存量数据行为与升级前完全一致；
+   * - 真源恒为 `speakRate`（条/分钟）。本字段**只影响 UI 展示与输入框单位**，
+   *   **不参与任何频率派生**（deriveLineSchedule / 主进程护栏都完全不看它）；
+   * - 为什么必须持久化：单位若只存组件内 state，关闭面板再打开就重置回「分钟」，
+   *   于是「5 条/天」（真源 0.003472 条/分）在分钟档被四舍五入成 0 ⇒
+   *   界面显示「0 条/分钟」而角色实际仍在按 5 条/天说话（用户可见的 P1 假象）。
+   * - 持久化于 settings.desktopCharacters[]，写入遵守「整数组覆盖」语义（HC-8）。
+   */
+  speakRateUnit?: SpeakRateUnit;
   /** 导入时的格式提示（非原生可渲染格式的说明文案键后缀） */
   note?: string;
 }
@@ -1395,6 +1411,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
       // v3.0.3：主动说话频率（条/分钟）。存量用户升级后默认 2 条/分
       // （派生 30000ms，与 v3.0.2 主进程 30s 护栏同值，行为不回退）。
       speakRate: 2,
+      // v3.0.4 P1：出厂展示单位 = 分钟（与 2 条/分一致，单位换算后仍是 2）。
+      speakRateUnit: 'min',
     },
   ],
   characterRuntime: {

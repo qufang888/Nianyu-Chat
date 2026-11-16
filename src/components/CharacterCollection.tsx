@@ -27,6 +27,61 @@ import {
 /** 频率达到该值时数值转警示色并追加成本提示（只讲成本，不讲"实际速率"）。 */
 const SPEAK_RATE_WARN_THRESHOLD = 20;
 
+/** 展示单位的尝试顺序（自动兜底时按此顺序挑第一个能显示 ≥1 的单位）。 */
+const RATE_UNIT_ORDER: SpeakRateUnit[] = ['min', 'hour', 'day'];
+
+/** 某个单位对应的 i18n 键（集中一处，避免下拉/标签两处三元各写一遍而漂移）。 */
+function speakRateUnitLabelKey(unit: SpeakRateUnit): string {
+  if (unit === 'hour') return 'characters.speakRateUnitHour';
+  if (unit === 'day') return 'characters.speakRateUnitDay';
+  return 'characters.speakRateUnitMin';
+}
+
+/** 一次「频率 → 展示」的派生结果（纯函数产物，UI 只消费不加工）。 */
+interface RateDisplay {
+  /** 实际用于展示/输入的单位 */
+  unit: SpeakRateUnit;
+  /** 该单位下的整数值（= 滑块档位 = 输入框显示值） */
+  value: number;
+  /** 该单位下的上界（= 滑块 max = 输入框 max） */
+  max: number;
+  /** 真源 > 0 但该单位下四舍五入成 0（即「不足 1 条/单位」） */
+  tooSmall: boolean;
+}
+
+/**
+ * 由「条/分钟」真源 + 角色持久化的单位偏好，算出展示单位与数值（v3.0.4 P1 修复）。
+ *
+ * 为什么不能只做 `rateForUnit(rate, pref)`：
+ * `rateForUnit` 内部 `Math.round`，于是「5 条/天」的真源 0.003472 条/分在**分钟档**
+ * 会被四舍五入成 0，而标签分支判断的是真源 `rate === 0`（此时不成立），
+ * 最终既不是真值、也进不了「已关闭」分支 ⇒ 用户看到「0 条/分钟」的假象。
+ *
+ * 两个分支（与产品约定一致，优先自动选单位）：
+ * 1. **没有持久化偏好**（老数据 / 升级用户）：按 min → hour → day 挑第一个能显示 ≥1 的单位，
+ *    只影响展示与输入框，不写库 ⇒ 「5 条/天」这类值即使没有单位记录也能正确显示成 5 条/天；
+ * 2. **已有持久化偏好**：严格尊重用户选择（否则用户选「分钟」却被打回「天」＝下拉框跳回去，
+ *    看起来像坏了），此时若该单位下不足 1 条，由调用方渲染「不足 1 条/{unit}」文案兜底，
+ *    绝不输出「0 条/单位」。
+ *
+ * @param perMinute 存储真源（条/分钟，允许小数）
+ * @param savedUnit 角色持久化的单位偏好（可能为 undefined = 无偏好 / 脏数据）
+ */
+function resolveRateDisplay(perMinute: number, savedUnit?: string | null): RateDisplay {
+  const rate = normalizeSpeakRate(perMinute);
+  const hasPref = savedUnit === 'min' || savedUnit === 'hour' || savedUnit === 'day';
+  let unit: SpeakRateUnit = normalizeSpeakRateUnit(savedUnit);
+  if (!hasPref) {
+    // 无偏好：挑一个能显示 ≥1 的单位；三者都 <1 时——
+    //   rate === 0（已关闭）回落「分钟」（滑块上界 60，最贴近用户直觉）；
+    //   rate > 0（极小值）回落「天」（最大单位，文案读作「不足 1 条/天」最有意义）
+    const fit = RATE_UNIT_ORDER.find((u) => rateForUnit(rate, u) >= 1);
+    unit = fit ?? (rate > 0 ? 'day' : 'min');
+  }
+  const value = rateForUnit(rate, unit);
+  return { unit, value, max: rateMaxForUnit(unit), tooSmall: rate > 0 && value === 0 };
+}
+
 interface Snapshot {
   runtime: CharacterRuntimeSettings;
   characters: DesktopCharacter[];
@@ -47,6 +102,92 @@ interface CharacterCollectionProps {
   stageRequest?: { id: string; nonce: number } | null;
 }
 
+/** 数字输入框的属性（v3.0.4 新增：与滑块双向同步的频率数值输入）。 */
+interface SpeakRateInputProps {
+  /** 当前单位下的整数值（= 滑块当前档位，input 的受控显示源）。 */
+  value: number;
+  /** 当前单位下的上界（= rateMaxForUnit(该角色的展示单位)，与滑块 max 同源）。 */
+  max: number;
+  /** 无障碍标签（由调用方用 i18n 解析后传入，禁止在此硬编码文案）。 */
+  ariaLabel: string;
+  /** 提交归一化后的整数（单位 = 当前所选单位），由调用方换算回条/分钟真源。 */
+  onCommit: (next: number) => void;
+}
+
+/**
+ * 主动说话频率的「数字输入框」（v3.0.4 需求 1）。
+ *
+ * 为什么需要本地草稿态：
+ * - `<input type="number">` 在输入过程中必然出现中间态（清空、只输入 "-"、只输入 "1" 准备
+ *   继续输入 "2"）。若 onChange 直接写库，「2 → 清空 → 12」的中途会被落盘成 0（= 关闭主动说话），
+ *   既产生脏数据，也会让主进程按 0 重建调度器；
+ * - 因此本组件把用户输入存在本地草稿字符串里，**只在 onBlur / Enter 时归一化并提交**，
+ *   输入过程中绝不写库。
+ *
+ * 归一化口径（与滑块完全一致，保证「输入框值 == 滑块档位」）：
+ * - 空串 / 纯空白 / 非有限数字 → **回退到当前真源值**（不写 0，避免误关）；
+ * - 负数 → 0；超出上界 → 钳到 `max`；小数 → 四舍五入取整（step=1）。
+ *
+ * 双向同步：
+ * - 滑块（或单位切换、其它窗口改设置）导致 `value` 变化时，若输入框**未聚焦**则同步显示值；
+ *   聚焦期间不覆盖用户正在敲的内容，避免「打字打到一半被外部刷新清掉」。
+ */
+const SpeakRateInput: React.FC<SpeakRateInputProps> = ({ value, max, ariaLabel, onCommit }) => {
+  const [draft, setDraft] = useState<string>(String(value));
+  /** 是否正在编辑：编辑期间禁止外部同步覆盖草稿。用 ref（不参与渲染，避免多余重渲染）。 */
+  const editingRef = useRef(false);
+
+  // 外部值变化（滑块拖动 / 单位切换 / 其它窗口改设置）→ 同步显示值。
+  // 编辑中不同步：否则用户刚清空准备重输时会被回填。
+  useEffect(() => {
+    if (!editingRef.current) setDraft(String(value));
+  }, [value]);
+
+  /** 把草稿归一化成合法整数；非法/空串一律回退当前值（绝不写 0）。 */
+  const normalizeDraft = useCallback((): number => {
+    const raw = draft.trim();
+    if (raw === '') return value;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return value;
+    return Math.min(max, Math.max(0, Math.round(n)));
+  }, [draft, max, value]);
+
+  /** 归一化 + 回填显示值 + 有变化才提交（同值不重复落盘）。 */
+  const commit = useCallback(() => {
+    const next = normalizeDraft();
+    setDraft(String(next));
+    if (next !== value) onCommit(next);
+  }, [normalizeDraft, onCommit, value]);
+
+  return (
+    <input
+      className="dc-coll-rate-input"
+      type="number"
+      inputMode="numeric"
+      min={0}
+      max={max}
+      step={1}
+      value={draft}
+      aria-label={ariaLabel}
+      onFocus={() => {
+        editingRef.current = true;
+      }}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        editingRef.current = false;
+        commit();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          // 回车：先归一化提交，再让输入框失焦（失焦回调里 commit 是幂等的，同值不重复写）
+          e.preventDefault();
+          e.currentTarget.blur();
+        }
+      }}
+    />
+  );
+};
+
 export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageRequest }) => {
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -55,8 +196,12 @@ export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageR
   const [stageChar, setStageChar] = useState<DesktopCharacter | null>(null);
   const [rtStatus, setRtStatus] = useState<{ dir: string; cubism4: boolean; cubism2: boolean } | null>(null);
   const lastStageNonceRef = useRef(0);
-  /** v3.0.4：频率单位（分钟/小时/天）为视图偏好，真源仍是条/分钟；缺省分钟，存量行为不变。 */
-  const [rateUnit, setRateUnit] = useState<SpeakRateUnit>('min');
+  // v3.0.4 P1（QA 回归）：频率单位**不再是组件级 state**。
+  // 旧实现 `const [rateUnit, setRateUnit] = useState<SpeakRateUnit>('min')` 让单位只活在
+  // 组件生命周期里：关闭面板再打开（或重启应用）就重置回「分钟」，于是「5 条/天」
+  // （真源 0.003472 条/分）在分钟档显示成「0 条/分钟」，而角色实际仍在按 5 条/天说话。
+  // 现改为**角色级持久化**：DesktopCharacter.speakRateUnit（见 src/types.ts），
+  // 读写都走 patchCharacter 的整数组覆盖路径（HC-8），与 speakRate 完全同构。
 
   const refresh = useCallback(async () => {
     const s = await api.dcGetState();
@@ -258,9 +403,13 @@ export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageR
             const lightPreview = c.kind === 'placeholder' || c.kind === 'image' || c.kind === 'sprite';
             // 频率缺省回落 2 条/分（与主进程护栏同值），保证老角色升级后行为不回退
             const rate = normalizeSpeakRate(c.speakRate);
-            // v3.0.4：按当前单位换算显示值；真源 rate 恒为条/分钟
-            const displayRate = rateForUnit(rate, rateUnit);
-            const displayMax = rateMaxForUnit(rateUnit);
+            // v3.0.4 P1：展示单位取自**该角色持久化的偏好**（c.speakRateUnit），
+            // 并对「真源 > 0 但该单位下不足 1 条」做兜底（详见 resolveRateDisplay）。
+            // 真源 rate 恒为条/分钟；单位只影响展示与输入框。
+            const rateDisplay = resolveRateDisplay(rate, c.speakRateUnit);
+            const displayUnit = rateDisplay.unit;
+            const displayRate = rateDisplay.value;
+            const displayMax = rateDisplay.max;
             return (
               <div className={`dc-coll-card${isActive ? ' active' : ''}`} key={c.id}>
                 <div className="dc-coll-preview">
@@ -314,27 +463,58 @@ export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageR
                     </label>
                   </div>
                   {/* v3.0.4：主动说话频率，支持分钟/小时/天三种单位。
-                      真源仍是条/分钟（DesktopCharacter.speakRate），单位只是视图换算；
+                      真源仍是条/分钟（DesktopCharacter.speakRate），单位只是视图偏好
+                      且**随角色持久化**（DesktopCharacter.speakRateUnit，v3.0.4 P1 修复）；
                       0 = 完全不主动说话。写入走 patchCharacter（整数组覆盖）。 */}
                   <div className="dc-coll-rate">
                     <div className="dc-coll-rate-head">
                       <span className="dc-coll-rate-label">{t('characters.speakRate')}</span>
                       <select
                         className="dc-coll-rate-unit"
-                        value={rateUnit}
+                        value={displayUnit}
                         aria-label={t('characters.speakRateUnitLabel')}
-                        onChange={(e) => setRateUnit(normalizeSpeakRateUnit(e.target.value))}
+                        onChange={(e) =>
+                          // 切单位只改「展示偏好」，绝不改真源 speakRate；
+                          // 持久化后重开面板/重启应用仍是这个单位（P1 根因修复）
+                          void patchCharacter(c.id, {
+                            speakRateUnit: normalizeSpeakRateUnit(e.target.value),
+                          })
+                        }
                       >
                         <option value="min">{t('characters.speakRateUnitMin')}</option>
                         <option value="hour">{t('characters.speakRateUnitHour')}</option>
                         <option value="day">{t('characters.speakRateUnitDay')}</option>
                       </select>
-                      <span
-                        className={`dc-coll-rate-value${rate >= SPEAK_RATE_WARN_THRESHOLD ? ' warn' : ''}`}
-                      >
-                        {rate === 0
-                          ? t('characters.speakRateOff')
-                          : t('characters.speakRateUnit', { n: String(displayRate), unit: t(`characters.speakRateUnit${rateUnit === 'min' ? 'Min' : rateUnit === 'hour' ? 'Hour' : 'Day'}`) })}
+                      {/* v3.0.4 需求 1：数字输入框与滑块双向同步。
+                          输入值单位 = 当前展示单位；写入时经 rateToPerMinute 换算回
+                          「条/分钟」真源（DesktopCharacter.speakRate），走既有整数组覆盖（HC-8）。
+                          输入过程中的中间态只存本地草稿，失焦/回车才归一化提交（见 SpeakRateInput）。 */}
+                      <span className="dc-coll-rate-num">
+                        <SpeakRateInput
+                          value={displayRate}
+                          max={displayMax}
+                          ariaLabel={t('characters.speakRateInputLabel')}
+                          onCommit={(next) =>
+                            void patchCharacter(c.id, { speakRate: rateToPerMinute(next, displayUnit) })
+                          }
+                        />
+                        <span
+                          className={`dc-coll-rate-value${rate >= SPEAK_RATE_WARN_THRESHOLD ? ' warn' : ''}`}
+                        >
+                          {/* v3.0.4 P1：三态而不是两态 ——
+                              0 ⇒ 已关闭；真源 > 0 但该单位下不足 1 条 ⇒「不足 1 条/{unit}」；
+                              其余 ⇒ 正常数值。**绝不输出「0 条/单位」这种假象。** */}
+                          {rate === 0
+                            ? t('characters.speakRateOff')
+                            : rateDisplay.tooSmall
+                              ? t('characters.speakRateLessThanOne', {
+                                  unit: t(speakRateUnitLabelKey(displayUnit)),
+                                })
+                              : t('characters.speakRateUnit', {
+                                  n: String(displayRate),
+                                  unit: t(speakRateUnitLabelKey(displayUnit)),
+                                })}
+                        </span>
                       </span>
                     </div>
                     <input
@@ -350,7 +530,7 @@ export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageR
                       onChange={(e) =>
                         void patchCharacter(c.id, {
                           // 把当前单位下的整数值换算回条/分钟真源（共享函数，精度归一）
-                          speakRate: rateToPerMinute(Number(e.target.value), rateUnit),
+                          speakRate: rateToPerMinute(Number(e.target.value), displayUnit),
                         })
                       }
                     />

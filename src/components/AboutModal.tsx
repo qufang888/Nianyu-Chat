@@ -6,7 +6,16 @@ import { useI18n } from '../i18n/I18nContext';
  * 关于软件弹窗（v3.0.4 改版）。
  * - 文案只保留品牌标语「万物皆可对话，心意自有回响」，旧的自我介绍长句已删除；
  * - 视觉：品牌 Logo + 强调线 + 标语主角 + 作者署名 / 版本徽标 + GitHub 入口；
+ * - v3.0.4 R2：用户要求「旁边这个框给它取消掉」——标语不再是卡片化容器
+ *   （`.about-slogan` 的描边与浅色承载块已在 index.css 删除，只留排版与留白），
+ *   标语本身靠字重 + 留白成为视觉主角；请勿再把 border / background 加回去。
+ *   同一轮还把标语句尾的句号去掉了（10 处语言同步，见 translations.ts / locales）。
  * - 所有颜色走主题变量，14 套主题下保持可读；不引入投影（遵循 .modal 既有约定）。
+ *
+ * ⚠️ 本组件根节点是 `.modal-mask`（fixed / inset:0 / z-index:10001，整窗遮罩），
+ * 所以主窗里任何「让用户看到别的页面」的动作都必须先把它关掉，
+ * 否则 view 变了也会被盖住（v3.0.4 R3 的「桌宠导航点了没反应」就是这个原因，
+ * 修复在 App.tsx 的三个桌宠导航 handler 里）。
  */
 export const AboutModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const { t } = useI18n();

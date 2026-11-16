@@ -4,7 +4,7 @@
  "about.logo": "Nianyu",
  "about.sub": "NIANYU",
  "about.author": "made by Qianfang",
- "about.line4": "Tout peut se dire ; les sentiments trouvent leur écho.",
+ "about.line4": "Tout peut se dire ; les sentiments trouvent leur écho",
  "about.github": "Visiter GitHub",
  "chat.removeImage": "Retirer l'image",
  "splash.logo": "Nianyu",
@@ -1200,11 +1200,13 @@
 
  "characters.speakRateUnit": "{n}/{unit}",
  "characters.speakRateUnitLabel": "Unité de temps",
+ "characters.speakRateInputLabel": "Valeur de la fréquence de parole proactive",
  "characters.speakRateUnitMin": "min",
  "characters.speakRateUnitHour": "h",
  "characters.speakRateUnitDay": "j",
 
  "characters.speakRateOff": "Désactivée",
+ "characters.speakRateLessThanOne": "Moins de 1 par {unit}",
 
  "characters.speakRateHint": "Nombre de répliques par unité de temps choisie ; 0 = jamais",
 

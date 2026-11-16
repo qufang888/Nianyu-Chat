@@ -4,7 +4,7 @@
  "about.logo": "Nianyu",
  "about.sub": "NIANYU",
  "about.author": "made by Qianfang",
- "about.line4": "Tudo pode ser conversado; os sentimentos encontram eco.",
+ "about.line4": "Tudo pode ser conversado; os sentimentos encontram eco",
  "about.github": "Visitar o GitHub",
  "chat.removeImage": "Remover imagem",
  "splash.logo": "Nianyu",
@@ -1200,11 +1200,13 @@
 
  "characters.speakRateUnit": "{n}/{unit}",
  "characters.speakRateUnitLabel": "Unidade de tempo",
+ "characters.speakRateInputLabel": "Valor da frequência de fala proativa",
  "characters.speakRateUnitMin": "min",
  "characters.speakRateUnitHour": "h",
  "characters.speakRateUnitDay": "d",
 
  "characters.speakRateOff": "Desativada",
+ "characters.speakRateLessThanOne": "Menos de 1 por {unit}",
 
  "characters.speakRateHint": "Frases por unidade de tempo escolhida; 0 = nunca",
 

@@ -4,7 +4,7 @@
  "about.logo": "念語",
  "about.sub": "NIANYU",
  "about.author": "made by 前方",
- "about.line4": "すべてに語りが可能。感情は、共鳴を見つける。",
+ "about.line4": "すべてに語りが可能。感情は、共鳴を見つける",
  "about.github": "GitHub を開く",
  "chat.removeImage": "画像を削除",
  "splash.logo": "念語",
@@ -1200,11 +1200,13 @@
 
  "characters.speakRateUnit": "{n}/{unit}",
  "characters.speakRateUnitLabel": "時間単位",
+ "characters.speakRateInputLabel": "自発的な発話頻度の数値",
  "characters.speakRateUnitMin": "分",
  "characters.speakRateUnitHour": "時間",
  "characters.speakRateUnitDay": "日",
 
  "characters.speakRateOff": "オフ",
+ "characters.speakRateLessThanOne": "{unit}あたり 1 件未満",
 
  "characters.speakRateHint": "選択した時間単位ごとの発話数。0 = 発話なし",
 

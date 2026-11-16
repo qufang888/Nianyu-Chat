@@ -348,20 +348,43 @@ export default function App() {
   // 1) dc:open-collection → 切到「桌宠角色」板块（右键菜单「管理角色」/ 设置里点「管理」）
   // 2) dc:open-chat       → 角色已绑定对话时，左键点击角色直接跳到那个会话
   // 绑定记录里带了会话名，但可能为空（历史数据），此时回查会话列表补全，避免标题空白。
+  //
+  // v3.0.4 P1（用户反馈「桌宠右键菜单的导航点了没反应」）：
+  // 根因是本组件渲染的「关于念语」弹窗 —— AboutModal 的根节点是 `.modal-mask`
+  // （index.css 里 position:fixed; inset:0; z-index:10001），会整窗盖住主界面。
+  // 三个 handler 原先只切 view、不关 aboutOpen，于是 view 虽然变了，
+  // 用户看到的仍是「关于」遮罩，主观上就是「点了没反应」。
+  // 因此三个 handler 都**先关掉关于弹窗**（setAboutOpen 是 useState 的稳定引用，
+  // 放进下面 deps=[] 的 effect 不会引入闭包过期：它永远指向同一个 dispatch）。
+  //
+  // 其它同层全屏模态的排查结论（有意不在这里关闭）：
+  //   · QuickImportPreviewModal（preview）—— 关闭会取消用户刚拖入的导入预检，
+  //     且它内部有在途的 previewFiles 异步请求，晚到的结果会把弹窗重新打开，
+  //     强行关掉反而出现「关了自己又弹回来」的诡异表现；
+  //   · RoleEditor / WorldBookEditor / RuleEditor（currentEdit）与 GroupEditor（showGroup）
+  //     —— 承载用户**未保存的输入**，导航时静默关闭＝丢数据，风险远大于收益；
+  //   · OnboardingWizard（showOnboarding）—— 首次启动向导，关闭语义是「跳过引导」，
+  //     不能由一次导航动作代用户决定；
+  //   · TutorialOverlay —— 关掉等价于把 tutorialDone 写成已看，同属用户选择。
+  // 上述几类都在同一渲染层，但只有「关于」是纯展示、无未保存数据、无在途请求，
+  // 关掉它零副作用，故只处理它（不扩大改动范围）。
   useEffect(() => {
     if (typeof api.onDcOpenCollection !== 'function') return;
     // 「管理角色」只进角色面板：先清掉可能残留的舞台请求，否则下一帧 CharacterCollection
     // 会拿旧 nonce 再弹一次 CharacterStage，表现为「管理角色却进了角色舞台」。
     const offCollection = api.onDcOpenCollection(() => {
+      setAboutOpen(false); // 先撤全屏遮罩，否则 view 变了也被盖住（v3.0.4 根因）
       setDcStageRequest(null);
       setView('characters');
     });
     // Bug 1：带角色 id 的舞台请求——切到角色面板并让面板自动打开该角色的 CharacterStage
     const offStage = api.onDcOpenStage((id) => {
+      setAboutOpen(false);
       setView('characters');
       setDcStageRequest({ id, nonce: Date.now() });
     });
     const offChat = api.onDcOpenChat(async (chat) => {
+      setAboutOpen(false);
       let name = chat.name || '';
       if (!name) {
         try {

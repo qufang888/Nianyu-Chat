@@ -315,25 +315,28 @@ html[data-anim-off~='character'] .dc-err {
   animation: none !important;
   transition: none !important;
 }
-/* v3.0.4（P1 动画失效根因）：
-   旧实现在这里对 .dc-bubble/.dc-menu 一律 `animation:none!important`，
-   而两者的基态本来就是完全可见（opacity:1、无位移），于是 Windows 关掉系统动画后
-   菜单/气泡「瞬现瞬隐」，用户感知为「完全没有线性动画」。
-   现在改为：无限循环的呼吸/游走(.dc-svg/.dc-modelimg)继续彻底关闭；
-   菜单与气泡保留**极短**的线性淡入淡出（0.01ms，只留一帧的可见性过渡），
-   既尊重 reduced-motion 的「减少大幅运动」诉求，又不丢失弹出的视觉反馈。
-   位移/缩放在 reduced-motion 下也一并归零，避免明显运动。 */
+/* v3.0.4 历史演进（保留说明，防止后续又把菜单/气泡塞回 reduced-motion 块）：
+   - 最初：本块对 .dc-bubble/.dc-menu 一律 `animation:none!important` ⇒ 系统关掉动画时瞬现瞬隐；
+   - v3.0.4 第一次修：改成 `animation-duration:0.01ms`（只留一帧过渡）⇒ 肉眼仍等价于没动画；
+   - v3.0.4 P1 R4（本次）：直接从本块移除，交给应用内的「动效三档」唯一权威。 */
+/* v3.0.4 P1 R4（用户第三次反馈「菜单/气泡没有线性动画」）：
+   reduced-motion 只压制**无限循环的大幅运动**（呼吸 / 游走缩放），
+   `.dc-bubble` / `.dc-menu` 已从这里**彻底移除**，理由：
+     ① 它们是**短促的进/出反馈**（默认 0.18s / 0.20s，一次就结束），不是「持续运动」，
+        reduced-motion 的设计意图是减少持续的、可能诱发不适的运动，不针对功能性反馈；
+     ② 本应用已有「动效三档」（全开 / 全关 / 自定义）作为动效的**唯一权威**——
+        用户想关就关（关掉后由下方 html.anim-off / data-anim-off 规则 `animation:none`
+        切到明确的可见终态），系统级 reduced-motion 再压一遍等于**双重门禁**，
+        结果就是功能级视觉反馈整体丢失（用户已连续两版反馈看不到动画）；
+     ③ 历史两版修法（先 `animation:none`，再 `animation-duration:0.01ms`）都是
+        「命中就近乎瞬现」，肉眼等价于没动画，故本次直接不再干预。
+   注意：JS 侧 menuAnimMs()/bubbleAnimMs() 按设置基准秒数 × character 分组倍率计时卸载，
+   与 CSS 的 calc(var(--dc-*-anim) * var(--anim-speed)) 同源；本块不参与时长计算，
+   移除后 CSS 与 JS 的时长完全一致，「卡住不消失 / 闪一下」两种错位都不可能发生。 */
 @media (prefers-reduced-motion: reduce) {
   .dc-svg,
   .dc-modelimg {
     animation: none !important;
-  }
-  .dc-bubble,
-  .dc-bubble.closing,
-  .dc-menu,
-  .dc-menu.closing {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
   }
 }
 /* v3.0.4：动效被三档开关彻底关掉时，给出明确的可见终态兜底

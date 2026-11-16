@@ -58,6 +58,7 @@ const l2dView = read('src/character/Live2DView.tsx');
 const coll = read('src/components/CharacterCollection.tsx');
 const stage = read('src/components/CharacterStage.tsx');
 const charCss = read('src/styles/character.css');
+const indexCss = read('src/styles/index.css');
 const panelCss = read('src/styles/character-panel.css');
 const settings = read('src/components/Settings.tsx');
 const sidebar = read('src/components/Sidebar.tsx');
@@ -1028,14 +1029,44 @@ check('v3.0.4 角色卡片有单位选择器（分钟/小时/天，无秒档）'
   /dc-coll-rate-unit/.test(coll) &&
   /value="min"/.test(coll) && /value="hour"/.test(coll) && /value="day"/.test(coll) &&
   !/value="sec"/.test(coll));
-check('v3.0.4 滑块显示值与写入值都经共享单位换算函数',
-  /rateForUnit\(rate, rateUnit\)/.test(coll) &&
-  /rateToPerMinute\(Number\(e\.target\.value\), rateUnit\)/.test(coll));
-// v3.0.4 P1 动画：prefers-reduced-motion 不再一刀切 kill 菜单/气泡动画
-check('v3.0.4 reduced-motion 不再对菜单/气泡用 animation:none!important',
-  /@media \(prefers-reduced-motion: reduce\)/.test(charCss) &&
-  /animation-duration: 0\.01ms !important/.test(charCss) &&
-  !/\.dc-bubble,[\s\S]{0,80}\.dc-menu \{\s*animation: none !important/.test(charCss));
+check('v3.0.4 滑块显示值与写入值都经共享单位换算函数（单位取角色级偏好）',
+  /resolveRateDisplay\(rate, c\.speakRateUnit\)/.test(coll) &&
+  /const value = rateForUnit\(rate, unit\);/.test(coll) &&
+  /max: rateMaxForUnit\(unit\)/.test(coll) &&
+  /rateToPerMinute\(Number\(e\.target\.value\), displayUnit\)/.test(coll));
+/** 按选择器字面量抽取一段 CSS 规则/at-rule 的完整块（含花括号），用于「块内不得出现 X」类判定 */
+function cssBlock(src, selector) {
+  const i = src.indexOf(selector);
+  if (i < 0) return '';
+  const open = src.indexOf('{', i);
+  if (open < 0) return '';
+  let depth = 0;
+  for (let k = open; k < src.length; k++) {
+    if (src[k] === '{') depth++;
+    else if (src[k] === '}') {
+      depth--;
+      if (depth === 0) return src.slice(open, k + 1);
+    }
+  }
+  return '';
+}
+// v3.0.4 P1（第三次反馈）：reduced-motion 只压无限循环的呼吸/游走，菜单与气泡彻底移出该块。
+// 判定基于「去注释后的 at-rule 块内容」，避免解释性注释里的类名把断言带偏。
+const rmBlock = cssBlock(stripComments(charCss), '@media (prefers-reduced-motion: reduce)');
+check('v3.0.4 R4 reduced-motion 块仍存在且继续关闭无限循环的 .dc-svg / .dc-modelimg',
+  rmBlock.length > 0 &&
+  /\.dc-svg/.test(rmBlock) &&
+  /\.dc-modelimg/.test(rmBlock) &&
+  /animation: none !important/.test(rmBlock));
+check('v3.0.4 R4 reduced-motion 块内不再包含 .dc-bubble / .dc-menu（系统级压制动画的根因已拆除）',
+  rmBlock.length > 0 &&
+  !/\.dc-bubble/.test(rmBlock) &&
+  !/\.dc-menu/.test(rmBlock) &&
+  !/animation-duration/.test(rmBlock));
+check('v3.0.4 R4 菜单/气泡动画时长仍与 JS 卸载计时同源（--dc-*-anim × --anim-speed）',
+  /animation: dcBubbleIn calc\(var\(--dc-bubble-anim, 0\.18s\) \* var\(--anim-speed, 1\)\) linear both/.test(charCss) &&
+  /animation: dcMenuIn calc\(var\(--dc-menu-anim, 0\.20s\) \* var\(--anim-speed, 1\)\) linear both/.test(charCss) &&
+  /getGroupAnimSpeed\(s, 'character'\)/.test(appTsx));
 check('v3.0.4 气泡/菜单弹入动画补 both 填充模式',
   /animation: dcBubbleIn calc\([^;]+\) linear both/.test(charCss) &&
   /animation: dcMenuIn calc\([^;]+\) linear both/.test(charCss));
@@ -1055,6 +1086,102 @@ check('K8 滑块滚轮不改数值（避免与页面滚动打架）',
 check('K8 频率写入走既有整数组覆盖路径（HC-8）',
   /patchCharacter\(c\.id, \{[\s\S]{0,200}speakRate/.test(coll) &&
   /api\.saveSettings\(\{ desktopCharacters: next \}\)/.test(coll));
+
+// ---------- K8b. 频率数字输入框（v3.0.4 R1：用户要求「能直接输入具体数值」） ----------
+// 与滑块共用同一真源：输入值单位 = 当前所选单位，写入前经 rateToPerMinute 换回条/分钟。
+check('v3.0.4 R1 角色卡片有频率数字输入框（type=number / min=0 / max=displayMax / step=1）',
+  /className="dc-coll-rate-input"/.test(coll) &&
+  /type="number"/.test(coll) &&
+  /min=\{0\}/.test(coll) &&
+  /max=\{displayMax\}/.test(coll) &&
+  /step=\{1\}/.test(coll));
+check('v3.0.4 R1 输入框写入走共享换算（rateToPerMinute(next, displayUnit)）+ 既有整数组覆盖',
+  /onCommit=\{\(next\) =>[\s\S]{0,160}rateToPerMinute\(next, displayUnit\)/.test(coll) &&
+  /patchCharacter\(c\.id, \{ speakRate: rateToPerMinute\(next, displayUnit\) \}\)/.test(coll));
+check('v3.0.4 R1 输入框中间态只存本地草稿，失焦/回车才归一化提交（不写脏数据）',
+  /useState<string>\(String\(value\)\)/.test(coll) &&
+  /onChange=\{\(e\) => setDraft\(e\.target\.value\)\}/.test(coll) &&
+  /onBlur=\{\(\) => \{[\s\S]{0,140}commit\(\);/.test(coll) &&
+  /e\.currentTarget\.blur\(\)/.test(coll));
+check('v3.0.4 R1 空串/非数字回退当前值、越界钳到 max、负数归零（清空不会误写成 0=关闭）',
+  /if \(raw === ''\) return value;/.test(coll) &&
+  /if \(!Number\.isFinite\(n\)\) return value;/.test(coll) &&
+  /Math\.min\(max, Math\.max\(0, Math\.round\(n\)\)\)/.test(coll));
+check('v3.0.4 R1 与滑块双向同步（外部值变化时回写草稿，编辑中不覆盖用户输入）',
+  /if \(!editingRef\.current\) setDraft\(String\(value\)\)/.test(coll));
+check('v3.0.4 R1 输入框无障碍标签走 i18n（无硬编码文案）',
+  /ariaLabel=\{t\('characters\.speakRateInputLabel'\)\}/.test(coll));
+// 输入框样式必须走主题变量（14 套主题可读），且不得硬编码色值
+const rateInputCss = cssBlock(panelCss, '.dc-coll-rate-input {');
+check('v3.0.4 R1 数字输入框样式走主题变量且无硬编码色值',
+  rateInputCss.length > 0 &&
+  /var\(--color-panel\)/.test(rateInputCss) &&
+  /var\(--color-text\)/.test(rateInputCss) &&
+  /var\(--color-border\)/.test(rateInputCss) &&
+  !/#[0-9a-fA-F]{3,8}\b/.test(rateInputCss));
+
+// ---------- K8c. 频率单位随角色持久化（v3.0.4 P1 回归修复） ----------
+// 旧实现的单位是组件级 useState('min')：关面板再打开就回「分钟」，
+// 「5 条/天」（真源 0.003472 条/分）在分钟档被 Math.round 抹成 0 ⇒ 显示「0 条/分钟」。
+const collCode = stripComments(coll); // 断言「不存在某写法」必须去注释（源码注释里引用了旧实现）
+check('v3.0.4 P1 DesktopCharacter 含 speakRateUnit（展示单位偏好随角色持久化）',
+  /speakRateUnit\?: SpeakRateUnit;/.test(types) &&
+  /主动说话频率的\*\*展示单位偏好\*\*/.test(types));
+check('v3.0.4 P1 出厂内置角色「小念」显式写入 speakRateUnit: min',
+  /speakRate: 2,[\s\S]{0,220}speakRateUnit: 'min'/.test(types));
+check('v3.0.4 P1 角色卡片按 c.speakRateUnit 读单位（不再用组件级单一 state）',
+  /resolveRateDisplay\(rate, c\.speakRateUnit\)/.test(collCode) &&
+  /value=\{displayUnit\}/.test(collCode) &&
+  !/useState<SpeakRateUnit>\('min'\)/.test(collCode));
+check('v3.0.4 P1 切换单位走 patchCharacter 持久化（speakRateUnit，整数组覆盖 HC-8）',
+  /patchCharacter\(c\.id, \{\s*speakRateUnit: normalizeSpeakRateUnit\(e\.target\.value\)/.test(collCode) &&
+  /api\.saveSettings\(\{ desktopCharacters: next \}\)/.test(collCode));
+check('v3.0.4 P1 真源 > 0 但该单位不足 1 条时有兜底（绝不输出「0 条/单位」）',
+  /tooSmall: rate > 0 && value === 0/.test(collCode) &&
+  /rateDisplay\.tooSmall\s*\?/.test(collCode) &&
+  /t\('characters\.speakRateLessThanOne'/.test(collCode));
+check('v3.0.4 P1 无单位偏好的老数据自动挑一个能显示 ≥1 的单位（min→hour→day）',
+  /RATE_UNIT_ORDER: SpeakRateUnit\[\] = \['min', 'hour', 'day'\]/.test(collCode) &&
+  /RATE_UNIT_ORDER\.find\(\(u\) => rateForUnit\(rate, u\) >= 1\)/.test(collCode));
+
+// ---------- K13. 关于页去框 / 去句号（v3.0.4 R2） ----------
+const aboutSloganCss = cssBlock(indexCss, '.about .about-slogan {');
+check('v3.0.4 R2 关于页标语去掉外框（无 border / 无 background）',
+  aboutSloganCss.length > 0 &&
+  !/border/.test(aboutSloganCss) &&
+  !/background/.test(aboutSloganCss));
+check('v3.0.4 R2 标语排版保留（字号 / 字重 / 字距 / 上边距）',
+  /font-size: calc\(19px \* var\(--font-scale\)\)/.test(aboutSloganCss) &&
+  /font-weight: 600/.test(aboutSloganCss) &&
+  /letter-spacing: 2px/.test(aboutSloganCss) &&
+  /margin-top: 24px/.test(aboutSloganCss));
+// 标语去掉句尾句号：translations.ts 的 zh/en + 8 个 locale JSON 共 10 处
+const sloganInline = [...trans.matchAll(/'about\.line4':\s*'((?:[^'\\]|\\.)*)'/g)].map((m) => m[1]);
+check('v3.0.4 R2 标语在 translations.ts（zh+en）不含句尾句号',
+  sloganInline.length === 2 && sloganInline.every((s) => s.trim() !== '' && !/[。.！!]$/.test(s)),
+  sloganInline.join(' | '));
+check('v3.0.4 R2 标语在 8 个 locale 中也不含句尾句号',
+  LOCALE_CODES.every((lang) => {
+    let j = {};
+    try { j = JSON.parse(read(`src/i18n/locales/${lang}.json`)); } catch { j = {}; }
+    const v = j['about.line4'];
+    return typeof v === 'string' && v.trim() !== '' && !/[。.！!]$/.test(v);
+  }));
+
+// ---------- K14. 桌宠导航被关于弹窗遮挡（v3.0.4 R3） ----------
+// AboutModal 根节点是 .modal-mask（fixed / inset:0 / z-index:10001），
+// 三个导航 handler 若不关 aboutOpen，view 变了也会被整窗遮罩盖住 ⇒ 表现为「点了没反应」。
+check('v3.0.4 R3 关于弹窗仍是全屏 .modal-mask（遮挡根因确认，勿把遮罩改成局部层）',
+  /className="modal-mask"/.test(aboutModal) &&
+  /\.modal-mask \{[\s\S]{0,400}position: fixed/.test(indexCss) &&
+  /\.modal-mask \{[\s\S]{0,400}z-index: 10001/.test(indexCss));
+check('v3.0.4 R3 三个桌宠导航 handler 都先 setAboutOpen(false)（管理角色 / 舞台 / 跳会话）',
+  /onDcOpenCollection\(\(\) => \{\s*setAboutOpen\(false\);/.test(appRoot) &&
+  /onDcOpenStage\(\(id\) => \{\s*setAboutOpen\(false\);/.test(appRoot) &&
+  /onDcOpenChat\(async \(chat\) => \{\s*setAboutOpen\(false\);/.test(appRoot));
+check('v3.0.4 R3 关于弹窗关闭逻辑仍走 setAboutOpen(false)（未退化成只切 view）',
+  /const \[aboutOpen, setAboutOpen\] = useState\(false\)/.test(appRoot) &&
+  /<AboutModal onClose=\{\(\) => setAboutOpen\(false\)\}/.test(appRoot));
 
 // ---------- K9. 设置页细调子块（仅自定义档渲染） ----------
 check('K9 桌宠动画细调子块存在且含 5 个滑块（菜单/气泡/基准/每档/上限）',
@@ -1086,6 +1213,10 @@ const NEW_KEYS = [
   // v3.0.4：多单位 + 关于页
   'characters.speakRateUnitLabel', 'characters.speakRateUnitMin',
   'characters.speakRateUnitHour', 'characters.speakRateUnitDay',
+  // v3.0.4 R1：频率数字输入框的无障碍标签
+  'characters.speakRateInputLabel',
+  // v3.0.4 P1：真源 > 0 但该单位不足 1 条时的兜底文案（带 {unit} 占位符）
+  'characters.speakRateLessThanOne',
   'about.github',
 ];
 for (const k of NEW_KEYS) {
@@ -1100,7 +1231,7 @@ for (const lang of LOCALE_CODES) {
     json = {};
   }
   const miss = NEW_KEYS.filter((k) => typeof json[k] !== 'string' || !json[k].trim());
-  check(`locales/${lang}.json 含 20 个新增桌宠/关于键且非空`, miss.length === 0, miss.join(','));
+  check(`locales/${lang}.json 含 ${NEW_KEYS.length} 个新增桌宠/关于键且非空`, miss.length === 0, miss.join(','));
 }
 check('K10 未新增「实际约 N 条/分」类折中提示（用户拍板取消）',
   !/实际约|实际生效|受请求耗时限制|实际速率/.test(trans) &&
@@ -1193,14 +1324,50 @@ check('O3 30s 兜底只在两路都缺失时触发且带告警（非静默回归
   const brokenL = lineScheduleSrc.replace('Math.round(raw * RATE_PRECISION) / RATE_PRECISION', 'Math.round(raw)');
   check('（可证伪）频率归一改回 Math.round 后多单位断言失效',
     !/Math\.round\(raw \* RATE_PRECISION\) \/ RATE_PRECISION/.test(brokenL));
-  // 变异 13：把 reduced-motion 改回 animation:none ⇒ 动画断言失效
-  const brokenM = charCss.replace(/animation-duration: 0\.01ms !important;/g, 'animation: none !important;');
-  check('（可证伪）reduced-motion 改回 animation:none 后动画断言失效',
-    !/animation-duration: 0\.01ms !important/.test(brokenM));
+  // 变异 13：把 .dc-bubble/.dc-menu 塞回 reduced-motion 块 ⇒ R4 断言失效
+  const brokenM = charCss.replace(
+    /@media \(prefers-reduced-motion: reduce\) \{\s*\.dc-svg/,
+    '@media (prefers-reduced-motion: reduce) {\n  .dc-bubble,\n  .dc-menu {\n    animation-duration: 0.01ms !important;\n  }\n  .dc-svg');
+  const brokenMRm = cssBlock(stripComments(brokenM), '@media (prefers-reduced-motion: reduce)');
+  check('（可证伪）把 .dc-bubble/.dc-menu 塞回 reduced-motion 块后 R4 断言失效',
+    /\.dc-bubble/.test(brokenMRm) && /\.dc-menu/.test(brokenMRm));
   // 变异 14：关于页改回旧长句 ⇒ 断言失效
   const brokenN = aboutModal.replace("{t('about.line4')}", "'一款面向深度情感交互的 AI 数字人对话网站'");
   check('（可证伪）关于页恢复旧长句后断言失效',
     /一款面向深度情感交互/.test(brokenN));
+  // 变异 15（R1）：输入框写入不再走共享换算 ⇒ K8b 断言失效
+  const brokenO = coll.replace('speakRate: rateToPerMinute(next, displayUnit)', 'speakRate: Number(next)');
+  check('（可证伪）输入框直写 Number(next) 不再换算后 R1 共享换算断言失效',
+    !/patchCharacter\(c\.id, \{ speakRate: rateToPerMinute\(next, displayUnit\) \}\)/.test(brokenO));
+  // 变异 16（R1）：清空即写 0 ⇒ 「不写脏数据」断言失效
+  const brokenP = coll.replace("if (raw === '') return value;", "if (raw === '') return 0;");
+  check('（可证伪）清空直接返回 0 后 R1 脏数据断言失效',
+    !/if \(raw === ''\) return value;/.test(brokenP));
+  // 变异 17（R2）：标语加回描边与浅色块 ⇒ R2 去框断言失效
+  const brokenQ = indexCss.replace(
+    /(\.about \.about-slogan \{[^}]*?)padding: 18px 12px;/,
+    '$1padding: 18px 12px;\n  border: 1px solid var(--color-border);\n  background: color-mix(in srgb, var(--color-primary) 6%, transparent);');
+  const brokenQSlogan = cssBlock(brokenQ, '.about .about-slogan {');
+  check('（可证伪）标语加回描边/底色后 R2 断言失效',
+    /border/.test(brokenQSlogan) && /background/.test(brokenQSlogan));
+  // 变异 18（R3）：导航 handler 不再关关于弹窗 ⇒ R3 断言失效
+  const brokenR = appRoot.replace(
+    /(onDcOpenCollection\(\(\) => \{)\s*setAboutOpen\(false\);/, '$1');
+  check('（可证伪）导航 handler 去掉 setAboutOpen(false) 后 R3 断言失效',
+    brokenR !== appRoot &&
+    !/onDcOpenCollection\(\(\) => \{\s*setAboutOpen\(false\);/.test(brokenR));
+  // 变异 19（P1）：把单位改回组件级 state ⇒ 「按 c.speakRateUnit 读单位」断言失效
+  const brokenS = coll.replace(
+    'const rateDisplay = resolveRateDisplay(rate, c.speakRateUnit);',
+    "const [rateUnit] = useState<SpeakRateUnit>('min');\n            const rateDisplay = resolveRateDisplay(rate, rateUnit);");
+  check('（可证伪）单位改回组件级 useState 后 P1「随角色持久化」断言失效',
+    brokenS !== coll &&
+    /useState<SpeakRateUnit>\('min'\)/.test(stripComments(brokenS)) &&
+    !/resolveRateDisplay\(rate, c\.speakRateUnit\)/.test(stripComments(brokenS)));
+  // 变异 20（P1）：删掉「不足 1 条」兜底分支 ⇒ P1 兜底断言失效
+  const brokenT = coll.replace('rateDisplay.tooSmall', 'false');
+  check('（可证伪）去掉 tooSmall 兜底后 P1 兜底断言失效',
+    brokenT !== coll && !/rateDisplay\.tooSmall\s*\?/.test(brokenT));
 }
 
 // ---------- 汇总 ----------

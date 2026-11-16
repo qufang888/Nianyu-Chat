@@ -2567,6 +2567,10 @@ body.cursor-hidden * {
 @media (prefers-reduced-motion: reduce) {
   .about .about-accent::after { animation: none; width: 100%; }
 }
+/* v3.0.4 需求 2：用户要求「旁边这个框给它取消掉」——去掉描边与浅色承载块，
+   只留排版（字号 / 字重 / 行高 / 字距 / 上下留白）。
+   去掉底色后 border-radius 已无可见效果，一并不写，避免留下误导性的死声明。
+   注：标语本身成为视觉主角靠的是字重与留白，而不是卡片化容器。 */
 .about .about-slogan {
   margin-top: 24px;
   font-size: calc(19px * var(--font-scale));
@@ -2574,11 +2578,7 @@ body.cursor-hidden * {
   line-height: 1.7;
   letter-spacing: 2px;
   color: var(--color-text);
-  /* 标语下方浅色承载块，让唯一文案成为视觉中心 */
   padding: 18px 12px;
-  border-radius: var(--radius);
-  border: 1px solid var(--color-border);
-  background: color-mix(in srgb, var(--color-primary) 6%, transparent);
 }
 .about .about-meta {
   margin-top: 20px;

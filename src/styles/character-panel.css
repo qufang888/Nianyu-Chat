@@ -164,8 +164,41 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  /* v3.0.4：数字输入框加入后，窄卡片（多列网格）允许换行，避免撑破卡片 */
+  flex-wrap: wrap;
   font-size: calc(11px * var(--font-scale));
   color: var(--color-text-secondary);
+}
+/* v3.0.4 需求 1：数字输入框 + 数值文案同排，整体靠右（与单位下拉形成「设值区」） */
+.dc-coll-rate-num {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+/* 数字输入框：颜色全部走主题变量，14 套主题下均可读；
+   去掉浏览器原生 spinner 的默认宽度抖动，用等宽数字保证对齐。 */
+.dc-coll-rate-input {
+  width: 58px;
+  padding: 1px 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-panel);
+  color: var(--color-text);
+  font-size: calc(10px * var(--font-scale));
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
+  text-align: right;
+}
+.dc-coll-rate-input:focus {
+  border-color: var(--color-primary);
+  outline: none;
+}
+/* 原生 spinner 在浅色/深色主题下都是浏览器默认灰，与主题不符且挤压文字宽度，隐藏之 */
+.dc-coll-rate-input::-webkit-outer-spin-button,
+.dc-coll-rate-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 /* v3.0.4：单位选择器（分钟/小时/天），与数值同排 */
 .dc-coll-rate-unit {
@@ -187,6 +220,10 @@
 /* 频率偏高时数值转警示色（提示只讲成本，不讲"实际速率"） */
 .dc-coll-rate-value.warn {
   color: var(--color-warn);
+}
+/* 数值文案已在 .dc-coll-rate-num 里与输入框同排，取消它自身的 auto 左外边距（避免双重推挤） */
+.dc-coll-rate-num .dc-coll-rate-value {
+  margin-left: 0;
 }
 .dc-coll-rate-range {
   width: 100%;

@@ -4,7 +4,7 @@
  "about.logo": "니아뉴",
  "about.sub": "NIANYU",
  "about.author": "made by 前方",
- "about.line4": "모든 것은 대화할 수 있고, 감정은 울림을 찾습니다.",
+ "about.line4": "모든 것은 대화할 수 있고, 감정은 울림을 찾습니다",
  "about.github": "GitHub 열기",
  "chat.removeImage": "이미지 제거",
  "splash.logo": "니아뉴",
@@ -1200,11 +1200,13 @@
 
  "characters.speakRateUnit": "{n}/{unit}",
  "characters.speakRateUnitLabel": "시간 단위",
+ "characters.speakRateInputLabel": "자발적 발화 빈도 값",
  "characters.speakRateUnitMin": "분",
  "characters.speakRateUnitHour": "시간",
  "characters.speakRateUnitDay": "일",
 
  "characters.speakRateOff": "꺼짐",
+ "characters.speakRateLessThanOne": "{unit}당 1개 미만",
 
  "characters.speakRateHint": "선택한 시간 단위당 발화 수, 0 = 발화 없음",
 

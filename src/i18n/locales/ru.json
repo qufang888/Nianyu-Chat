@@ -4,7 +4,7 @@
  "about.logo": "Nianyu",
  "about.sub": "NIANYU",
  "about.author": "made by Qianfang",
- "about.line4": "Обо всём можно поговорить; чувства находят свой отзвук.",
+ "about.line4": "Обо всём можно поговорить; чувства находят свой отзвук",
  "about.github": "Открыть GitHub",
  "chat.removeImage": "Убрать изображение",
  "splash.logo": "Nianyu",
@@ -1200,11 +1200,13 @@
 
  "characters.speakRateUnit": "{n}/{unit}",
  "characters.speakRateUnitLabel": "Единица времени",
+ "characters.speakRateInputLabel": "Значение частоты активных реплик",
  "characters.speakRateUnitMin": "мин",
  "characters.speakRateUnitHour": "ч",
  "characters.speakRateUnitDay": "д",
 
  "characters.speakRateOff": "Выкл",
+ "characters.speakRateLessThanOne": "Меньше 1 за {unit}",
 
  "characters.speakRateHint": "Фраз за выбранную единицу времени; 0 = никогда",
 

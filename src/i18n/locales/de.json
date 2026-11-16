@@ -4,7 +4,7 @@
  "about.logo": "Nianyu",
  "about.sub": "NIANYU",
  "about.author": "made by Qianfang",
- "about.line4": "Alles lässt sich besprechen; Gefühle finden ihr Echo.",
+ "about.line4": "Alles lässt sich besprechen; Gefühle finden ihr Echo",
  "about.github": "GitHub besuchen",
  "chat.removeImage": "Bild entfernen",
  "splash.logo": "Nianyu",
@@ -1200,11 +1200,13 @@
 
  "characters.speakRateUnit": "{n}/{unit}",
  "characters.speakRateUnitLabel": "Zeiteinheit",
+ "characters.speakRateInputLabel": "Wert der aktiven Sprechrate",
  "characters.speakRateUnitMin": "Min.",
  "characters.speakRateUnitHour": "Std.",
  "characters.speakRateUnitDay": "T",
 
  "characters.speakRateOff": "Aus",
+ "characters.speakRateLessThanOne": "Weniger als 1 pro {unit}",
 
  "characters.speakRateHint": "Wie viele Sätze pro gewählter Zeiteinheit aktiv gesagt werden; 0 = nie",
 
