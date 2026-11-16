@@ -65,8 +65,17 @@ export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageR
   // Bug 1：角色窗右键「打开角色舞台」→ 本面板自动打开该角色的 CharacterStage。
   // 依赖 nonce（而非 id）保证同一角色重复点击也能再次打开；用 ref 去重避免 refresh 重跑时
   // 反复重置用户已手动关闭的舞台。角色列表异步到达时，snap.characters 变化会重试直至命中。
+  //
+  // P2-1：stageRequest 被清空（如右键「管理角色」，App.tsx 会 setDcStageRequest(null)）时，
+  // 必须同时关掉已打开的 CharacterStage。否则面板不重挂载、stageChar 仍非 null，
+  // 舞台会继续盖在面板上，表现为「点管理角色却停在角色舞台」。
   useEffect(() => {
-    if (!stageRequest || !stageRequest.id) return;
+    if (!stageRequest || !stageRequest.id) {
+      // 请求已撤销 → 关闭舞台，让「管理角色」真正落到角色面板列表。
+      // 首次挂载时 stageRequest 本就是 null，此处 setStageChar(null) 是幂等 no-op。
+      setStageChar(null);
+      return;
+    }
     if (stageRequest.nonce === lastStageNonceRef.current) return;
     const c = snap.characters.find((x) => x.id === stageRequest.id);
     if (!c) return;

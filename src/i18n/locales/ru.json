@@ -1180,6 +1180,7 @@
  "export.worldBook": "Export world book",
  "characters.stageTitle": "Сцена персонажа",
  "characters.dragRotate": "Тяните для поворота · колесо для масштаба",
+ "characters.stageZoom": "Размер модели",
  "characters.say": "Сказать что-нибудь",
  "characters.newChat": "Новый чат",
  "characters.record": "История",

@@ -1180,6 +1180,7 @@
  "export.worldBook": "Export world book",
  "characters.stageTitle": "Scène du personnage",
  "characters.dragRotate": "Glisser pour tourner · molette pour zoomer",
+ "characters.stageZoom": "Taille du modèle",
  "characters.say": "Dire quelque chose",
  "characters.newChat": "Nouvelle discussion",
  "characters.record": "Historique",

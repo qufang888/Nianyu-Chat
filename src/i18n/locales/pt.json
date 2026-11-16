@@ -1180,6 +1180,7 @@
  "export.worldBook": "Export world book",
  "characters.stageTitle": "Palco do personagem",
  "characters.dragRotate": "Arraste para girar · roda para zoom",
+ "characters.stageZoom": "Tamanho do modelo",
  "characters.say": "Dizer algo",
  "characters.newChat": "Novo chat",
  "characters.record": "Histórico",

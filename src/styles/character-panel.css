@@ -309,3 +309,25 @@
   margin-left: auto;
   font-size: calc(12px * var(--font-scale));
 }
+/* 舞台模型大小滑块：全局 input[type=range] 已按主题变量上色，这里只管布局与可读性。 */
+.stage-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px;
+  font-size: calc(12px * var(--font-scale));
+  color: var(--color-text-secondary);
+  background: var(--color-panel-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.stage-zoom-range {
+  width: 120px;
+  cursor: pointer;
+}
+.stage-zoom-value {
+  min-width: 38px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}

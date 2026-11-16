@@ -514,6 +514,8 @@ export interface NianyuAPI {
   onDcOpenChat: (cb: (chat: any) => void) => () => void;
   onDcOpenCollection: (cb: () => void) => () => void;
   onDcOpenStage: (cb: (id: string) => void) => () => void;
+  /** 桌宠气泡：绑定对话来了新消息时，主进程定向推送到该角色窗。 */
+  onDcChatMessage: (cb: (d: { content: string; senderType?: string }) => void) => () => void;
   // 主进程推送：全局光标相对角色窗左上角的 DIP 坐标（≈30Hz），渲染层据此让眼神全屏跟随。
   onDcCursor: (cb: (data: { x: number; y: number }) => void) => () => void;
   setActiveChat: (type: string, id: string) => void; // 通知主进程当前聊天（主动消息未读判断）
@@ -655,6 +657,65 @@ const windowStateListeners = new Map<
   (isMaximized: boolean) => void,
   (_e: unknown, isMaximized: boolean) => void
 >();
+
+/**
+ * 桌面角色导航意图的「缓存 + 订阅后重放」机制（P2-2）。
+ *
+ * 背景：主界面被关闭后重建时，主进程在新 webContents 的 did-finish-load 时刻 send
+ * 'dc:open-chat' / 'dc:open-collection' / 'dc:open-stage'。preload 的 ipcRenderer.on
+ * 此时已注册（preload 早于 did-finish-load 执行），消息不会丢；但此刻 React 组件尚未
+ * mount、渲染层的 onDcOpenXxx 订阅还没建立 —— 裸 listener 把事件直接 cb 出去无人接收，
+ * 意图就此丢失，表现为「关闭主界面后第一次点击仍然没反应（第二次才会好）」。
+ *
+ * 做法：给这类「一次性导航意图」加一层 pending 缓存。消息到达时若尚无订阅者，则存入
+ * pending；渲染层注册订阅的那一刻，若存在 pending 立即重放并清空（重放后清空，
+ * 保证实时到达与重放不会触发两次）。
+ *
+ * 注：本块必须位于 api 对象定义之前 —— pending 是 const 声明，存在 TDZ，
+ * 放在 api 之后虽因箭头函数延迟求值而恰好可用，但语义脆弱、易被后续改动踩坏。
+ */
+type PendingIntent<T> = { value: T | null; subscribed: boolean };
+
+const pendingDcOpenChat: PendingIntent<any> = { value: null, subscribed: false };
+const pendingDcOpenCollection: PendingIntent<void> = { value: null, subscribed: false };
+const pendingDcOpenStage: PendingIntent<string> = { value: null, subscribed: false };
+
+/**
+ * 订阅一个「可缓存重放」的 ipc 通道。
+ * @param channel IPC 通道名
+ * @param pending 该通道的状态槽（模块级常量，保证同一通道共享同一槽）
+ * @param cb 订阅回调
+ * @param map 把 IPC 载荷转换为要投递给 cb 的参数（void 表示无载荷）
+ */
+function subscribeWithReplay<T>(
+  channel: string,
+  pending: PendingIntent<T>,
+  cb: (payload: T) => void,
+  map: (raw: any) => T,
+): () => void {
+  const listener = (_e: any, raw: any) => {
+    if (pending.subscribed) {
+      // 已有订阅者：直接转发（并清空可能残留的 pending，保证只触发一次）
+      pending.value = null;
+      cb(map(raw));
+      return;
+    }
+    // 无订阅者：缓存意图，等订阅建立后重放
+    pending.value = map(raw);
+  };
+  ipcRenderer.on(channel, listener);
+  pending.subscribed = true;
+  // 订阅建立：若期间有缓存意图，立即重放一次并清空
+  if (pending.value !== null && pending.value !== undefined) {
+    const v = pending.value;
+    pending.value = null;
+    cb(v);
+  }
+  return () => {
+    ipcRenderer.removeListener(channel, listener);
+    pending.subscribed = false;
+  };
+}
 
 const api: NianyuAPI = {
   getRoles: () => ipcRenderer.invoke('roles:list'),
@@ -1106,20 +1167,14 @@ const api: NianyuAPI = {
     ipcRenderer.on('dc:state', listener);
     return () => ipcRenderer.removeListener('dc:state', listener);
   },
-  onDcOpenChat: (cb) => {
-    const listener = (_e: any, chat: any) => cb(chat);
-    ipcRenderer.on('dc:open-chat', listener);
-    return () => ipcRenderer.removeListener('dc:open-chat', listener);
-  },
-  onDcOpenCollection: (cb) => {
-    const listener = () => cb();
-    ipcRenderer.on('dc:open-collection', listener);
-    return () => ipcRenderer.removeListener('dc:open-collection', listener);
-  },
-  onDcOpenStage: (cb) => {
-    const listener = (_e: any, id: string) => cb(id);
-    ipcRenderer.on('dc:open-stage', listener);
-    return () => ipcRenderer.removeListener('dc:open-stage', listener);
+  onDcOpenChat: (cb) => subscribeWithReplay('dc:open-chat', pendingDcOpenChat, cb, (raw) => raw),
+  onDcOpenCollection: (cb) =>
+    subscribeWithReplay('dc:open-collection', pendingDcOpenCollection, cb, () => undefined),
+  onDcOpenStage: (cb) => subscribeWithReplay('dc:open-stage', pendingDcOpenStage, cb, (raw) => raw),
+  onDcChatMessage: (cb) => {
+    const listener = (_e: any, d: { content: string; senderType?: string }) => cb(d);
+    ipcRenderer.on('dc:chat-message', listener);
+    return () => ipcRenderer.removeListener('dc:chat-message', listener);
   },
   onDcCursor: (cb) => {
     const listener = (_e: any, d: { x: number; y: number }) => cb(d);

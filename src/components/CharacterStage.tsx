@@ -15,6 +15,12 @@ import type { CharacterExpression } from '../character/PlaceholderCharacter';
 import { ModelView } from '../character/ModelView';
 
 const STAGE_LINES = ['今天想聊点什么？', '我在这里，慢慢说就好。', '你笑的时候，我也跟着开心。', '要不要一起发会儿呆？'];
+/** 舞台缩放范围与步长（集中定义：滚轮与滑块共用，避免两处阈值漂移）。 */
+const STAGE_ZOOM_MIN = 0.6;
+const STAGE_ZOOM_MAX = 1.9;
+const STAGE_ZOOM_STEP = 0.05;
+/** 滚轮像素 → 缩放增量系数：常规鼠标一格 deltaY≈100 → 约 0.12。 */
+const STAGE_WHEEL_SENSITIVITY = 0.0012;
 
 export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: () => void }> = ({
   character,
@@ -62,7 +68,7 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
   };
   const onWheel = (e: React.WheelEvent) => {
     e.preventDefault();
-    setZoom((z) => Math.max(0.6, Math.min(1.9, z - e.deltaY * 0.0012)));
+    setZoom((z) => Math.max(STAGE_ZOOM_MIN, Math.min(STAGE_ZOOM_MAX, z - e.deltaY * STAGE_WHEEL_SENSITIVITY)));
   };
 
   const speak = async () => {
@@ -202,6 +208,20 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
             <button className="btn-ghost" onClick={openChat} disabled={!character.boundChat}>
               {t('characters.record')}
             </button>
+            <label className="stage-zoom">
+              <span>{t('characters.stageZoom')}</span>
+              <input
+                className="stage-zoom-range"
+                type="range"
+                min={STAGE_ZOOM_MIN}
+                max={STAGE_ZOOM_MAX}
+                step={STAGE_ZOOM_STEP}
+                value={zoom}
+                aria-label={t('characters.stageZoom')}
+                onChange={(e) => setZoom(Number(e.target.value))}
+              />
+              <span className="stage-zoom-value">{Math.round(zoom * 100)}%</span>
+            </label>
             <span className="muted stage-hint">{t('characters.dragRotate')}</span>
           </div>
         </div>

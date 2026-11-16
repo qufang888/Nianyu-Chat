@@ -1180,6 +1180,7 @@
  "export.worldBook": "Export world book",
  "characters.stageTitle": "캐릭터 스테이지",
  "characters.dragRotate": "드래그로 회전 · 휠로 확대",
+ "characters.stageZoom": "모델 크기",
  "characters.say": "한마디 하기",
  "characters.newChat": "새 대화",
  "characters.record": "기록 보기",

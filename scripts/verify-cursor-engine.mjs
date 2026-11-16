@@ -590,10 +590,12 @@ section('9. CI 入口');
 // ============================================================================
 const pkg = JSON.parse(read('package.json'));
 // 刻意**不写死**具体版本号：写死会让任何一次正常发版都误报（与 verify-builtin-skill 的 G10 同款教训）。
-// 这里只断言「仍是 V3 测试版」这一语义：主版本号为 3，且带 beta 预发布标识。
+// 这里只断言「主版本号为 3」这一语义。
+// 注：v3.0.1 转正式版后曾附带断言"版本号含 beta"，导致正式版发版时该断言误报 ——
+// beta 只是预发布阶段的特征，正式版本就不该再要求，故移除该附加条件。
 ok(
-  /^3\./.test(pkg.version) && pkg.version.includes('beta'),
-  `package.json 版本号为 V3 测试版（${pkg.version}）`
+  /^3\./.test(pkg.version),
+  `package.json 主版本号为 3（${pkg.version}）`
 );
 ok(typeof pkg.scripts['verify:cursor-engine'] === 'string', 'package.json 含 verify:cursor-engine 入口');
 for (const s of ['verify:cursor-hotspot', 'verify:cursor-leave', 'verify:launch-cursor', 'verify:cursor-cover-state']) {

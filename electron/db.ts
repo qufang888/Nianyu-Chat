@@ -40,6 +40,23 @@ export { migrateCursorHotspot };
  */
 const COMPANION_FLUSH_MS = 30_000;
 
+/**
+ * 「新消息写入」全局钩子（可空）。
+ *
+ * 用途：桌宠气泡的跨窗推送 —— 桌宠绑定的对话里一旦来了新消息（AI 回复或用户消息），
+ * 就要实时弹到桌宠头顶的气泡上。`addMessage` 是所有新消息落库的唯一入口（AI 回复、
+ * 用户消息、续写/重写、主动消息等全部经过它），故在此设唯一钩子点，避免逐处埋点。
+ *
+ * 约定：回调在 store 落库之后触发，保证监听者读到的是已持久化的消息；回调抛错由
+ * addMessage 内部捕获，不影响写库与主流程。
+ */
+let onChatMessageAdded: ((msg: ChatMessage) => void) | null = null;
+
+/** 注册「新消息写入」监听器；返回反注册函数。 */
+export function setChatMessageAddedListener(fn: ((msg: ChatMessage) => void) | null): void {
+  onChatMessageAdded = fn;
+}
+
 // 纯 JS 存储：数据以 JSON 文件持久化，无需任何原生编译模块。
 interface ChatSession {
   chat_type: string;
@@ -1063,6 +1080,13 @@ class DataManager {
     this.ensureChatSession(msg.chat_type, msg.chat_id, msg.timestamp);
     this.store.messages.push(full);
     this.saveStore();
+    // 通知外部监听者（本项目用于「桌宠气泡：绑定对话来了新消息 → 实时弹到桌宠头顶」）。
+    // 放在 store 落库之后，保证监听者读到的一定是已持久化的消息；监听者自身抛错不得影响写库。
+    try {
+      onChatMessageAdded?.(full);
+    } catch (e) {
+      console.warn('[nianyu] onChatMessageAdded failed:', (e as Error)?.message);
+    }
     return full;
   }
 

@@ -56,6 +56,46 @@ const CASCADE_OFFSET = 28;
 const DRAG_WATCHDOG_MS = 9000;
 /** 看门狗检查周期（低频，独立于 60Hz 物理定时器）。 */
 const DRAG_WATCHDOG_POLL_MS = 1000;
+/**
+ * 桌宠气泡的新消息推送：绑定对话里来了新消息时，实时弹到该角色头顶的气泡。
+ *
+ * 过滤规则（避免打扰与重复弹）：
+ * - 只推 **AI 回复**（sender_type === 'ai'）与 **用户消息**（sender_type === 'user'）；
+ *   system 消息（回滚/清空等系统提示）不弹。
+ * - `from_proactive === true` 的消息**不推**：桌宠自己的主动消息链路已自行弹过气泡
+ *   （CharacterApp 的 requestCharacterLine → showBubble），再推一次会重复弹两次。
+ * - 空内容不推（纯图片消息 content 为空串，桌宠气泡是文字气泡，弹空白无意义）。
+ * - `status === 'failed'` 的失败消息不推。
+ */
+const DC_BUBBLE_MAX_LEN = 120;
+
+/** 把新消息推送给绑定了该会话的桌宠窗口。 */
+export function pushChatMessageToCharacters(msg: {
+  chat_type?: string;
+  chat_id?: string;
+  sender_type?: string;
+  content?: string;
+  status?: string;
+  from_proactive?: boolean;
+}): void {
+  if (dcWindows.size === 0) return;
+  const type = msg.chat_type;
+  const id = msg.chat_id;
+  if (!type || !id) return;
+  if (msg.from_proactive === true) return;
+  if (msg.status === 'failed') return;
+  if (msg.sender_type !== 'ai' && msg.sender_type !== 'user') return;
+  const raw = (msg.content || '').trim();
+  if (!raw) return;
+  const content = raw.length > DC_BUBBLE_MAX_LEN ? `${raw.slice(0, DC_BUBBLE_MAX_LEN)}…` : raw;
+  for (const [cid, w] of dcWindows) {
+    if (w.isDestroyed() || !w.isVisible()) continue;
+    const c = findChar(cid);
+    const bound = c?.boundChat;
+    if (!bound || bound.type !== type || bound.id !== id) continue;
+    w.webContents.send('dc:chat-message', { content, senderType: msg.sender_type });
+  }
+}
 
 /** 每个角色窗口独立的拖拽/惯性/穿透意愿状态。 */
 interface DragState {
@@ -83,6 +123,13 @@ const dcWindows = new Map<string, BrowserWindow>();
 /** 每角色独立的拖拽/惯性/穿透状态。 */
 const dragStates = new Map<string, DragState>();
 let mainWindowRef: BrowserWindow | null = null;
+/**
+ * 主窗唤出回调（由 main.ts 注入，内部走 showMainWindow()）。
+ * 为什么需要：用户「关闭主界面」时 mainWindowRef 指向已销毁窗口（main.ts 的 closed 处理把
+ * mainWindow 置 null），右键菜单的「绑定对话 / 打开角色舞台 / 管理角色」原本直接 return → 点了没反应。
+ * 注入而非直接 import main.ts 可避免循环依赖（与 floatingBall 的 setBallMainShow 同模式）。
+ */
+let mainShowRef: (() => void) | null = null;
 /**
  * 设置变更广播器（由 main.ts 注入）。
  * 为什么需要：运行时开关（启用/置顶/穿透锁定/当前角色）由主进程直接落盘，渲染层若只靠自己
@@ -332,6 +379,14 @@ function sendState(id?: string): void {
 
 export function setCharacterMainWindow(win: BrowserWindow | null): void {
   mainWindowRef = win;
+}
+
+/**
+ * 注入「唤出（必要时重建）主窗」回调。main.ts 的回调在 showMainWindow() 之后会再次调用
+ * setCharacterMainWindow(mainWindow)，确保 createWindow() 产生的新窗口同步回本模块引用。
+ */
+export function setCharacterMainShow(fn: () => void): void {
+  mainShowRef = fn;
 }
 
 /** 注入设置变更广播器（main.ts 的 broadcast），让运行时开关的改动能被各窗口感知 */
@@ -732,12 +787,47 @@ function ensureDragWatchdog(): void {
   }, DRAG_WATCHDOG_POLL_MS);
 }
 
+/**
+ * 桌宠右键导航的统一投递：主窗还在就 restore/show/focus；主窗已销毁则先走注入的
+ * showMainWindow() 重建（回调会刷新 mainWindowRef），等新 renderer 加载完成再补发 IPC。
+ *
+ * 为什么必须等 did-finish-load：重建出来的 BrowserWindow 是新 webContents，React 的
+ * onDcOpenCollection / onDcOpenStage / onDcOpenChat 订阅在组件 mount 后才存在；若在
+ * createWindow() 刚返回就 send，IPC 会落在空文档上被永久丢弃（表现为「按钮仍然没反应」）。
+ * 已存在的窗口不等待，保持原来的即时响应手感。
+ */
+function withMainWindow(deliver: (win: BrowserWindow) => void): void {
+  const existing = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null;
+  let win: BrowserWindow | null = existing;
+  if (!win) {
+    if (!mainShowRef) return;
+    mainShowRef();
+    win = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null;
+  }
+  if (!win) return;
+  const target = win;
+  const send = (): void => {
+    if (target.isDestroyed()) return;
+    if (target.isMinimized()) target.restore();
+    target.show();
+    target.focus();
+    try {
+      deliver(target);
+    } catch (e) {
+      // 极端竞态（窗口在 send 瞬间被关）下静默跳过，避免 uncaughtException 弹窗
+      console.warn('[nianyu] dc main ipc skip:', (e as Error)?.message);
+    }
+  };
+  if (!existing && target.webContents.isLoadingMainFrame()) {
+    target.webContents.once('did-finish-load', send);
+  } else {
+    send();
+  }
+}
+
 function openBoundChat(chat: { type: 'single' | 'group'; id: string; name?: string }): void {
-  if (!mainWindowRef || mainWindowRef.isDestroyed()) return;
-  if (mainWindowRef.isMinimized()) mainWindowRef.restore();
-  mainWindowRef.show();
-  mainWindowRef.focus();
-  mainWindowRef.webContents.send('dc:open-chat', chat);
+  if (!chat?.id) return;
+  withMainWindow((win) => win.webContents.send('dc:open-chat', chat));
 }
 
 // ===================== IPC =====================
@@ -856,23 +946,15 @@ export function registerDesktopCharacterIPC(): void {
     if (chat && chat.id) openBoundChat(chat);
   });
 
-  // 角色窗请求打开主界面的「桌宠角色」面板
+  // 角色窗请求打开主界面的「桌宠角色」面板（右键「管理角色」/ 未绑定时的「绑定对话」）
   ipcMain.on('dc:open-collection', () => {
-    if (!mainWindowRef || mainWindowRef.isDestroyed()) return;
-    if (mainWindowRef.isMinimized()) mainWindowRef.restore();
-    mainWindowRef.show();
-    mainWindowRef.focus();
-    mainWindowRef.webContents.send('dc:open-collection');
+    withMainWindow((win) => win.webContents.send('dc:open-collection'));
   });
 
   // Bug 1「打开角色舞台」：唤起主窗并带上角色 id，让「桌宠角色」面板自动打开该角色的 CharacterStage。
   // 无既有跨窗舞台机制（stageChar 原是面板本地 state），故新增此通道而不再只 dcOpenCollection。
   ipcMain.on('dc:open-stage', (_e, id: string) => {
-    if (!mainWindowRef || mainWindowRef.isDestroyed()) return;
-    if (mainWindowRef.isMinimized()) mainWindowRef.restore();
-    mainWindowRef.show();
-    mainWindowRef.focus();
-    mainWindowRef.webContents.send('dc:open-stage', String(id || ''));
+    withMainWindow((win) => win.webContents.send('dc:open-stage', String(id || '')));
   });
 
   ipcMain.on('dc:show-window', () => {

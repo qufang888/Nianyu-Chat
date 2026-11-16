@@ -68,6 +68,15 @@ const floatingBall = read('electron/floatingBall.ts');
 const chatWin = read('src/components/ChatWindow.tsx');
 const miniChat = read('src/components/MiniChat.tsx');
 const ipcTs = read('src/ipc.ts');
+const dbTs = read('electron/db.ts');
+const LOCALE_CODES = ['de', 'es', 'fr', 'ja', 'ko', 'pt', 'ru', 'zh-Hant'];
+const localeStageZoom = LOCALE_CODES.map((code) => {
+  try {
+    return JSON.parse(read(`src/i18n/locales/${code}.json`))['characters.stageZoom'] || '';
+  } catch {
+    return '';
+  }
+});
 
 // ============================================================================
 section('A. 窗口与物理层（electron/desktopCharacter.ts）');
@@ -625,6 +634,193 @@ check('P2-2 心跳只在看门狗内刷新；springStep 绝不刷新 dragStarted
   const bP22 = mainDc.replace('p.x !== st.watchdogCursorX || p.y !== st.watchdogCursorY', 'false');
   check('（可证伪）回退看门狗光标位移心跳后 P2-2 断言失效',
     !/p\.x !== st\.watchdogCursorX \|\| p\.y !== st\.watchdogCursorY/.test(bP22));
+}
+
+// ============================================================================
+section('I. 本轮 5 项修复 + 2 项增量（每项均可证伪）');
+// ============================================================================
+
+// I1：主窗关闭后右键三项无反应 —— 注入 showMainWindow 重建，并在新 renderer 加载完成后补发 IPC
+check('I1 注入主窗唤出器：desktopCharacter 导出 setCharacterMainShow，main.ts 用 showMainWindow 注入并刷新引用',
+  /export function setCharacterMainShow\(fn: \(\) => void\)/.test(mainDc) &&
+  /setCharacterMainShow\(\(\) => \{[\s\S]{0,200}showMainWindow\(\);[\s\S]{0,120}setCharacterMainWindow\(mainWindow\);/.test(electronMain));
+check('I1 三条右键导航统一走 withMainWindow（主窗销毁不再直接 return）',
+  !/if \(!mainWindowRef \|\| mainWindowRef\.isDestroyed\(\)\) return;/.test(mainDc) &&
+  /withMainWindow\(\(win\) => win\.webContents\.send\('dc:open-chat', chat\)\)/.test(mainDc) &&
+  /withMainWindow\(\(win\) => win\.webContents\.send\('dc:open-collection'\)\)/.test(mainDc) &&
+  /withMainWindow\(\(win\) => win\.webContents\.send\('dc:open-stage', String\(id \|\| ''\)\)\)/.test(mainDc));
+check('I1 重建后补发延后到新 webContents 加载完成（否则 IPC 落在空文档上）',
+  /mainShowRef\(\);/.test(mainDc) &&
+  /target\.webContents\.isLoadingMainFrame\(\)/.test(mainDc) &&
+  /target\.webContents\.once\('did-finish-load', send\)/.test(mainDc));
+
+// I2：管理角色落点 —— 进入角色面板前清舞台请求，避免残留 nonce 把面板再次弹到舞台
+check('I2 管理角色先清舞台请求再进角色面板；舞台路径仍带 nonce',
+  /api\.onDcOpenCollection\(\(\) => \{[\s\S]{0,120}setDcStageRequest\(null\);[\s\S]{0,80}setView\('characters'\);/.test(appRoot) &&
+  /api\.onDcOpenStage\(\(id\) => \{[\s\S]{0,120}setDcStageRequest\(\{ id, nonce: Date\.now\(\) \}\)/.test(appRoot));
+
+// I3：滚轮缩放 —— 真因是 --dc-scale 写在子元素上不会向上继承，父元素 transform 永远取默认 1
+check('I3 缩放变量写在 .dc-character 自身（父元素 transform 才消费它），不在 .dc-stage 上',
+  /className=\{`dc-character\$\{dragging \? ' dragging' : ''\}`\}[\s\S]{0,200}--dc-scale/.test(appTsx) &&
+  !/className="dc-stage"[^>]*--dc-scale/.test(appTsx) &&
+  /transform: translateX\(-50%\) scale\(var\(--dc-scale, 1\)\)/.test(charCss));
+check('I3 滚轮链路完整：onWheel + 0.6~1.6 钳制 + dcSetScale 持久化 + 原生 passive:false 阻止滚动',
+  /onWheel=\{onCharacterWheel\}/.test(appTsx) &&
+  /Math\.max\(0\.6, Math\.min\(1\.6, Math\.round\(\(cur \+ step\) \* 100\) \/ 100\)\)/.test(appTsx) &&
+  /api\.dcSetScale\(c\.id, next\)/.test(appTsx) &&
+  /addEventListener\('wheel',[\s\S]{0,200}\{ passive: false \}\)/.test(appTsx));
+
+// I4：桌宠头顶气泡（.dc-bubble）—— 绑定会话 proactive 消息 → showBubble → 线性弹入动画
+check('I4 气泡弹入改为 linear 且仍受 character 动画组 all-off / custom 双门控',
+  /animation: dcBubbleIn 0\.18s linear/.test(charCss) &&
+  !/dcBubbleIn 0\.18s ease/.test(charCss) &&
+  /html\.anim-off \.dc-bubble/.test(charCss) &&
+  /html\[data-anim-off~='character'\] \.dc-bubble/.test(charCss));
+check('I4 绑定会话有消息走 proactive → showBubble → .dc-bubble 链路',
+  /api\.proactive\(\{ chatType: bound\.type, chatId: bound\.id, source: 'character' \}\)/.test(appTsx) &&
+  /showBubble\(text, CHARACTER_BUBBLE_MS\)/.test(appTsx) &&
+  /className="dc-bubble"/.test(appTsx));
+
+// I5：右键菜单弹入 + 收回，均 linear；三档开关关掉时立即卸载
+check('I5 菜单弹入/收回均为 linear（dcMenuOut + .dc-menu.closing，仍受 character 组门控）',
+  /animation: dcMenuIn 0\.14s linear/.test(charCss) &&
+  /\.dc-menu\.closing \{[\s\S]{0,200}animation: dcMenuOut 0\.14s linear forwards/.test(charCss) &&
+  /@keyframes dcMenuOut/.test(charCss) &&
+  /html\[data-anim-off~='character'\] \.dc-menu/.test(charCss));
+check('I5 三条关闭路径统一 closeMenu：延迟卸载 + 动画被关立即卸载（setTimeout 兜底）',
+  /const closeMenu = useCallback/.test(appTsx) &&
+  /root\.classList\.contains\('anim-off'\)/.test(appTsx) &&
+  /includes\('character'\)/.test(appTsx) &&
+  /DC_MENU_ANIM_MS = 140/.test(appTsx) &&
+  /setTimeout\(\(\) => \{[\s\S]{0,240}setMenuOpen\(false\)[\s\S]{0,160}DC_MENU_ANIM_MS\)/.test(appTsx) &&
+  /if \(e\.key === 'Escape'\) closeMenu\(\)/.test(appTsx) &&
+  /closeMenu\(\);[\s\S]{0,40}m\.onClick\(\)/.test(appTsx) &&
+  /className=\{`dc-menu\$\{menuClosing \? ' closing' : ''\}`\}/.test(appTsx));
+
+// I6：角色舞台滑块（新增一个 i18n key，10 处齐全）
+check('I6 舞台新增模型大小滑块（range + 共用阈值常量 + setZoom + i18n 10 处齐全）',
+  /type="range"/.test(stage) &&
+  /min=\{STAGE_ZOOM_MIN\}/.test(stage) && /max=\{STAGE_ZOOM_MAX\}/.test(stage) && /step=\{STAGE_ZOOM_STEP\}/.test(stage) &&
+  /onChange=\{\(e\) => setZoom\(Number\(e\.target\.value\)\)\}/.test(stage) &&
+  /t\('characters\.stageZoom'\)/.test(stage) &&
+  /'characters\.stageZoom': '模型大小'/.test(trans) &&
+  /'characters\.stageZoom': 'Model size'/.test(trans) &&
+  localeStageZoom.length === 8 && localeStageZoom.every((v) => typeof v === 'string' && v.length > 0));
+
+// I7：其它菜单项通道完整性（lock / aot / chat / stage / manage / hide）
+check('I7 六项菜单 IPC 通道齐全且隐藏角色走 sender 归属（不多关其它角色）',
+  ["key: 'lock'", "key: 'aot'", "key: 'chat'", "key: 'stage'", "key: 'manage'", "key: 'hide'"].every((k) => appTsx.includes(k)) &&
+  /api\.dcSetPassThroughLock\(/.test(appTsx) && /api\.dcSetAlwaysOnTop\(/.test(appTsx) && /api\.dcHideCharacter\(charId\)/.test(appTsx) &&
+  /ipcMain\.on\('dc:set-pass-through-lock'/.test(mainDc) &&
+  /ipcMain\.on\('dc:set-always-on-top'/.test(mainDc) &&
+  /ipcMain\.on\('dc:hide-character',\s*\(e\)\s*=>\s*hideActiveCharacter\(e\.sender\)\)/.test(mainDc));
+
+// 可证伪：把每项实现回退，对应断言必须变红
+{
+  const m1 = mainDc.replace('    mainShowRef();', '    /* stripped */');
+  check('（可证伪）删掉主窗重建调用后 I1 断言失效', !/mainShowRef\(\);/.test(m1));
+  const m1b = mainDc.replace("target.webContents.once('did-finish-load', send)", 'send()');
+  check('（可证伪）去掉 did-finish-load 延迟投递后 I1 断言失效',
+    !/target\.webContents\.once\('did-finish-load', send\)/.test(m1b));
+
+  const m2 = appRoot.replace(/setDcStageRequest\(null\);/, '');
+  check('（可证伪）删掉舞台请求清理后 I2 断言失效',
+    !/api\.onDcOpenCollection\(\(\) => \{[\s\S]{0,120}setDcStageRequest\(null\)/.test(m2));
+
+  const m3 = appTsx.replace(/className=\{`dc-character\$\{dragging \? ' dragging' : ''\}`\}[\s\S]{0,200}--dc-scale/,
+    "className=\"dc-character\"");
+  check('（可证伪）把 --dc-scale 挪回子元素后 I3 断言失效',
+    !/className=\{`dc-character\$\{dragging \? ' dragging' : ''\}`\}[\s\S]{0,200}--dc-scale/.test(m3));
+
+  const m4 = charCss.replace('animation: dcBubbleIn 0.18s linear', 'animation: dcBubbleIn 0.18s ease');
+  check('（可证伪）气泡动画改回 ease 后 I4 断言失效', !/animation: dcBubbleIn 0\.18s linear/.test(m4));
+
+  const m5 = charCss.replace('animation: dcMenuOut 0.14s linear forwards', '/* stripped */');
+  check('（可证伪）删掉菜单收回动画后 I5 断言失效', !/\.dc-menu\.closing \{[\s\S]{0,200}animation: dcMenuOut 0\.14s linear forwards/.test(m5));
+  const m5b = appTsx.replace("if (e.key === 'Escape') closeMenu();", "if (e.key === 'Escape') setMenuOpen(false);");
+  check('（可证伪）Escape 不走统一收尾后 I5 断言失效', !/if \(e\.key === 'Escape'\) closeMenu\(\)/.test(m5b));
+
+  const m6 = stage.replace('type="range"', 'type="text"');
+  check('（可证伪）去掉舞台滑块后 I6 断言失效', !/type="range"/.test(m6));
+
+  const m7 = mainDc.replace("ipcMain.on('dc:hide-character', (e) => hideActiveCharacter(e.sender));", '/* stripped */');
+  check('（可证伪）删掉隐藏角色 IPC 后 I7 断言失效',
+    !/ipcMain\.on\('dc:hide-character',\s*\(e\)\s*=>\s*hideActiveCharacter\(e\.sender\)\)/.test(m7));
+}
+
+// ============================================================================
+section('J. QA 复检发现的 2 个 P2 + 新增「新消息实时弹气泡」（每项均可证伪）');
+// ============================================================================
+
+// J1（P2-1）：从角色舞台直接点「管理角色」时，舞台必须关闭、落到角色面板。
+// 根因：App 只清了 dcStageRequest（prop），面板内部已 set 的 stageChar 未清，
+// 面板不重挂载 → CharacterStage 继续盖在面板上，表现为「管理角色却停在舞台」。
+check('J1 舞台请求被撤销时同步关闭已打开的 CharacterStage（否则「管理角色」停在舞台）',
+  /if \(!stageRequest \|\| !stageRequest\.id\) \{[\s\S]{0,200}setStageChar\(null\);[\s\S]{0,80}return;/.test(coll));
+check('J1 关闭舞台不破坏既有 nonce 去重与异步重试逻辑',
+  /if \(stageRequest\.nonce === lastStageNonceRef\.current\) return;/.test(coll) &&
+  /lastStageNonceRef\.current = stageRequest\.nonce;/.test(coll) &&
+  /snap\.characters\.find\(\(x\) => x\.id === stageRequest\.id\)/.test(coll));
+
+// J2（P2-2）：主窗重建后「第一次」点击仍可能丢 IPC —— 裸 ipcRenderer.on 无缓存重放。
+// 修法：preload 层给 dc:open-chat / dc:open-collection / dc:open-stage 做「意图缓存 + 订阅后重放」。
+check('J2 preload 提供「缓存 + 订阅后重放」订阅器（subscribeWithReplay），带 pending 槽与订阅态标记',
+  /function subscribeWithReplay<T>\(/.test(preload) &&
+  /type PendingIntent<T> = \{ value: T \| null; subscribed: boolean \}/.test(preload) &&
+  /pending\.subscribed = true;/.test(preload) &&
+  /pending\.value = map\(raw\);/.test(preload) &&
+  /cb\(v\);/.test(preload));
+check('J2 三条导航通道均走 subscribeWithReplay（订阅建立时重放缓存意图）',
+  /onDcOpenChat: \(cb\) => subscribeWithReplay\('dc:open-chat', pendingDcOpenChat, cb, \(raw\) => raw\)/.test(preload) &&
+  /onDcOpenCollection: \(cb\) =>\s*\n?\s*subscribeWithReplay\('dc:open-collection', pendingDcOpenCollection, cb, \(\) => undefined\)/.test(preload) &&
+  /onDcOpenStage: \(cb\) => subscribeWithReplay\('dc:open-stage', pendingDcOpenStage, cb, \(raw\) => raw\)/.test(preload));
+check('J2 三个 pending 槽与 subscribed 标记独立存在（互不串台）',
+  /const pendingDcOpenChat: PendingIntent<any> = \{ value: null, subscribed: false \}/.test(preload) &&
+  /const pendingDcOpenCollection: PendingIntent<void> = \{ value: null, subscribed: false \}/.test(preload) &&
+  /const pendingDcOpenStage: PendingIntent<string> = \{ value: null, subscribed: false \}/.test(preload));
+
+// J3（新增功能）：绑定对话来了新消息（AI 回复 / 用户消息）→ 实时弹到桌宠头顶气泡。
+// 钩在 DataManager.addMessage（所有新消息的唯一落库入口），按角色 boundChat 匹配后定向推送。
+check('J3 消息写入中央单点挂钩：db.addMessage 落库后触发 onChatMessageAdded',
+  /export function setChatMessageAddedListener\(fn: \(\(msg: ChatMessage\) => void\) \| null\)/.test(dbTs) &&
+  /this\.store\.messages\.push\(full\);[\s\S]{0,200}onChatMessageAdded\?\.\(full\);/.test(dbTs));
+check('J3 main.ts 注册监听器并转发到桌宠定向推送',
+  /setChatMessageAddedListener\(/.test(electronMain) &&
+  /pushChatMessageToCharacters/.test(electronMain) &&
+  /import \{[^}]*pushChatMessageToCharacters[^}]*\} from '\.\/desktopCharacter'/.test(electronMain));
+check('J3 桌宠侧按角色 boundChat 匹配后定向推送到该角色窗（多窗口不串台）',
+  /export function pushChatMessageToCharacters\(/.test(mainDc) &&
+  /bound\.type !== type \|\| bound\.id !== id/.test(mainDc) &&
+  /w\.webContents\.send\('dc:chat-message', \{ content, senderType: msg\.sender_type \}\)/.test(mainDc));
+check('J3 过滤规则：跳过 proactive（避免与主动消息气泡重复弹）/ 失败消息 / system / 空内容',
+  /if \(msg\.from_proactive === true\) return;/.test(mainDc) &&
+  /if \(msg\.status === 'failed'\) return;/.test(mainDc) &&
+  /if \(msg\.sender_type !== 'ai' && msg\.sender_type !== 'user'\) return;/.test(mainDc) &&
+  /if \(!raw\) return;/.test(mainDc));
+check('J3 渲染层订阅 dc:chat-message 并复用 showBubble（沿用既有线性气泡动画与开关门控）',
+  /api\.onDcChatMessage\(/.test(appTsx) &&
+  /sanitizeBubbleText\(d\?\.content \|\| ''\)/.test(appTsx) &&
+  /showBubble\(text, CHARACTER_BUBBLE_MS\)/.test(appTsx) &&
+  /onDcChatMessage: \(cb: \(d: \{ content: string; senderType\?: string \}\) => void\) => \(\) => void;/.test(preload) &&
+  /onDcChatMessage: \(cb\) => raw\.onDcChatMessage\(cb\)/.test(ipcTs));
+
+// 可证伪：把 J 段三处修复分别回退，对应断言必须变红
+{
+  const j1 = coll.replace('setStageChar(null);', '/* stripped */');
+  check('（可证伪）删掉舞台撤销时的 setStageChar(null) 后 J1 断言失效',
+    !/if \(!stageRequest \|\| !stageRequest\.id\) \{[\s\S]{0,200}setStageChar\(null\);/.test(j1));
+
+  const j2 = preload.replace(/subscribeWithReplay\('dc:open-chat', pendingDcOpenChat, cb, \(raw\) => raw\)/, '/* stripped */');
+  check('（可证伪）让 dc:open-chat 退回裸 ipcRenderer.on 后 J2 断言失效',
+    !/onDcOpenChat: \(cb\) => subscribeWithReplay/.test(j2));
+
+  const j3 = mainDc.replace("w.webContents.send('dc:chat-message', { content, senderType: msg.sender_type });", '/* stripped */');
+  check('（可证伪）删掉新消息定向推送后 J3 断言失效',
+    !/w\.webContents\.send\('dc:chat-message'/.test(j3));
+
+  const j4 = dbTs.replace('onChatMessageAdded?.(full);', '/* stripped */');
+  check('（可证伪）摘掉 addMessage 的消息钩子后 J3 断言失效',
+    !/onChatMessageAdded\?\.\(full\);/.test(j4));
 }
 
 // ---------- 汇总 ----------

@@ -60,6 +60,11 @@ const CHARACTER_LINE_TIMEOUT_MS = 20_000;
 const CHARACTER_BUBBLE_MAX_CHARS = 80;
 /** 模型语句气泡的停留时长（毫秒）。 */
 const CHARACTER_BUBBLE_MS = 4200;
+/** 右键菜单收回动画时长（毫秒），与 character.css 的 dcMenuOut 0.14s 固定时长一致。
+ *  角色窗 CSS 不接 --anim-speed 倍率，故这里用固定值与 CSS 对齐，不用 animMs 造成错位。 */
+const DC_MENU_ANIM_MS = 140;
+/** applyAnimControl 在 all-off/自定义档写到 documentElement 上的分组黑名单属性名。 */
+const ANIM_OFF_ATTR = 'data-anim-off';
 
 /**
  * 只裁剪「气泡展示」文本；写入绑定对话的仍是模型原文，不做任何改写。
@@ -89,6 +94,8 @@ export const CharacterApp: React.FC = () => {
   const [dragging, setDragging] = useState(false);
   const [bubble, setBubble] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  /** 菜单正在播放收回动画：此时仍挂载 .dc-menu.closing，动画结束/动画被关后立刻卸载。 */
+  const [menuClosing, setMenuClosing] = useState(false);
   const [modelError, setModelError] = useState<string>('');
 
   const charRef = useRef<HTMLDivElement | null>(null);
@@ -100,6 +107,8 @@ export const CharacterApp: React.FC = () => {
   const actionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draggingRef = useRef(false);
   const menuOpenRef = useRef(false);
+  const menuClosingRef = useRef(false);
+  const menuCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const charRefState = useRef<DesktopCharacter | null>(null);
   /** 桌宠语句生成的并发锁：同一时刻只允许一个模型请求在途。 */
   const lineInFlightRef = useRef(false);
@@ -177,6 +186,24 @@ export const CharacterApp: React.FC = () => {
       off();
     };
   }, []);
+
+  // ===== 绑定对话来了新消息 → 实时弹到桌宠头顶气泡 =====
+  // 主进程在 DataManager.addMessage（所有新消息的唯一落库入口）挂钩，按本角色 boundChat
+  // 匹配后定向推到该角色窗（electron/desktopCharacter.ts 的 pushChatMessageToCharacters）。
+  // 主进程已过滤 proactive 自造句（from_proactive），故此处不会与主动消息气泡重复弹。
+  useEffect(() => {
+    if (typeof api.onDcChatMessage !== 'function') return;
+    const off = api.onDcChatMessage((d) => {
+      const text = sanitizeBubbleText(d?.content || '');
+      if (!text) return;
+      // 拖拽中 / 菜单打开时不弹气泡，避免打断操作与遮挡菜单
+      if (draggingRef.current || menuOpenRef.current) return;
+      showBubble(text, CHARACTER_BUBBLE_MS);
+      setExpression('happy');
+      setTimeout(() => setExpression((e) => (e === 'happy' ? 'neutral' : e)), 1800);
+    });
+    return off;
+  }, [showBubble]);
 
   // ===== 动效总开关（角色窗是独立 document，走统一的 applyAnimControl('character')）=====
   // 角色窗不加载 index.css，所以「全关档」的全局 kill 规则不存在于本文档；
@@ -290,6 +317,54 @@ export const CharacterApp: React.FC = () => {
     api.dcSetIgnore(!next);
   }, []);
 
+  /**
+   * 统一收尾：右键菜单弹出/收回都要走这里，保证 outside-pointerdown、Escape、菜单项点击
+   * 三条路径行为一致。播放 dcMenuOut 后延迟卸载；若动画被三档开关关掉则立刻卸载，
+   * 不依赖 animationend（animation:none 时该事件不会触发，菜单会卡住不消失）。
+   */
+  const closeMenu = useCallback(() => {
+    if (!menuOpenRef.current || menuClosingRef.current) return;
+    const root = document.documentElement;
+    const animOff =
+      root.classList.contains('anim-off') ||
+      (root.getAttribute(ANIM_OFF_ATTR) || '').split(' ').includes('character');
+    if (animOff) {
+      setMenuOpen(false);
+      setMenuClosing(false);
+      menuClosingRef.current = false;
+      return;
+    }
+    menuClosingRef.current = true;
+    setMenuClosing(true);
+    if (menuCloseTimer.current) clearTimeout(menuCloseTimer.current);
+    menuCloseTimer.current = setTimeout(() => {
+      setMenuOpen(false);
+      setMenuClosing(false);
+      menuClosingRef.current = false;
+      menuCloseTimer.current = null;
+    }, DC_MENU_ANIM_MS);
+  }, []);
+
+  /** 打开菜单：取消可能还在排队的收回定时器，避免刚点开就被上一次关闭的 timer 卸载。 */
+  const openMenu = useCallback(() => {
+    if (menuCloseTimer.current) {
+      clearTimeout(menuCloseTimer.current);
+      menuCloseTimer.current = null;
+    }
+    menuClosingRef.current = false;
+    setMenuClosing(false);
+    setMenuOpen(true);
+    applyInteractive(true);
+  }, [applyInteractive]);
+
+  // 组件卸载时清掉收回定时器，避免对已卸载组件 setState
+  useEffect(
+    () => () => {
+      if (menuCloseTimer.current) clearTimeout(menuCloseTimer.current);
+    },
+    []
+  );
+
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       // 穿透锁定/拖拽期间不改路由（拖拽由主进程锁定可交互）
@@ -317,10 +392,10 @@ export const CharacterApp: React.FC = () => {
     const onOutsideDown = (e: PointerEvent) => {
       const target = e.target as HTMLElement | null;
       if (target?.closest('.dc-menu')) return;
-      setMenuOpen(false);
+      closeMenu();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMenuOpen(false);
+      if (e.key === 'Escape') closeMenu();
     };
     document.addEventListener('pointerdown', onOutsideDown, true);
     window.addEventListener('keydown', onKey);
@@ -328,7 +403,7 @@ export const CharacterApp: React.FC = () => {
       document.removeEventListener('pointerdown', onOutsideDown, true);
       window.removeEventListener('keydown', onKey);
     };
-  }, [menuOpen]);
+  }, [menuOpen, closeMenu]);
 
   // ===== 视线全屏跟随（主进程轮询全局光标，约 30Hz 推送；窗口整体穿透，窗内 mousemove 收不到屏外光标）=====
   useEffect(() => {
@@ -425,18 +500,34 @@ export const CharacterApp: React.FC = () => {
   }, []);
 
   // ===== 滚轮缩放（悬停在角色本体上时调节桌面角色大小；钳制 0.6~1.6，步长 0.05）=====
+  // 触发链：窗口默认整体穿透 → 光标进入角色命中区时主进程转发的 mousemove 命中
+  // .dc-character → applyInteractive(true) 把窗口切可交互 → 滚轮事件才会到 DOM。
+  // 穿透锁定（passThroughLocked）时窗口恒穿透，滚轮本就不该被捕获，属预期行为。
   const onCharacterWheel = (e: React.WheelEvent) => {
     const c = charRefState.current;
-    if (!c) return;
+    if (!c || runtime.passThroughLocked) return;
     const step = e.deltaY < 0 ? 0.05 : -0.05;
     const cur = c.scale ?? 1;
     // 四舍五入到两位小数，避免浮点累积误差（0.05 步长在二进制下不精确）
     const next = Math.max(0.6, Math.min(1.6, Math.round((cur + step) * 100) / 100));
     if (next === cur) return;
-    // 本地先更新，保证缩放手感跟手；持久化交给主进程广播回写
+    // 本地先更新，保证缩放手感跟手；持久化交给主进程广播回写。
+    // 注意 --dc-scale 必须写在 .dc-character 自身：CSS 自定义属性只向下继承，
+    // 写在子元素 .dc-stage 上不会改变父元素的 transform（这正是「滚轮无反应」的根因）。
     setState((s) => (s.character ? { ...s, character: { ...s.character, scale: next } } : s));
     api.dcSetScale(c.id, next);
   };
+
+  // React 17+ 的 onWheel 挂的是 passive 监听器，里面 preventDefault() 会被忽略并告警。
+  // 这里用原生 passive:false 监听只负责阻止默认滚动；缩放仍由上面唯一的 onWheel 处理，
+  // 避免两套逻辑重复放大。body 已是 overflow:hidden，此举只是双保险。
+  useEffect(() => {
+    const el = charRef.current;
+    if (!el || !state.character) return;
+    const preventScroll = (e: WheelEvent) => e.preventDefault();
+    el.addEventListener('wheel', preventScroll, { passive: false });
+    return () => el.removeEventListener('wheel', preventScroll);
+  }, [state.character?.id]);
 
   const onCharacterClick = () => {
     // 角色本体是 div，不被 CLICK_SOUND_SELECTOR 命中，需手动补点击音
@@ -454,8 +545,7 @@ export const CharacterApp: React.FC = () => {
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setMenuOpen(true);
-    applyInteractive(true);
+    openMenu();
   };
 
   const menu = useMemo(() => {
@@ -516,9 +606,11 @@ export const CharacterApp: React.FC = () => {
         </div>
       )}
 
+      {/* 缩放变量必须落在 .dc-character 自身（其 transform 才消费它），不能写在 .dc-stage 上 */}
       <div
         ref={charRef}
         className={`dc-character${dragging ? ' dragging' : ''}`}
+        style={{ ['--dc-scale' as string]: String(scale) } as React.CSSProperties}
         onPointerDown={beginPointer}
         onPointerMove={movePointer}
         onPointerUp={endPointer}
@@ -527,7 +619,7 @@ export const CharacterApp: React.FC = () => {
         onContextMenu={onContextMenu}
         title={state.character.name}
       >
-        <div className="dc-stage" style={{ ['--dc-scale' as string]: String(scale) } as React.CSSProperties}>
+        <div className="dc-stage">
           <ModelView
             character={state.character}
             expression={expression}
@@ -551,14 +643,20 @@ export const CharacterApp: React.FC = () => {
       </div>
 
       {menuOpen && (
-        <div className="dc-menu" onPointerDown={(e) => e.stopPropagation()}>
+        <div
+          className={`dc-menu${menuClosing ? ' closing' : ''}`}
+          onPointerDown={(e) => {
+            // 收回期间不再吃指针事件，也不再阻止外部关闭判定
+            if (!menuClosing) e.stopPropagation();
+          }}
+        >
           {menu.map((m) => (
             <button
               key={m.key}
               type="button"
               className={`dc-menu-item${m.checked ? ' checked' : ''}`}
               onClick={() => {
-                setMenuOpen(false);
+                closeMenu();
                 m.onClick();
               }}
             >

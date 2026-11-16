@@ -1180,6 +1180,7 @@
  "export.worldBook": "Export world book",
  "characters.stageTitle": "キャラステージ",
  "characters.dragRotate": "ドラッグで回転 · ホイールで拡大",
+ "characters.stageZoom": "モデルのサイズ",
  "characters.say": "ひとこと話す",
  "characters.newChat": "新しい会話",
  "characters.record": "履歴を見る",

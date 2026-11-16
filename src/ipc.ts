@@ -580,6 +580,8 @@ export interface NianyuAPI {
   onDcOpenChat: (cb: (chat: { type: 'single' | 'group'; id: string; name?: string }) => void) => () => void;
   onDcOpenCollection: (cb: () => void) => () => void;
   onDcOpenStage: (cb: (id: string) => void) => () => void;
+  /** 主进程推送：绑定对话来了新消息（AI 回复 / 用户消息），渲染层据此弹桌宠头顶气泡。 */
+  onDcChatMessage: (cb: (d: { content: string; senderType?: string }) => void) => () => void;
   /** 主进程推送：全局光标相对角色窗左上角的 DIP 坐标（≈30Hz），渲染层据此让眼神全屏跟随。 */
   onDcCursor: (cb: (data: { x: number; y: number }) => void) => () => void;
 
@@ -655,6 +657,7 @@ export const api: NianyuAPI = {
   onDcOpenChat: (cb) => raw.onDcOpenChat(cb),
   onDcOpenCollection: (cb) => raw.onDcOpenCollection(cb),
   onDcOpenStage: (cb) => raw.onDcOpenStage(cb),
+  onDcChatMessage: (cb) => raw.onDcChatMessage(cb),
   rateInfo: (modelId) => raw.rateInfo(modelId),
   queueSnapshot: () => raw.queueSnapshot(),
   queueReorder: (key, orderedIds) => raw.queueReorder(key, orderedIds),

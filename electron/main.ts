@@ -12,7 +12,7 @@ import {
 } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
-import { getDataManager, defaultDataDirPath, resolveMediaConfig } from './db';
+import { getDataManager, defaultDataDirPath, resolveMediaConfig, setChatMessageAddedListener } from './db';
 import {
   setUpdateBroadcaster,
   startAutoCheck,
@@ -132,9 +132,11 @@ import {
   getDesktopCharacterSnapshot,
   refreshDesktopCharacter,
   registerDesktopCharacterIPC,
+  setCharacterMainShow,
   setCharacterMainWindow,
   setCharacterSettingsSink,
   getDesktopCharacterWindow,
+  pushChatMessageToCharacters,
 } from './desktopCharacter';
 // V3 桌面角色素材层：角色包导入/解压、nychar:// 私有协议、运行库目录
 import { registerCharacterAssetIPC, registerCharacterProtocol } from './characterAssets';
@@ -7989,9 +7991,22 @@ app.whenReady().then(() => {
   createFloatingBall();
   // V3 桌面角色：注册 IPC 并按设置创建角色窗（默认关闭，由「桌宠角色」面板开启）
   setCharacterMainWindow(mainWindow);
+  // 主窗被用户关闭（closeToTray=false / 任务栏关闭）后 desktopCharacter 的引用会悬空：
+  // 桌宠右键「绑定 / 舞台 / 管理」先调这里重建主窗，再刷新模块内引用后补发导航 IPC。
+  // 注入而非在子模块 import main.ts，避免循环依赖（同 floatingBall 的 setBallMainShow）。
+  setCharacterMainShow(() => {
+    showMainWindow();
+    setCharacterMainWindow(mainWindow);
+  });
   // 运行时开关由主进程落盘并广播，渲染层只重读、不回写（避免把旧 x/y 覆盖回来）
   setCharacterSettingsSink((patch) => broadcast('settings:changed', patch));
   registerDesktopCharacterIPC();
+  // 桌宠气泡：绑定对话里来了新消息（AI 回复 / 用户消息）→ 实时推到该角色窗头顶气泡。
+  // 钩在 DataManager.addMessage（所有新消息的唯一落库入口），按角色 boundChat 匹配后定向推送；
+  // proactive 自造句由桌宠自身链路弹气泡，此处已过滤 from_proactive，不会重复弹。
+  setChatMessageAddedListener((msg) => {
+    pushChatMessageToCharacters(msg);
+  });
   // 素材层：nychar:// 供渲染层读取解压后的角色素材；导入/删除后同步刷新角色窗与会话列表
   registerCharacterProtocol();
   registerCharacterAssetIPC(() => {

@@ -350,7 +350,12 @@ export default function App() {
   // 绑定记录里带了会话名，但可能为空（历史数据），此时回查会话列表补全，避免标题空白。
   useEffect(() => {
     if (typeof api.onDcOpenCollection !== 'function') return;
-    const offCollection = api.onDcOpenCollection(() => setView('characters'));
+    // 「管理角色」只进角色面板：先清掉可能残留的舞台请求，否则下一帧 CharacterCollection
+    // 会拿旧 nonce 再弹一次 CharacterStage，表现为「管理角色却进了角色舞台」。
+    const offCollection = api.onDcOpenCollection(() => {
+      setDcStageRequest(null);
+      setView('characters');
+    });
     // Bug 1：带角色 id 的舞台请求——切到角色面板并让面板自动打开该角色的 CharacterStage
     const offStage = api.onDcOpenStage((id) => {
       setView('characters');
