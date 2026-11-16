@@ -633,6 +633,12 @@ export interface DesktopCharacter {
   behavior: boolean;
   /** 是否显示气泡 */
   bubble: boolean;
+  /**
+   * 主动说话频率（条/分钟，0~60；缺省 2；0 = 完全不主动说话）。
+   * 持久化于 settings.desktopCharacters[]，写入遵守「整数组覆盖」语义。
+   * 缺省值由 src/utils/lineSchedule.ts 的 deriveLineSchedule 统一兜底。
+   */
+  speakRate?: number;
   /** 导入时的格式提示（非原生可渲染格式的说明文案键后缀） */
   note?: string;
 }
@@ -888,6 +894,17 @@ export interface AppSettings {
   desktopCharacters?: DesktopCharacter[];
   /** 桌面角色运行时状态（窗口位置 / 置顶 / 穿透锁定 / 当前角色） */
   characterRuntime?: CharacterRuntimeSettings;
+  // ===== 桌宠动画细调（v3.0.3；仅「自定义」档可见，仍受 character 分组开关与速度倍率约束）=====
+  /** 菜单弹出/收回时长（秒，0.05~1.0，步长 0.05）。缺省 0.20 */
+  animCharacterMenuSec?: number;
+  /** 气泡弹出/收回时长（秒，0.05~1.0，步长 0.05）。缺省 0.18 */
+  animCharacterBubbleSec?: number;
+  /** 气泡停留基准（秒，1~10，步长 0.5）。缺省 3 */
+  animCharacterBubbleBaseSec?: number;
+  /** 气泡停留「每 20 字」递增（秒，0~3，步长 0.5）。缺省 1 */
+  animCharacterBubbleStepSec?: number;
+  /** 气泡停留上限（秒，3~30，步长 1）。缺省 10 */
+  animCharacterBubbleMaxSec?: number;
   // ===== 自定义动态光标 =====
   customCursor: {
     enabled: boolean; // 总开关：false=系统原生光标，true=动态光标（DOM 字形 + Canvas 特效）
@@ -1373,6 +1390,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
       scale: 1,
       behavior: true,
       bubble: true,
+      // v3.0.3：主动说话频率（条/分钟）。存量用户升级后默认 2 条/分
+      // （派生 30000ms，与 v3.0.2 主进程 30s 护栏同值，行为不回退）。
+      speakRate: 2,
     },
   ],
   characterRuntime: {
@@ -1383,6 +1403,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
     passThroughLocked: false,
     activeId: '',
   },
+  // ===== 桌宠动画细调（v3.0.3）=====
+  // 出厂值与用户拍板口径一致：菜单 0.20s / 气泡 0.18s / 停留 3s 起、每 20 字 +1s、最多 10s。
+  animCharacterMenuSec: 0.2,
+  animCharacterBubbleSec: 0.18,
+  animCharacterBubbleBaseSec: 3,
+  animCharacterBubbleStepSec: 1,
+  animCharacterBubbleMaxSec: 10,
   customCursor: {
     enabled: false,
     lerpSpeed: 0.25,

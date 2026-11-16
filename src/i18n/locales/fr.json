@@ -66,6 +66,23 @@
  "animCtl.groupSplash": "Écran de bienvenue",
  "animCtl.groupStats": "Graphiques et classements des statistiques",
  "animCtl.groupCharacter": "Animations du personnage (respiration / bulle / menu)",
+ "animCtl.groupCharacterDetail": "Animations de la mascotte (détails)",
+ "animCtl.groupCharacterDetailOff": "Les animations de la mascotte sont desactivees par l interrupteur d effets ; ces reglages n ont aucun effet",
+
+ "animCtl.menuAnimMs": "Durée d'ouverture/fermeture du menu",
+
+ "animCtl.bubbleAnimMs": "Durée d'apparition/disparition de la bulle",
+
+ "animCtl.bubbleHoldBase": "Durée de base",
+
+ "animCtl.bubbleHoldStep": "+{n} caractères",
+
+ "animCtl.bubbleHoldMax": "Maximum",
+
+ "animCtl.bubbleHoldPreview": "{n} caractères ≈ {v}",
+
+ "animCtl.bubbleHoldDesc": "La durée de la bulle dépend de la longueur : base {base} s, +{step} s tous les {n} caractères, maximum {max} s",
+
  "animCtl.groupTheme": "Thème et interactions générales",
  "animCtl.groupToast": "Notifications et bannière de mise à jour",
  "animCtl.groupTutorial": "Mise en évidence du tutoriel",
@@ -1181,6 +1198,18 @@
  "characters.stageTitle": "Scène du personnage",
  "characters.dragRotate": "Glisser pour tourner · molette pour zoomer",
  "characters.stageZoom": "Taille du modèle",
+ "characters.speakRate": "Fréquence de parole proactive",
+
+ "characters.speakRateUnit": "{n}/min",
+
+ "characters.speakRateOff": "Désactivée",
+
+ "characters.speakRateHint": "Nombre maximal de phrases actives par minute ; 0 = jamais",
+
+ "characters.speakRateWarn": "Une fréquence élevée génère plus d'appels au modèle et plus de coûts",
+
+ "characters.stageSyncHint": "S'applique aussi à la mascotte du bureau",
+
  "characters.say": "Dire quelque chose",
  "characters.newChat": "Nouvelle discussion",
  "characters.record": "Historique",

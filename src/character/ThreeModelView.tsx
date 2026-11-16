@@ -14,6 +14,15 @@ interface Props {
   /** 0~1 口型开合（由舞台的语音分析驱动；桌面窗恒为 0） */
   mouth: number;
   blink: boolean;
+  /**
+   * 舞台缩放倍率（v3.0.3）。缺省 1 ⇒ 桌宠窗行为与改动前逐字等价。
+   *
+   * 用途：舞台里 3D 模型的盒子会随 zoom 变大，若渲染分辨率不变，放大后就是「一张 1× 截图放大」。
+   * 因此这里同时做两件事：
+   *   ① 画布本身随盒子变大（CSS 100% + ResizeObserver 自动跟随）；
+   *   ② 渲染像素比再乘一个 zoom，让后备缓冲的像素数随放大同步增长 ⇒ 真正的高分辨率。
+   */
+  zoom?: number;
   onError?: (message: string) => void;
 }
 
@@ -33,13 +42,35 @@ const EXPRESSION_MAP: Record<CharacterExpression, string[]> = {
   dragged: ['surprised'],
 };
 
-export const ThreeModelView: React.FC<Props> = ({ url, kind, expression, mouth, blink, onError }) => {
+export const ThreeModelView: React.FC<Props> = ({ url, kind, expression, mouth, blink, zoom = 1, onError }) => {
   const hostRef = useRef<HTMLDivElement | null>(null);
   // 用 ref 把「当前状态」喂给动画循环，避免每次 props 变化重建 WebGL 场景
   const stateRef = useRef({ expression, mouth, blink });
   stateRef.current = { expression, mouth, blink };
   const errRef = useRef(onError);
   errRef.current = onError;
+  // zoom 放进 ref：改缩放时**不重建** WebGL 场景，只更新渲染分辨率与模型缩放。
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  /** 渲染器/模型组的跨渲染引用：供 zoom 变化时在不重建场景的前提下更新分辨率与缩放。 */
+  const rendererRef = useRef<any>(null);
+  const modelGroupRef = useRef<any>(null);
+  const baseScaleRef = useRef(1);
+
+  /**
+   * 渲染分辨率随舞台缩放提升：后备缓冲的像素数 = CSS 尺寸 × pixelRatio。
+   * 放大时若 pixelRatio 不变，3D 就是「1× 渲染结果被放大」⇒ 模糊。
+   * 上限 3，避免高倍缩放把 GPU 压垮（见设计文档 Q-6）。
+   */
+  const applyPixelRatio = (r: any) => {
+    if (!r) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    // pixelRatio 只在放大时提升；缩小时保持 dpr 下限，避免 0.6 档把缓冲降到 1px 以下。
+    const z = Math.max(0.6, zoomRef.current);
+    const pr = Math.max(1, Math.min(3, Math.round(dpr * z * 100) / 100));
+    if (typeof r.getPixelRatio === 'function' && r.getPixelRatio() === pr) return;
+    r.setPixelRatio(pr);
+  };
 
   useEffect(() => {
     const host = hostRef.current;
@@ -90,6 +121,8 @@ export const ThreeModelView: React.FC<Props> = ({ url, kind, expression, mouth, 
         /* 忽略 */
       }
       renderer = null;
+      rendererRef.current = null;
+      modelGroupRef.current = null;
       scene = null;
       camera = null;
       root = null;
@@ -108,7 +141,10 @@ export const ThreeModelView: React.FC<Props> = ({ url, kind, expression, mouth, 
       const group = new THREE.Group();
       group.add(obj);
       const h = Math.max(size.y, 0.001);
-      group.scale.setScalar(2 / h);
+      // 基准缩放记下来：舞台放大时按 zoom 乘上去（模型本身变大，而不是拉伸画面）。
+      baseScaleRef.current = 2 / h;
+      group.scale.setScalar(baseScaleRef.current * Math.max(0.6, zoomRef.current));
+      modelGroupRef.current = group;
       scene.add(group);
     }
 
@@ -164,7 +200,8 @@ export const ThreeModelView: React.FC<Props> = ({ url, kind, expression, mouth, 
       if (disposed) return;
 
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+      rendererRef.current = renderer;
+      applyPixelRatio(renderer);
       renderer.setClearColor(0x000000, 0);
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.domElement.style.width = '100%';
@@ -188,6 +225,8 @@ export const ThreeModelView: React.FC<Props> = ({ url, kind, expression, mouth, 
         if (!renderer || !camera) return;
         const w = host.clientWidth || 1;
         const h = host.clientHeight || 1;
+        // 画布尺寸随盒子变化（CSS 100%），像素比随 zoom 提升 ⇒ 后备缓冲像素数同步增长
+        applyPixelRatio(renderer);
         renderer.setSize(w, h, false);
         camera.aspect = w / h;
         camera.updateProjectionMatrix();
@@ -259,6 +298,20 @@ export const ThreeModelView: React.FC<Props> = ({ url, kind, expression, mouth, 
     // onError 每次渲染都是新函数，不放进依赖，避免重建 WebGL 场景
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, kind]);
+
+  /**
+   * v3.0.3：舞台缩放变化时**不重建** WebGL 场景，只做两件事：
+   *   ① 提升渲染分辨率（pixelRatio × zoom）—— 否则放大后就是「1× 渲染结果被放大」；
+   *   ② 按 zoom 缩放模型组 —— 放大的模型本身，而不是拉伸画面。
+   * 桌面桌宠窗不传 zoom（恒为 1），本 effect 什么都不做 ⇒ 行为与改动前逐字等价。
+   */
+  useEffect(() => {
+    const r = rendererRef.current;
+    const g = modelGroupRef.current;
+    if (!r && !g) return;
+    applyPixelRatio(r);
+    if (g) g.scale.setScalar(baseScaleRef.current * Math.max(0.6, zoom));
+  }, [zoom]);
 
   return <div className="dc-model3d" ref={hostRef} />;
 };

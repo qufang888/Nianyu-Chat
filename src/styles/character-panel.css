@@ -152,6 +152,41 @@
   color: var(--color-text-secondary);
   cursor: pointer;
 }
+/* v3.0.3：主动说话频率滑块（条/分钟，0 = 不主动说话） */
+.dc-coll-rate {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.dc-coll-rate-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: calc(11px * var(--font-scale));
+  color: var(--color-text-secondary);
+}
+.dc-coll-rate-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+/* 频率偏高时数值转警示色（提示只讲成本，不讲"实际速率"） */
+.dc-coll-rate-value.warn {
+  color: var(--color-warn);
+}
+.dc-coll-rate-range {
+  width: 100%;
+  margin: 0;
+}
+.dc-coll-rate-hint {
+  font-size: calc(10px * var(--font-scale));
+  color: var(--color-text-secondary);
+}
+.dc-coll-rate-warn {
+  font-size: calc(10px * var(--font-scale));
+  color: var(--color-warn);
+}
 .dc-coll-bind {
   display: flex;
   align-items: center;
@@ -223,26 +258,45 @@
 .stage-viewport {
   position: relative;
   flex: 1;
-  min-height: 0;
+  /* v3.0.3：视口最小高度 380px —— 容纳 190×220×1.6 = 304×352 的放大模型 */
+  min-height: 380px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-panel-alt);
-  overflow: hidden;
+  /* v3.0.3：语义从「视口内放大」改为「角色真实大小」后，放大的模型可能超出视口 ⇒ 允许滚动 */
+  overflow: auto;
   cursor: grab;
   touch-action: none;
+  /* v3.0.3：透视移到视口。透视距离随 --stage-zoom 同步放大 ⇒ 相对畸变不变，
+     旋转手感与 v3.0.2 一致（旧实现是固定 900px + scale()，放大后畸变会变大）。 */
+  perspective: calc(900px * var(--stage-zoom, 1));
+  perspective-origin: 50% 50%;
 }
 .stage-viewport:active {
   cursor: grabbing;
 }
+/* v3.0.3 新增内层：让放大的模型能撑出滚动区（否则 flex 居中 + overflow 会裁掉两侧） */
+.stage-inner {
+  min-width: 100%;
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 .stage-model {
   position: relative;
-  width: 190px;
-  height: 220px;
+  /* v3.0.3：盒子按 --stage-zoom 真实放大（浏览器按最终尺寸重采样 ⇒ 清晰）。
+     旧实现是固定 190×220 + transform: scale()，Chromium 会先按 1× 栅格化再插值放大 ⇒ 模糊。
+     另注：旧实现的 will-change: transform 会把元素提升为合成层，强制按 1× 栅格化后插值，
+     这里必须去掉（清晰度优先；旋转掉帧问题已由「不再缩放」本身缓解）。 */
+  width: calc(190px * var(--stage-zoom, 1));
+  height: calc(220px * var(--stage-zoom, 1));
+  flex: 0 0 auto;
   transform-style: preserve-3d;
-  will-change: transform;
+  will-change: auto;
 }
 .stage-model img {
   width: 100%;

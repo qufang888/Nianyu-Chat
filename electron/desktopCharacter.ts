@@ -940,6 +940,22 @@ export function registerDesktopCharacterIPC(): void {
     sendState();
   });
 
+  // v3.0.3 预览通道：舞台拖动缩放滑块时的**实时预览**。
+  //
+  // 为什么需要独立通道（对比只发 dc:set-scale）：
+  //   - dc:set-scale 会落盘 + 广播 settings:changed ⇒ 拖一次就是 N 次写盘 + N 次广播，
+  //     既拖不动（主线程被 IO 拖慢），又违反「同一轮操作内只广播 1 次」；
+  //   - 预览通道**只改角色窗本地的 --dc-scale**，不落盘、不广播 ⇒ 拖动全程跟手且零 IO。
+  //
+  // 提交（落盘）仍走既有的 dc:set-scale，由舞台在手势结束时发起一次。
+  ipcMain.on('dc:set-scale-live', (_e, id: string, scale: number) => {
+    if (!id) return;
+    const w = dcWindows.get(id);
+    if (!w || w.isDestroyed()) return;
+    const clamped = Math.max(0.6, Math.min(1.6, Number(scale) || 1));
+    w.webContents.send('dc:scale-preview', { id, scale: clamped });
+  });
+
   ipcMain.handle('dc:get-state', (_e, id?: string) => getDesktopCharacterSnapshot(id));
 
   ipcMain.on('dc:open-chat', (_e, chat: { type: 'single' | 'group'; id: string; name?: string }) => {

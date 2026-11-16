@@ -74,6 +74,9 @@ import {
   MEMORY_SUMMARIZE_EXISTING_PLACEHOLDER,
   MEMORY_SUMMARIZE_DIALOGUE_PLACEHOLDER,
 } from '../src/utils/builtinPrompts';
+// v3.0.3：桌宠语句频率派生的**唯一真源**（渲染层与主进程共用同一份 ⇒ 护栏与调度不可能漂移）。
+// 本模块零 DOM / 零 import 依赖，主进程可直接引用（见下方 dispatchProactive 护栏）。
+import { deriveLineSchedule, LINE_MIN_INTERVAL_MS } from '../src/utils/lineSchedule';
 import {
   initProactiveEngine,
   rescheduleProactive,
@@ -4215,6 +4218,8 @@ async function handleProactive(p: {
   extraInstruction?: string; // NHPP 定向回访：附加上下文指令（普通主动消息不传，行为不变）
   /** 'character'：桌宠气泡语句来源，须静默降级 / 不打扰（v3.0.1-beta.9）。 */
   source?: 'character';
+  /** 桌宠语句的最小请求间隔（毫秒，方案 A 透传）；普通主动消息不传，行为不变。 */
+  targetIntervalMs?: number;
 }): Promise<{ ok: boolean; roleId?: string; roleName?: string; content?: string; error?: string }> {
   // 'character' 分支的全部行为差异集中在此开关，普通主动消息路径逐字保持不变。
   const isCharacter = p.source === 'character';
@@ -4382,13 +4387,42 @@ async function handleProactive(p: {
   }
 }
 
-// ===== 桌宠互动语句：主进程侧节流 / 并发锁（v3.0.1-beta.9）=====
+// ===== 桌宠互动语句：主进程侧节流 / 并发锁（v3.0.1-beta.9；v3.0.3 改为按角色频率派生）=====
 // 渲染层已做最小间隔 + 并发锁；这里是第二道防线，防止桌宠窗重建、多窗口并存或
 // 异常重入时绕过渲染层节流，造成未经用户操作的高频模型调用（QPS 风暴）。
-/** 桌宠语句两次生成之间的主进程最小间隔（毫秒）。 */
-const CHARACTER_LINE_MIN_GAP_MS = 30_000;
-let characterLineLastAt = 0;
+//
+// v3.0.3：原来的固定 30s 护栏是「60 条/分」的隐形杀手（30s ⇒ 最多 2 条/分）。
+// 现改为**按角色频率派生**：
+//   - 方案 A（主路径）：渲染层把派生好的 targetIntervalMs 随请求带上来，主进程只兜底；
+//   - 方案 B（兜底）：targetIntervalMs 缺失时，主进程自己反查绑定该对话的角色，
+//     用它的 speakRate 重新派生（与渲染层共用 src/utils/lineSchedule.ts，绝不漂移）。
+/** 各绑定对话上次发起桌宠语句的时间戳（毫秒）。key = `chatType:chatId`。 */
+const characterLineLastAt = new Map<string, number>();
+/** 桌宠语句全局并发锁：同一时刻只允许一个桌宠语句在途（HC-9 要求保留）。 */
 let characterLineInFlight = false;
+/** 「间隔无法判定」只告警一次，避免高频刷屏。 */
+let characterLineGapWarned = false;
+
+/**
+ * 由「绑定对话」反查桌宠角色，并按它的 speakRate 派生护栏间隔（方案 B 兜底）。
+ *
+ * 为什么需要：渲染层把 targetIntervalMs 带上来是主路径（方案 A），
+ * 但万一某个旧版本/异常路径没带，主进程不能退回到"30 秒"这个隐形杀手，
+ * 也不能直接放行 —— 故自己再算一次（两端共用同一份 deriveLineSchedule）。
+ *
+ * @returns 派生出的最小间隔（毫秒）；找不到对应角色时返回 0 表示"无法判定"
+ */
+function deriveGapFromBoundCharacter(chatType: string, chatId: string): number {
+  try {
+    const settings = dm.getSettings();
+    const list = Array.isArray(settings.desktopCharacters) ? settings.desktopCharacters : [];
+    const c = list.find((x) => x.boundChat && x.boundChat.type === chatType && x.boundChat.id === chatId);
+    if (!c) return 0;
+    return deriveLineSchedule(c.speakRate).intervalMs;
+  } catch {
+    return 0;
+  }
+}
 
 /**
  * chats:proactive 统一入口：按 source 分流。
@@ -4400,22 +4434,43 @@ async function dispatchProactive(p: {
   chatId: string;
   extraInstruction?: string;
   source?: 'character';
+  /**
+   * 渲染层派生的最小请求间隔（毫秒，方案 A）。
+   * 主进程只把它当"不得高于前端派生值"的上限兜底；缺失时走方案 B（反查角色 speakRate）。
+   */
+  targetIntervalMs?: number;
 }): Promise<{ ok: boolean; roleId?: string; roleName?: string; content?: string; error?: string }> {
   if (p.source !== 'character') return handleProactive(p);
   // v3.0.1-beta.9 P1：与经典 idle（:7306 `if (streamControllers.has(chatId)) continue;`）/
   // NHPP（:7921 `isBusy: (chatId) => streamControllers.has(chatId)`）同口径让路。
-  // 桌宠 15s 试探频率远高于经典 idle / NHPP，若不检查，registerStream 的 prev.abort()
+  // 桌宠试探频率远高于经典 idle / NHPP，若不检查，registerStream 的 prev.abort()
   // 会中断用户正在进行的 AI 回复；返回 ok:false 走既有静默降级（不弹提示、不写消息、无兜底文案）。
-  // 放在节流之前：busy 不应占用 30s 最小间隔窗口，下一轮可直接重试。
+  // 放在节流之前：busy 不应占用最小间隔窗口，下一轮可直接重试。
   if (streamControllers.has(p.chatId)) {
     return { ok: false, error: 'busy' };
   }
   const now = Date.now();
-  if (characterLineInFlight || now - characterLineLastAt < CHARACTER_LINE_MIN_GAP_MS) {
+  // 护栏间隔：优先用渲染层带来的派生值（方案 A）；缺失则反查绑定角色自己派生（方案 B）；
+  // 两者都拿不到时退回 30s 旧值并告警一次（此时无从判定该角色的真实频率，宁可保守）。
+  const carried = Number(p.targetIntervalMs);
+  let gap = Number.isFinite(carried) && carried > 0 ? carried : deriveGapFromBoundCharacter(p.chatType, p.chatId);
+  if (!(gap > 0)) {
+    if (!characterLineGapWarned) {
+      characterLineGapWarned = true;
+      console.warn('[nianyu] 桌宠语句间隔无法判定，回退 30s 护栏（角色未绑定对话或 speakRate 缺失）');
+    }
+    gap = 30_000;
+  }
+  gap = Math.max(LINE_MIN_INTERVAL_MS, Math.round(gap));
+  // 节流键按对话维度：同绑一个对话的两个角色共享窗口 ⇒ 天然不会重复弹泡；
+  // 不同对话互不影响 ⇒ 快角色不会被慢角色压住。
+  const key = `${p.chatType}:${p.chatId}`;
+  const lastAt = characterLineLastAt.get(key) ?? 0;
+  if (characterLineInFlight || now - lastAt < gap) {
     return { ok: false, error: 'throttled' };
   }
   characterLineInFlight = true;
-  characterLineLastAt = now;
+  characterLineLastAt.set(key, now);
   try {
     return await handleProactive(p);
   } finally {

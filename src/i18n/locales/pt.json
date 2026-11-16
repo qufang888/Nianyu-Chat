@@ -66,6 +66,23 @@
  "animCtl.groupSplash": "Ecrã inicial",
  "animCtl.groupStats": "Gráficos e classificações de estatísticas",
  "animCtl.groupCharacter": "Animações do personagem (respiração / balão / menu)",
+ "animCtl.groupCharacterDetail": "Animações do mascote (detalhes)",
+ "animCtl.groupCharacterDetailOff": "As animacoes do mascote estao desativadas pelo interruptor de efeitos; estes ajustes nao tem efeito",
+
+ "animCtl.menuAnimMs": "Duração de abertura/fechamento do menu",
+
+ "animCtl.bubbleAnimMs": "Duração de aparecimento/desvanecimento do balão",
+
+ "animCtl.bubbleHoldBase": "Permanência base",
+
+ "animCtl.bubbleHoldStep": "+{n} caracteres",
+
+ "animCtl.bubbleHoldMax": "Máximo",
+
+ "animCtl.bubbleHoldPreview": "{n} caracteres ≈ {v}",
+
+ "animCtl.bubbleHoldDesc": "A permanência do balão escala com o tamanho do texto: base {base} s, +{step} s a cada {n} caracteres, no máximo {max} s",
+
  "animCtl.groupTheme": "Tema e interações gerais",
  "animCtl.groupToast": "Notificações e faixa de atualização",
  "animCtl.groupTutorial": "Realce do tutorial",
@@ -1181,6 +1198,18 @@
  "characters.stageTitle": "Palco do personagem",
  "characters.dragRotate": "Arraste para girar · roda para zoom",
  "characters.stageZoom": "Tamanho do modelo",
+ "characters.speakRate": "Frequência de fala proativa",
+
+ "characters.speakRateUnit": "{n}/min",
+
+ "characters.speakRateOff": "Desativada",
+
+ "characters.speakRateHint": "Máximo de frases ativas por minuto; 0 = nunca",
+
+ "characters.speakRateWarn": "Frequências altas geram mais chamadas ao modelo e mais custo",
+
+ "characters.stageSyncHint": "Também se aplica ao mascote na área de trabalho",
+
  "characters.say": "Dizer algo",
  "characters.newChat": "Novo chat",
  "characters.record": "Histórico",

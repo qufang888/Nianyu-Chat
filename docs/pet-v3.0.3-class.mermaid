@@ -1,0 +1,138 @@
+%% 念语 v3.0.3 桌宠增量 —— 类图（源自 docs/pet-v3.0.3-design.md §4）
+%% 供 Mermaid Live / GitHub 直接渲染
+classDiagram
+    direction LR
+
+    class AppSettings {
+        +string animMode
+        +Record~string,boolean~ animGroups
+        +number animSpeed
+        +number animCharacterMenuSec
+        +number animCharacterBubbleSec
+        +number animCharacterBubbleBaseSec
+        +number animCharacterBubbleStepSec
+        +number animCharacterBubbleMaxSec
+        +DesktopCharacter[] desktopCharacters
+    }
+
+    class DesktopCharacter {
+        +string id
+        +string name
+        +DesktopCharacterKind kind
+        +number scale
+        +boolean behavior
+        +boolean bubble
+        +number speakRate
+        +BoundChat boundChat
+    }
+
+    class LineSchedule {
+        +boolean enabled
+        +number rate
+        +number intervalMs
+        +number tickMs
+    }
+
+    class CharacterAnimParams {
+        +number menuSec
+        +number bubbleSec
+        +number holdBaseSec
+        +number holdStepSec
+        +number holdMaxSec
+    }
+
+    class LineScheduleUtil {
+        <<module src/utils/lineSchedule.ts>>
+        +normalizeSpeakRate(n) number
+        +deriveLineSchedule(n) LineSchedule
+        +deriveLineScheduleForCharacter(c) LineSchedule
+    }
+
+    class BubbleTimingUtil {
+        <<module src/utils/bubbleTiming.ts>>
+        +countBubbleChars(text) number
+        +bubbleHoldSeconds(len, p) number
+        +bubbleHoldMs(text, p) number
+        +readCharacterAnimParams(s) CharacterAnimParams
+    }
+
+    class AnimControl {
+        <<module src/utils/animControl.ts>>
+        +applyAnimControl(doc, settings, kind) void
+        +getAnimMode(settings) AnimMode
+        +isGroupEnabled(settings, groupId) boolean
+        +getGroupAnimSpeed(settings, groupId) number
+        +animMs(cssSeconds, doc) number
+        +readAnimSpeed(doc) number
+    }
+
+    class CharacterStage {
+        <<component src/components/CharacterStage.tsx>>
+        -number zoom
+        -number rotX
+        -number rotY
+        -ZoomSource zoomSource
+        -number lastWrittenZoom
+        +onSliderChange(v) void
+        +onWheel(e) void
+        +syncFromSettings(chars) void
+    }
+
+    class CharacterCollection {
+        <<component src/components/CharacterCollection.tsx>>
+        -Snapshot snap
+        -DesktopCharacter stageChar
+        +patchCharacter(id, patch) void
+        +setSpeakRate(id, n) void
+    }
+
+    class CharacterApp {
+        <<component src/character/CharacterApp.tsx>>
+        -DcState state
+        -string bubble
+        -boolean bubbleClosing
+        -number bubbleSeq
+        -boolean menuClosing
+        -boolean lineInFlightRef
+        -number lineLastAtRef
+        +showBubble(text) void
+        +closeBubble() void
+        +closeMenu() void
+        +menuAnimMs() number
+        +requestCharacterLine(bound, sch) void
+        +tickLine() void
+    }
+
+    class DesktopCharacterBridge {
+        <<module electron/desktopCharacter.ts>>
+        +createDesktopCharacter(id) void
+        +sendState(id) void
+        +persistPos(id) void
+        +registerDesktopCharacterIPC() void
+    }
+
+    class ProactiveDispatcher {
+        <<module electron/main.ts>>
+        -Map~string,number~ characterLineLastAt
+        -boolean characterLineInFlight
+        +dispatchProactive(p) Promise
+        +handleProactive(p) Promise
+    }
+
+    AppSettings "1" o-- "0..*" DesktopCharacter : desktopCharacters[]
+    DesktopCharacter --> LineSchedule : speakRate
+    LineScheduleUtil ..> LineSchedule : 派生
+    BubbleTimingUtil ..> CharacterAnimParams : 读取/钳制
+    AppSettings --> CharacterAnimParams : animCharacter* 字段
+    AnimControl ..> AppSettings : 读取档位/倍率
+    CharacterStage ..> DesktopCharacterBridge : dcSetScale / dcSetScaleLive
+    CharacterStage ..> AnimControl : 主窗门控(character 组)
+    CharacterCollection ..> DesktopCharacterBridge : dcGetState / saveSettings
+    CharacterCollection --> CharacterStage : 打开舞台
+    CharacterApp ..> AnimControl : applyAnimControl(document,s,'character')
+    CharacterApp ..> BubbleTimingUtil : 气泡时长
+    CharacterApp ..> LineScheduleUtil : 频率派生
+    CharacterApp --> LineSchedule : 调度
+    CharacterApp ..> DesktopCharacterBridge : dc:scale-preview 接收方
+    ProactiveDispatcher ..> LineScheduleUtil : 主进程护栏派生
+    ProactiveDispatcher ..> CharacterApp : 返回 throttled/busy

@@ -82,6 +82,31 @@ import {
   type SoundType,
 } from '../utils/sound';
 import { compareVersions } from '../utils/versionCompare';
+// v3.0.3：桌宠动画细调的唯一真源（与角色窗共用同一份 ⇒ 设置页的换算示例与实际表现一致）。
+import {
+  bubbleHoldSeconds,
+  readCharacterAnimParams,
+  BUBBLE_STEP_CHARS,
+} from '../utils/bubbleTiming';
+
+// ===== 桌宠动画细调的取值范围（v3.0.3；与 PRD §4.2 一致）=====
+const CHAR_MENU_SEC_MIN = 0.05;
+const CHAR_MENU_SEC_MAX = 1.0;
+const CHAR_MENU_SEC_STEP = 0.05;
+const CHAR_BUBBLE_SEC_MIN = 0.05;
+const CHAR_BUBBLE_SEC_MAX = 1.0;
+const CHAR_BUBBLE_SEC_STEP = 0.05;
+const CHAR_HOLD_BASE_MIN = 1;
+const CHAR_HOLD_BASE_MAX = 10;
+const CHAR_HOLD_BASE_STEP = 0.5;
+const CHAR_HOLD_STEP_MIN = 0;
+const CHAR_HOLD_STEP_MAX = 3;
+const CHAR_HOLD_STEP_STEP = 0.5;
+const CHAR_HOLD_MAX_MIN = 3;
+const CHAR_HOLD_MAX_MAX = 30;
+const CHAR_HOLD_MAX_STEP = 1;
+/** 换算示例用的字数（PRD §4.2：显示「60 字 ≈ 5.0s」）。 */
+const CHAR_HOLD_PREVIEW_CHARS = 60;
 
 export const THEMES: { key: ThemeName; nameKey: string; swatch: string }[] = [
   { key: 'wechat', nameKey: 'theme.wechat', swatch: 'linear-gradient(135deg,#07c160,#2e2e2e)' },
@@ -1141,6 +1166,12 @@ export const Settings: React.FC<{
       animGroups: { ...(draft?.animGroups || {}), [groupId]: !cur },
     });
   };
+
+  // ===== 桌宠动画细调（v3.0.3）=====
+  // 参数来自共享真源 readCharacterAnimParams（与角色窗同一份 ⇒ 钳制口径一致）。
+  const charAnim = readCharacterAnimParams(draft);
+  // 「桌面角色动画」分组被关时，细调值不生效 —— 置灰 + 说明（HC-7 不静默失效）。
+  const charGroupOff = draft?.animGroups?.character === false;
 
   // ===== 分组独立速度（v2.3.98）：仅在自定义档的分组列表里使用 =====
   // 与全局速度同构，但按分组：缺省（未写任何覆盖）=「跟随全局」；预设档 = 固定倍率；
@@ -2401,6 +2432,144 @@ export const Settings: React.FC<{
                   </div>
                 );
               })}
+            </div>
+
+            {/* ===== 桌宠动画细调（仅「自定义」档渲染，Q3 拍板）=====
+                与分组区同规则：全开 / 全关档下不渲染（用户需先切到「自定义」才能细调）。
+                分组「桌面角色动画」被关时，本块置灰 + 说明（HC-7 不静默失效）。 */}
+            <div style={{ marginTop: 16, maxWidth: 620 }}>
+              <div className="section-title" style={{ marginTop: 0 }}>{t('animCtl.groupCharacterDetail')}</div>
+              <fieldset
+                disabled={charGroupOff}
+                style={{
+                  border: 'none',
+                  padding: 0,
+                  margin: '8px 0 0',
+                  opacity: charGroupOff ? 0.45 : 1,
+                }}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {/* 菜单弹出/收回时长 */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 150 }}>
+                      <span style={{ fontSize: 13 }}>{t('animCtl.menuAnimMs')}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min={CHAR_MENU_SEC_MIN}
+                      max={CHAR_MENU_SEC_MAX}
+                      step={CHAR_MENU_SEC_STEP}
+                      value={charAnim.menuSec}
+                      aria-label={t('animCtl.menuAnimMs')}
+                      onChange={(e) => patch({ animCharacterMenuSec: Number(e.target.value) })}
+                      style={{ width: 160 }}
+                    />
+                    <span style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums', minWidth: 44 }}>
+                      {charAnim.menuSec.toFixed(2)}s
+                    </span>
+                  </div>
+                  {/* 气泡弹出/收回时长 */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 150 }}>
+                      <span style={{ fontSize: 13 }}>{t('animCtl.bubbleAnimMs')}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min={CHAR_BUBBLE_SEC_MIN}
+                      max={CHAR_BUBBLE_SEC_MAX}
+                      step={CHAR_BUBBLE_SEC_STEP}
+                      value={charAnim.bubbleSec}
+                      aria-label={t('animCtl.bubbleAnimMs')}
+                      onChange={(e) => patch({ animCharacterBubbleSec: Number(e.target.value) })}
+                      style={{ width: 160 }}
+                    />
+                    <span style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums', minWidth: 44 }}>
+                      {charAnim.bubbleSec.toFixed(2)}s
+                    </span>
+                  </div>
+                  {/* 气泡停留三参数：基准 / 每 20 字递增 / 上限 */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 150 }}>
+                      <span style={{ fontSize: 13 }}>{t('animCtl.bubbleHoldBase')}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min={CHAR_HOLD_BASE_MIN}
+                      max={CHAR_HOLD_BASE_MAX}
+                      step={CHAR_HOLD_BASE_STEP}
+                      value={charAnim.holdBaseSec}
+                      aria-label={t('animCtl.bubbleHoldBase')}
+                      onChange={(e) => patch({ animCharacterBubbleBaseSec: Number(e.target.value) })}
+                      style={{ width: 160 }}
+                    />
+                    <span style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums', minWidth: 44 }}>
+                      {charAnim.holdBaseSec.toFixed(1)}s
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 150 }}>
+                      <span style={{ fontSize: 13 }}>
+                        {t('animCtl.bubbleHoldStep', { n: String(BUBBLE_STEP_CHARS) })}
+                      </span>
+                    </label>
+                    <input
+                      type="range"
+                      min={CHAR_HOLD_STEP_MIN}
+                      max={CHAR_HOLD_STEP_MAX}
+                      step={CHAR_HOLD_STEP_STEP}
+                      value={charAnim.holdStepSec}
+                      aria-label={t('animCtl.bubbleHoldStep', { n: String(BUBBLE_STEP_CHARS) })}
+                      onChange={(e) => patch({ animCharacterBubbleStepSec: Number(e.target.value) })}
+                      style={{ width: 160 }}
+                    />
+                    <span style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums', minWidth: 44 }}>
+                      +{charAnim.holdStepSec.toFixed(1)}s
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 150 }}>
+                      <span style={{ fontSize: 13 }}>{t('animCtl.bubbleHoldMax')}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min={CHAR_HOLD_MAX_MIN}
+                      max={CHAR_HOLD_MAX_MAX}
+                      step={CHAR_HOLD_MAX_STEP}
+                      value={charAnim.holdMaxSec}
+                      aria-label={t('animCtl.bubbleHoldMax')}
+                      onChange={(e) => patch({ animCharacterBubbleMaxSec: Number(e.target.value) })}
+                      style={{ width: 160 }}
+                    />
+                    <span style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums', minWidth: 44 }}>
+                      {charAnim.holdMaxSec.toFixed(0)}s
+                    </span>
+                  </div>
+                </div>
+                {/* 换算示例：与角色窗实际使用的是同一个函数 ⇒ 示例与实测必然一致 */}
+                <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--color-text-secondary)', marginTop: 8 }}>
+                  {t('animCtl.bubbleHoldPreview', {
+                    n: String(CHAR_HOLD_PREVIEW_CHARS),
+                    v: `${bubbleHoldSeconds(CHAR_HOLD_PREVIEW_CHARS, {
+                      baseSec: charAnim.holdBaseSec,
+                      stepSec: charAnim.holdStepSec,
+                      maxSec: charAnim.holdMaxSec,
+                    }).toFixed(1)}s`,
+                  })}
+                </div>
+                <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+                  {t('animCtl.bubbleHoldDesc', {
+                    base: charAnim.holdBaseSec.toFixed(1),
+                    n: String(BUBBLE_STEP_CHARS),
+                    step: charAnim.holdStepSec.toFixed(1),
+                    max: charAnim.holdMaxSec.toFixed(0),
+                  })}
+                </div>
+              </fieldset>
+              {charGroupOff && (
+                <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--color-warn)', marginTop: 8 }}>
+                  {t('animCtl.groupCharacterDetailOff')}
+                </div>
+              )}
             </div>
           </>
         )}

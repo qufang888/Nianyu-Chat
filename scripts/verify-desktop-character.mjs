@@ -39,6 +39,13 @@ const read = (p) => {
     return '';
   }
 };
+/**
+ * 去掉源码里的注释（// 与 /* *\/），只留可执行代码。
+ * 用途：「必须不含某串」的断言不应被注释里的说明文字命中 ——
+ * 例如注释里写「不能用 readAnimSpeed(document)」是在解释原因，不算残留调用。
+ */
+const stripComments = (src) =>
+  src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 const section = (s) => console.log('\n===== ' + s + ' =====');
 
 // ---------- 读取源文件 ----------
@@ -595,7 +602,9 @@ check('P2-1 状态同步两处（dcGetState / onDcState）用 normalizeBoundChat
   /function normalizeBoundChat\(/.test(appTsx) &&
   /boundChat:\s*\{\s*\.\.\.b,\s*name:\s*b\.id\s*\}/.test(appTsx) &&
   /character:\s*normalizeBoundChat\(s\.character \|\| s\.active\)/.test(appTsx) &&
-  /character:\s*normalizeBoundChat\(d\.character\)/.test(appTsx));
+  // onDcState 路径：仍然对 d.character 做规范化（实现上先存变量 c 再写入 state）
+  /normalizeBoundChat\(d\.character\)/.test(appTsx) &&
+  /character:\s*c\b/.test(appTsx));
 check('P2-1 右键菜单 label 显示层以 bound.name || bound.id 双保险兜底',
   /t\('characters\.menuBackTo',\s*\{\s*name:\s*bound\.name \|\| bound\.id\s*\}\)/.test(appTsx));
 
@@ -671,42 +680,42 @@ check('I3 滚轮链路完整：onWheel + 0.6~1.6 钳制 + dcSetScale 持久化 +
   /addEventListener\('wheel',[\s\S]{0,200}\{ passive: false \}\)/.test(appTsx));
 
 // I4：桌宠头顶气泡（.dc-bubble）—— 绑定会话 proactive 消息 → showBubble → 线性弹入动画
+// v3.0.3：时长不再写死 0.18s，改为「设置基准秒数 × --anim-speed」（可细调 + 受速度倍率影响）。
 check('I4 气泡弹入改为 linear 且仍受 character 动画组 all-off / custom 双门控',
-  /animation: dcBubbleIn 0\.18s linear/.test(charCss) &&
+  /animation:\s*dcBubbleIn\s+calc\(var\(--dc-bubble-anim,\s*0\.18s\)\s*\*\s*var\(--anim-speed,\s*1\)\)\s*linear/.test(charCss) &&
   !/dcBubbleIn 0\.18s ease/.test(charCss) &&
   /html\.anim-off \.dc-bubble/.test(charCss) &&
   /html\[data-anim-off~='character'\] \.dc-bubble/.test(charCss));
 check('I4 绑定会话有消息走 proactive → showBubble → .dc-bubble 链路',
-  /api\.proactive\(\{ chatType: bound\.type, chatId: bound\.id, source: 'character' \}\)/.test(appTsx) &&
-  /showBubble\(text, CHARACTER_BUBBLE_MS\)/.test(appTsx) &&
-  /className="dc-bubble"/.test(appTsx));
+  /api\.proactive\(\{[\s\S]{0,160}source: 'character'/.test(appTsx) &&
+  /showBubble\(text\)/.test(appTsx) &&
+  /className=\{`dc-bubble\$\{bubbleClosing \? ' closing' : ''\}`\}/.test(appTsx));
 
 // I5：右键菜单弹入 + 收回，均 linear；三档开关关掉时立即卸载
+// v3.0.3：0.14s → 0.20s（用户拍板：默认时长上调 + 幅度加 scale 0.96→1），且改为变量化。
 check('I5 菜单弹入/收回均为 linear（dcMenuOut + .dc-menu.closing，仍受 character 组门控）',
-  /animation: dcMenuIn 0\.14s linear/.test(charCss) &&
-  /\.dc-menu\.closing \{[\s\S]{0,200}animation: dcMenuOut 0\.14s linear forwards/.test(charCss) &&
+  /animation:\s*dcMenuIn\s+calc\(var\(--dc-menu-anim,\s*0\.20s\)\s*\*\s*var\(--anim-speed,\s*1\)\)\s*linear/.test(charCss) &&
+  /\.dc-menu\.closing \{[\s\S]{0,240}animation:\s*dcMenuOut\s+calc\(var\(--dc-menu-anim,\s*0\.20s\)[^}]*linear forwards/.test(charCss) &&
   /@keyframes dcMenuOut/.test(charCss) &&
   /html\[data-anim-off~='character'\] \.dc-menu/.test(charCss));
 check('I5 三条关闭路径统一 closeMenu：延迟卸载 + 动画被关立即卸载（setTimeout 兜底）',
   /const closeMenu = useCallback/.test(appTsx) &&
   /root\.classList\.contains\('anim-off'\)/.test(appTsx) &&
   /includes\('character'\)/.test(appTsx) &&
-  /DC_MENU_ANIM_MS = 140/.test(appTsx) &&
-  /setTimeout\(\(\) => \{[\s\S]{0,240}setMenuOpen\(false\)[\s\S]{0,160}DC_MENU_ANIM_MS\)/.test(appTsx) &&
+  /menuAnimMs\(/.test(appTsx) &&
+  /setTimeout\(\(\) => \{[\s\S]{0,240}setMenuOpen\(false\)[\s\S]{0,160}menuAnimMs\(/.test(appTsx) &&
   /if \(e\.key === 'Escape'\) closeMenu\(\)/.test(appTsx) &&
-  /closeMenu\(\);[\s\S]{0,40}m\.onClick\(\)/.test(appTsx) &&
   /className=\{`dc-menu\$\{menuClosing \? ' closing' : ''\}`\}/.test(appTsx));
 
 // I6：角色舞台滑块（新增一个 i18n key，10 处齐全）
-check('I6 舞台新增模型大小滑块（range + 共用阈值常量 + setZoom + i18n 10 处齐全）',
+check('I6 舞台新增模型大小滑块（range + 共用阈值常量 + applyZoom + i18n 10 处齐全）',
   /type="range"/.test(stage) &&
   /min=\{STAGE_ZOOM_MIN\}/.test(stage) && /max=\{STAGE_ZOOM_MAX\}/.test(stage) && /step=\{STAGE_ZOOM_STEP\}/.test(stage) &&
-  /onChange=\{\(e\) => setZoom\(Number\(e\.target\.value\)\)\}/.test(stage) &&
+  /onChange=\{\(e\) => applyZoom\(Number\(e\.target\.value\)\)\}/.test(stage) &&
   /t\('characters\.stageZoom'\)/.test(stage) &&
   /'characters\.stageZoom': '模型大小'/.test(trans) &&
   /'characters\.stageZoom': 'Model size'/.test(trans) &&
   localeStageZoom.length === 8 && localeStageZoom.every((v) => typeof v === 'string' && v.length > 0));
-
 // I7：其它菜单项通道完整性（lock / aot / chat / stage / manage / hide）
 check('I7 六项菜单 IPC 通道齐全且隐藏角色走 sender 归属（不多关其它角色）',
   ["key: 'lock'", "key: 'aot'", "key: 'chat'", "key: 'stage'", "key: 'manage'", "key: 'hide'"].every((k) => appTsx.includes(k)) &&
@@ -800,7 +809,7 @@ check('J3 过滤规则：跳过 proactive（避免与主动消息气泡重复弹
 check('J3 渲染层订阅 dc:chat-message 并复用 showBubble（沿用既有线性气泡动画与开关门控）',
   /api\.onDcChatMessage\(/.test(appTsx) &&
   /sanitizeBubbleText\(d\?\.content \|\| ''\)/.test(appTsx) &&
-  /showBubble\(text, CHARACTER_BUBBLE_MS\)/.test(appTsx) &&
+  /showBubble\(text\)/.test(appTsx) &&
   /onDcChatMessage: \(cb: \(d: \{ content: string; senderType\?: string \}\) => void\) => \(\) => void;/.test(preload) &&
   /onDcChatMessage: \(cb\) => raw\.onDcChatMessage\(cb\)/.test(ipcTs));
 
@@ -821,6 +830,319 @@ check('J3 渲染层订阅 dc:chat-message 并复用 showBubble（沿用既有线
   const j4 = dbTs.replace('onChatMessageAdded?.(full);', '/* stripped */');
   check('（可证伪）摘掉 addMessage 的消息钩子后 J3 断言失效',
     !/onChatMessageAdded\?\.\(full\);/.test(j4));
+}
+
+// ============================================================================
+section('K. v3.0.3 桌宠增量（共享真源 / 频率派生 / 动画同源 / 舞台同步 / 高清渲染）');
+// ============================================================================
+const lineScheduleSrc = read('src/utils/lineSchedule.ts');
+const bubbleTimingSrc = read('src/utils/bubbleTiming.ts');
+
+// ---------- K1. 共享真源模块存在且自洽 ----------
+check('K1 频率派生真源 src/utils/lineSchedule.ts 存在且导出约定接口',
+  /export function normalizeSpeakRate/.test(lineScheduleSrc) &&
+  /export function deriveLineSchedule\s*\(/.test(lineScheduleSrc) &&
+  /export function deriveLineScheduleForCharacter/.test(lineScheduleSrc) &&
+  /export const LINE_MIN_INTERVAL_MS = 1000/.test(lineScheduleSrc) &&
+  /export const SPEAK_RATE_MAX = 60/.test(lineScheduleSrc) &&
+  /export const SPEAK_RATE_DEFAULT = 2/.test(lineScheduleSrc));
+check('K1 气泡时长真源 src/utils/bubbleTiming.ts 存在且导出约定接口',
+  /export function countBubbleChars/.test(bubbleTimingSrc) &&
+  /export function bubbleHoldSeconds/.test(bubbleTimingSrc) &&
+  /export function bubbleHoldMs/.test(bubbleTimingSrc) &&
+  /export function readCharacterAnimParams/.test(bubbleTimingSrc) &&
+  /export const BUBBLE_STEP_CHARS = 20/.test(bubbleTimingSrc));
+check('K1 两个真源模块零 DOM 依赖（可被 electron 主进程直接 import）',
+  !/\bdocument\b|\bwindow\b|\bHTMLElement\b/.test(lineScheduleSrc) &&
+  !/\bdocument\b|\bwindow\b|\bHTMLElement\b/.test(bubbleTimingSrc));
+
+// ---------- K2. 主进程护栏按角色频率派生（方案 A） ----------
+check('K2 主进程不再有固定的 30s 护栏常量（CHARACTER_LINE_MIN_GAP_MS 已删除）',
+  !/CHARACTER_LINE_MIN_GAP_MS/.test(electronMain));
+check('K2 主进程护栏改为「渲染层派生值 + 按对话反查角色」两路来源',
+  /targetIntervalMs/.test(electronMain) &&
+  /deriveLineSchedule/.test(electronMain) &&
+  /deriveGapFromBoundCharacter/.test(electronMain) &&
+  /Math\.max\(LINE_MIN_INTERVAL_MS/.test(electronMain));
+check('K2 主进程与渲染层共用同一份 deriveLineSchedule（同源派生，不可能漂移）',
+  /import \{[^}]*deriveLineSchedule[^}]*\} from '\.\.\/src\/utils\/lineSchedule'/.test(electronMain) &&
+  /from '\.\.\/utils\/lineSchedule'/.test(appTsx) &&
+  /deriveLineScheduleForCharacter/.test(appTsx));
+check('K2 主进程节流窗口按对话分键（快角色不被慢角色压住）',
+  /const characterLineLastAt = new Map<string, number>\(\)/.test(electronMain) &&
+  /characterLineLastAt\.get\(key\)/.test(electronMain) &&
+  /characterLineLastAt\.set\(key, now\)/.test(electronMain));
+check('K2 并发锁保留（characterLineInFlight 未被放宽）',
+  /let characterLineInFlight = false/.test(electronMain) &&
+  /characterLineInFlight = true/.test(electronMain) &&
+  /characterLineInFlight = false/.test(electronMain));
+
+// ---------- K3. 渲染层频率调度改造 ----------
+check('K3 渲染层不再有写死的 15s/45s 调度常量',
+  !/CHARACTER_LINE_TICK_MS/.test(appTsx) &&
+  !/CHARACTER_LINE_MIN_INTERVAL_MS/.test(appTsx) &&
+  !/CHARACTER_BUBBLE_MS/.test(appTsx));
+check('K3 频率为 0 时连调度定时器都不创建（零请求/零气泡/零写库）',
+  /if \(!sch\.enabled\) return;/.test(appTsx) &&
+  /deriveLineScheduleForCharacter/.test(appTsx));
+check('K3 调度器为自续期 setTimeout（频率改动即时生效，无需重启）',
+  /setTimeout\(\(\) => \{[\s\S]{0,900}schedule\(\);/.test(appTsx) &&
+  !/setInterval\(/.test(appTsx));
+check('K3 请求携带派生好的 targetIntervalMs（主进程护栏据此兜底）',
+  /targetIntervalMs: sch\.intervalMs/.test(appTsx) &&
+  /targetIntervalMs\?: number/.test(preload) &&
+  /targetIntervalMs\?: number/.test(ipcTs));
+
+// ---------- K4. 气泡双向动画 + 按字数时长 ----------
+check('K4 气泡有收回态（.dc-bubble.closing）与 dcBubbleOut 关键帧',
+  /\.dc-bubble\.closing \{[\s\S]{0,200}dcBubbleOut/.test(charCss) &&
+  /@keyframes dcBubbleOut/.test(charCss) &&
+  /pointer-events: none/.test(charCss));
+check('K4 收回态显式登记进 character 分组（防后续改类名静默失效）',
+  /character: \[[^\]]*'\.dc-bubble\.closing'/.test(anim) &&
+  /html\.anim-off \.dc-bubble\.closing/.test(charCss) &&
+  /html\[data-anim-off~='character'\] \.dc-bubble\.closing/.test(charCss));
+check('K4 气泡状态机四阶段（显示 → 停留 → 收回 → 卸载）齐全',
+  /const \[bubbleClosing, setBubbleClosing\] = useState\(false\)/.test(appTsx) &&
+  /const \[bubbleSeq, setBubbleSeq\] = useState\(0\)/.test(appTsx) &&
+  /bubbleHoldTimer/.test(appTsx) &&
+  /bubbleOutTimer/.test(appTsx) &&
+  /key=\{bubbleSeq\}/.test(appTsx));
+check('K4 点气泡文字走收回动画而非瞬间消失（closeBubble）',
+  /const closeBubble = useCallback/.test(appTsx) &&
+  /closeBubble\(\);/.test(appTsx));
+check('K4 气泡停留时长按码点字数计算（与设置页同一函数）',
+  /bubbleHoldMs\(text,/.test(appTsx) &&
+  /bubbleHoldMs/.test(bubbleTimingSrc) &&
+  /\[...\.\.\.text\]\.length|\[\.\.\.text\]\.length/.test(bubbleTimingSrc));
+check('K4 分档用 ceil（21 字进第 2 档，与 PRD 分档表一致）',
+  /Math\.ceil\(/.test(bubbleTimingSrc) &&
+  !/Math\.floor\(/.test(bubbleTimingSrc));
+
+// ---------- K5. 菜单动画 0.20s + 幅度 + 速度倍率 ----------
+check('K5 菜单动画时长 0.20s（用户拍板）且幅度含 scale 0.96→1',
+  /@keyframes dcMenuIn \{[\s\S]{0,200}translateY\(6px\) scale\(0\.96\)/.test(charCss) &&
+  /@keyframes dcMenuOut \{[\s\S]{0,200}translateY\(6px\) scale\(0\.96\)/.test(charCss));
+check('K5 菜单时长不再写死（改为 --dc-menu-anim 变量 + --anim-speed 倍率）',
+  /var\(--dc-menu-anim, 0\.20s\) \* var\(--anim-speed, 1\)/.test(charCss) &&
+  !/animation: dcMenuIn 0\.14s linear/.test(charCss) &&
+  !/DC_MENU_ANIM_MS/.test(appTsx));
+check('K5 JS 侧卸载计时与 CSS 同源（基准秒数 × character 分组倍率）',
+  /function menuAnimMs/.test(appTsx) &&
+  /getGroupAnimSpeed\(s, 'character'\)/.test(appTsx) &&
+  /readCharacterAnimParams\(s\)\.menuSec/.test(appTsx) &&
+  // 只看可执行代码：注释里提到 readAnimSpeed 是「为什么不能用它」的说明，不是调用
+  !/readAnimSpeed\(/.test(stripComments(appTsx)));
+check('K5 气泡侧同样同源（基准秒数 × character 分组倍率）',
+  /function bubbleAnimMs/.test(appTsx) &&
+  /getGroupAnimSpeed\(settings, 'character'\)/.test(appTsx) &&
+  /var\(--dc-bubble-anim, 0\.18s\) \* var\(--anim-speed, 1\)/.test(charCss));
+check('K5 角色窗把动画基准秒数写进 CSS 变量（写在 documentElement 上，向下继承）',
+  /--dc-menu-anim/.test(appTsx) &&
+  /--dc-bubble-anim/.test(appTsx) &&
+  /documentElement/.test(appTsx));
+check('K5 菜单项先播收回动画再执行业务动作（收回可见）',
+  /menuActionTimer/.test(appTsx) &&
+  /closeMenu\(\);[\s\S]{0,200}menuActionTimer\.current = setTimeout/.test(appTsx) &&
+  /m\.onClick\(\);/.test(appTsx));
+
+// ---------- K6. 舞台 ⇄ 桌面缩放双向同步 ----------
+// 只取缩放常量声明块来判定「1.9 是否残留」——注释里提到 1.9（说明已删除）不算残留。
+const stageZoomConsts = (stage.match(/const STAGE_ZOOM_[A-Z]+ = [0-9.]+;/g) || []).join(' ');
+check('K6 舞台缩放区间收窄到 0.6~1.6（1.9 档位彻底删除）',
+  /const STAGE_ZOOM_MAX = 1\.6/.test(stage) &&
+  !/1\.9/.test(stageZoomConsts) &&
+  /const STAGE_ZOOM_MIN = 0\.6/.test(stage));
+check('K6 存在「实时预览」通道：dc:set-scale-live（渲染→主）与 dc:scale-preview（主→角色窗）',
+  /ipcMain\.on\('dc:set-scale-live'/.test(mainDc) &&
+  /webContents\.send\('dc:scale-preview'/.test(mainDc) &&
+  /dcSetScaleLive/.test(preload) &&
+  /dcSetScaleLive/.test(ipcTs) &&
+  /onDcScalePreview/.test(preload) &&
+  /onDcScalePreview/.test(ipcTs) &&
+  /onDcScalePreview/.test(appTsx));
+check('K6 预览通道不落盘、不广播（只推给该角色窗改本地 --dc-scale）',
+  /dc:set-scale-live[\s\S]{0,400}webContents\.send\('dc:scale-preview'/.test(mainDc) &&
+  !/dc:set-scale-live[\s\S]{0,400}saveSettings/.test(mainDc));
+check('K6 舞台写回只发生在用户手势里（外部同步只读，绝不回写）',
+  /zoomSourceRef/.test(stage) &&
+  /api\.dcSetScaleLive\(/.test(stage) &&
+  /api\.dcSetScale\(/.test(stage));
+check('K6 舞台反向订阅 settings:changed（桌面滚轮 → 舞台滑块 ≤300ms）',
+  /api\.onSettingsChanged/.test(stage) &&
+  /desktopCharacters/.test(stage));
+check('K6 舞台滑块仍是 0.6~1.6 / 步长 0.05，且复用既有 dc:set-scale 提交（整数组覆盖）',
+  /min=\{STAGE_ZOOM_MIN\}/.test(stage) &&
+  /max=\{STAGE_ZOOM_MAX\}/.test(stage) &&
+  /step=\{STAGE_ZOOM_STEP\}/.test(stage) &&
+  /api\.dcSetScale\(character\.id, next\)/.test(stage) &&
+  /const next = list\.slice\(\);[\s\S]{0,120}next\[idx\] = \{ \.\.\.next\[idx\], scale: clamped \};[\s\S]{0,120}dm\.saveSettings\(\{ desktopCharacters: next \}\)/.test(mainDc));
+
+// ---------- K7. 舞台高清渲染 ----------
+check('K7 舞台模型盒子按 --stage-zoom 放大（不再靠 transform: scale 插值）',
+  /width: calc\(190px \* var\(--stage-zoom, 1\)\)/.test(panelCss) &&
+  /height: calc\(220px \* var\(--stage-zoom, 1\)\)/.test(panelCss));
+check('K7 舞台模型 transform 里不再有 scale()（插值放大是模糊根因）',
+  !/scale\(\$\{zoom\}\)/.test(stage) &&
+  !/scale\([0-9.]+\)/.test(stage.replace(/scaleY\([^)]*\)/g, '')));
+// 只看**声明行**（注释里提到 will-change: transform 是解释为何去掉它，不算残留）。
+const panelWillChange = (panelCss.match(/^\s*will-change:[^;]+;/gm) || []).join(' ');
+check('K7 舞台模型去掉 will-change: transform（合成层会强制 1× 栅格化）',
+  !/will-change:\s*transform/.test(panelWillChange) &&
+  /will-change:\s*auto/.test(panelWillChange));
+check('K7 舞台视口允许滚动且有最小高度（放大后不被裁掉）',
+  /overflow: auto/.test(panelCss) &&
+  /min-height: 380px/.test(panelCss));
+check('K7 3D / Live2D 渲染分辨率随 zoom 提升（缺省 1 ⇒ 桌宠窗行为零变化）',
+  /zoom\?: number/.test(modelView) &&
+  /zoom\?: number/.test(threeView) &&
+  /zoom\?: number/.test(l2dView) &&
+  /applyPixelRatio/.test(threeView) &&
+  /targetResolution/.test(l2dView));
+
+// ---------- K8. 角色面板频率滑块 ----------
+check('K8 角色卡片有频率滑块（0~60 / 步长 1）',
+  /min=\{0\}/.test(coll) &&
+  /max=\{60\}/.test(coll) &&
+  /step=\{1\}/.test(coll) &&
+  /speakRate/.test(coll));
+check('K8 频率缺省回落 2 条/分（存量用户升级行为不回退）',
+  /normalizeSpeakRate\(c\.speakRate\)/.test(coll));
+check('K8 滑块滚轮不改数值（避免与页面滚动打架）',
+  /onWheel=\{\(e\) => e\.preventDefault\(\)\}/.test(coll));
+check('K8 频率写入走既有整数组覆盖路径（HC-8）',
+  /patchCharacter\(c\.id, \{[\s\S]{0,200}speakRate/.test(coll) &&
+  /api\.saveSettings\(\{ desktopCharacters: next \}\)/.test(coll));
+
+// ---------- K9. 设置页细调子块（仅自定义档渲染） ----------
+check('K9 桌宠动画细调子块存在且含 5 个滑块（菜单/气泡/基准/每档/上限）',
+  /animCtl\.groupCharacterDetail/.test(settings) &&
+  /animCharacterMenuSec/.test(settings) &&
+  /animCharacterBubbleSec/.test(settings) &&
+  /animCharacterBubbleBaseSec/.test(settings) &&
+  /animCharacterBubbleStepSec/.test(settings) &&
+  /animCharacterBubbleMaxSec/.test(settings));
+check('K9 细调子块只在「自定义」档渲染（与分组区同规则）',
+  /animCustom && \(/.test(settings) &&
+  /sec-anim-control/.test(settings));
+check('K9 character 分组被关时细调块置灰 + 说明（HC-7 不静默失效）',
+  /charGroupOff/.test(settings) &&
+  /disabled=\{charGroupOff\}/.test(settings) &&
+  /opacity: charGroupOff \? 0\.45 : 1/.test(settings));
+check('K9 换算示例与角色窗共用同一函数（示例与实测必然一致）',
+  /bubbleHoldSeconds\(/.test(settings) &&
+  /bubbleHoldSeconds\(/.test(bubbleTimingSrc));
+
+// ---------- K10. 新增 i18n 键 10 处齐全 ----------
+const NEW_KEYS = [
+  'characters.speakRate', 'characters.speakRateUnit', 'characters.speakRateOff',
+  'characters.speakRateHint', 'characters.speakRateWarn', 'characters.stageSyncHint',
+  'animCtl.groupCharacterDetail', 'animCtl.menuAnimMs', 'animCtl.bubbleAnimMs',
+  'animCtl.bubbleHoldBase', 'animCtl.bubbleHoldStep', 'animCtl.bubbleHoldMax',
+  'animCtl.bubbleHoldPreview', 'animCtl.bubbleHoldDesc',
+  'animCtl.groupCharacterDetailOff',
+];
+for (const k of NEW_KEYS) {
+  const n = (trans.match(new RegExp(`'${k.replace(/\./g, '\\.')}':`, 'g')) || []).length;
+  check(`translations.ts 含 ${k}（zh+en 共 2 处）`, n === 2, `实得 ${n}`);
+}
+for (const lang of LOCALE_CODES) {
+  let json = {};
+  try {
+    json = JSON.parse(read(`src/i18n/locales/${lang}.json`));
+  } catch {
+    json = {};
+  }
+  const miss = NEW_KEYS.filter((k) => typeof json[k] !== 'string' || !json[k].trim());
+  check(`locales/${lang}.json 含 15 个新增桌宠键且非空`, miss.length === 0, miss.join(','));
+}
+check('K10 未新增「实际约 N 条/分」类折中提示（用户拍板取消）',
+  !/实际约|实际生效|受请求耗时限制|实际速率/.test(trans) &&
+  LOCALE_CODES.every((lang) => {
+    let j = {};
+    try { j = JSON.parse(read(`src/i18n/locales/${lang}.json`)); } catch { j = {}; }
+    return !Object.values(j).some((v) => typeof v === 'string' && /实际约|实际生效|受请求耗时限制/.test(v));
+  }));
+
+// ---------- K12. QA 回归修复（D1/D2/O1/O2/O4） ----------
+const stageCode = stripComments(stage);
+check('D1 舞台有独立的 lastCommittedZoomRef（与回声抑制 ref 分离）',
+  /lastCommittedZoomRef\s*=\s*useRef<number \| null>\(null\)/.test(stageCode) &&
+  /lastWrittenZoomRef\s*=\s*useRef<number \| null>\(null\)/.test(stageCode));
+check('D1 commitZoom 内用 STAGE_ZOOM_EPS 对 lastCommittedZoomRef 判重后才 dcSetScale',
+  /lastCommittedZoomRef\.current !== null && Math\.abs\(lastCommittedZoomRef\.current - next\) < STAGE_ZOOM_EPS[\s\S]{0,160}api\.dcSetScale\(/.test(stageCode));
+check('D1 判重 return 在 lastCommittedZoomRef 赋值之前（同值不重发）',
+  /if \(lastCommittedZoomRef\.current[\s\S]{0,120}return;\s*\}\s*lastCommittedZoomRef\.current = next;/.test(stageCode));
+check('D2 设置页关闭说明用独立键 groupCharacterDetailOff（非标题键复读）',
+  /\{charGroupOff &&[\s\S]{0,220}t\('animCtl\.groupCharacterDetailOff'\)\}/.test(settings) &&
+  !/\{charGroupOff &&[\s\S]{0,220}t\('animCtl\.groupCharacterDetail'\)\}/.test(settings));
+check('O1 ThreeModelView 不再用 Math.max(1, zoom) 裁切缩小档',
+  !/Math\.max\(1,\s*zoom\)/.test(threeView) &&
+  !/Math\.max\(1,\s*zoomRef\.current\)/.test(stripComments(threeView)) &&
+  /Math\.max\(0\.6,\s*zoom\)/.test(threeView));
+check('O2 zoomSourceRef 在 commitZoom 内真实参与闸门（非死代码）',
+  /zoomSourceRef\.current !== 'user'[\s\S]{0,80}return;/.test(stageCode));
+check('O4 气泡正文按码点截断，不切 emoji 代理对',
+  /const cps = \[\.\.\.s\]/.test(appTsx) &&
+  /cps\.slice\(0, CHARACTER_BUBBLE_MAX_CHARS\)\.join\(''\)/.test(appTsx) &&
+  !/(^|[^p])s\.slice\(0, CHARACTER_BUBBLE_MAX_CHARS\)/.test(appTsx));
+check('O3 30s 兜底只在两路都缺失时触发且带告警（非静默回归）',
+  /if \(!characterLineGapWarned\)/.test(electronMain) &&
+  /console\.warn\('\[nianyu\] 桌宠语句间隔无法判定，回退 30s 护栏/.test(electronMain) &&
+  /gap = 30_000;/.test(electronMain));
+
+// ---------- K11. 可证伪：变异后对应断言必须变红 ----------
+{
+  // 变异 1：把 ceil 改回 floor ⇒ K4「分档用 ceil」断言失效
+  const brokenA = bubbleTimingSrc.replace('Math.ceil(', 'Math.floor(');
+  check('（可证伪）把气泡分档 ceil 改成 floor 后 K4 断言失效',
+    !/Math\.ceil\(/.test(brokenA) && /Math\.floor\(/.test(brokenA));
+  // 变异 2：把菜单 CSS 的 --anim-speed 去掉 ⇒ K5「CSS 接速度倍率」断言失效
+  const brokenB = charCss.replace(/ \* var\(--anim-speed, 1\)/g, '');
+  check('（可证伪）把菜单/气泡 CSS 的 --anim-speed 去掉后 K5 断言失效',
+    !/var\(--anim-speed, 1\)/.test(brokenB));
+  // 变异 3：把菜单幅度 scale(0.96) 删掉 ⇒ K5「幅度含 scale」断言失效
+  const brokenC = charCss.replace('translateY(6px) scale(0.96)', 'translateY(6px)');
+  check('（可证伪）删掉菜单动画的 scale(0.96) 幅度后 K5 断言失效',
+    !/@keyframes dcMenuIn \{[\s\S]{0,200}translateY\(6px\) scale\(0\.96\)/.test(brokenC));
+  // 变异 4：主进程把护栏改回固定常量 ⇒ K2 断言失效
+  const brokenD = electronMain.replace(/Math\.max\(LINE_MIN_INTERVAL_MS, Math\.round\(gap\)\)/, 'CHARACTER_LINE_MIN_GAP_MS');
+  check('（可证伪）主进程护栏改回固定常量后 K2 断言失效',
+    !/Math\.max\(LINE_MIN_INTERVAL_MS, Math\.round\(gap\)\)/.test(brokenD) && /CHARACTER_LINE_MIN_GAP_MS/.test(brokenD));
+  // 变异 5：舞台把 --stage-zoom 的 calc 去掉 ⇒ K7 断言失效
+  const brokenE = panelCss.replace('width: calc(190px * var(--stage-zoom, 1));', 'width: 190px;');
+  check('（可证伪）舞台模型盒子不再按 --stage-zoom 放大后 K7 断言失效',
+    !/width: calc\(190px \* var\(--stage-zoom, 1\)\)/.test(brokenE));
+  // 变异 6：恢复 will-change: transform ⇒ K7 断言失效
+  const brokenF = panelCss.replace('will-change: auto;', 'will-change: transform;');
+  const brokenFWillChange = (brokenF.match(/^\s*will-change:[^;]+;/gm) || []).join(' ');
+  check('（可证伪）恢复 will-change: transform 后 K7 断言失效',
+    !/will-change:\s*auto/.test(brokenFWillChange) &&
+    /will-change:\s*transform/.test(brokenFWillChange));
+  // 变异 7：把 .dc-bubble.closing 从分组登记里删掉 ⇒ K4 断言失效
+  const brokenG = anim.replace("'.dc-bubble.closing', ", '');
+  check('（可证伪）从 character 分组里删掉 .dc-bubble.closing 后 K4 断言失效',
+    !/character: \[[^\]]*'\.dc-bubble\.closing'/.test(brokenG));
+  // 变异 8：把 getGroupAnimSpeed 换成 readAnimSpeed ⇒ K5 断言失效
+  // （变异后代码里出现了 readAnimSpeed( 调用 ⇒ K5 的「不得使用 readAnimSpeed」判定翻红）
+  const brokenH = appTsx.split("getGroupAnimSpeed(s, 'character')").join('readAnimSpeed(document)');
+  check('（可证伪）把分组倍率换成 readAnimSpeed(document) 后 K5 断言失效',
+    !/getGroupAnimSpeed\(s, 'character'\)/.test(brokenH) &&
+    /readAnimSpeed\(/.test(stripComments(brokenH)));
+  // 变异 9：去掉 D1 判重 ⇒ K12 D1 断言失效
+  const brokenI = stageCode.replace(
+    /if \(lastCommittedZoomRef\.current !== null && Math\.abs\(lastCommittedZoomRef\.current - next\) < STAGE_ZOOM_EPS\) \{\s*return;\s*\}\s*/,
+    '');
+  check('（可证伪）删掉 D1 同值判重后 K12 断言失效',
+    !/lastCommittedZoomRef\.current !== null && Math\.abs/.test(brokenI));
+  // 变异 10：D2 改回标题键 ⇒ K12 D2 断言失效
+  const brokenJ = settings.replace("t('animCtl.groupCharacterDetailOff')", "t('animCtl.groupCharacterDetail')");
+  check('（可证伪）D2 改回标题键后 K12 断言失效',
+    /\{charGroupOff &&[\s\S]{0,220}t\('animCtl\.groupCharacterDetail'\)\}/.test(brokenJ));
+  // 变异 11：O1 恢复 Math.max(1, zoom) ⇒ K12 O1 断言失效
+  const brokenK = threeView.replace(/Math\.max\(0\.6, zoom\)/g, 'Math.max(1, zoom)');
+  check('（可证伪）O1 恢复 Math.max(1, zoom) 后 K12 断言失效',
+    /Math\.max\(1,\s*zoom\)/.test(brokenK));
 }
 
 // ---------- 汇总 ----------

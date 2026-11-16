@@ -66,6 +66,23 @@
  "animCtl.groupSplash": "Экран приветствия",
  "animCtl.groupStats": "Графики и рейтинги статистики",
  "animCtl.groupCharacter": "Анимации персонажа (дыхание / облачко / меню)",
+ "animCtl.groupCharacterDetail": "Анимации питомца (подробно)",
+ "animCtl.groupCharacterDetailOff": "Анимации питомца отключены переключателем эффектов; эти настройки не действуют",
+
+ "animCtl.menuAnimMs": "Длительность открытия/закрытия меню",
+
+ "animCtl.bubbleAnimMs": "Длительность появления/исчезновения пузыря",
+
+ "animCtl.bubbleHoldBase": "Базовое время показа",
+
+ "animCtl.bubbleHoldStep": "+{n} символов",
+
+ "animCtl.bubbleHoldMax": "Максимум",
+
+ "animCtl.bubbleHoldPreview": "{n} символов ≈ {v}",
+
+ "animCtl.bubbleHoldDesc": "Время показа пузыря зависит от длины текста: база {base} с, +{step} с каждые {n} символов, максимум {max} с",
+
  "animCtl.groupTheme": "Тема и общие взаимодействия",
  "animCtl.groupToast": "Уведомления и баннер обновления",
  "animCtl.groupTutorial": "Подсветка обучения",
@@ -1181,6 +1198,18 @@
  "characters.stageTitle": "Сцена персонажа",
  "characters.dragRotate": "Тяните для поворота · колесо для масштаба",
  "characters.stageZoom": "Размер модели",
+ "characters.speakRate": "Частота активных реплик",
+
+ "characters.speakRateUnit": "{n}/мин",
+
+ "characters.speakRateOff": "Выкл",
+
+ "characters.speakRateHint": "Сколько реплик в минуту питомец говорит сам; 0 = не говорит",
+
+ "characters.speakRateWarn": "Высокая частота увеличивает число вызовов модели и расходы",
+
+ "characters.stageSyncHint": "Применяется и к питомцу на рабочем столе",
+
  "characters.say": "Сказать что-нибудь",
  "characters.newChat": "Новый чат",
  "characters.record": "История",

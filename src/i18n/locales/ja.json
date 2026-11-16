@@ -66,6 +66,23 @@
  "animCtl.groupSplash": "スプラッシュ画面",
  "animCtl.groupStats": "統計のグラフとランキング",
  "animCtl.groupCharacter": "デスクトップキャラのアニメ（呼吸 / 吹き出し / メニュー）",
+ "animCtl.groupCharacterDetail": "デスクトップキャラのアニメ（詳細）",
+ "animCtl.groupCharacterDetailOff": "デスクトップキャラのアニメはエフェクトスイッチでオフになっています。詳細設定は反映されません",
+
+ "animCtl.menuAnimMs": "メニューの表示/消去の時間",
+
+ "animCtl.bubbleAnimMs": "吹き出しの表示/消去の時間",
+
+ "animCtl.bubbleHoldBase": "基本の保持時間",
+
+ "animCtl.bubbleHoldStep": "{n} 文字ごとに +",
+
+ "animCtl.bubbleHoldMax": "上限",
+
+ "animCtl.bubbleHoldPreview": "{n} 文字 ≈ {v}",
+
+ "animCtl.bubbleHoldDesc": "吹き出しの保持時間は文字数に応じて決まります：基本 {base} 秒、{n} 文字ごとに +{step} 秒、最大 {max} 秒",
+
  "animCtl.groupTheme": "テーマと一般的な操作",
  "animCtl.groupToast": "通知と更新バナー",
  "animCtl.groupTutorial": "オンボーディングのハイライト",
@@ -1181,6 +1198,18 @@
  "characters.stageTitle": "キャラステージ",
  "characters.dragRotate": "ドラッグで回転 · ホイールで拡大",
  "characters.stageZoom": "モデルのサイズ",
+ "characters.speakRate": "自発的な発話頻度",
+
+ "characters.speakRateUnit": "{n} 本/分",
+
+ "characters.speakRateOff": "オフ",
+
+ "characters.speakRateHint": "1 分間に自発的に話す最大本数。0 = 話さない",
+
+ "characters.speakRateWarn": "頻度が高いほどモデル呼び出しと費用が増えます",
+
+ "characters.stageSyncHint": "デスクトップ上のキャラクターにも反映されます",
+
  "characters.say": "ひとこと話す",
  "characters.newChat": "新しい会話",
  "characters.record": "履歴を見る",

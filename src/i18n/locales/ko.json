@@ -66,6 +66,23 @@
  "animCtl.groupSplash": "스플래시 화면",
  "animCtl.groupStats": "통계 차트 및 순위",
  "animCtl.groupCharacter": "데스크톱 캐릭터 애니메이션(호흡 / 말풍선 / 메뉴)",
+ "animCtl.groupCharacterDetail": "데스크톱 캐릭터 애니메이션 (세부)",
+ "animCtl.groupCharacterDetailOff": "데스크톱 캐릭터 애니메이션이 효과 스위치로 꺼져 있어 세부 설정이 적용되지 않습니다",
+
+ "animCtl.menuAnimMs": "메뉴 열기/닫기 시간",
+
+ "animCtl.bubbleAnimMs": "말풍선 열기/닫기 시간",
+
+ "animCtl.bubbleHoldBase": "기본 유지 시간",
+
+ "animCtl.bubbleHoldStep": "{n}자마다 +",
+
+ "animCtl.bubbleHoldMax": "최대",
+
+ "animCtl.bubbleHoldPreview": "{n}자 ≈ {v}",
+
+ "animCtl.bubbleHoldDesc": "말풍선 유지 시간은 글자 수에 따라 달라집니다: 기본 {base}초, {n}자마다 +{step}초, 최대 {max}초",
+
  "animCtl.groupTheme": "테마 및 일반 상호작용",
  "animCtl.groupToast": "알림과 업데이트 배너",
  "animCtl.groupTutorial": "온보딩 하이라이트",
@@ -1181,6 +1198,18 @@
  "characters.stageTitle": "캐릭터 스테이지",
  "characters.dragRotate": "드래그로 회전 · 휠로 확대",
  "characters.stageZoom": "모델 크기",
+ "characters.speakRate": "자발적 발화 빈도",
+
+ "characters.speakRateUnit": "{n}개/분",
+
+ "characters.speakRateOff": "꺼짐",
+
+ "characters.speakRateHint": "1분에 자발적으로 말할 최대 개수, 0 = 말하지 않음",
+
+ "characters.speakRateWarn": "빈도가 높을수록 모델 호출과 비용이 증가합니다",
+
+ "characters.stageSyncHint": "데스크톱의 캐릭터에도 적용됩니다",
+
  "characters.say": "한마디 하기",
  "characters.newChat": "새 대화",
  "characters.record": "기록 보기",

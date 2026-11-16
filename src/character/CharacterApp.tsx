@@ -11,12 +11,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
-import type { CharacterRuntimeSettings, DesktopCharacter } from '../types';
+import type { AppSettings, CharacterRuntimeSettings, DesktopCharacter } from '../types';
 import type { CharacterExpression } from './PlaceholderCharacter';
 import { ModelView } from './ModelView';
 import { pickIdleAction } from './behaviors';
-import { applyAnimControl, type AnimSettingsLike } from '../utils/animControl';
+import { applyAnimControl, getGroupAnimSpeed, type AnimSettingsLike } from '../utils/animControl';
 import { playSoundSync } from '../utils/sound';
+// v3.0.3：频率派生的唯一真源（与主进程共用同一份 ⇒ 护栏与调度不可能漂移）。
+import { deriveLineScheduleForCharacter, type LineSchedule } from '../utils/lineSchedule';
+// v3.0.3：气泡停留时长 / 动画时长的唯一真源（角色窗与设置页共用同一份 ⇒ 示例与实测一致）。
+import { bubbleHoldMs, readCharacterAnimParams } from '../utils/bubbleTiming';
 
 interface DcState {
   runtime: CharacterRuntimeSettings;
@@ -48,23 +52,42 @@ const DEFAULT_RUNTIME: CharacterRuntimeSettings = {
 const HIT_SELECTOR = '.dc-character, .dc-bubble, .dc-menu';
 const DRAG_THRESHOLD = 5;
 
-// ===== 桌宠互动语句生成参数（v3.0.1-beta.9）=====
+// ===== 桌宠互动语句生成参数（v3.0.1-beta.9；v3.0.3 频率改为按设置派生）=====
 // 这些值只控制「触发节奏 / 展示形态」，不参与任何文案内容；文案一律由模型输出。
-/** 试探周期（毫秒）：每次到期才检查是否满足生成条件，未绑定时不发任何请求。 */
-const CHARACTER_LINE_TICK_MS = 15_000;
-/** 两次生成请求之间的最小间隔（毫秒）：防止高频模型调用造成 QPS 风暴。 */
-const CHARACTER_LINE_MIN_INTERVAL_MS = 45_000;
+// v3.0.3：原先的「试探周期 15s / 最小间隔 45s」两个硬编码常量已删除，
+// 改由 deriveLineSchedule(speakRate) 统一派生（见 src/utils/lineSchedule.ts）。
 /** 单次生成请求的软超时（毫秒）：超时后静默放弃并释放并发锁，不显示任何气泡。 */
 const CHARACTER_LINE_TIMEOUT_MS = 20_000;
 /** 气泡展示的最大字符数：仅裁剪展示文本，写入绑定对话的仍是模型原文。 */
 const CHARACTER_BUBBLE_MAX_CHARS = 80;
-/** 模型语句气泡的停留时长（毫秒）。 */
-const CHARACTER_BUBBLE_MS = 4200;
-/** 右键菜单收回动画时长（毫秒），与 character.css 的 dcMenuOut 0.14s 固定时长一致。
- *  角色窗 CSS 不接 --anim-speed 倍率，故这里用固定值与 CSS 对齐，不用 animMs 造成错位。 */
-const DC_MENU_ANIM_MS = 140;
 /** applyAnimControl 在 all-off/自定义档写到 documentElement 上的分组黑名单属性名。 */
 const ANIM_OFF_ATTR = 'data-anim-off';
+
+/**
+ * 菜单收回动画的 JS 侧等待时长（毫秒）—— 与 CSS 端严格同源。
+ *
+ * 同源要点（三处必须一致，缺一即出现「闪一下消失 / 卡住不消失」）：
+ *   CSS:  animation: dcMenuOut calc(var(--dc-menu-anim, 0.20s) * var(--anim-speed, 1)) linear forwards
+ *   JS :  menuSec * 1000 * getGroupAnimSpeed(settings, 'character')
+ *   变量: --dc-menu-anim 由本窗写入 = readCharacterAnimParams(settings).menuSec
+ *
+ * ⚠️ 倍率必须取 **character 分组倍率**（getGroupAnimSpeed），不能用 readAnimSpeed(document)：
+ *    后者读的是 documentElement 上的全局倍率，而自定义档下 CSS 实际生效的是分组倍率，
+ *    两者不一致 ⇒ 速度调快/调慢时菜单动画会与卸载计时错位。
+ */
+function menuAnimMs(s: AppSettings | null): number {
+  const base = readCharacterAnimParams(s).menuSec;
+  return Math.round(base * 1000 * getGroupAnimSpeed(s, 'character'));
+}
+
+/**
+ * 气泡收回动画的 JS 侧等待时长（毫秒）—— 与 CSS 端 --dc-bubble-anim × --anim-speed 同源。
+ * 换算口径与 menuAnimMs 完全一致（同一个分组倍率、同一个钳制后的参数）。
+ */
+function bubbleAnimMs(s: AppSettings | null): number {
+  const base = readCharacterAnimParams(s).bubbleSec;
+  return Math.round(base * 1000 * getGroupAnimSpeed(s, 'character'));
+}
 
 /**
  * 只裁剪「气泡展示」文本；写入绑定对话的仍是模型原文，不做任何改写。
@@ -73,8 +96,10 @@ const ANIM_OFF_ATTR = 'data-anim-off';
 function sanitizeBubbleText(raw: string): string {
   let s = raw.replace(/\s+/g, ' ').trim();
   s = s.replace(/^["'「『“‘]+|["'」』”’]+$/g, '').trim();
-  if (s.length > CHARACTER_BUBBLE_MAX_CHARS) {
-    s = `${s.slice(0, CHARACTER_BUBBLE_MAX_CHARS)}…`;
+  // 按码点截断，避免 UTF-16 slice 把 emoji 代理对切成半个乱码。
+  const cps = [...s];
+  if (cps.length > CHARACTER_BUBBLE_MAX_CHARS) {
+    s = `${cps.slice(0, CHARACTER_BUBBLE_MAX_CHARS).join('')}…`;
   }
   return s;
 }
@@ -93,6 +118,10 @@ export const CharacterApp: React.FC = () => {
   const [eye, setEye] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const [bubble, setBubble] = useState<string | null>(null);
+  /** 气泡正在播放收回动画：此时仍挂载 .dc-bubble.closing，动画结束才卸载。 */
+  const [bubbleClosing, setBubbleClosing] = useState(false);
+  /** 气泡序号：每次新气泡自增，作为 React key ⇒ DOM 重挂 ⇒ 弹入动画必定重播（不闪烁）。 */
+  const [bubbleSeq, setBubbleSeq] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   /** 菜单正在播放收回动画：此时仍挂载 .dc-menu.closing，动画结束/动画被关后立刻卸载。 */
   const [menuClosing, setMenuClosing] = useState(false);
@@ -103,12 +132,31 @@ export const CharacterApp: React.FC = () => {
   // from：这次按下发生在角色本体还是气泡上。只有角色本体的「点一下」才等于点角色
   //（气泡是中性可拖拽区，点气泡不该顺手跳转绑定的对话）。
   const dragRef = useRef<{ started: boolean; from: 'character' | 'bubble'; sx: number; sy: number; gdx: number; gdy: number } | null>(null);
-  const bubbleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 气泡停留计时器：到点后进入「收回动画」阶段。 */
+  const bubbleHoldTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 气泡收回动画计时器：到点后真正卸载气泡 DOM。 */
+  const bubbleOutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 角色窗最新 settings 快照：动画时长/停留参数的读取源（改设置后立即生效）。 */
+  const settingsRef = useRef<AppSettings | null>(null);
+  /**
+   * 舞台缩放预览的临时缩放值（未落盘）。
+   * 预览值优先于 dc:state 带来的持久化值，避免拖动途中被别的 dc:state 推送"跳回"旧尺寸；
+   * 舞台提交（dc:set-scale）后，落盘值与预览值一致 ⇒ 预览自动结束。
+   */
+  const previewScaleRef = useRef<number | null>(null);
+  /** 预览兜底过期计时器：舞台异常关闭（未提交）时，预览值不能永久留在桌宠上。 */
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const actionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draggingRef = useRef(false);
   const menuOpenRef = useRef(false);
   const menuClosingRef = useRef(false);
   const menuCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * 菜单项动作的延迟执行计时器（v3.0.3）。
+   * 点菜单项时先播完收回动画再执行该项业务动作，让用户「看得到收回」——
+   * 否则收回动画会被业务动作（打开窗口 / 隐藏角色）瞬间盖过，表现为「菜单啪地消失」。
+   */
+  const menuActionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const charRefState = useRef<DesktopCharacter | null>(null);
   /** 桌宠语句生成的并发锁：同一时刻只允许一个模型请求在途。 */
   const lineInFlightRef = useRef(false);
@@ -121,26 +169,116 @@ export const CharacterApp: React.FC = () => {
 
   const scale = state.character?.scale ?? 1;
   const runtime = state.runtime;
+  /** 角色数据是否已加载（用于调度器的依赖：避免用对象身份做依赖导致每次 dc:state 都重置定时器）。 */
+  const hasCharacter = !!state.character;
 
-  const showBubble = useCallback((text: string, ms = 3800) => {
-    if (charRefState.current && charRefState.current.bubble === false) return;
-    setBubble(text);
-    if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
-    bubbleTimer.current = setTimeout(() => setBubble(null), ms);
+  /**
+   * 角色窗当前是否处于「动画被关掉」状态。
+   *
+   * 两种情况都会让 CSS 动画不播：
+   *   ① 全关档（html.anim-off）；
+   *   ② 自定义档且 character 分组被关（html[data-anim-off~="character"]）。
+   * 这时 JS 侧必须**立即卸载**元素，不能等动画时长 —— 否则动画不播 ⇒ 元素永远等在
+   * 「收回态」上，表现为菜单/气泡「关不掉」。
+   */
+  const isAnimOff = useCallback((): boolean => {
+    const root = document.documentElement;
+    return (
+      root.classList.contains('anim-off') ||
+      (root.getAttribute(ANIM_OFF_ATTR) || '').split(' ').includes('character')
+    );
   }, []);
+
+  /**
+   * 显示一条气泡（四阶段状态机）：
+   *   显示 → 按字数计算的停留 → 收回动画 → 卸载。
+   *
+   * - 停留时长由 bubbleHoldMs(text, params) 按**展示文本的码点数**算出
+   *   （与设置页的换算示例同一个函数 ⇒ 示例与实测必然一致）；
+   * - 新气泡到来时会清掉旧的两个计时器 + 重置 closing + 自增 seq（key 变化 ⇒ DOM 重挂），
+   *   于是旧气泡立即退场、新气泡立即弹入，不会被旧气泡的收回动画吞掉；
+   * - 动画被关掉时直接卸载（功能完整，只是没有动画）。
+   */
+  const showBubble = useCallback(
+    (text: string) => {
+      if (charRefState.current && charRefState.current.bubble === false) return;
+      const params = readCharacterAnimParams(settingsRef.current);
+      const holdMs = bubbleHoldMs(text, {
+        baseSec: params.holdBaseSec,
+        stepSec: params.holdStepSec,
+        maxSec: params.holdMaxSec,
+      });
+      // 清掉旧的停留/收回计时器：新气泡立即接管，绝不被旧气泡的收回动画吞掉。
+      if (bubbleHoldTimer.current) {
+        clearTimeout(bubbleHoldTimer.current);
+        bubbleHoldTimer.current = null;
+      }
+      if (bubbleOutTimer.current) {
+        clearTimeout(bubbleOutTimer.current);
+        bubbleOutTimer.current = null;
+      }
+      setBubbleClosing(false);
+      setBubbleSeq((n) => n + 1);
+      setBubble(text);
+      bubbleHoldTimer.current = setTimeout(() => {
+        bubbleHoldTimer.current = null;
+        // 停留到期 → 进入收回动画阶段
+        if (isAnimOff()) {
+          setBubble(null);
+          return;
+        }
+        setBubbleClosing(true);
+        bubbleOutTimer.current = setTimeout(() => {
+          bubbleOutTimer.current = null;
+          setBubble(null);
+          setBubbleClosing(false);
+        }, bubbleAnimMs(settingsRef.current));
+      }, holdMs);
+    },
+    [isAnimOff]
+  );
+
+  /**
+   * 主动关闭气泡（点气泡文字）：与「停留到期」走同一条收回动画路径，
+   * 而不是瞬间消失（v3.0.3 R5-AC6）。
+   */
+  const closeBubble = useCallback(() => {
+    if (bubbleHoldTimer.current) {
+      clearTimeout(bubbleHoldTimer.current);
+      bubbleHoldTimer.current = null;
+    }
+    if (bubbleOutTimer.current) {
+      clearTimeout(bubbleOutTimer.current);
+      bubbleOutTimer.current = null;
+    }
+    if (isAnimOff()) {
+      setBubble(null);
+      setBubbleClosing(false);
+      return;
+    }
+    setBubbleClosing(true);
+    bubbleOutTimer.current = setTimeout(() => {
+      bubbleOutTimer.current = null;
+      setBubble(null);
+      setBubbleClosing(false);
+    }, bubbleAnimMs(settingsRef.current));
+  }, [isAnimOff]);
 
   /**
    * 向绑定对话请求一句由模型按该对话人物人设生成的互动语句。
    * 复用 api.proactive（→ chats:proactive → handleProactive）：主进程会把原句以
    * from_proactive 消息写入绑定对话，并把内容通过返回值回传给桌宠气泡。
    * 失败 / 超时 / 无内容一律静默降级，绝不使用固定文案兜底。
+   *
+   * @param bound 目标对话
+   * @param sch 该角色当前的调度方案（intervalMs 由 speakRate 派生，与主进程护栏同源）
    */
   const requestCharacterLine = useCallback(
-    async (bound: { type: 'single' | 'group'; id: string }) => {
+    async (bound: { type: 'single' | 'group'; id: string }, sch: LineSchedule) => {
       const now = Date.now();
       // 并发锁 + 最小间隔：重复触发 / 多定时器叠加 / 窗口重建都不会造成 QPS 风暴。
       if (lineInFlightRef.current) return;
-      if (now - lineLastAtRef.current < CHARACTER_LINE_MIN_INTERVAL_MS) return;
+      if (now - lineLastAtRef.current < sch.intervalMs) return;
       lineInFlightRef.current = true;
       lineLastAtRef.current = now;
       let timer: ReturnType<typeof setTimeout> | null = null;
@@ -150,13 +288,19 @@ export const CharacterApp: React.FC = () => {
           timer = setTimeout(() => resolve(null), CHARACTER_LINE_TIMEOUT_MS);
         });
         const res = await Promise.race([
-          api.proactive({ chatType: bound.type, chatId: bound.id, source: 'character' }),
+          // 带上派生好的最小间隔：主进程护栏据此兜底，避免固定 30s 把高频率压死。
+          api.proactive({
+            chatType: bound.type,
+            chatId: bound.id,
+            source: 'character',
+            targetIntervalMs: sch.intervalMs,
+          }),
           timeout,
         ]);
         if (!res || !res.ok) return;
         const text = sanitizeBubbleText(res.content || '');
         if (!text) return;
-        showBubble(text, CHARACTER_BUBBLE_MS);
+        showBubble(text);
         setExpression('happy');
         setTimeout(() => setExpression((e) => (e === 'happy' ? 'neutral' : e)), 1800);
       } catch {
@@ -179,13 +323,53 @@ export const CharacterApp: React.FC = () => {
       setState({ runtime: s.runtime || DEFAULT_RUNTIME, character: normalizeBoundChat(s.character || s.active) });
     });
     const off = api.onDcState((d) => {
-      setState({ runtime: d.runtime || DEFAULT_RUNTIME, character: normalizeBoundChat(d.character) });
+      // 舞台预览期间的缩放值是**未落盘的临时值**：若此时有别的 dc:state 推送（改频率、
+      // 拖拽结束等都会推），不能让它把预览值冲掉，否则桌宠会在拖动过程中"跳回"旧尺寸。
+      // 故预览值单独记在 previewScaleRef 里，优先于 dc:state 的持久化值。
+      const c = normalizeBoundChat(d.character);
+      const pv = previewScaleRef.current;
+      if (c && pv !== null && typeof c.scale === 'number' && Math.abs(c.scale - pv) < 1e-6) {
+        // 落盘值与预览值一致 ⇒ 舞台的提交已生效，预览结束，恢复以持久化值为准。
+        previewScaleRef.current = null;
+        if (previewTimerRef.current) {
+          clearTimeout(previewTimerRef.current);
+          previewTimerRef.current = null;
+        }
+      }
+      setState({
+        runtime: d.runtime || DEFAULT_RUNTIME,
+        character: c && pv !== null ? { ...c, scale: pv } : c,
+      });
     });
     return () => {
       alive = false;
       off();
     };
   }, []);
+
+  // ===== v3.0.3：舞台缩放预览 =====
+  // 舞台拖动「模型大小」滑块时，主进程把中间值推过来，让本窗的 --dc-scale 立即跟随。
+  // 这里**只更新本地状态**，不落盘、不广播：落盘由舞台在手势结束时统一走 dc:set-scale 一次。
+  useEffect(() => {
+    if (typeof api.onDcScalePreview !== 'function') return;
+    const off = api.onDcScalePreview((d) => {
+      if (!d || d.id !== charId) return;
+      previewScaleRef.current = d.scale;
+      // 兜底过期：舞台异常关闭（没走到提交）时，预览值最多保留 3 秒，之后拉回持久化值。
+      if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = setTimeout(() => {
+        previewTimerRef.current = null;
+        if (previewScaleRef.current !== d.scale) return; // 已被提交/新预览取代
+        previewScaleRef.current = null;
+        api.dcGetState(charId).then((s) => {
+          const c = normalizeBoundChat(s?.character || s?.active);
+          if (c) setState((st) => ({ ...st, character: c }));
+        });
+      }, 3000);
+      setState((s) => (s.character ? { ...s, character: { ...s.character, scale: d.scale } } : s));
+    });
+    return off;
+  }, [charId]);
 
   // ===== 绑定对话来了新消息 → 实时弹到桌宠头顶气泡 =====
   // 主进程在 DataManager.addMessage（所有新消息的唯一落库入口）挂钩，按本角色 boundChat
@@ -198,7 +382,7 @@ export const CharacterApp: React.FC = () => {
       if (!text) return;
       // 拖拽中 / 菜单打开时不弹气泡，避免打断操作与遮挡菜单
       if (draggingRef.current || menuOpenRef.current) return;
-      showBubble(text, CHARACTER_BUBBLE_MS);
+      showBubble(text);
       setExpression('happy');
       setTimeout(() => setExpression((e) => (e === 'happy' ? 'neutral' : e)), 1800);
     });
@@ -209,7 +393,19 @@ export const CharacterApp: React.FC = () => {
   // 角色窗不加载 index.css，所以「全关档」的全局 kill 规则不存在于本文档；
   // applyAnimControl 会按 kind='character' 注入本窗自己的门禁样式（含 character 分组的独立开关）。
   useEffect(() => {
-    const apply = (s: AnimSettingsLike | null) => applyAnimControl(document, s, 'character');
+    const apply = (s: AnimSettingsLike | null) => {
+      // 记住最新设置：菜单/气泡的 JS 侧卸载计时与 CSS 变量都从这里取，
+      // 保证「改设置后下一次开合菜单/弹气泡立即生效」。
+      settingsRef.current = s as AppSettings | null;
+      applyAnimControl(document, s, 'character');
+      // 把桌宠动画的基准时长写进 CSS 变量（写在角色窗 documentElement 上）。
+      // CSS 侧一律写成 calc(var(--dc-*-anim, 默认) * var(--anim-speed, 1))，
+      // 这样「基准秒数」只有一个真值（设置），CSS 与 JS 都从它派生。
+      const p = readCharacterAnimParams(s as AppSettings | null);
+      const root = document.documentElement;
+      root.style.setProperty('--dc-menu-anim', `${p.menuSec}s`);
+      root.style.setProperty('--dc-bubble-anim', `${p.bubbleSec}s`);
+    };
     api.getSettings().then((s) => apply(s as AnimSettingsLike));
     const off = api.onSettingsChanged(() => {
       api.getSettings().then((s) => apply(s as AnimSettingsLike));
@@ -266,24 +462,50 @@ export const CharacterApp: React.FC = () => {
     };
   }, [showBubble]);
 
-  // ===== 桌宠互动语句（绑定对话后由模型生成，v3.0.1-beta.9）=====
+  // ===== 桌宠互动语句（绑定对话后由模型生成，v3.0.1-beta.9；v3.0.3 频率可调）=====
   // 固定句子池已全部移除：未绑定对话时完全不生成语句、也不显示任何文案气泡；
   // 绑定后按该对话人物的人设，复用主动消息链路 api.proactive 生成，原句同时
   // 作为 from_proactive 消息写入绑定对话（在该对话的消息列表里可以看到）。
   // 点击 / 拖拽不触发模型请求：它们是高频即时反馈，模型有秒级延迟且会放大 QPS，
   // 只保留表情 / 动作 / 音效等非语言反馈，不显示任何文案气泡。
+  //
+  // v3.0.3：频率由角色设置 speakRate（条/分钟）派生，调度器改为**自续期 setTimeout**：
+  //   - 每次到期后按**当前**频率重新算出下一轮 tick ⇒ 改频率后无需重启即可生效；
+  //   - speakRate = 0 ⇒ 整个调度器不启动（连定时器都不创建）⇒ 零请求 / 零气泡 / 零写库；
+  //   - tick 只负责「到点检查」，是否真的发起由「距上次发起 ≥ intervalMs」判定；
+  //   - 拖拽中 / 菜单打开 / 未绑定 等跳过情形**不更新** lineLastAtRef ⇒ 不重排后续节奏。
   useEffect(() => {
-    const timer = setInterval(() => {
-      const c = charRefState.current;
-      const bound = c?.boundChat;
-      // 未绑定 / 关闭自主行为 / 关闭气泡 / 拖拽中 / 菜单打开 → 不发起任何模型请求。
-      if (!bound?.id) return;
-      if (c?.behavior === false || c?.bubble === false) return;
-      if (draggingRef.current || menuOpenRef.current) return;
-      void requestCharacterLine(bound);
-    }, CHARACTER_LINE_TICK_MS);
-    return () => clearInterval(timer);
-  }, [requestCharacterLine]);
+    // 角色尚未加载（首帧 state.character 为 null）时不启动调度器 ——
+    // 否则会在「用户已把频率设为 0」与「角色数据还没到」之间短暂地跑起一个默认频率的定时器。
+    const c = state.character;
+    if (!c) return;
+    const sch = deriveLineScheduleForCharacter(c);
+    // 频率为 0：完全不主动说话 —— 连调度定时器都不创建（PRD R3-AC16）。
+    if (!sch.enabled) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const schedule = () => {
+      timer = setTimeout(() => {
+        if (!alive) return;
+        const cur = charRefState.current;
+        const bound = cur?.boundChat;
+        // 未绑定 / 关闭自主行为 / 关闭气泡 / 拖拽中 / 菜单打开 → 不发起任何模型请求。
+        // 注意：这些跳过情形**不**更新 lineLastAtRef ⇒ 不重排后续节奏（R3-AC11）。
+        if (bound?.id && cur?.behavior !== false && cur?.bubble !== false && !draggingRef.current && !menuOpenRef.current) {
+          void requestCharacterLine(bound, sch);
+        }
+        // 自续期：按当前频率重算下一轮间隔（改频率后即时生效，无需重启）。
+        schedule();
+      }, sch.tickMs);
+    };
+    schedule();
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+    // 依赖 speakRate（频率）与「角色是否已加载」两个**标量**：
+    // 用 state.character 对象本身做依赖会让每次 dc:state 推送都重置定时器。
+  }, [requestCharacterLine, state.character?.speakRate, hasCharacter]);
 
   // ===== 自主游走（时长触发，窗口小幅位移） =====
   useEffect(() => {
@@ -321,14 +543,13 @@ export const CharacterApp: React.FC = () => {
    * 统一收尾：右键菜单弹出/收回都要走这里，保证 outside-pointerdown、Escape、菜单项点击
    * 三条路径行为一致。播放 dcMenuOut 后延迟卸载；若动画被三档开关关掉则立刻卸载，
    * 不依赖 animationend（animation:none 时该事件不会触发，菜单会卡住不消失）。
+   *
+   * 卸载等待时长与 CSS 端同源（menuAnimMs）：基准秒数来自设置，
+   * 倍率取 character 分组倍率 ⇒ 速度调快/调慢时两侧始终一致。
    */
   const closeMenu = useCallback(() => {
     if (!menuOpenRef.current || menuClosingRef.current) return;
-    const root = document.documentElement;
-    const animOff =
-      root.classList.contains('anim-off') ||
-      (root.getAttribute(ANIM_OFF_ATTR) || '').split(' ').includes('character');
-    if (animOff) {
+    if (isAnimOff()) {
       setMenuOpen(false);
       setMenuClosing(false);
       menuClosingRef.current = false;
@@ -342,8 +563,8 @@ export const CharacterApp: React.FC = () => {
       setMenuClosing(false);
       menuClosingRef.current = false;
       menuCloseTimer.current = null;
-    }, DC_MENU_ANIM_MS);
-  }, []);
+    }, menuAnimMs(settingsRef.current));
+  }, [isAnimOff]);
 
   /** 打开菜单：取消可能还在排队的收回定时器，避免刚点开就被上一次关闭的 timer 卸载。 */
   const openMenu = useCallback(() => {
@@ -351,16 +572,25 @@ export const CharacterApp: React.FC = () => {
       clearTimeout(menuCloseTimer.current);
       menuCloseTimer.current = null;
     }
+    // 同样要取消「上一轮菜单项动作」的延迟执行：否则快速「点菜单项 → 重新右键」时，
+    // 上一次的菜单动作会在新菜单打开后才执行（表现为点 A 却执行了 B）。
+    if (menuActionTimer.current) {
+      clearTimeout(menuActionTimer.current);
+      menuActionTimer.current = null;
+    }
     menuClosingRef.current = false;
     setMenuClosing(false);
     setMenuOpen(true);
     applyInteractive(true);
   }, [applyInteractive]);
 
-  // 组件卸载时清掉收回定时器，避免对已卸载组件 setState
+  // 组件卸载时清掉收回定时器与菜单项动作定时器，避免对已卸载组件 setState
   useEffect(
     () => () => {
       if (menuCloseTimer.current) clearTimeout(menuCloseTimer.current);
+      if (menuActionTimer.current) clearTimeout(menuActionTimer.current);
+      if (bubbleHoldTimer.current) clearTimeout(bubbleHoldTimer.current);
+      if (bubbleOutTimer.current) clearTimeout(bubbleOutTimer.current);
     },
     []
   );
@@ -588,7 +818,10 @@ export const CharacterApp: React.FC = () => {
     <div className="dc-root">
       {bubble && (
         <div
-          className="dc-bubble"
+          // key 随 bubbleSeq 变化 ⇒ 每次新气泡都是全新 DOM 节点 ⇒ 弹入动画必定重播，
+          // 不会出现「旧气泡的收回动画还没结束，新气泡就被吞掉」。
+          key={bubbleSeq}
+          className={`dc-bubble${bubbleClosing ? ' closing' : ''}`}
           onPointerDown={beginPointer}
           onPointerMove={movePointer}
           onPointerUp={endPointer}
@@ -597,7 +830,8 @@ export const CharacterApp: React.FC = () => {
             className="dc-bubble-text"
             onClick={(e) => {
               e.stopPropagation();
-              setBubble(null);
+              // 点文字关闭也走收回动画（不是瞬间消失）
+              closeBubble();
             }}
           >
             {bubble}
@@ -656,8 +890,15 @@ export const CharacterApp: React.FC = () => {
               type="button"
               className={`dc-menu-item${m.checked ? ' checked' : ''}`}
               onClick={() => {
+                // v3.0.3：先播完收回动画，再执行该项业务动作 ——
+                // 否则业务动作（打开舞台 / 隐藏角色）会瞬间把收回动画盖过，用户看不到收回。
                 closeMenu();
-                m.onClick();
+                if (menuActionTimer.current) clearTimeout(menuActionTimer.current);
+                const delay = isAnimOff() ? 0 : menuAnimMs(settingsRef.current);
+                menuActionTimer.current = setTimeout(() => {
+                  menuActionTimer.current = null;
+                  m.onClick();
+                }, delay);
               }}
             >
               <span className="dc-menu-check">{m.checked ? '✓' : ''}</span>

@@ -14,6 +14,13 @@ interface Props {
   expression: CharacterExpression;
   mouth: number;
   blink: boolean;
+  /**
+   * 舞台缩放倍率（v3.0.3）。缺省 1 ⇒ 桌宠窗行为与改动前逐字等价。
+   *
+   * Live2D 是**运行时渲染**的：舞台里画布随盒子变大后，若渲染分辨率不变，
+   * 放大结果就是「1× 渲染被拉伸」⇒ 模糊。故这里把渲染分辨率上限随 zoom 提升。
+   */
+  zoom?: number;
   onError?: (message: string) => void;
 }
 
@@ -53,12 +60,30 @@ function loadScript(src: string): Promise<void> {
 
 const runtimeUrl = (file: string) => `nychar://model/__runtime__/${encodeURIComponent(file)}`;
 
-export const Live2DView: React.FC<Props> = ({ url, expression, mouth, blink, onError }) => {
+export const Live2DView: React.FC<Props> = ({ url, expression, mouth, blink, zoom = 1, onError }) => {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const stateRef = useRef({ expression, mouth, blink });
   stateRef.current = { expression, mouth, blink };
   const errRef = useRef(onError);
   errRef.current = onError;
+  // zoom 放进 ref：改缩放时**不重建** Live2D 场景，只更新渲染分辨率。
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  /** PIXI Application 引用：供 zoom 变化时调整渲染分辨率（不重建模型）。 */
+  const appRef = useRef<any>(null);
+
+  /**
+   * Live2D 的渲染分辨率（等价于 three 的 pixelRatio）。
+   *
+   * 舞台放大后画布 CSS 尺寸变大，若后备缓冲只按 1× 分配，模型就是「1× 渲染被放大」⇒ 糊。
+   * 这里让分辨率随 zoom 一起涨（上限 3，避免高倍缩放把 GPU 压垮，见设计文档 Q-6），
+   * 于是放大后的 Live2D 是**按更大分辨率重新渲染**的，而不是拉伸旧帧。
+   */
+  const targetResolution = () => {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const z = Math.max(1, zoomRef.current);
+    return Math.max(1, Math.min(3, Math.round(dpr * z * 100) / 100));
+  };
 
   useEffect(() => {
     const host = hostRef.current;
@@ -106,9 +131,11 @@ export const Live2DView: React.FC<Props> = ({ url, expression, mouth, blink, onE
         backgroundAlpha: 0,
         antialias: true,
         autoDensity: true,
-        resolution: Math.min(2, window.devicePixelRatio || 1),
+        // v3.0.3：渲染分辨率随舞台缩放提升（上限 3），避免放大后是「1× 帧被拉伸」
+        resolution: targetResolution(),
         autoStart: true,
       });
+      appRef.current = app;
       const canvas = app.view as HTMLCanvasElement;
       canvas.style.width = '100%';
       canvas.style.height = '100%';
@@ -131,7 +158,14 @@ export const Live2DView: React.FC<Props> = ({ url, expression, mouth, blink, onE
         if (!model) return;
         const cw = host.clientWidth || w;
         const ch = host.clientHeight || h;
-        try { app?.renderer?.resize(cw, ch); } catch { /* 忽略 */ }
+        // 分辨率变化时先同步 renderer.resolution，再 resize，让后备缓冲按新分辨率重建
+        const wantRes = targetResolution();
+        try {
+          if (app?.renderer && app.renderer.resolution !== wantRes) {
+            app.renderer.resolution = wantRes;
+          }
+          app?.renderer?.resize(cw, ch);
+        } catch { /* 忽略 */ }
         const mw = model.width || 1;
         const mh = model.height || 1;
         const k = Math.min(cw / mw, ch / mh) * 0.98;
@@ -228,9 +262,29 @@ export const Live2DView: React.FC<Props> = ({ url, expression, mouth, blink, onE
       }
       model = null;
       app = null;
+      appRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url]);
+
+  /**
+   * v3.0.3：舞台缩放变化时**不重建** Live2D 模型，只把渲染分辨率调上去，
+   * 让放大后的模型是按更高分辨率渲染的（而不是拉伸 1× 的旧帧）。
+   * 桌面桌宠窗不传 zoom（恒为 1），本 effect 不做任何事 ⇒ 行为与改动前逐字等价。
+   */
+  useEffect(() => {
+    const app = appRef.current;
+    if (!app) return;
+    const want = targetResolution();
+    try {
+      if (app.renderer && app.renderer.resolution !== want) {
+        app.renderer.resolution = want;
+        app.renderer.resize(app.renderer.width / want, app.renderer.height / want);
+      }
+    } catch {
+      /* 忽略：个别运行库可能不支持运行时改分辨率 */
+    }
+  }, [zoom]);
 
   return <div className="dc-modell2d" ref={hostRef} />;
 };

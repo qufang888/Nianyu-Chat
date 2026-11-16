@@ -445,7 +445,11 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
     labelKey: 'animCtl.groupCharacter',
     selectors: ['.dc-svg', '.dc-modelimg', '.stage-bubble', '.stage-model'],
     docSelectors: {
-      character: ['.dc-svg', '.dc-modelimg', '.dc-bubble', '.dc-menu', '.dc-err'],
+      // v3.0.3：显式补登 .dc-bubble.closing（气泡收回态）。
+      // .dc-bubble 已能命中同一元素，但显式登记可防后续改类名时静默失效 ——
+      // 闸门脚本 verify-desktop-character.mjs 对此有断言。
+      // ⚠️ 禁止把 .dc-bubble 挪进 bubble 组：那会让主窗消息气泡的开关误伤桌宠气泡。
+      character: ['.dc-svg', '.dc-modelimg', '.dc-bubble', '.dc-bubble.closing', '.dc-menu', '.dc-err'],
     },
   },
 ];

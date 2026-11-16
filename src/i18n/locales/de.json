@@ -66,6 +66,23 @@
  "animCtl.groupSplash": "Startbildschirm",
  "animCtl.groupStats": "Statistik-Diagramme & Ranglisten",
  "animCtl.groupCharacter": "Desktop-Charakter-Animationen (Atmen / Blase / Menü)",
+ "animCtl.groupCharacterDetail": "Haustier-Animationen (Details)",
+ "animCtl.groupCharacterDetailOff": "Haustier-Animationen sind derzeit ueber den Effekt-Schalter deaktiviert; die Feineinstellungen haben keine Wirkung",
+
+ "animCtl.menuAnimMs": "Dauer der Menü-Ein-/Ausblendung",
+
+ "animCtl.bubbleAnimMs": "Dauer der Sprechblasen-Ein-/Ausblendung",
+
+ "animCtl.bubbleHoldBase": "Grundverweildauer",
+
+ "animCtl.bubbleHoldStep": "+{n} Zeichen",
+
+ "animCtl.bubbleHoldMax": "Maximum",
+
+ "animCtl.bubbleHoldPreview": "{n} Zeichen ≈ {v}",
+
+ "animCtl.bubbleHoldDesc": "Die Verweildauer der Sprechblase richtet sich nach der Textlänge: {base} s Basis, +{step} s je {n} Zeichen, höchstens {max} s",
+
  "animCtl.groupTheme": "Design & allgemeine Interaktionen",
  "animCtl.groupToast": "Hinweise & Update-Banner",
  "animCtl.groupTutorial": "Einrichtungs-Hervorhebung",
@@ -1181,6 +1198,18 @@
  "characters.stageTitle": "Charakterbühne",
  "characters.dragRotate": "Ziehen zum Drehen · Rad zum Zoomen",
  "characters.stageZoom": "Modellgröße",
+ "characters.speakRate": "Aktive Sprechrate",
+
+ "characters.speakRateUnit": "{n}/Min.",
+
+ "characters.speakRateOff": "Aus",
+
+ "characters.speakRateHint": "Wie viele Sätze pro Minute aktiv gesagt werden dürfen; 0 = nie",
+
+ "characters.speakRateWarn": "Eine hohe Rate erzeugt mehr Modellaufrufe und Kosten",
+
+ "characters.stageSyncHint": "Gilt auch für das Haustier auf dem Desktop",
+
  "characters.say": "Etwas sagen",
  "characters.newChat": "Neuer Chat",
  "characters.record": "Verlauf",

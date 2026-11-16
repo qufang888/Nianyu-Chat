@@ -66,6 +66,23 @@
  "animCtl.groupSplash": "開機歡迎語",
  "animCtl.groupStats": "統計圖表與排行榜",
  "animCtl.groupCharacter": "桌面角色動畫（呼吸 / 氣泡 / 選單）",
+ "animCtl.groupCharacterDetail": "桌寵動畫細調",
+ "animCtl.groupCharacterDetailOff": "桌寵動畫目前被「動效開關」關閉，細調暫不生效",
+
+ "animCtl.menuAnimMs": "選單彈出/收回時長",
+
+ "animCtl.bubbleAnimMs": "氣泡彈出/收回時長",
+
+ "animCtl.bubbleHoldBase": "基準停留",
+
+ "animCtl.bubbleHoldStep": "每 {n} 字 +",
+
+ "animCtl.bubbleHoldMax": "上限",
+
+ "animCtl.bubbleHoldPreview": "{n} 字 ≈ {v}",
+
+ "animCtl.bubbleHoldDesc": "氣泡停留時長按字數分檔：基準 {base} 秒，每多 {n} 字 +{step} 秒，最多 {max} 秒",
+
  "animCtl.groupTheme": "主題與一般互動",
  "animCtl.groupToast": "輕提示與更新橫幅",
  "animCtl.groupTutorial": "新手引導高亮",
@@ -1181,6 +1198,18 @@
  "characters.stageTitle": "角色舞台",
  "characters.dragRotate": "拖曳旋轉 · 滾輪縮放",
  "characters.stageZoom": "模型大小",
+ "characters.speakRate": "主動說話頻率",
+
+ "characters.speakRateUnit": "{n} 條/分鐘",
+
+ "characters.speakRateOff": "已關閉",
+
+ "characters.speakRateHint": "每分鐘最多主動說幾句，0 = 不主動說話",
+
+ "characters.speakRateWarn": "頻率較高會產生較多模型呼叫與費用",
+
+ "characters.stageSyncHint": "調整後同步到桌面桌寵",
+
  "characters.say": "說一句",
  "characters.newChat": "新對話",
  "characters.record": "查看記錄",

@@ -66,6 +66,23 @@
  "animCtl.groupSplash": "Pantalla de bienvenida",
  "animCtl.groupStats": "Gráficos y clasificaciones de estadísticas",
  "animCtl.groupCharacter": "Animaciones del personaje (respiración / burbuja / menú)",
+ "animCtl.groupCharacterDetail": "Animaciones de la mascota (detalles)",
+ "animCtl.groupCharacterDetailOff": "Las animaciones de la mascota estan desactivadas por el interruptor de efectos; estos ajustes no surten efecto",
+
+ "animCtl.menuAnimMs": "Duración de apertura/cierre del menú",
+
+ "animCtl.bubbleAnimMs": "Duración de aparición/desaparición del globo",
+
+ "animCtl.bubbleHoldBase": "Permanencia base",
+
+ "animCtl.bubbleHoldStep": "+{n} caracteres",
+
+ "animCtl.bubbleHoldMax": "Máximo",
+
+ "animCtl.bubbleHoldPreview": "{n} caracteres ≈ {v}",
+
+ "animCtl.bubbleHoldDesc": "La permanencia del globo escala con la longitud: base {base} s, +{step} s por cada {n} caracteres, máximo {max} s",
+
  "animCtl.groupTheme": "Tema e interacción general",
  "animCtl.groupToast": "Avisos y banner de actualización",
  "animCtl.groupTutorial": "Resaltado del tutorial",
@@ -1181,6 +1198,18 @@
  "characters.stageTitle": "Escenario del personaje",
  "characters.dragRotate": "Arrastra para girar · rueda para zoom",
  "characters.stageZoom": "Tamaño del modelo",
+ "characters.speakRate": "Frecuencia de habla proactiva",
+
+ "characters.speakRateUnit": "{n}/min",
+
+ "characters.speakRateOff": "Desactivada",
+
+ "characters.speakRateHint": "Máximo de frases activas por minuto; 0 = nunca",
+
+ "characters.speakRateWarn": "Una frecuencia alta genera más llamadas al modelo y más coste",
+
+ "characters.stageSyncHint": "También se aplica a la mascota del escritorio",
+
  "characters.say": "Decir algo",
  "characters.newChat": "Nuevo chat",
  "characters.record": "Historial",

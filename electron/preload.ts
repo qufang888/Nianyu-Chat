@@ -150,6 +150,11 @@ export interface NianyuAPI {
     chatId: string;
     /** 'character'：桌宠气泡语句（静默降级 / 不打扰 / 主进程额外节流），v3.0.1-beta.9。 */
     source?: 'character';
+    /**
+     * 桌宠语句的最小请求间隔（毫秒）—— 渲染层按角色 speakRate 派生后带上（v3.0.3 方案 A）。
+     * 主进程据此做护栏兜底，避免固定 30s 把 60 条/分压成 2 条/分。
+     */
+    targetIntervalMs?: number;
   }) => Promise<{ ok: boolean; roleId?: string; roleName?: string; content?: string; error?: string }>;
   // ===== 随机事件 =====
   randomEvent: (p: { chatType: string; chatId: string; theme?: string }) => Promise<{
@@ -494,6 +499,13 @@ export interface NianyuAPI {
   dcSetEnabled: (v: boolean) => void;
   dcSetActive: (id: string) => void;
   dcSetScale: (id: string, scale: number) => void;
+  /**
+   * v3.0.3 预览通道：舞台拖动缩放滑块时，把中间值推给该角色窗做实时预览。
+   * **不落盘、不广播**；最终提交仍走 dcSetScale（手势结束时一次）。
+   */
+  dcSetScaleLive: (id: string, scale: number) => void;
+  /** 订阅预览值（主进程 → 角色窗）。 */
+  onDcScalePreview: (cb: (d: { id: string; scale: number }) => void) => () => void;
   dcGetState: (id?: string) => Promise<{ runtime: any; characters: any[]; active: any | null; character?: any | null }>;
   dcOpenChat: (chat: { type: 'single' | 'group'; id: string; name?: string }) => void;
   dcOpenCollection: () => void;
@@ -1149,6 +1161,12 @@ const api: NianyuAPI = {
   dcSetEnabled: (v) => ipcRenderer.send('dc:set-enabled', v),
   dcSetActive: (id) => ipcRenderer.send('dc:set-active', id),
   dcSetScale: (id, scale) => ipcRenderer.send('dc:set-scale', id, scale),
+  dcSetScaleLive: (id, scale) => ipcRenderer.send('dc:set-scale-live', id, scale),
+  onDcScalePreview: (cb) => {
+    const listener = (_e: any, d: { id: string; scale: number }) => cb(d);
+    ipcRenderer.on('dc:scale-preview', listener);
+    return () => ipcRenderer.removeListener('dc:scale-preview', listener);
+  },
   dcGetState: (id) => ipcRenderer.invoke('dc:get-state', id),
   dcOpenChat: (chat) => ipcRenderer.send('dc:open-chat', chat),
   dcOpenCollection: () => ipcRenderer.send('dc:open-collection'),

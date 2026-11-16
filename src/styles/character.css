@@ -157,8 +157,19 @@ body {
   box-shadow: 0 6px 20px rgba(10, 14, 24, 0.18);
   word-break: break-word;
   cursor: grab;
-  /* 用户要求线性弹出；duration 与 animMs 无直接耦合（气泡不参与延迟卸载） */
-  animation: dcBubbleIn 0.18s linear;
+  /* 用户要求线性弹出。
+     时长来源有两层，且**必须与 JS 侧同源**：
+       --dc-bubble-anim  = 设置里的「气泡弹出/收回时长」（默认 0.18s，由渲染层写入）
+       --anim-speed      = 动效速度倍率（applyAnimControl 写入；自定义档下由 character 分组规则覆盖）
+     JS 侧的卸载等待用 bubbleAnimMs() = bubbleSec × 1000 × getGroupAnimSpeed(settings,'character')，
+     与这里的 calc(...) 严格对得上 ⇒ 不会出现「闪一下消失 / 卡住不消失」。 */
+  animation: dcBubbleIn calc(var(--dc-bubble-anim, 0.18s) * var(--anim-speed, 1)) linear;
+}
+/* 收回态：播放 dcBubbleOut 后再由 JS 卸载。
+   pointer-events:none 保证收回期间不接收点击（避免"缩回中还能点"导致的误触）。 */
+.dc-bubble.closing {
+  animation: dcBubbleOut calc(var(--dc-bubble-anim, 0.18s) * var(--anim-speed, 1)) linear forwards;
+  pointer-events: none;
 }
 .dc-bubble-text {
   cursor: pointer;
@@ -177,11 +188,22 @@ body {
 @keyframes dcBubbleIn {
   from {
     opacity: 0;
-    transform: translateX(-50%) translateY(4px);
+    transform: translateX(-50%) translateY(4px) scale(0.96);
   }
   to {
     opacity: 1;
-    transform: translateX(-50%) translateY(0);
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+}
+/* 收回方向与弹入相反：弹入从下 +4px 上移进入，收回向上 -4px 淡出，形成"进/出"的方向感。 */
+@keyframes dcBubbleOut {
+  from {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-4px) scale(0.96);
   }
 }
 
@@ -197,12 +219,15 @@ body {
   border: 1px solid var(--color-border);
   border-radius: 10px;
   box-shadow: 0 10px 30px rgba(8, 12, 22, 0.28);
-  animation: dcMenuIn 0.14s linear;
+  /* 时长来源与气泡同构：--dc-menu-anim（设置里的基准秒数，默认 0.20s）× --anim-speed（倍率）。
+     JS 侧的卸载等待用 menuAnimMs() = menuSec × 1000 × getGroupAnimSpeed(settings,'character')，
+     与这里的 calc(...) 严格对得上 ⇒ 速度调快/调慢时两侧始终一致。 */
+  animation: dcMenuIn calc(var(--dc-menu-anim, 0.20s) * var(--anim-speed, 1)) linear;
 }
 /* 收回动画：React 先加 .closing 播完再卸载，pointer-events:none 保证收回期间不挡操作。
    linear 与弹入一致；forwards 保持末帧透明，避免卸载前闪回。 */
 .dc-menu.closing {
-  animation: dcMenuOut 0.14s linear forwards;
+  animation: dcMenuOut calc(var(--dc-menu-anim, 0.20s) * var(--anim-speed, 1)) linear forwards;
   pointer-events: none;
 }
 .dc-menu-item {
@@ -231,21 +256,21 @@ body {
 @keyframes dcMenuIn {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(6px) scale(0.96);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 @keyframes dcMenuOut {
   from {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
   to {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(6px) scale(0.96);
   }
 }
 
@@ -270,15 +295,19 @@ body {
 
 /* 动效三档开关：角色窗不加载 index.css 的 .anim-off，这里用同一约定兜底。
    CharacterApp 通过 applyAnimControl(document, settings, 'character') 同时写入
-   `anim-off`（全关档）与 `data-anim-off="character"`（自定义档关掉 character 组）。 */
+   `anim-off`（全关档）与 `data-anim-off="character"`（自定义档关掉 character 组）。
+   .dc-bubble.closing 显式补登：它与 .dc-bubble 是同一元素，但显式写出可防后续
+   改类名时静默失效（闸门脚本对此有断言）。 */
 html.anim-off .dc-svg,
 html.anim-off .dc-modelimg,
 html.anim-off .dc-bubble,
+html.anim-off .dc-bubble.closing,
 html.anim-off .dc-menu,
 html.anim-off .dc-err,
 html[data-anim-off~='character'] .dc-svg,
 html[data-anim-off~='character'] .dc-modelimg,
 html[data-anim-off~='character'] .dc-bubble,
+html[data-anim-off~='character'] .dc-bubble.closing,
 html[data-anim-off~='character'] .dc-menu,
 html[data-anim-off~='character'] .dc-err {
   animation: none !important;

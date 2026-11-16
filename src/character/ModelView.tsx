@@ -21,6 +21,12 @@ interface Props {
   /** 视线跟随（仅原创占位形象有效；图片/模型不跟随） */
   eyeX?: number;
   eyeY?: number;
+  /**
+   * 舞台缩放倍率（v3.0.3）。仅 3D / Live2D 需要它：位图与矢量靠 CSS 盒子放大即可，
+   * 而 3D/Live2D 是**运行时渲染**的，必须自己提高渲染分辨率才能保持清晰。
+   * 缺省 1 ⇒ 桌宠窗行为与改动前完全一致。
+   */
+  zoom?: number;
   /** 渲染失败时回传原因（界面据此显示提示，而不是空白） */
   onError?: (message: string) => void;
 }
@@ -41,6 +47,7 @@ export const ModelView: React.FC<Props> = ({
   dragging,
   eyeX = 0,
   eyeY = 0,
+  zoom = 1,
   onError,
 }) => {
   const [imgFailed, setImgFailed] = useState(false);
@@ -54,7 +61,7 @@ export const ModelView: React.FC<Props> = ({
   }
 
   if (character.kind === 'live2d') {
-    return <Live2DView url={url} expression={expression} mouth={mouth} blink={blink} onError={onError} />;
+    return <Live2DView url={url} expression={expression} mouth={mouth} blink={blink} zoom={zoom} onError={onError} />;
   }
 
   if (character.kind === 'vrm' || character.kind === 'glb') {
@@ -65,6 +72,7 @@ export const ModelView: React.FC<Props> = ({
         expression={expression}
         mouth={mouth}
         blink={blink}
+        zoom={zoom}
         onError={onError}
       />
     );

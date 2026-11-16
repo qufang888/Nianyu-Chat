@@ -1,0 +1,127 @@
+%% 念语 v3.0.3 桌宠增量 —— 时序图（源自 docs/pet-v3.0.3-design.md §5）
+%% 四个场景：① 舞台⇄桌面缩放同步 ② 气泡弹出→停留→缩回 ③ 频率调度→QPS 排队→气泡 ④ 右键菜单开合
+
+%% ===== ① 舞台滑块 → 桌面同步 =====
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant ST as CharacterStage(主窗)
+    participant MB as Electron主进程
+    participant DW as 角色窗(独立document)
+    participant SET as settings.json
+
+    Note over ST: 唯一真值 = DesktopCharacter.scale
+    U->>ST: 拖动「模型大小」滑块
+    ST->>ST: onChange → setZoom(v)（本地镜像，跟手）
+    ST->>ST: zoomSourceRef='user' → useEffect 触发
+    ST->>MB: dc:set-scale-live(id, v)   【预览·不落盘·不广播】
+    MB->>DW: dc:scale-preview {id, scale}
+    DW->>DW: setState(character.scale=v) → --dc-scale 立即生效（≤30ms）
+    Note over U,DW: 手势过程中桌宠持续跟随，全程零落盘
+
+    U->>ST: 松手（pointerup / 200ms 去抖到期）
+    ST->>MB: dc:set-scale(id, v)        【提交·落盘·广播】
+    MB->>SET: saveSettings({desktopCharacters: next})  ← 整数组覆盖(HC-8)
+    MB-->>ST: broadcast('settings:changed', {desktopCharacters: next})  ← 次数 = 1
+    MB-->>DW: dc:state {character:{scale:v}}（权威值）
+    ST->>ST: onSettingsChanged → setZoom(v)   ← 纯读，绝不回调 dcSetScale（L1）
+    ST->>ST: lastWrittenZoomRef 命中 → 跳过（防无意义重渲染，L2）
+
+    Note over ST,DW: —— 反向同步（桌面滚轮 → 舞台）——
+    U->>DW: 桌面桌宠上滚轮调尺寸
+    DW->>MB: dc:set-scale(id, next)
+    MB->>SET: saveSettings(整数组)
+    MB-->>ST: broadcast('settings:changed', {desktopCharacters: next})
+    ST->>ST: setZoom(c.scale)   ← 舞台滑块 ≤300ms 内跟随
+
+%% ===== ② 新消息 → 气泡弹出 → 停留 → 缩回 =====
+sequenceDiagram
+    autonumber
+    participant DM as DataManager.addMessage
+    participant MB as Electron主进程
+    participant CA as CharacterApp(角色窗)
+    participant BT as bubbleTiming
+
+    DM->>MB: onChatMessageAdded(msg)
+    MB->>MB: 过滤：from_proactive / failed / system / 空内容
+    MB->>CA: dc:chat-message {content}(≤120字)
+    CA->>CA: sanitizeBubbleText(text)（合并空白/去引号/截断80字）
+    CA->>BT: bubbleHoldMs(text, params)
+    BT-->>CA: holdMs = clamp(base + ceil((len-20)/20)*step, base, max)
+    CA->>CA: clearTimeout(hold/out)；bubbleClosing=false；bubbleSeq++
+    CA->>CA: setBubble(text) → key={bubbleSeq} 重挂 DOM
+    Note over CA: 播放 dcBubbleIn（--dc-bubble-anim × --anim-speed）
+
+    alt 动画被三档开关关掉（anim-off / character 组关）
+        CA->>CA: 立即卸载（不播收回动画，功能完整）
+    else 正常
+        CA->>CA: holdMs 到期 → bubbleClosing=true（加 .closing）
+        Note over CA: 播放 dcBubbleOut（0.18s）；pointer-events:none
+        CA->>CA: outTimer 到期 → setBubble(null) 卸载
+    end
+
+    Note over CA: —— 打断场景：收回动画播放期间来了新消息 ——
+    CA->>CA: showBubble(新文本) → 清 outTimer + closing=false + bubbleSeq++
+    Note over CA: 旧节点立即卸载，新节点重播 dcBubbleIn ⇒ 新气泡立即出现，不闪烁、不被吞
+
+    Note over CA: —— 点击关闭 ——
+    CA->>CA: .dc-bubble-text onClick → closeBubble() → 走同一收回动画（非瞬间消失）
+
+%% ===== ③ 频率调度 → 请求 → QPS 排队 → 气泡 =====
+sequenceDiagram
+    autonumber
+    participant CA as CharacterApp(角色窗)
+    participant LS as lineSchedule(单一真值)
+    participant MB as Electron主进程
+    participant Q as 请求队列(QPS)
+    participant AI as 模型
+    participant DM as DataManager
+
+    CA->>LS: deriveLineScheduleForCharacter(c)
+    LS-->>CA: {enabled, rate, intervalMs, tickMs}
+    Note over CA: rate=0 ⇒ enabled=false ⇒ 不创建任何定时器（零请求/零气泡/零写库）
+
+    loop 每 tickMs 自续期 setTimeout
+        CA->>CA: 守卫：boundChat? behavior? bubble? 拖拽中? 菜单开?（跳过不重排节奏）
+        CA->>CA: 守卫：now - lineLastAtRef >= intervalMs ?（并发锁 lineInFlightRef）
+        CA->>MB: chats:proactive {chatType, chatId, source:'character', targetIntervalMs}
+        MB->>MB: busy guard（对话正在生成）→ {ok:false,error:'busy'}
+        MB->>MB: 护栏：characterLineInFlight || now-lastAt(按chat键) < max(1000,targetIntervalMs)
+        Note over MB: → {ok:false,error:'throttled'}（渲染层不重试、不补打）
+        MB->>MB: characterLineInFlight = true
+        MB->>Q: enqueueAndWait(cfg.id, cfg.qps, '主动消息')
+        Q->>Q: 按该模型 QPS 排队（不丢消息，按序放行）
+        Q->>AI: queryAI(cfg, messages, 1024)   ← 放行即「发起」，计入频率
+        AI-->>Q: content
+        Q->>DM: addMessage({from_proactive:true})（写入绑定对话）
+        DM-->>MB: from_proactive ⇒ pushChatMessageToCharacters 过滤 ⇒ 不重复弹气泡
+        MB-->>CA: {ok:true, content}
+        CA->>CA: sanitizeBubbleText(content) → showBubble(text)（按字数算停留）
+        MB->>MB: finally: characterLineInFlight = false
+    end
+
+%% ===== ④ 右键菜单开合 =====
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant CA as CharacterApp(角色窗)
+    participant AC as applyAnimControl(character)
+
+    CA->>AC: applyAnimControl(document, settings, 'character')
+    AC->>AC: 写 --anim-speed / --anim-speed-character / 门禁样式
+    CA->>CA: 写 --dc-menu-anim = animCharacterMenuSec(默认0.20s)
+    Note over CA: CSS: dcMenuIn calc(var(--dc-menu-anim,.20s) * var(--anim-speed,1)) linear
+
+    U->>CA: 右键角色
+    CA->>CA: openMenu()（清 menuCloseTimer / menuActionTimer）
+    CA->>CA: setMenuOpen(true) → .dc-menu 挂载
+    Note over CA: 播放 dcMenuIn：opacity 0→1 + translateY 6px→0 + scale 0.96→1（linear）
+
+    U->>CA: 点菜单项（如「打开角色舞台」）
+    CA->>CA: closeMenu() → menuClosing=true（.closing：pointer-events:none）
+    Note over CA: 播放 dcMenuOut（反向）；此刻不执行业务动作 ⇒ 用户能看到收回
+    CA->>CA: setTimeout(menuAnimMs()) → m.onClick()
+    CA->>CA: outTimer 到期 → setMenuOpen(false) 卸载
+
+    Note over CA: —— 全部关闭档 / 自定义档关 character 组 ——
+    CA->>CA: closeMenu() 检测到 anim-off ⇒ 立即卸载（菜单不会卡住）

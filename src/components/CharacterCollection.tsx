@@ -15,6 +15,10 @@ import { useToast } from './Toast';
 import type { CharacterRuntimeSettings, ChatListItem, DesktopCharacter } from '../types';
 import { PlaceholderCharacter } from '../character/PlaceholderCharacter';
 import { CharacterStage } from './CharacterStage';
+import { normalizeSpeakRate, SPEAK_RATE_MAX, SPEAK_RATE_MIN } from '../utils/lineSchedule';
+
+/** 频率达到该值时数值转警示色并追加成本提示（只讲成本，不讲"实际速率"）。 */
+const SPEAK_RATE_WARN_THRESHOLD = 20;
 
 interface Snapshot {
   runtime: CharacterRuntimeSettings;
@@ -215,6 +219,8 @@ export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageR
             const isActive = snap.runtime.activeId ? snap.runtime.activeId === c.id : snap.active?.id === c.id;
             // 网格里只有占位/图片直接渲染；3D 与 Live2D 放进舞台预览，避免一屏几十个 WebGL 上下文
             const lightPreview = c.kind === 'placeholder' || c.kind === 'image' || c.kind === 'sprite';
+            // 频率缺省回落 2 条/分（与主进程护栏同值），保证老角色升级后行为不回退
+            const rate = normalizeSpeakRate(c.speakRate);
             return (
               <div className={`dc-coll-card${isActive ? ' active' : ''}`} key={c.id}>
                 <div className="dc-coll-preview">
@@ -266,6 +272,44 @@ export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageR
                       <input type="checkbox" checked={c.bubble} onChange={(e) => void patchCharacter(c.id, { bubble: e.target.checked })} />
                       {t('characters.bubble')}
                     </label>
+                  </div>
+                  {/* v3.0.3：主动说话频率（条/分钟）。0 = 完全不主动说话。
+                      写入走 patchCharacter（整数组覆盖），与其它角色字段同一路径。 */}
+                  <div className="dc-coll-rate">
+                    <div className="dc-coll-rate-head">
+                      <span className="dc-coll-rate-label">{t('characters.speakRate')}</span>
+                      <span
+                        className={`dc-coll-rate-value${rate >= SPEAK_RATE_WARN_THRESHOLD ? ' warn' : ''}`}
+                      >
+                        {rate === 0
+                          ? t('characters.speakRateOff')
+                          : t('characters.speakRateUnit', { n: String(rate) })}
+                      </span>
+                    </div>
+                    <input
+                      className="dc-coll-rate-range"
+                      type="range"
+                      min={0}
+                      max={60}
+                      step={1}
+                      value={rate}
+                      aria-label={t('characters.speakRate')}
+                      // 滚轮在滑块上不得改数值（避免与页面滚动打架）
+                      onWheel={(e) => e.preventDefault()}
+                      onChange={(e) =>
+                        void patchCharacter(c.id, {
+                          // 写入时按共享常量钳制，避免越界值进 settings
+                          speakRate: Math.min(
+                            SPEAK_RATE_MAX,
+                            Math.max(SPEAK_RATE_MIN, Number(e.target.value))
+                          ),
+                        })
+                      }
+                    />
+                    <div className="dc-coll-rate-hint">{t('characters.speakRateHint')}</div>
+                    {rate >= SPEAK_RATE_WARN_THRESHOLD && (
+                      <div className="dc-coll-rate-warn">{t('characters.speakRateWarn')}</div>
+                    )}
                   </div>
                   <div className="dc-coll-bind">
                     <span className="muted">{t('characters.bind')}</span>

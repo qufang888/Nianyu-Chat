@@ -5,6 +5,20 @@
 // - 语音以气泡呈现：复用主聊天已有的 TTS（api.textToSpeech 返回 dataURL 音频）；
 // - 口型同步：Web Audio AnalyserNode 取音量驱动嘴型；TTS 未配置时回退 Web Speech API 并做简易口型动画。
 //
+// v3.0.3 变更（舞台 ⇄ 桌面双向同步 + 高清渲染）：
+// - 缩放语义从「视口内放大」改为「**角色真实大小**」：舞台里的模型大小 = 桌面桌宠的大小，
+//   拖动滑块会实时同步到桌面桌宠，桌面滚轮改大小也会反向同步回舞台滑块；
+// - 唯一真值是 settings.desktopCharacters[].scale，舞台只保留一份**本地镜像 state**（跟手用）；
+// - 渲染路径改为「按 zoom 放大布局盒子」而非「transform: scale() 插值」，
+//   消除合成层纹理放大导致的模糊（详见 css 注释）。
+//
+// v3.0.3 QA P1-1（一次拖动只落盘一次）：
+// - pointerup 提交过一次后，浏览器还会派发 blur（focusout）⇒ React onBlur 再触发一次 flushCommit；
+//   拖动中途停顿 >200ms 时去抖也会先提交一次。两者若不判重 ⇒ 一次拖动落盘 2 次 + 广播 2 次，
+//   违反 PRD A5 / R1-AC5（「同一轮操作内 saveSettings 只发生 1 次」）。
+//   修法：commitZoom 内用**独立的** lastCommittedZoomRef 判重（值未变 ⇒ 直接 return）。
+//   ⚠️ 不可复用 lastWrittenZoomRef —— 后者承担「回声抑制」语义（用完即清空），两者语义不同、不可混用。
+//
 // 合规：舞台配色/布局为念语自有样式，与任何商业产品的视觉稿无关；Live2D/VRM/GLB 本版不内置
 // 专有运行时，仅对图片/原创占位角色提供原生渲染，其余格式在舞台内明确提示。
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -15,12 +29,20 @@ import type { CharacterExpression } from '../character/PlaceholderCharacter';
 import { ModelView } from '../character/ModelView';
 
 const STAGE_LINES = ['今天想聊点什么？', '我在这里，慢慢说就好。', '你笑的时候，我也跟着开心。', '要不要一起发会儿呆？'];
-/** 舞台缩放范围与步长（集中定义：滚轮与滑块共用，避免两处阈值漂移）。 */
+/** 舞台缩放范围与步长（集中定义：滚轮与滑块共用，避免两处阈值漂移）。
+ *  v3.0.3：上限由 1.9 收窄到 1.6 —— 与桌面滚轮区间**完全一致**（Q1 拍板口径），
+ *  1.9 档位彻底删除（不保留、不钳制、不提示）。 */
 const STAGE_ZOOM_MIN = 0.6;
-const STAGE_ZOOM_MAX = 1.9;
+const STAGE_ZOOM_MAX = 1.6;
 const STAGE_ZOOM_STEP = 0.05;
 /** 滚轮像素 → 缩放增量系数：常规鼠标一格 deltaY≈100 → 约 0.12。 */
 const STAGE_WHEEL_SENSITIVITY = 0.0012;
+/** 拖动滑块时的提交去抖（毫秒）：拖动过程中只发预览，停下来这么久才落盘一次。 */
+const STAGE_SCALE_COMMIT_DEBOUNCE_MS = 200;
+/** 缩放值比较容差：滑块步长 0.05，用 1e-6 判定「同一个值」（与回声抑制口径一致）。 */
+const STAGE_ZOOM_EPS = 1e-6;
+/** 本次 zoom 变化来源：user=用户手势（允许写回）；external=外部同步（只读）。 */
+type ZoomSource = 'user' | 'external';
 
 export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: () => void }> = ({
   character,
@@ -29,7 +51,8 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
   const { t } = useI18n();
   const [rotX, setRotX] = useState(-4);
   const [rotY, setRotY] = useState(0);
-  const [zoom, setZoom] = useState(1);
+  /** 缩放的本地镜像：拖动时立即跟手；外部变化也会对齐到权威值。 */
+  const [zoom, setZoom] = useState(character.scale ?? 1);
   const [bubble, setBubble] = useState<string | null>(null);
   const [expression, setExpression] = useState<CharacterExpression>('neutral');
   const [mouth, setMouth] = useState(0);
@@ -38,6 +61,18 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
   const audioCtxRef = useRef<AudioContext | null>(null);
   const rafRef = useRef(0);
   const speakTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** 本次 zoom 变化的来源：区分「用户手势」与「外部同步」，只有前者才允许写回。 */
+  const zoomSourceRef = useRef<ZoomSource>('external');
+  /** 最后一次**已提交**（落盘）的 zoom：用于回声抑制，避免自己写的广播又触发一次 setZoom。 */
+  const lastWrittenZoomRef = useRef<number | null>(null);
+  /** QA D1：最后一次真正发给主进程的 zoom。判重用——与 lastWrittenZoomRef 的「用完即清」语义不同，
+   *  本 ref 生命周期内只增不减，确保 pointerup→blur、去抖→pointerup 同值路径只落盘一次。 */
+  const lastCommittedZoomRef = useRef<number | null>(null);
+  /** 落盘提交的去抖计时器。 */
+  const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 最新 zoom 的 ref：滚轮与手势末提交都要读「当前值」，用 ref 避免读到过期的闭包值。 */
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
 
   const stopMouth = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -50,7 +85,81 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
   useEffect(() => () => {
     stopMouth();
     audioCtxRef.current?.close().catch(() => {});
+    if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
   }, [stopMouth]);
+
+  // ===== v3.0.3：外部缩放同步（桌面滚轮 → 舞台滑块）=====
+  // 桌面滚轮改大小 → 主进程落盘并广播 settings:changed → 舞台订阅到后按 id 找到角色 → 更新滑块。
+  // ⚠️ 这一路**只读**：绝不回调 dcSetScale（否则会与桌面形成回环、反复写盘）。
+  useEffect(() => {
+    const off = api.onSettingsChanged((_e: any, patch: any) => {
+      const list = patch?.desktopCharacters;
+      if (!Array.isArray(list)) return;
+      const c = list.find((x: any) => x?.id === character.id);
+      if (!c || typeof c.scale !== 'number') return;
+      const v = Math.max(STAGE_ZOOM_MIN, Math.min(STAGE_ZOOM_MAX, c.scale));
+      // 回声抑制：我们自己刚提交的值，广播回来时无需再 setZoom（避免无意义的重渲染）。
+      if (lastWrittenZoomRef.current !== null && Math.abs(lastWrittenZoomRef.current - v) < 1e-6) {
+        lastWrittenZoomRef.current = null;
+        return;
+      }
+      zoomSourceRef.current = 'external';
+      setZoom(v);
+    });
+    return off;
+  }, [character.id]);
+
+  // 打开舞台时拉一次权威值（props 里的 character 可能是打开瞬间的旧快照）。
+  useEffect(() => {
+    let alive = true;
+    api.dcGetState(character.id).then((s: any) => {
+      if (!alive) return;
+      const v = s?.character?.scale;
+      if (typeof v !== 'number') return;
+      const next = Math.max(STAGE_ZOOM_MIN, Math.min(STAGE_ZOOM_MAX, v));
+      zoomSourceRef.current = 'external';
+      setZoom(next);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [character.id]);
+
+  /**
+   * 提交缩放到桌面（落盘 + 广播）。
+   * 只在手势结束时调用一次 ⇒ 一次拖动 = 一次 settings:changed 广播。
+   */
+  const commitZoom = useCallback(
+    (v: number) => {
+      // O2：外部同步路径绝不回写。applyZoom 打的是 'user' 标记，外部 setZoom 不打标记；
+      // 这里作为最后一道闸门，防止后续改动误把外部值送进提交链路造成桌面↔舞台回环。
+      if (zoomSourceRef.current !== 'user') return;
+      const next = Math.max(STAGE_ZOOM_MIN, Math.min(STAGE_ZOOM_MAX, v));
+      if (lastCommittedZoomRef.current !== null && Math.abs(lastCommittedZoomRef.current - next) < STAGE_ZOOM_EPS) {
+        return;
+      }
+      lastCommittedZoomRef.current = next;
+      lastWrittenZoomRef.current = next;
+      api.dcSetScale(character.id, next);
+    },
+    [character.id]
+  );
+
+  /**
+   * 手势内的实时预览 + 延迟提交。
+   * - 预览（dcSetScaleLive）：只推给角色窗改本地 --dc-scale，**不落盘、不广播** ⇒ 拖动全程跟手；
+   * - 提交（dcSetScale）：去抖 200ms 后落盘一次；指针抬起时立即提交（不等去抖）。
+   */
+  const scheduleCommit = useCallback(
+    (v: number) => {
+      if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
+      commitTimerRef.current = setTimeout(() => {
+        commitTimerRef.current = null;
+        commitZoom(v);
+      }, STAGE_SCALE_COMMIT_DEBOUNCE_MS);
+    },
+    [commitZoom]
+  );
 
   const onPointerDown = (e: React.PointerEvent) => {
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
@@ -66,10 +175,37 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
     dragRef.current = null;
     (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
   };
+
+  /**
+   * 缩放值变化入口：统一在这里打「用户手势」标记并做预览 + 提交排程。
+   * 外部同步走 setZoom（不经本函数），因此不会误触发写回。
+   */
+  const applyZoom = useCallback(
+    (raw: number) => {
+      const v = Math.max(STAGE_ZOOM_MIN, Math.min(STAGE_ZOOM_MAX, raw));
+      zoomSourceRef.current = 'user';
+      setZoom(v);
+      // 实时预览：桌宠窗立即跟随（不落盘、不广播）
+      api.dcSetScaleLive(character.id, v);
+      // 落盘提交：去抖后一次
+      scheduleCommit(v);
+    },
+    [character.id, scheduleCommit]
+  );
+
   const onWheel = (e: React.WheelEvent) => {
     e.preventDefault();
-    setZoom((z) => Math.max(STAGE_ZOOM_MIN, Math.min(STAGE_ZOOM_MAX, z - e.deltaY * STAGE_WHEEL_SENSITIVITY)));
+    applyZoom(zoomRef.current - e.deltaY * STAGE_WHEEL_SENSITIVITY);
   };
+
+  /** 滑块拖动结束（pointerup / keyup）时立即提交，不再等去抖。 */
+  const flushCommit = useCallback(() => {
+    if (commitTimerRef.current) {
+      clearTimeout(commitTimerRef.current);
+      commitTimerRef.current = null;
+    }
+    commitZoom(zoomRef.current);
+  }, [commitZoom]);
 
   const speak = async () => {
     const text = STAGE_LINES[Math.floor(Math.random() * STAGE_LINES.length)];
@@ -158,6 +294,11 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
         <div className="modal-body stage-body">
           <div
             className="stage-viewport"
+            // --stage-zoom 写在**视口**上（而不是 .stage-model）：
+            // CSS 自定义属性只向下继承，写在子元素上父元素读不到 ——
+            // 视口要用它算 perspective、模型要用它算盒子尺寸，两者必须是同一个值。
+            // （与 v3.0.2 的 --dc-scale 必须写在 .dc-character 自身同理）
+            style={{ ['--stage-zoom' as string]: String(zoom) } as React.CSSProperties}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
@@ -165,24 +306,35 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
             onWheel={onWheel}
             title={t('characters.dragRotate')}
           >
-            <div
-              className="stage-model"
-              style={{ transform: `perspective(900px) rotateX(${rotX}deg) rotateY(${rotY}deg) scale(${zoom})` }}
-            >
-              <ModelView
-                character={character}
-                expression={expression}
-                blink={false}
-                dragging={false}
-                mouth={mouth}
-                onError={(m) => setStageError(m)}
-              />
-              {character.kind === 'placeholder' && (
-                <span
-                  className="stage-mouth"
-                  style={{ transform: `translate(-50%, 0) scaleY(${0.25 + mouth * 1.9})` }}
+            {/* v3.0.3：新增内层容器 —— 放大后的模型要能撑出滚动区（overflow:auto）。
+                外层 .stage-viewport 负责裁剪与滚动，内层负责居中。 */}
+            <div className="stage-inner">
+              {/* v3.0.3 高清渲染关键：模型盒子按 --stage-zoom 真实放大（CSS 侧 calc），
+                  transform 只保留旋转，**不再有 scale()** ——
+                  有 scale() 时浏览器会先按原尺寸栅格化再插值放大 ⇒ 模糊；
+                  盒子直接变大则由浏览器按最终尺寸重采样 ⇒ 清晰（与桌面桌宠同一条渲染路径）。
+                  旋转仍是舞台专属的纯预览姿态，不写回桌面。
+                  透视距离随 zoom 同步放大 ⇒ 相对畸变不变，旋转手感与 v3.0.2 一致。 */}
+              <div
+                className="stage-model"
+                style={{ transform: `rotateX(${rotX}deg) rotateY(${rotY}deg)` }}
+              >
+                <ModelView
+                  character={character}
+                  expression={expression}
+                  blink={false}
+                  dragging={false}
+                  mouth={mouth}
+                  zoom={zoom}
+                  onError={(m) => setStageError(m)}
                 />
-              )}
+                {character.kind === 'placeholder' && (
+                  <span
+                    className="stage-mouth"
+                    style={{ transform: `translate(-50%, 0) scaleY(${0.25 + mouth * 1.9})` }}
+                  />
+                )}
+              </div>
             </div>
             {bubble && <div className="stage-bubble">{bubble}</div>}
           </div>
@@ -218,10 +370,15 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
                 step={STAGE_ZOOM_STEP}
                 value={zoom}
                 aria-label={t('characters.stageZoom')}
-                onChange={(e) => setZoom(Number(e.target.value))}
+                onChange={(e) => applyZoom(Number(e.target.value))}
+                onPointerUp={flushCommit}
+                onKeyUp={flushCommit}
+                onBlur={flushCommit}
               />
               <span className="stage-zoom-value">{Math.round(zoom * 100)}%</span>
             </label>
+            {/* v3.0.3：说明「模型大小」会同步到桌面桌宠，避免用户以为只是舞台预览 */}
+            <span className="muted stage-hint">{t('characters.stageSyncHint')}</span>
             <span className="muted stage-hint">{t('characters.dragRotate')}</span>
           </div>
         </div>
