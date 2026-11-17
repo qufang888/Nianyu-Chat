@@ -27,6 +27,11 @@ interface Props {
    * 缺省 1 ⇒ 桌宠窗行为与改动前完全一致。
    */
   zoom?: number;
+  /**
+   * 纯渲染分辨率倍率（v3.0.6，只抬像素密度、不改模型尺寸）。
+   * 桌宠窗传 `max(1.5, scale)` 以抵消 CSS transform:scale 的插值模糊；舞台不传（=1）。
+   */
+  resolutionScale?: number;
   /** 渲染失败时回传原因（界面据此显示提示，而不是空白） */
   onError?: (message: string) => void;
 }
@@ -48,6 +53,7 @@ export const ModelView: React.FC<Props> = ({
   eyeX = 0,
   eyeY = 0,
   zoom = 1,
+  resolutionScale = 1,
   onError,
 }) => {
   const [imgFailed, setImgFailed] = useState(false);
@@ -61,7 +67,17 @@ export const ModelView: React.FC<Props> = ({
   }
 
   if (character.kind === 'live2d') {
-    return <Live2DView url={url} expression={expression} mouth={mouth} blink={blink} zoom={zoom} onError={onError} />;
+    return (
+      <Live2DView
+        url={url}
+        expression={expression}
+        mouth={mouth}
+        blink={blink}
+        zoom={zoom}
+        resolutionScale={resolutionScale}
+        onError={onError}
+      />
+    );
   }
 
   if (character.kind === 'vrm' || character.kind === 'glb') {
@@ -73,6 +89,7 @@ export const ModelView: React.FC<Props> = ({
         mouth={mouth}
         blink={blink}
         zoom={zoom}
+        resolutionScale={resolutionScale}
         onError={onError}
       />
     );

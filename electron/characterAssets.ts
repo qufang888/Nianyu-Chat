@@ -20,6 +20,7 @@ import { pathToFileURL } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
+import iconv from 'iconv-lite';
 import { getDataManager } from './db';
 import { requestFilePick } from './dialogBridge';
 import type { CharacterImportResult, DesktopCharacter, DesktopCharacterKind } from '../src/types';
@@ -30,7 +31,7 @@ const MAX_PACKAGE_BYTES = 800 * 1024 * 1024;
 const MAX_SCAN_DEPTH = 8;
 
 /** 图片扩展名：可直接作为「静态立绘」角色 */
-const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'apng', 'bmp', 'avif']);
+const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'apng', 'bmp', 'avif', 'svg']);
 /** 3D / Live2D 扩展名 */
 const MODEL_EXT = new Set(['vrm', 'glb', 'gltf', 'moc3', 'moc', 'model3.json', 'model.json']);
 
@@ -144,7 +145,66 @@ function newId(): string {
   return `dc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** 把 zip 解到目标目录（校验解压体积与路径穿越） */
+/**
+ * ZIP 文件名解码（v3.0.6）：按 **UTF-8 flag（bit 11）** 确定性选择编码，而非猜测。
+ *
+ * 背景：adm-zip 的默认 decoder 无条件 `Buffer.toString('utf8')`，不读 ZIP 标准里的 UTF-8 flag，
+ * 也没有多字节编码回退。后果：
+ *  - Windows 资源管理器压缩的中文名是 **GBK** 字节（未置 flag）⇒ 解出 U+FFFD 乱码；
+ *  - 日系模型包常用 **Shift_JIS/CP932**（未置 flag）⇒ GBK 回退会「静默解错」（不产生 U+FFFD，
+ *    例如「早瀬優香」被 GBK 解成「憗悾桪崄」），比乱码更隐蔽——贴图/bin 404、模型白屏。
+ *
+ * 因此这里**不用 decoder 猜编码**（那无法区分 GBK 与 SJIS：两者互解都不产生替换符），
+ * 而是按 ZIP 规范：
+ *   ① flag 置位（efs=true）⇒ 一定是 UTF-8，直接按 UTF-8 解；
+ *   ② flag 未置位 ⇒ 按 ZIP 传统编码，依次尝试 UTF-8 / GBK / CP932，
+ *      用「解码出的可读 CJK 字符数最多、且不含 U+FFFD」作为打分，取最优。
+ *   ③ 打分也分不出（极短/全 ASCII）⇒ 保持 UTF-8 结果（对 ASCII 三者等价）。
+ *
+ * 这样既覆盖 GBK 中文包，也覆盖 SJIS/CP932 日系包，且不误伤合法 UTF-8 包。
+ */
+function decodeZipName(entry: { rawEntryName: Buffer; header: any }): string {
+  const raw: Buffer = entry.rawEntryName;
+  const isUtf8Flag = !!(entry.header?.flags_efs || entry.header?.efs);
+  if (isUtf8Flag) return raw.toString('utf8');
+  // flag 未置位时不猜：先看字节本身是否合法 UTF-8 —— 合法就几乎必然是 UTF-8
+  // （GBK/SJIS 的多字节序列极少恰好构成合法 UTF-8），避免「UTF-8 包但工具没置 flag」被误判。
+  const utf8 = raw.toString('utf8');
+  if (!utf8.includes('\uFFFD')) return utf8;
+
+  // UTF-8 不合法 ⇒ 传统编码（GBK 中文 / CP932 日文）二选一。
+  // 这两个编码的字节空间大量重叠，round-trip 无法区分（互解都能还原原字节），
+  // 必须用**编码特征**区分（已用真实 GBK/SJIS 文件名验证）：
+  //  ① CP932 解出**半角片假名**(U+FF66-FF9F) ⇒ 原字节是 GBK（GBK 中文字节被误当 SJIS 时必然出现）
+  //  ② CP932 解出**全角假名**(U+3040-30FF) ⇒ 原字节就是 CP932（日文名含假名）
+  //  ③ 两者都无假名（纯汉字名）⇒ 比较 GBK 一级/二级字库命中数：
+  //     「早瀬優香」按 CP932 解命中常用字「早/香」；按 GBK 误解成「憗悾桪崄」全是 GBK 扩展区生僻字。
+  const gbk = iconv.decode(raw, 'gbk');
+  const sjis = iconv.decode(raw, 'cp932');
+  const halfKana = (sjis.match(/[\uff66-\uff9f]/g) || []).length;
+  const fullKana = (sjis.match(/[\u3040-\u30ff]/g) || []).length;
+  if (halfKana > 0 && fullKana === 0) return gbk;
+  if (fullKana > 0) return sjis;
+
+  const commonCount = (s: string): number => {
+    let n = 0;
+    for (const ch of s) {
+      if (!/[\u4e00-\u9fff]/.test(ch)) continue;
+      try {
+        const b = iconv.encode(ch, 'gbk');
+        // GBK 一级(0xB0-0xD7)/二级(0xD8-0xF7)是 GB2312 常用字；其余为扩展区生僻字
+        if (b.length === 2 && b[0] >= 0xb0 && b[0] <= 0xf7) n += 2;
+        else n -= 1;
+      } catch {
+        n -= 1;
+      }
+    }
+    return n;
+  };
+  return commonCount(sjis) > commonCount(gbk) ? sjis : gbk;
+}
+
+/** 把 zip 解到目标目录（校验解压体积与路径穿越，逐条目按 UTF-8 flag 解码文件名） */
 function extractZip(zipPath: string, destDir: string): void {
   const zip = new AdmZip(zipPath);
   const entries = zip.getEntries();
@@ -153,10 +213,16 @@ function extractZip(zipPath: string, destDir: string): void {
     if (e.isDirectory) continue;
     total += e.header.size || 0;
     if (total > MAX_PACKAGE_BYTES) throw new Error('package too large');
-    const name = e.entryName.replace(/\\/g, '/');
-    if (name.includes('..') || path.isAbsolute(name)) throw new Error('unsafe entry');
+    const name = decodeZipName(e).replace(/\\/g, '/');
+    // 按路径段判断穿越：不要用 includes('..')，会误伤「角色..vrm」这类合法文件名
+    if (name.split('/').some((seg) => seg === '..') || path.isAbsolute(name)) throw new Error('unsafe entry');
+    // 逐条目写盘：用 decodeZipName 的结果而非 adm-zip 的默认 entryName（后者不读 flag）
+    const target = path.join(destDir, ...name.split('/').filter(Boolean));
+    const resolved = path.resolve(target);
+    if (!resolved.startsWith(path.resolve(destDir) + path.sep)) throw new Error('unsafe entry');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, e.getData());
   }
-  zip.extractAllTo(destDir, true);
 }
 
 /** 单文件/单目录/单 zip → characters/<id>/ */
@@ -312,18 +378,22 @@ function looksLikeCharacterPackage(p: string): boolean {
       const files = listFiles(p);
       return !!pickEntry(files) && files.length > 0;
     }
-    const ext = (p.split('.').pop() || '').toLowerCase();
+    // v3.0.6：统一用 extOf()（能识别 .model3.json / .model.json 的复合后缀），
+    // 此前 split('.').pop() 对它们得到 'json' ⇒ 拖 Live2D 单文件不被角色层接管。
+    const ext = extOf(p);
     if (ext === 'zip') {
       // zip 只认「解压后确实含模型/图片」的，避免把普通压缩包（如聊天记录备份）抢走
       try {
         const zip = new AdmZip(p);
-        const names = zip.getEntries().map((e) => e.entryName);
+        // 与 extractZip 一致地按 UTF-8 flag 解码 + 归一化分隔符
+        const names = zip.getEntries().map((e) => decodeZipName(e).replace(/\\/g, '/'));
         return !!pickEntry(names);
       } catch {
         return false;
       }
     }
-    return MODEL_EXT.has(ext);
+    // v3.0.6：单张图片也要接管（与文件对话框导入行为一致）
+    return MODEL_EXT.has(ext) || IMAGE_EXT.has(ext);
   } catch {
     return false;
   }
@@ -343,7 +413,7 @@ export function registerCharacterAssetIPC(onChanged: () => void): void {
               { name: '角色包', extensions: ['zip'] },
               { name: '3D 模型', extensions: ['vrm', 'glb', 'gltf'] },
               { name: 'Live2D', extensions: ['json', 'moc3', 'moc'] },
-              { name: '静态立绘', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] },
+              { name: '静态立绘', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'apng', 'avif', 'svg'] },
             ]
           : undefined,
     });

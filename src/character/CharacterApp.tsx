@@ -14,6 +14,7 @@ import { useI18n } from '../i18n/I18nContext';
 import type { AppSettings, CharacterRuntimeSettings, DesktopCharacter } from '../types';
 import type { CharacterExpression } from './PlaceholderCharacter';
 import { ModelView } from './ModelView';
+import { DESKTOP_RESOLUTION_SCALE_MIN } from './ThreeModelView';
 import { pickIdleAction } from './behaviors';
 import { applyAnimControl, getGroupAnimSpeed, type AnimSettingsLike } from '../utils/animControl';
 import { playSoundSync } from '../utils/sound';
@@ -126,7 +127,6 @@ export const CharacterApp: React.FC = () => {
   /** 菜单正在播放收回动画：此时仍挂载 .dc-menu.closing，动画结束/动画被关后立刻卸载。 */
   const [menuClosing, setMenuClosing] = useState(false);
   const [modelError, setModelError] = useState<string>('');
-
   const charRef = useRef<HTMLDivElement | null>(null);
   const interactiveRef = useRef(false);
   // from：这次按下发生在角色本体还是气泡上。只有角色本体的「点一下」才等于点角色
@@ -313,6 +313,13 @@ export const CharacterApp: React.FC = () => {
     },
     [showBubble],
   );
+
+  // v3.0.6：角色切换/素材变更时清掉上一次的加载失败提示。
+  // 每个角色窗只绑定一个 id，但用户可能把同一窗口切到别的角色（面板场景）或重新导入素材，
+  // 不清除会出现「已换成正常模型却仍显示旧错误」的误导。
+  useEffect(() => {
+    setModelError('');
+  }, [state.character?.id, state.character?.entry]);
 
   // ===== 状态同步 =====
   useEffect(() => {
@@ -861,6 +868,9 @@ export const CharacterApp: React.FC = () => {
             dragging={dragging}
             eyeX={eye.x}
             eyeY={eye.y}
+            // v3.0.6：桌宠画布被 CSS scale(--dc-scale) 放大，渲染缓冲必须同步放大才不糊；
+            // 最低 1.5× 超采样，让 scale=1 时也和舞台一样清晰（舞台不传此 prop）。
+            resolutionScale={Math.max(DESKTOP_RESOLUTION_SCALE_MIN, scale)}
             onError={(m) => setModelError(m)}
           />
         </div>

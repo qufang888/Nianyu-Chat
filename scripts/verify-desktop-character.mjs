@@ -71,6 +71,7 @@ const preload = read('electron/preload.ts');
 const electronMain = read('electron/main.ts');
 const types = read('src/types.ts');
 const trans = read('src/i18n/translations.ts');
+const assetsTs = read('electron/characterAssets.ts');
 const themeCtx = read('src/theme/ThemeContext.tsx');
 const aboutModal = read('src/components/AboutModal.tsx');
 const windowLevels = read('electron/windowLevels.ts');
@@ -1370,6 +1371,107 @@ check('O3 30s 兜底只在两路都缺失时触发且带告警（非静默回归
     brokenT !== coll && !/rateDisplay\.tooSmall\s*\?/.test(brokenT));
 }
 
+// ---------- K15. v3.0.6：VRM 生命感 + 桌宠 3D 分辨率 ----------
+check('v3.0.6 VRM 有自驱动呼吸/待机/眨眼（不再静止贴图）',
+  /VRM_BREATH_PERIOD_SEC/.test(threeView) &&
+  /breathBone\.rotation\.x/.test(threeView) &&
+  /idleBone\.rotation\.y/.test(threeView) &&
+  /autoBlink/.test(threeView) &&
+  /VRM_BLINK_MIN_GAP_MS/.test(threeView));
+check('v3.0.6 表情名大小写不敏感解析（兼容 VRM0 自定义名 Blink/Joy）',
+  /function resolveExpressionNames/.test(threeView) &&
+  /function resolveBlinkNames/.test(threeView) &&
+  /n\.toLowerCase\(\) === c\.toLowerCase\(\)/.test(threeView) &&
+  /blink_l|eyeBlinkLeft/.test(threeView));
+// QA P0（v3.0.6）：three-vrm 的 VRMExpression.name 带 VRMExpression_ 前缀，
+// 真名在 .expressionName。必须断言读的是真名属性，否则「大小写不敏感」形同虚设。
+check('v3.0.6 表情名从 expressionName 读取（QA P0：不能用带前缀的 name）',
+  /typeof e\?\.expressionName === 'string' \? e\.expressionName : ''/.test(threeView) &&
+  /legacy\.startsWith\('VRMExpression_'\)/.test(threeView) &&
+  /\.slice\('VRMExpression_'\.length\)/.test(threeView));
+check('v3.0.6 呼吸/待机基于 rest 角度计算，不累加漂移',
+  /breathRestX - breath \* VRM_BREATH_ANGLE/.test(threeView) &&
+  /idleRestY \+ Math\.sin/.test(threeView));
+check('v3.0.6 VRM0 兼容 rotateVRM0 仍在（老模型朝向）',
+  /VRMUtils\.rotateVRM0/.test(threeView));
+check('v3.0.6 桌宠传 resolutionScale（最低 1.5× 超采样）',
+  /DESKTOP_RESOLUTION_SCALE_MIN = 1\.5/.test(threeView) &&
+  /resolutionScale=\{Math\.max\(DESKTOP_RESOLUTION_SCALE_MIN, scale\)\}/.test(appTsx) &&
+  /resolutionScale/.test(modelView) &&
+  /export const DESKTOP_RESOLUTION_SCALE_MIN/.test(threeView));
+check('v3.0.6 pixelRatio 同时含 zoom 与 resolutionScale（舞台行为不变）',
+  /dpr \* z \* rs/.test(threeView) &&
+  /Math\.min\(MAX_PIXEL_RATIO/.test(threeView) &&
+  /\[zoom, resolutionScale\]/.test(threeView));
+check('v3.0.6 Live2D 同步支持 resolutionScale（同类模糊一并修）',
+  /resolutionScaleRef\.current/.test(l2dView) &&
+  /dpr \* z \* rs/.test(l2dView) &&
+  /\[zoom, resolutionScale\]/.test(l2dView));
+check('v3.0.6 舞台不传 resolutionScale（保持原清晰路径）',
+  !/resolutionScale/.test(stage));
+
+// 变异自证 21：去掉自动眨眼调度 ⇒ K15 VRM 生命感断言失效
+{
+  // 变异 21a：呼吸驱动改成常量（等价于不呼吸）⇒ K15 呼吸断言失效
+  const broken = threeView.replace(
+    /breathBone\.rotation\.x = breathRestX - breath \* VRM_BREATH_ANGLE;/,
+    'breathBone.rotation.x = breathRestX;');
+  check('（可证伪）呼吸驱动改成常量后 K15 呼吸断言失效',
+    broken !== threeView && !/breathRestX - breath \* VRM_BREATH_ANGLE/.test(broken));
+  const broken2 = threeView.replace(
+    /autoBlink = Math\.sin\(Math\.PI \* p\);/, 'autoBlink = 0;');
+  check('（可证伪）眨眼脉冲改 0 后 K15 眨眼断言失效',
+    broken2 !== threeView && !/autoBlink = Math\.sin\(Math\.PI \* p\)/.test(broken2));
+  // 变异 22：表情名改精确匹配（VRM0 的 Blink 将识别不到）
+  const broken3 = threeView.replace(
+    /n\.toLowerCase\(\) === c\.toLowerCase\(\)/, 'n === c');
+  check('（可证伪）表情名区分大小写后 K15 兼容断言失效',
+    broken3 !== threeView && !/n\.toLowerCase\(\) === c\.toLowerCase\(\)/.test(broken3));
+  // 变异 24：表情名读回带前缀的 name（QA P0 回归）⇒ K15 断言失效
+  const broken5 = threeView.replace(
+    "const real = typeof e?.expressionName === 'string' ? e.expressionName : '';",
+    "const real = typeof e?.name === 'string' ? e.name : '';");
+  check('（可证伪）表情名改回 name 后 QA P0 断言失效',
+    broken5 !== threeView &&
+    !/typeof e\?\.expressionName === 'string' \? e\.expressionName : ''/.test(broken5));
+  // 变异 23：桌宠不再传 resolutionScale ⇒ 模糊回归
+  const broken4 = appTsx.replace(
+    'resolutionScale={Math.max(DESKTOP_RESOLUTION_SCALE_MIN, scale)}', '');
+  check('（可证伪）桌宠去掉 resolutionScale 后 K15 断言失效',
+    broken4 !== appTsx && !/resolutionScale=\{Math\.max\(DESKTOP_RESOLUTION_SCALE_MIN, scale\)\}/.test(broken4));
+}
+
+// ---------- K16. v3.0.6：模型包兼容性 ----------
+check('v3.0.6 zip 文件名兼容：UTF-8 flag + GBK/CP932 多编码判别',
+  /import iconv from 'iconv-lite'/.test(assetsTs) &&
+  /function decodeZipName/.test(assetsTs) &&
+  /flags_efs \|\| entry\.header\?\.efs/.test(assetsTs) &&
+  /iconv\.decode\(raw, 'gbk'\)/.test(assetsTs) &&
+  /iconv\.decode\(raw, 'cp932'\)/.test(assetsTs) &&
+  /\[\\uff66-\\uff9f\]/.test(assetsTs) &&
+  /\[\\u3040-\\u30ff\]/.test(assetsTs));
+check('v3.0.6 逐条目按解码后文件名写盘（不用默认 extractAllTo）',
+  /fs\.writeFileSync\(target, e\.getData\(\)\)/.test(assetsTs) &&
+  !/zip\.extractAllTo\(/.test(assetsTs));
+check('v3.0.6 路径穿越按段判断（不误伤合法 .. 文件名）',
+  /name\.split\('\/'\)\.some\(\(seg\) => seg === '\.\.'\)/.test(assetsTs));
+check('v3.0.6 SVG 立绘纳入支持',
+  /'avif', 'svg'/.test(assetsTs) &&
+  /MODEL_EXT\.has\(ext\) \|\| IMAGE_EXT\.has\(ext\)/.test(assetsTs) &&
+  /extensions: \['png'[^\]]*'svg'/.test(assetsTs));
+check('v3.0.6 拖拽单文件用 extOf（兼容 .model3.json 复合后缀）',
+  /const ext = extOf\(p\);/.test(assetsTs) &&
+  !/const ext = \(p\.split\('\.'\)\.pop\(\) \|\| ''\)\.toLowerCase\(\);/.test(assetsTs));
+check('v3.0.6 GLB 多动画选 idle/最长 clip（不只播 [0]）',
+  /const prefers = \/\(\?:\\|\^/.test(threeView) &&
+  /idle\|loop\|breath\|stand\|taiki\|待機\|アイドル/.test(threeView) &&
+  /const named = clips\.find/.test(threeView) &&
+  /const longest = clips\.reduce/.test(threeView) &&
+  !/mixer\.clipAction\(gltf\.animations\[0\]\)/.test(threeView));
+check('v3.0.6 角色切换清空 modelError（错误提示不残留）',
+  /setModelError\(''\);[\s\S]{0,80}\[state\.character\?\.id, state\.character\?\.entry\]/.test(appTsx));
+check('v3.0.6 iconv-lite 声明为直接依赖',
+  /"iconv-lite": "\^0\.7\.3"/.test(read('package.json')));
 // ---------- 汇总 ----------
 console.log('\n' + '─'.repeat(70));
 if (failures.length === 0) {

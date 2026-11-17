@@ -1,6 +1,6 @@
 {
   "name": "nianyu-client",
-  "version": "3.0.5",
+  "version": "3.0.6",
   "description": "念语 - AI 数字人聊天客户端 (Electron + React + TypeScript)",
   "main": "dist-electron/electron/main.js",
   "author": "前方",
@@ -36,7 +36,8 @@
     "pixi.js": "^6.5.10",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "three": "^0.170.0"
+    "three": "^0.170.0",
+    "iconv-lite": "^0.7.3"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.5",
