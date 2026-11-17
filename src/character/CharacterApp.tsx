@@ -743,17 +743,18 @@ export const CharacterApp: React.FC = () => {
     };
   }, []);
 
-  // ===== 滚轮缩放（悬停在角色本体上时调节桌面角色大小；钳制 0.6~1.6，步长 0.05）=====
+  // ===== 滚轮缩放（悬停在角色本体上时调节桌面角色大小；钳制 0.6~2.0，步长 0.05）=====
   // 触发链：窗口默认整体穿透 → 光标进入角色命中区时主进程转发的 mousemove 命中
   // .dc-character → applyInteractive(true) 把窗口切可交互 → 滚轮事件才会到 DOM。
   // 穿透锁定（passThroughLocked）时窗口恒穿透，滚轮本就不该被捕获，属预期行为。
+  // v3.0.9：上限由 1.6 放宽到 2.0（用户反馈最大档仍偏小），步长/下限不变。
   const onCharacterWheel = (e: React.WheelEvent) => {
     const c = charRefState.current;
     if (!c || runtime.passThroughLocked) return;
     const step = e.deltaY < 0 ? 0.05 : -0.05;
     const cur = c.scale ?? 1;
     // 四舍五入到两位小数，避免浮点累积误差（0.05 步长在二进制下不精确）
-    const next = Math.max(0.6, Math.min(1.6, Math.round((cur + step) * 100) / 100));
+    const next = Math.max(0.6, Math.min(2.0, Math.round((cur + step) * 100) / 100));
     if (next === cur) return;
     // 本地先更新，保证缩放手感跟手；持久化交给主进程广播回写。
     // 注意 --dc-scale 必须写在 .dc-character 自身：CSS 自定义属性只向下继承，

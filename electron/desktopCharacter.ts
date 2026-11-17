@@ -203,7 +203,8 @@ const CHAR_BODY_W = 190;
 const CHAR_BODY_H = 228;
 const CHAR_BODY_BOTTOM_GAP = 10;
 const DC_SCALE_MIN = 0.6;
-const DC_SCALE_MAX = 1.6;
+// v3.0.9：上限由 1.6 放宽到 2.0（用户反馈最大档仍偏小），下限/步长不变
+const DC_SCALE_MAX = 2.0;
 
 /**
  * 位置钳制（Bug 2）：按「角色可见区」而非整窗矩形（340×420）钳制到工作区。
@@ -922,7 +923,7 @@ export function registerDesktopCharacterIPC(): void {
   // 右键菜单「隐藏角色」：关闭本窗对应角色的桌面显示（enabled=false），面板「显示」勾同步取消；主开关不动
   ipcMain.on('dc:hide-character', (e) => hideActiveCharacter(e.sender));
 
-  // 滚轮缩放：持久化该角色的 scale（钳制 0.6~1.6），并广播 settings:changed + dc:state
+  // 滚轮缩放：持久化该角色的 scale（钳制 0.6~2.0），并广播 settings:changed + dc:state
   // （角色窗据此即时刷新显示，设置页「桌宠角色」面板同步显示新大小）。
   ipcMain.on('dc:set-scale', (_e, id: string, scale: number) => {
     if (!id) return;
@@ -930,7 +931,7 @@ export function registerDesktopCharacterIPC(): void {
     const list = Array.isArray(s.desktopCharacters) ? s.desktopCharacters : [];
     const idx = list.findIndex((c) => c.id === id);
     if (idx < 0) return;
-    const clamped = Math.max(0.6, Math.min(1.6, Number(scale) || 1));
+    const clamped = Math.max(0.6, Math.min(DC_SCALE_MAX, Number(scale) || 1));
     const next = list.slice();
     next[idx] = { ...next[idx], scale: clamped };
     dm.saveSettings({ desktopCharacters: next });
@@ -952,7 +953,7 @@ export function registerDesktopCharacterIPC(): void {
     if (!id) return;
     const w = dcWindows.get(id);
     if (!w || w.isDestroyed()) return;
-    const clamped = Math.max(0.6, Math.min(1.6, Number(scale) || 1));
+    const clamped = Math.max(0.6, Math.min(DC_SCALE_MAX, Number(scale) || 1));
     w.webContents.send('dc:scale-preview', { id, scale: clamped });
   });
 

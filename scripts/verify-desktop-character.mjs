@@ -54,6 +54,7 @@ const assets = read('electron/characterAssets.ts');
 const appTsx = read('src/character/CharacterApp.tsx');
 const modelView = read('src/character/ModelView.tsx');
 const threeView = read('src/character/ThreeModelView.tsx');
+const vrmPose = read('src/character/vrmPose.ts');
 const l2dView = read('src/character/Live2DView.tsx');
 const coll = read('src/components/CharacterCollection.tsx');
 const stage = read('src/components/CharacterStage.tsx');
@@ -677,9 +678,9 @@ check('I3 缩放变量写在 .dc-character 自身（父元素 transform 才消�
   /className=\{`dc-character\$\{dragging \? ' dragging' : ''\}`\}[\s\S]{0,200}--dc-scale/.test(appTsx) &&
   !/className="dc-stage"[^>]*--dc-scale/.test(appTsx) &&
   /transform: translateX\(-50%\) scale\(var\(--dc-scale, 1\)\)/.test(charCss));
-check('I3 滚轮链路完整：onWheel + 0.6~1.6 钳制 + dcSetScale 持久化 + 原生 passive:false 阻止滚动',
+check('I3 滚轮链路完整：onWheel + 0.6~2.0 钳制 + dcSetScale 持久化 + 原生 passive:false 阻止滚动',
   /onWheel=\{onCharacterWheel\}/.test(appTsx) &&
-  /Math\.max\(0\.6, Math\.min\(1\.6, Math\.round\(\(cur \+ step\) \* 100\) \/ 100\)\)/.test(appTsx) &&
+  /Math\.max\(0\.6, Math\.min\(2\.0, Math\.round\(\(cur \+ step\) \* 100\) \/ 100\)\)/.test(appTsx) &&
   /api\.dcSetScale\(c\.id, next\)/.test(appTsx) &&
   /addEventListener\('wheel',[\s\S]{0,200}\{ passive: false \}\)/.test(appTsx));
 
@@ -962,8 +963,8 @@ check('K5 菜单项先播收回动画再执行业务动作（收回可见）',
 // ---------- K6. 舞台 ⇄ 桌面缩放双向同步 ----------
 // 只取缩放常量声明块来判定「1.9 是否残留」——注释里提到 1.9（说明已删除）不算残留。
 const stageZoomConsts = (stage.match(/const STAGE_ZOOM_[A-Z]+ = [0-9.]+;/g) || []).join(' ');
-check('K6 舞台缩放区间收窄到 0.6~1.6（1.9 档位彻底删除）',
-  /const STAGE_ZOOM_MAX = 1\.6/.test(stage) &&
+check('K6 舞台缩放区间放宽到 0.6~2.0（v3.0.9）',
+  /const STAGE_ZOOM_MAX = 2\.0/.test(stage) &&
   !/1\.9/.test(stageZoomConsts) &&
   /const STAGE_ZOOM_MIN = 0\.6/.test(stage));
 check('K6 存在「实时预览」通道：dc:set-scale-live（渲染→主）与 dc:scale-preview（主→角色窗）',
@@ -984,7 +985,7 @@ check('K6 舞台写回只发生在用户手势里（外部同步只读，绝不�
 check('K6 舞台反向订阅 settings:changed（桌面滚轮 → 舞台滑块 ≤300ms）',
   /api\.onSettingsChanged/.test(stage) &&
   /desktopCharacters/.test(stage));
-check('K6 舞台滑块仍是 0.6~1.6 / 步长 0.05，且复用既有 dc:set-scale 提交（整数组覆盖）',
+check('K6 舞台滑块仍是 0.6~2.0 / 步长 0.05，且复用既有 dc:set-scale 提交（整数组覆盖）',
   /min=\{STAGE_ZOOM_MIN\}/.test(stage) &&
   /max=\{STAGE_ZOOM_MAX\}/.test(stage) &&
   /step=\{STAGE_ZOOM_STEP\}/.test(stage) &&
@@ -1623,6 +1624,35 @@ const MOTION_KEYS = [
   const b5 = threeView.replace('const groupOn = !!(g.motion || g.gaze);', 'const groupOn = true;');
   check('（可证伪）rAF 门禁改硬编码 true 后 K18-6 失效',
     b5 !== threeView && !/const groupOn = !!\(g\.motion \|\| g\.gaze\)/.test(b5));
+}
+
+// ---------- K19. v3.0.9：视线上下方向修正 + 缩放上限 2.0 ----------
+check('v3.0.9 视线 pitch 屏幕 Y 翻转（光标往上=抬头，眼球 marker）',
+  /pitchRad: -y \* VRM_GAZE_MAX_PITCH_DEG \* DEG2RAD/.test(vrmPose) &&
+  /headPos\.y \+ Math\.tan\(pitchRad\) \* VRM_GAZE_DISTANCE/.test(threeView));
+check('v3.0.9 头部 gaze.pitch 取反（rotation.x 正值=低头，抬头需负值）',
+  /rig\.gaze\.pitch = smooth\(rig\.gaze\.pitch, -pitchRad \* r, dt, VRM_GAZE_SMOOTH_TAU\)/.test(vrmPose) &&
+  /\+ gz\.pitch,/.test(threeView));
+check('v3.0.9 缩放上限 2.0 主进程/渲染层/类型三处一致',
+  /const DC_SCALE_MAX = 2\.0/.test(mainDc) &&
+  /Math\.max\(0\.6, Math\.min\(DC_SCALE_MAX, Number\(scale\) \|\| 1\)\)/.test(mainDc) &&
+  /const STAGE_ZOOM_MAX = 2\.0/.test(stage) &&
+  /显示缩放（0\.6~2\.0/.test(types));
+// 变异自证 27：pitch 改回不翻转 ⇒ K19 视线断言失效
+{
+  const broken = vrmPose.replace(
+    'pitchRad: -y * VRM_GAZE_MAX_PITCH_DEG * DEG2RAD,',
+    'pitchRad: y * VRM_GAZE_MAX_PITCH_DEG * DEG2RAD,');
+  check('（可证伪）pitch 去掉屏幕Y翻转后 K19 视线断言失效',
+    broken !== vrmPose && !/pitchRad: -y \* VRM_GAZE_MAX_PITCH_DEG/.test(broken));
+  const broken2 = vrmPose.replace(
+    'rig.gaze.pitch = smooth(rig.gaze.pitch, -pitchRad * r, dt, VRM_GAZE_SMOOTH_TAU);',
+    'rig.gaze.pitch = smooth(rig.gaze.pitch, pitchRad * r, dt, VRM_GAZE_SMOOTH_TAU);');
+  check('（可证伪）头部 pitch 去掉取反后 K19 断言失效',
+    broken2 !== vrmPose && !/smooth\(rig\.gaze\.pitch, -pitchRad/.test(broken2));
+  const broken3 = stage.replace('const STAGE_ZOOM_MAX = 2.0;', 'const STAGE_ZOOM_MAX = 1.6;');
+  check('（可证伪）舞台缩放退回 1.6 后 K19 断言失效',
+    broken3 !== stage && !/const STAGE_ZOOM_MAX = 2\.0/.test(broken3));
 }
 
 // ---------- 汇总 ----------

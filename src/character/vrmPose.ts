@@ -221,13 +221,23 @@ export function writeBone(
   bone.scale.set(r.sx * s, r.sy * s, r.sz * s);
 }
 
-/** eye(-1..1) → yaw/pitch（弧度），钳在 ±30° / ±22°；屏幕下方 ⇒ pitch 正 ⇒ 低头。 */
+/**
+ * eye(-1..1) → yaw/pitch（弧度），钳在 ±30° / ±22°。
+ *
+ * v3.0.9 修复「光标往上头却往下」：调用方传入的 eye.y 来自屏幕坐标（**向下为正**），
+ * 而 gazeMarker 用的是 three.js 世界坐标（**向上为正**）
+ *   marker.y = head.y + tan(pitchRad) * distance  ⇒  pitch>0 意味着 marker 在上方 = 抬头。
+ * 所以这里必须把屏幕 Y 反转：光标往上(eye.y<0) ⇒ pitchRad>0 ⇒ 抬头。
+ * 旧实现直接 `y * MAX` 导致光标往上时 marker 被放到头下方 ⇒ 眼睛/头都向下看（用户实测 bug）。
+ *
+ * yaw 不反转：屏幕 X 向右为正，世界 X 也向右为正，方向一致。
+ */
 export function mapEyeToAngles(eyeX: number, eyeY: number): { yawRad: number; pitchRad: number } {
   const x = Math.max(-1, Math.min(1, Number(eyeX) || 0));
   const y = Math.max(-1, Math.min(1, Number(eyeY) || 0));
   return {
     yawRad: x * VRM_GAZE_MAX_YAW_DEG * DEG2RAD,
-    pitchRad: y * VRM_GAZE_MAX_PITCH_DEG * DEG2RAD,
+    pitchRad: -y * VRM_GAZE_MAX_PITCH_DEG * DEG2RAD,
   };
 }
 
@@ -241,6 +251,12 @@ export function smooth(prev: number, next: number, dt: number, tau: number): num
 /**
  * 头部凝视分量平滑（不覆盖 idle 的 head sine，ThreeModelView 会把它加在 writeBone 的 dx/dy 上）。
  * ratio 已含「开关 + gestureHold + 头部 35%」语义；幅度=0 时仍传 ratio，故眼神不受幅度影响。
+ *
+ * ⚠️ v3.0.9 pitch 符号：入参 pitchRad 是「抬头为正」的 gaze 目标角（marker 用 tan(pitchRad) 放在头上方，
+ * 已由 mapEyeToAngles 修好）。但 head bone 的 `rotation.x` 是「正值=低头」（VRM0/VRM1 一致，见 QA 实测），
+ * 因此写入 rig.gaze.pitch（作为 rotation.x 增量）时**必须取反**：抬头 ⇒ rotation.x 为负。
+ * 不取反会导致「光标往上、眼球看上但头往下」的分裂观感（用户 v3.0.8 实测 bug）。
+ * yaw 无需取反：rotation.y 正值与屏幕右向一致。
  */
 export function applyGazeHead(
   rig: VRMPoseRig,
@@ -251,5 +267,5 @@ export function applyGazeHead(
 ): void {
   const r = Math.max(0, Math.min(1, Number(ratio) || 0));
   rig.gaze.yaw = smooth(rig.gaze.yaw, yawRad * r, dt, VRM_GAZE_SMOOTH_TAU);
-  rig.gaze.pitch = smooth(rig.gaze.pitch, pitchRad * r, dt, VRM_GAZE_SMOOTH_TAU);
+  rig.gaze.pitch = smooth(rig.gaze.pitch, -pitchRad * r, dt, VRM_GAZE_SMOOTH_TAU);
 }
