@@ -93,19 +93,43 @@ function resolveBlinkNames(mgr: any): string[] {
   return [...left, ...right];
 }
 
-/** VRM 自驱动生命感参数（v3.0.6）——都是短周期、低幅度，不抢外部表情控制 */
+/**
+ * VRM 自驱动生命感参数（v3.0.7 重做）。
+ *
+ * v3.0.6 的教训：呼吸 1.1° / 摆头 1.3° 在 228px 的角色上位移不到 1px，肉眼完全看不出来，
+ * 用户只会看到眼睛在眨。v3.0.7 改为**真正可见**的待机动作：呼吸带胸腔起伏 + 头部转动/点头/侧倾
+ * + 双臂自然摆动 + 身体重心微移，各部位周期互质避免"整齐划一像机器人"。
+ * 所有角度都是**基于 rest 姿态的增量**，不累加、不漂移；拖动/菜单交互时由下层 gate 决定是否让位。
+ */
 /** 两次自动眨眼的间隔区间（毫秒）：2.2s ~ 5.2s，接近真人无意识眨眼频率 */
 const VRM_BLINK_MIN_GAP_MS = 2200;
 const VRM_BLINK_RANDOM_MS = 3000;
 /** 一次眨眼的时长（毫秒）：闭合+张开共 130ms */
 const VRM_BLINK_DURATION_MS = 130;
-/** 呼吸周期（秒）：4.2s 一轮，与原创占位形象的 dcBreathe 同节奏 */
-const VRM_BREATH_PERIOD_SEC = 4.2;
-/** 呼吸时胸腔最大前倾角（弧度）：约 1.1°，轻微到不会显得夸张 */
-const VRM_BREATH_ANGLE = 0.019;
-/** 待机时头部左右微摆周期（秒）与幅度（弧度）：约 7.5s / 1.3° */
-const VRM_IDLE_PERIOD_SEC = 7.5;
-const VRM_IDLE_ANGLE = 0.023;
+/** 呼吸周期（秒）：3.6s 一轮（比 v3.0.6 稍快，起伏更明显） */
+const VRM_BREATH_PERIOD_SEC = 3.6;
+/** 胸腔前倾幅度（弧度）：约 6.9°（QA 实测 4.6° 仅 1.6px 偏弱，上调到 3px 可见） */
+const VRM_BREATH_ANGLE = 0.12;
+/** 呼吸时胸腔的缩放起伏：峰值 +3%（配合旋转，肉眼可见"吸气挺胸"） */
+const VRM_BREATH_SCALE = 0.03;
+/** 头部左右转动：周期 6.4s、幅度约 16°（QA 实测 11° 仅 2.4px，上调到 >3px 可见） */
+const VRM_HEAD_TURN_PERIOD_SEC = 6.4;
+const VRM_HEAD_TURN_ANGLE = 0.28;
+/** 头部上下点头：周期 5.3s、幅度约 8.6°（与转头周期错开，动作不机械） */
+const VRM_HEAD_NOD_PERIOD_SEC = 5.3;
+const VRM_HEAD_NOD_ANGLE = 0.15;
+/** 头部侧倾：周期 9.7s、幅度约 3.5° */
+const VRM_HEAD_TILT_PERIOD_SEC = 9.7;
+const VRM_HEAD_TILT_ANGLE = 0.06;
+/** 手臂自然摆动：周期 4.8s、幅度约 9°，左右反相（像轻轻晃动手臂） */
+const VRM_ARM_SWAY_PERIOD_SEC = 4.8;
+const VRM_ARM_SWAY_ANGLE = 0.16;
+/** 手臂前后摆：周期 5.7s、幅度约 9.2°，左右反相 */
+const VRM_ARM_SWING_PERIOD_SEC = 5.7;
+const VRM_ARM_SWING_ANGLE = 0.16;
+/** 身体重心左右微移：周期 8.3s、幅度约 3°（hips/spine 轻微摇摆） */
+const VRM_BODY_SWAY_PERIOD_SEC = 8.3;
+const VRM_BODY_SWAY_ANGLE = 0.052;
 /** 桌宠窗最低超采样倍率：即使 scale=1 也按 1.5× 渲染，避免「舞台清晰桌面糊」 */
 export const DESKTOP_RESOLUTION_SCALE_MIN = 1.5;
 /** pixelRatio 硬上限：190×228 的画布 4× 也只有 760×912，成本可控 */
@@ -171,10 +195,15 @@ export const ThreeModelView: React.FC<Props> = ({
     let ro: ResizeObserver | null = null;
     const exprCur: Record<string, number> = {};
     /** v3.0.6：VRM 生命感驱动用的骨骼引用（normalized bone，vrm.update 会同步到原始骨骼） */
+    /** v3.0.7：待机动画骨骼 + 各自的 rest 姿态（每帧基于 rest 计算增量，绝不累加） */
     let breathBone: any = null;
-    let idleBone: any = null;
-    let breathRestX = 0;
-    let idleRestY = 0;
+    let breathBoneKey = 'chest';
+    let headBone: any = null;
+    let armL: any = null;
+    let armR: any = null;
+    let hipsBone: any = null;
+    let spineBone: any = null;
+    const restPose: Record<string, { x: number; y: number; z: number; sx: number; sy: number; sz: number }> = {};
     /** v3.0.6：模型里真实存在的表情名（VRM0 自定义名大小写不定，需运行时解析一次） */
     let blinkNames: string[] = [];
     let expressionNames: Record<string, string[]> = {};
@@ -222,7 +251,11 @@ export const ThreeModelView: React.FC<Props> = ({
       vrm = null;
       mixer = null;
       breathBone = null;
-      idleBone = null;
+      headBone = null;
+      armL = null;
+      armR = null;
+      hipsBone = null;
+      spineBone = null;
       blinkNames = [];
       expressionNames = {};
     };
@@ -259,19 +292,52 @@ export const ThreeModelView: React.FC<Props> = ({
           mixer?.update(dt);
           const st = stateRef.current;
 
-          // ===== v3.0.6：VRM 自驱动生命感 =====
-          // ③ 待机微动：头部缓慢左右摆（基于 rest 角度，绝不累加，避免长跑漂移）
-          if (idleBone) {
-            idleBone.rotation.y =
-              idleRestY + Math.sin((now / 1000) * ((2 * Math.PI) / VRM_IDLE_PERIOD_SEC)) * VRM_IDLE_ANGLE;
-          }
-          // ② 呼吸：胸腔轻微前倾-回正。以 rest 姿态为基准做正弦位移，
-          //    必须在 vrm.update(dt) 之前写，update 才会把 normalized bone 同步到原始骨骼。
+          // ===== v3.0.7：VRM 自驱动待机动画（明显可见）=====
+          // 所有骨骼都基于**初始化时记录的 rest 姿态**做正弦增量，绝不累加、不漂移；
+          // 必须在 vrm.update(dt) 之前写，update 才会把 normalized bone 同步到原始骨骼。
+          const tSec = now / 1000;
+          const wave = (period: number, phase = 0) => Math.sin(tSec * ((2 * Math.PI) / period) + phase);
+          const applyBone = (bone: any, key: string, rx: number, ry: number, rz: number) => {
+            if (!bone) return;
+            const r = restPose[key];
+            if (!r) return;
+            bone.rotation.x = r.x + rx;
+            bone.rotation.y = r.y + ry;
+            bone.rotation.z = r.z + rz;
+          };
+
+          // ① 身体重心：hips/spine 轻微左右摇摆 + 前后微倾（周期互质，避免整齐划一）
+          const bodySway = wave(VRM_BODY_SWAY_PERIOD_SEC);
+          applyBone(hipsBone, 'hips', 0, 0, bodySway * VRM_BODY_SWAY_ANGLE);
+          applyBone(spineBone, 'spine', wave(VRM_BREATH_PERIOD_SEC, 0.6) * 0.03, 0, -bodySway * VRM_BODY_SWAY_ANGLE * 0.6);
+
+          // ② 呼吸：胸腔前倾-回正 + 轻微缩放起伏（吸气挺胸，肉眼可见）
           if (breathBone) {
-            const breath = (Math.sin((now / 1000) * ((2 * Math.PI) / VRM_BREATH_PERIOD_SEC)) + 1) / 2;
-            breathBone.rotation.x = breathRestX - breath * VRM_BREATH_ANGLE;
+            const r = restPose[breathBoneKey] || restPose.chest || { x: 0, y: 0, z: 0, sx: 1, sy: 1, sz: 1 };
+            const breath = (wave(VRM_BREATH_PERIOD_SEC) + 1) / 2; // 0..1
+            breathBone.rotation.x = r.x - breath * VRM_BREATH_ANGLE;
+            breathBone.rotation.y = r.y;
+            breathBone.rotation.z = r.z;
+            const s = 1 + breath * VRM_BREATH_SCALE;
+            breathBone.scale.set(r.sx * s, r.sy * s, r.sz * s);
           }
-          // ① 自动眨眼：随机间隔触发一次「闭合→张开」的正弦脉冲；
+
+          // ③ 头部：左右转动 + 点头 + 侧倾（三种周期互质，像真人在四处看）
+          applyBone(
+            headBone,
+            'head',
+            wave(VRM_HEAD_NOD_PERIOD_SEC) * VRM_HEAD_NOD_ANGLE,
+            wave(VRM_HEAD_TURN_PERIOD_SEC) * VRM_HEAD_TURN_ANGLE,
+            wave(VRM_HEAD_TILT_PERIOD_SEC) * VRM_HEAD_TILT_ANGLE
+          );
+
+          // ④ 双臂：左右反相自然摆动（外张/收拢 + 前后轻摆），让"手动起来"
+          const armWave = wave(VRM_ARM_SWAY_PERIOD_SEC);
+          const armSwing = wave(VRM_ARM_SWING_PERIOD_SEC, 1.1);
+          applyBone(armL, 'leftUpperArm', armSwing * VRM_ARM_SWING_ANGLE, 0, armWave * VRM_ARM_SWAY_ANGLE);
+          applyBone(armR, 'rightUpperArm', -armSwing * VRM_ARM_SWING_ANGLE, 0, -armWave * VRM_ARM_SWAY_ANGLE);
+
+          // ⑤ 自动眨眼：随机间隔触发一次「闭合→张开」的正弦脉冲；
           //    仅在模型确实有 blink preset 时才驱动（否则 setValue 会被 catch 吞掉白费 CPU）。
           let autoBlink = 0;
           if (blinkNames.length) {
@@ -393,22 +459,42 @@ export const ThreeModelView: React.FC<Props> = ({
                 } catch {
                   /* 忽略 */
                 }
-                // v3.0.6：找到可用于生命感的 normalized 骨骼。
-                // 用 normalized 而非 raw：three-vrm 会在 update() 里把 normalized 姿态同步到原始骨骼，
+                // v3.0.7：抓取待机动画要用的一组 normalized 骨骼，并记录各自 rest 姿态。
+                // 用 normalized 而非 raw：three-vrm 在 update() 里会把 normalized 姿态同步到原始骨骼，
                 // 且不同 VRM 的骨骼层级差异被规范化，同一套角度对所有模型语义一致。
+                // 缺某根骨骼就跳过对应动作（其余照常生效），不因单个模型骨骼缺失整体降级。
                 try {
                   const hm = vrm?.humanoid;
-                  breathBone =
-                    hm?.getNormalizedBoneNode?.('chest') ||
-                    hm?.getNormalizedBoneNode?.('upperChest') ||
-                    hm?.getNormalizedBoneNode?.('spine') ||
-                    null;
-                  idleBone = hm?.getNormalizedBoneNode?.('head') || null;
-                  if (breathBone) breathRestX = breathBone.rotation.x;
-                  if (idleBone) idleRestY = idleBone.rotation.y;
+                  const get = (name: string) => hm?.getNormalizedBoneNode?.(name) || null;
+                  // 呼吸骨骼按优先级挑一个，并记录实际用的 key（tick 里按这个 key 取 rest）
+                  const chest = get('chest');
+                  const upperChest = get('upperChest');
+                  const spine = get('spine');
+                  breathBone = chest || upperChest || spine;
+                  breathBoneKey = chest ? 'chest' : upperChest ? 'upperChest' : 'spine';
+                  headBone = get('head');
+                  armL = get('leftUpperArm');
+                  armR = get('rightUpperArm');
+                  hipsBone = get('hips');
+                  spineBone = spine;
+                  const bones: Record<string, any> = {
+                    chest, upperChest, spine, head: headBone, hips: hipsBone,
+                    leftUpperArm: armL, rightUpperArm: armR,
+                  };
+                  for (const [key, bone] of Object.entries(bones)) {
+                    if (!bone) continue;
+                    restPose[key] = {
+                      x: bone.rotation.x, y: bone.rotation.y, z: bone.rotation.z,
+                      sx: bone.scale.x, sy: bone.scale.y, sz: bone.scale.z,
+                    };
+                  }
                 } catch {
                   breathBone = null;
-                  idleBone = null;
+                  headBone = null;
+                  armL = null;
+                  armR = null;
+                  hipsBone = null;
+                  spineBone = null;
                 }
                 // v3.0.6：解析模型里真实存在的表情名（VRM0 自定义名如 Blink/Joy 与规范名不同）
                 try {

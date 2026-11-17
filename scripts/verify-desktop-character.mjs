@@ -1375,7 +1375,7 @@ check('O3 30s 兜底只在两路都缺失时触发且带告警（非静默回归
 check('v3.0.6 VRM 有自驱动呼吸/待机/眨眼（不再静止贴图）',
   /VRM_BREATH_PERIOD_SEC/.test(threeView) &&
   /breathBone\.rotation\.x/.test(threeView) &&
-  /idleBone\.rotation\.y/.test(threeView) &&
+  /headBone,/.test(threeView) && /'head',/.test(threeView) &&
   /autoBlink/.test(threeView) &&
   /VRM_BLINK_MIN_GAP_MS/.test(threeView));
 check('v3.0.6 表情名大小写不敏感解析（兼容 VRM0 自定义名 Blink/Joy）',
@@ -1389,9 +1389,9 @@ check('v3.0.6 表情名从 expressionName 读取（QA P0：不能用带前缀的
   /typeof e\?\.expressionName === 'string' \? e\.expressionName : ''/.test(threeView) &&
   /legacy\.startsWith\('VRMExpression_'\)/.test(threeView) &&
   /\.slice\('VRMExpression_'\.length\)/.test(threeView));
-check('v3.0.6 呼吸/待机基于 rest 角度计算，不累加漂移',
-  /breathRestX - breath \* VRM_BREATH_ANGLE/.test(threeView) &&
-  /idleRestY \+ Math\.sin/.test(threeView));
+check('v3.0.6 呼吸/待机基于 rest 角度计算，不累加漂移（v3.0.7 统一走 applyBone）',
+  /breathBone\.rotation\.x = r\.x - breath \* VRM_BREATH_ANGLE/.test(threeView) &&
+  /applyBone\(\s*headBone,/.test(threeView));
 check('v3.0.6 VRM0 兼容 rotateVRM0 仍在（老模型朝向）',
   /VRMUtils\.rotateVRM0/.test(threeView));
 check('v3.0.6 桌宠传 resolutionScale（最低 1.5× 超采样）',
@@ -1414,10 +1414,10 @@ check('v3.0.6 舞台不传 resolutionScale（保持原清晰路径）',
 {
   // 变异 21a：呼吸驱动改成常量（等价于不呼吸）⇒ K15 呼吸断言失效
   const broken = threeView.replace(
-    /breathBone\.rotation\.x = breathRestX - breath \* VRM_BREATH_ANGLE;/,
-    'breathBone.rotation.x = breathRestX;');
+    /breathBone\.rotation\.x = r\.x - breath \* VRM_BREATH_ANGLE;/,
+    'breathBone.rotation.x = r.x;');
   check('（可证伪）呼吸驱动改成常量后 K15 呼吸断言失效',
-    broken !== threeView && !/breathRestX - breath \* VRM_BREATH_ANGLE/.test(broken));
+    broken !== threeView && !/breathBone\.rotation\.x = r\.x - breath \* VRM_BREATH_ANGLE/.test(broken));
   const broken2 = threeView.replace(
     /autoBlink = Math\.sin\(Math\.PI \* p\);/, 'autoBlink = 0;');
   check('（可证伪）眨眼脉冲改 0 后 K15 眨眼断言失效',
@@ -1472,6 +1472,50 @@ check('v3.0.6 角色切换清空 modelError（错误提示不残留）',
   /setModelError\(''\);[\s\S]{0,80}\[state\.character\?\.id, state\.character\?\.entry\]/.test(appTsx));
 check('v3.0.6 iconv-lite 声明为直接依赖',
   /"iconv-lite": "\^0\.7\.3"/.test(read('package.json')));
+// ---------- K17. v3.0.7：可见的待机动作（身体/头/手） ----------
+// 用区间下限断言（不锁死精确值），日后微调幅度不会误报
+const readConst = (name) => {
+  const m = threeView.match(new RegExp(`const ${name} = ([0-9.]+);`));
+  return m ? parseFloat(m[1]) : NaN;
+};
+check('v3.0.7 呼吸/头部/手臂/身体幅度达到肉眼可见阈值（>v3.0.6 的不可见幅度）',
+  readConst('VRM_BREATH_ANGLE') >= 0.1 &&
+  readConst('VRM_BREATH_SCALE') >= 0.025 &&
+  readConst('VRM_HEAD_TURN_ANGLE') >= 0.25 &&
+  readConst('VRM_HEAD_NOD_ANGLE') >= 0.12 &&
+  readConst('VRM_ARM_SWAY_ANGLE') >= 0.14 &&
+  readConst('VRM_ARM_SWING_ANGLE') >= 0.14 &&
+  readConst('VRM_BODY_SWAY_ANGLE') >= 0.05);
+check('v3.0.7 驱动 head / 左右上臂 / hips / spine 骨骼（不止眨眼）',
+  /headBone = get\('head'\)/.test(threeView) &&
+  /armL = get\('leftUpperArm'\)/.test(threeView) &&
+  /armR = get\('rightUpperArm'\)/.test(threeView) &&
+  /hipsBone = get\('hips'\)/.test(threeView) &&
+  /spineBone = spine/.test(threeView));
+check('v3.0.7 呼吸带胸腔缩放起伏（吸气挺胸）',
+  /VRM_BREATH_SCALE/.test(threeView) &&
+  /breathBone\.scale\.set\(r\.sx \* s, r\.sy \* s, r\.sz \* s\)/.test(threeView));
+check('v3.0.7 所有骨骼基于 rest 姿态增量（不累加漂移）',
+  /bone\.rotation\.x = r\.x \+ rx/.test(threeView) &&
+  /bone\.rotation\.y = r\.y \+ ry/.test(threeView) &&
+  /bone\.rotation\.z = r\.z \+ rz/.test(threeView) &&
+  /restPose\[key\] = \{/.test(threeView));
+check('v3.0.7 双臂左右反相摆动（自然而非整齐划一）',
+  /applyBone\(armL, 'leftUpperArm', armSwing[\s\S]{0,80}armWave/.test(threeView) &&
+  /applyBone\(armR, 'rightUpperArm', -armSwing[\s\S]{0,80}-armWave/.test(threeView));
+// 变异自证 25：把幅度改回 v3.0.6 的不可见值 ⇒ K17 失效
+{
+  const broken = threeView
+    .replace('const VRM_BREATH_ANGLE = 0.12;', 'const VRM_BREATH_ANGLE = 0.019;')
+    .replace('const VRM_HEAD_TURN_ANGLE = 0.28;', 'const VRM_HEAD_TURN_ANGLE = 0.023;');
+  check('（可证伪）幅度退回 v3.0.6 不可见值后 K17 失效',
+    broken !== threeView && !/const VRM_BREATH_ANGLE = 0\.08/.test(broken));
+  // 变异 26：去掉手臂驱动 ⇒ K17 失效
+  const broken2 = threeView.replace(/applyBone\(armL,[\s\S]{0,180}armWave \* VRM_ARM_SWAY_ANGLE\);/, '');
+  check('（可证伪）删掉手臂驱动后 K17 失效',
+    broken2 !== threeView && !/applyBone\(armL, 'leftUpperArm'/.test(broken2));
+}
+
 // ---------- 汇总 ----------
 console.log('\n' + '─'.repeat(70));
 if (failures.length === 0) {

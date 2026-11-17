@@ -555,7 +555,7 @@ const GUIDE: GuideSection[] = [
       <>
         <p>v3.0.6 起桌面角色对常见模型包的兼容性做了系统增强。</p>
         <ul>
-          <li><b>VRM 会动了</b>：导入的 VRM 角色在桌面上会有<b>呼吸起伏、头部轻微摆动和自然眨眼</b>（无需模型自带动画，也不是固定贴图）。表情与口型按模型实际支持的表情名匹配，包含老式 VRM0 里叫「Blink / Joy / Angry」这类非标准命名。</li>
+          <li><b>VRM 会动了</b>：导入的 VRM 角色在桌面上会有<b>明显的呼吸起伏（吸气挺胸）、头部转动与点头、双臂自然摆动、身体重心微移，以及自然眨眼</b>（v3.0.7 增强：v3.0.6 幅度太小只剩眨眼）（无需模型自带动画，也不是固定贴图）。表情与口型按模型实际支持的表情名匹配，包含老式 VRM0 里叫「Blink / Joy / Angry」这类非标准命名。</li>
           <li><b>桌面不再模糊</b>：桌宠放大后按更高分辨率重新渲染（最低 1.5× 超采样），与角色舞台一样清晰。</li>
           <li><b>格式与编码</b>：支持 VRM 0.x/1.0、GLB/GLTF、Live2D Cubism 4/2、PNG/JPG/WebP/GIF/APNG/AVIF/SVG 立绘；zip 内中文（GBK）与日文（Shift_JIS/CP932）文件名都能正确识别，不会贴图丢失。单文件拖入 <code>.model3.json</code>、<code>.model.json</code> 或图片也能正确导入。多动画 GLB 自动选待机/循环段。</li>
           <li><b>仍不支持</b>：FBX / OBJ / DAE / BLEND / USDZ（会明确提示，不崩不白屏）；Live2D 需自备 Cubism Core/runtime；单包上限 800MB、最多扫描 8 层目录。</li>
