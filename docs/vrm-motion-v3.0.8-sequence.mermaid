@@ -1,0 +1,119 @@
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant M as 主进程 desktopCharacter.ts
+    participant P as preload / ipc.ts
+    participant A as CharacterApp.tsx
+    participant V as ModelView.tsx
+    participant T as ThreeModelView.tsx
+    participant R as vrmPose.ts (纯函数)
+    participant G as three-vrm lookAt
+    participant W as WebGLRenderer
+
+    %% ---------- 场景 1：加载 VRM，识别 rest 姿态并摆自然站姿 ----------
+    rect rgb(238, 245, 255)
+    Note over A,W: 场景 1 · VRM 加载 → T-pose 检测 → 自然站姿
+    A->>V: character(kind='vrm') + expression/blink/dragging + eyeX/eyeY + motionAmplitude + gates
+    V->>T: 透传 props（全部进 ref，useEffect 仍只 [url, kind]）
+    T->>T: GLTFLoader + VRMLoaderPlugin.load(url)
+    T->>T: vrm = gltf.userData.vrm
+    T->>T: if metaVersion==='0' → VRMUtils.rotateVRM0(vrm)（scene.rotation.y = π）
+    T->>R: capture(humanoid)
+    R->>R: hm.getNormalizedBoneNode(chest/upperChest/spine/head/hips/leftUpperArm/...)
+    R->>R: restPose[key] = {x,y,z,sx,sy,sz}（normalized rest 恒 0/0/0/1/1/1）
+    R->>R: 追加抓取 leftLowerArm/rightLowerArm
+    T->>R: detectNaturalBase(vrm, root)
+    R->>R: root.updateWorldMatrix(true,true) → upper/lower 世界坐标相减
+    R->>R: dirLocal = dirWorld.applyQuaternion(invRootWorldQuat)
+    R->>R: armAngleDeg = atan2(|dirLocal.x|, -dirLocal.y) × 180/π
+    R->>R: correctionDeg = armAngleDeg < 25° ? 0 : clamp(15° - armAngleDeg, -80°, 0)
+    R-->>T: basePose.leftUpperArm.z = sign(dirLocal.x)*correctionDeg
+    R-->>T: basePose.{L,R}UpperArm.x = -frontSign × 10°（前屈）
+    R-->>T: basePose.{L,R}LowerArm.x = -frontSign × 12°（肘微屈）
+    T->>T: gazeMarker = new Object3D(); scene.add(gazeMarker)
+    T->>G: vrm.lookAt.target = gazeMarker（autoUpdate 保持默认 true）
+    T->>W: startLoop() → rAF(tick)
+    Note over T: baseBlend 0→1（0.4s 淡入），避免从 T-pose 瞬跳
+    end
+
+    %% ---------- 场景 2：每帧 rAF（门禁 + 幅度 + 三层姿态合成） ----------
+    rect rgb(240, 255, 240)
+    Note over T,W: 场景 2 · rAF tick（账号：动效三档门控）
+    loop 每帧 60fps
+        T->>T: st = stateRef.current；gate = gateRef（isGroupEnabled(settings,'character')）
+        T->>T: amp = clamp(ampRef.current, 0, 1)；k = gate.idle ? amp : 0
+        T->>R: applyIdleDeltas(tSec, k)
+        R->>R: hips/spine 重心摇摆 · chest 呼吸+缩放 · head 转/点/倾 · 双臂反相摆
+        R->>R: 全部 delta × k；写 bone.rotation = rest + base*baseBlend + delta
+        T->>R: applyGazeHead(yawRad, pitchRad, 0.35*k, dt)
+        R->>R: head.rotation.x/y 追加平滑后的 gaze 分量（yaw→y，pitch→x）
+        T->>T: 自动眨眼脉冲（gate.idle 时才调度；外部 blink prop 恒生效）
+        T->>T: 表情 / 口型 setValue 平滑逼近（不受幅度影响）
+        T->>T: head.getWorldPosition(headPos)（可能滞后一帧，16ms 无感）
+        T->>G: gazeMarker.position = headPos + (tan(yaw)*D, tan(pitch)*D, D)
+        T->>G: vrm.update(dt)
+        G->>G: humanoid.update()：normalized→raw 骨骼同步
+        G->>G: lookAt.update()：target 世界坐标 → yaw/pitch → 眼球左/右/上/下
+        G->>G: expressionManager.update() / springBone / materials
+        T->>W: renderer.render(scene, camera)
+    end
+    end
+
+    %% ---------- 场景 3：全局光标 → 眼神 ----------
+    rect rgb(255, 248, 232)
+    Note over U,G: 场景 3 · 全局光标跟随（30Hz 推送 → 60Hz 渲染）
+    U->>M: 移动鼠标（任意屏幕位置）
+    loop 每 33ms
+        M->>M: screen.getCursorScreenPoint() → p
+        M->>P: webContents.send('dc:cursor', {x: p.x-b.x, y: p.y-b.y})
+        P->>A: api.onDcCursor(cb) 回调
+        A->>A: cx,cy = charRef.getBoundingClientRect() 中心
+        A->>A: eye.x = clamp((x-cx)/170, -1, 1)；eye.y = clamp((y-cy)/170, -1, 1)
+        A->>A: setEye({x,y}) → 重渲染
+        A->>V: eyeX={eye.x} eyeY={eye.y}
+        V->>T: eyeX/eyeY → eyeRef.current（不重建场景）
+    end
+    Note over T,G: tick 内 yaw = eyeX × 30°；pitch = eyeY × 22°（屏幕下方→低头）
+    T->>G: gazeMarker 位置更新 → lookAt 自动跟随
+    end
+
+    %% ---------- 场景 4：设置改动（幅度 / 开关 / 门禁） ----------
+    rect rgb(248, 238, 255)
+    Note over U,T: 场景 4 · 设置面板改幅度 / 子开关 / 三档门禁
+    U->>A: 设置页改 motionAmplitude 或 animCharacterIdle/Gaze 或 animMode
+    A->>P: api.getSettings()（onSettingsChanged 回调）
+    P-->>A: 新 settings
+    A->>A: settingsRef.current = s；setSettings(s)（新增 state，触发重渲染）
+    A->>A: applyAnimControl(document, s, 'character')
+    A->>A: idleOn = isGroupEnabled(s,'character') && s.animCharacterIdle !== false
+    A->>A: gazeOn = isGroupEnabled(s,'character') && s.animCharacterGaze !== false
+    A->>V: motionAmplitude={character.motionAmplitude ?? 1} motionEnabled/idleOn gazeEnabled/gazeOn
+    V->>T: ampRef.current / gateRef.current（不重建场景）
+    alt gazeOn 从 true → false
+        T->>G: vrm.lookAt.autoUpdate = false；vrm.lookAt.reset()（下一帧应用 0,0）
+    else gate.idle=false
+        T->>R: 只写 basePose（零 delta），冻结 sine；自动眨眼停
+    end
+    end
+
+    %% ---------- 场景 5：拖拽 / 菜单让位 ----------
+    rect rgb(255, 238, 238)
+    Note over U,T: 场景 5 · 交互让位
+    U->>A: 按住角色开始拖拽 / 打开右键菜单
+    A->>A: setDragging(true) / setMenuOpen(true)
+    A->>V: gestureHold={dragging || menuOpen}
+    V->>T: gestureHoldRef.current
+    T->>T: 拖拽：gazeRatio 与 idle k 用 τ=0.2s 平滑降到 0；菜单：仅 gaze 降到 0
+    U->>A: 松手 / 关菜单
+    A->>V: gestureHold=false → 平滑恢复
+    end
+
+    %% ---------- 场景 6：舞台窗视线 ----------
+    rect rgb(238, 255, 255)
+    Note over U,V: 场景 6 · 角色舞台（主窗内，不依赖 dc:cursor）
+    U->>A: 右键菜单 → 打开角色舞台
+    A->>A: CharacterStage 挂载（主窗 document）
+    U->>A: 主窗内 mousemove（window.addEventListener）
+    A->>A: 相对 .stage-model 盒子中心算 eye（同样 /170）
+    A->>V: eyeX/eyeY → ModelView → ThreeModelView（与主路径同构）
+    end

@@ -1912,6 +1912,12 @@
  "settings.cursorHotspotHint": "滑鼠實際點擊位置＝圖上的紅點位置。拖曳紅點即可調整，拖曳過程中立即生效，放開後儲存。",
  "settings.cursorImageInvalid": "無法辨識該檔案，請選擇有效的圖片（PNG / JPG / WebP）",
  "settings.cursorImageTooLarge": "圖片檔案過大（上限 4MB），請選擇較小的圖片",
- "settings.cursorImageDecodeFailed": "圖片解碼失敗，請換一張試試"
+ "settings.cursorImageDecodeFailed": "圖片解碼失敗，請換一張試試",
+ "characters.motionAmplitude": "動作幅度",
+ "characters.motionAmplitudeHint": "僅影響 3D 模型的待機動作；0% 為自然站姿靜止，眼神跟隨不受影響",
+ "characters.motionAmplitudeValue": "{v}%",
+ "animCtl.groupCharacterIdle": "待機動作（呼吸 / 點頭 / 擺臂）",
+ "animCtl.groupCharacterGaze": "視線跟隨滑鼠（3D 模型）",
+ "animCtl.groupCharacterSubHint": "以上開關僅在「桌面角色動畫」分組開啟時生效"
 }
 

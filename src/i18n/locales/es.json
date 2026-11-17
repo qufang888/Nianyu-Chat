@@ -1912,6 +1912,12 @@
  "settings.cursorHotspotHint": "La posición real del clic = el punto rojo de la imagen. Arrastra el punto para ajustarlo: se aplica al instante mientras arrastras y se guarda al soltar.",
  "settings.cursorImageInvalid": "No se pudo reconocer el archivo. Elige una imagen válida (PNG / JPG / WebP).",
  "settings.cursorImageTooLarge": "La imagen es demasiado grande (límite 4 MB). Elige una más pequeña.",
- "settings.cursorImageDecodeFailed": "No se pudo decodificar la imagen. Prueba con otra."
+ "settings.cursorImageDecodeFailed": "No se pudo decodificar la imagen. Prueba con otra.",
+ "characters.motionAmplitude": "Amplitud de movimiento",
+ "characters.motionAmplitudeHint": "Solo afecta a la animación en reposo de los modelos 3D; 0 % mantiene la postura natural, la mirada sigue activa",
+ "characters.motionAmplitudeValue": "{v}%",
+ "animCtl.groupCharacterIdle": "Movimiento en reposo (respiración / cabeza / brazos)",
+ "animCtl.groupCharacterGaze": "Seguimiento ocular del ratón (modelos 3D)",
+ "animCtl.groupCharacterSubHint": "Estos interruptores solo se aplican cuando «Animaciones de personajes de escritorio» está activado"
 }
 

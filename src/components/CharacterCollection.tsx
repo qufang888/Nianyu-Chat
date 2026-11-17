@@ -27,6 +27,19 @@ import {
 /** 频率达到该值时数值转警示色并追加成本提示（只讲成本，不讲"实际速率"）。 */
 const SPEAK_RATE_WARN_THRESHOLD = 20;
 
+/** v3.0.8：VRM 待机动作幅度滑块范围 / 步长 / 缺省（缺省 1 保证老用户零感知）。 */
+const MOTION_AMP_MIN = 0;
+const MOTION_AMP_MAX = 1;
+const MOTION_AMP_STEP = 0.05;
+const MOTION_AMP_DEFAULT = 1;
+
+/** 挡住脏数据（NaN / 越界 / 字符串），与 types.ts 的可选字段读侧口径一致。 */
+function normalizeMotionAmplitude(v: number | undefined): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return MOTION_AMP_DEFAULT;
+  return Math.max(MOTION_AMP_MIN, Math.min(MOTION_AMP_MAX, n));
+}
+
 /** 展示单位的尝试顺序（自动兜底时按此顺序挑第一个能显示 ≥1 的单位）。 */
 const RATE_UNIT_ORDER: SpeakRateUnit[] = ['min', 'hour', 'day'];
 
@@ -410,6 +423,8 @@ export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageR
             const displayUnit = rateDisplay.unit;
             const displayRate = rateDisplay.value;
             const displayMax = rateDisplay.max;
+            // v3.0.8：幅度按角色持久化，缺省 1；占位/图片角色也显示（导入 3D 后行为一致）。
+            const motionAmp = normalizeMotionAmplitude(c.motionAmplitude);
             return (
               <div className={`dc-coll-card${isActive ? ' active' : ''}`} key={c.id}>
                 <div className="dc-coll-preview">
@@ -538,6 +553,30 @@ export const CharacterCollection: React.FC<CharacterCollectionProps> = ({ stageR
                     {rate >= SPEAK_RATE_WARN_THRESHOLD && (
                       <div className="dc-coll-rate-warn">{t('characters.speakRateWarn')}</div>
                     )}
+                  </div>
+                  {/* v3.0.8：VRM 待机动作幅度（按角色持久化，复用 dc-coll-rate-* 结构/主题变量）。
+                      只影响程序化待机 delta；0% 身体停在自然站姿，但眼球视线跟随照常工作。 */}
+                  <div className="dc-coll-rate">
+                    <div className="dc-coll-rate-head">
+                      <span className="dc-coll-rate-label">{t('characters.motionAmplitude')}</span>
+                      <span className="dc-coll-rate-value">
+                        {t('characters.motionAmplitudeValue', { v: String(Math.round(motionAmp * 100)) })}
+                      </span>
+                    </div>
+                    <input
+                      className="dc-coll-rate-range"
+                      type="range"
+                      min={MOTION_AMP_MIN}
+                      max={MOTION_AMP_MAX}
+                      step={MOTION_AMP_STEP}
+                      value={motionAmp}
+                      aria-label={t('characters.motionAmplitude')}
+                      onWheel={(e) => e.preventDefault()}
+                      onChange={(e) =>
+                        void patchCharacter(c.id, { motionAmplitude: normalizeMotionAmplitude(Number(e.target.value)) })
+                      }
+                    />
+                    <div className="dc-coll-rate-hint">{t('characters.motionAmplitudeHint')}</div>
                   </div>
                   <div className="dc-coll-bind">
                     <span className="muted">{t('characters.bind')}</span>

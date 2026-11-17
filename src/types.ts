@@ -657,6 +657,12 @@ export interface DesktopCharacter {
    * - 持久化于 settings.desktopCharacters[]，写入遵守「整数组覆盖」语义（HC-8）。
    */
   speakRateUnit?: SpeakRateUnit;
+  /**
+   * VRM 程序化待机动作幅度倍率（v3.0.8；0~1，缺省 1 = 与 v3.0.7 观感一致）。
+   * 0 = 停在自然站姿；不缩放眼球 lookAt / 眨眼 / 口型 / 表情。
+   * 每角色独立持久化，走 patchCharacter 整数组覆盖（HC-8）。
+   */
+  motionAmplitude?: number;
   /** 导入时的格式提示（非原生可渲染格式的说明文案键后缀） */
   note?: string;
 }
@@ -923,6 +929,10 @@ export interface AppSettings {
   animCharacterBubbleStepSec?: number;
   /** 气泡停留上限（秒，3~30，步长 1）。缺省 10 */
   animCharacterBubbleMaxSec?: number;
+  /** v3.0.8：character 分组内程序化待机（呼吸/头/臂/重心）独立开关，缺省 true */
+  animCharacterIdle?: boolean;
+  /** v3.0.8：character 分组内全局光标视线跟随独立开关，缺省 true */
+  animCharacterGaze?: boolean;
   // ===== 自定义动态光标 =====
   customCursor: {
     enabled: boolean; // 总开关：false=系统原生光标，true=动态光标（DOM 字形 + Canvas 特效）
@@ -1413,6 +1423,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
       speakRate: 2,
       // v3.0.4 P1：出厂展示单位 = 分钟（与 2 条/分一致，单位换算后仍是 2）。
       speakRateUnit: 'min',
+      // v3.0.8：占位角色也补齐幅度字段，导入替换后行为一致。
+      motionAmplitude: 1,
     },
   ],
   characterRuntime: {
@@ -1430,6 +1442,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   animCharacterBubbleBaseSec: 3,
   animCharacterBubbleStepSec: 1,
   animCharacterBubbleMaxSec: 10,
+  animCharacterIdle: true,
+  animCharacterGaze: true,
   customCursor: {
     enabled: false,
     lerpSpeed: 0.25,

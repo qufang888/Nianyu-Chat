@@ -1912,6 +1912,12 @@
  "settings.cursorHotspotHint": "La position réelle du clic = le point rouge sur l’image. Faites glisser le point pour le régler : l’effet est immédiat pendant le glissement et enregistré au relâchement.",
  "settings.cursorImageInvalid": "Ce fichier n’a pas pu être reconnu. Veuillez choisir une image valide (PNG / JPG / WebP).",
  "settings.cursorImageTooLarge": "L’image est trop volumineuse (limite 4 Mo). Veuillez en choisir une plus petite.",
- "settings.cursorImageDecodeFailed": "L’image n’a pas pu être décodée. Veuillez en essayer une autre."
+ "settings.cursorImageDecodeFailed": "L’image n’a pas pu être décodée. Veuillez en essayer une autre.",
+ "characters.motionAmplitude": "Amplitude du mouvement",
+ "characters.motionAmplitudeHint": "N'affecte que l'animation au repos des modèles 3D ; 0 % fige la posture naturelle, le suivi du regard reste actif",
+ "characters.motionAmplitudeValue": "{v}%",
+ "animCtl.groupCharacterIdle": "Animation au repos (respiration / tête / bras)",
+ "animCtl.groupCharacterGaze": "Suivi du regard à la souris (modèles 3D)",
+ "animCtl.groupCharacterSubHint": "Ces interrupteurs ne s'appliquent que lorsque « Animations des personnages sur le bureau » est activé"
 }
 

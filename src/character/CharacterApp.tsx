@@ -16,7 +16,7 @@ import type { CharacterExpression } from './PlaceholderCharacter';
 import { ModelView } from './ModelView';
 import { DESKTOP_RESOLUTION_SCALE_MIN } from './ThreeModelView';
 import { pickIdleAction } from './behaviors';
-import { applyAnimControl, getGroupAnimSpeed, type AnimSettingsLike } from '../utils/animControl';
+import { applyAnimControl, getGroupAnimSpeed, isGroupEnabled, type AnimSettingsLike } from '../utils/animControl';
 import { playSoundSync } from '../utils/sound';
 // v3.0.3：频率派生的唯一真源（与主进程共用同一份 ⇒ 护栏与调度不可能漂移）。
 import { deriveLineScheduleForCharacter, type LineSchedule } from '../utils/lineSchedule';
@@ -117,6 +117,8 @@ export const CharacterApp: React.FC = () => {
   const [expression, setExpression] = useState<CharacterExpression>('neutral');
   const [blink, setBlink] = useState(false);
   const [eye, setEye] = useState({ x: 0, y: 0 });
+  /** v3.0.8：设置快照（rAF 的门禁/幅度经 ref 传递；这里只触发一次重渲染把新值写进 ref） */
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [dragging, setDragging] = useState(false);
   const [bubble, setBubble] = useState<string | null>(null);
   /** 气泡正在播放收回动画：此时仍挂载 .dc-bubble.closing，动画结束才卸载。 */
@@ -169,6 +171,10 @@ export const CharacterApp: React.FC = () => {
 
   const scale = state.character?.scale ?? 1;
   const runtime = state.runtime;
+  // v3.0.8：三档门禁（character 分组）+ 两个子开关的合取；缺省 true 保证老设置不变。
+  const charGroupOn = settings ? isGroupEnabled(settings, 'character') : true;
+  const idleOn = charGroupOn && settings?.animCharacterIdle !== false;
+  const gazeOn = charGroupOn && settings?.animCharacterGaze !== false;
   /** 角色数据是否已加载（用于调度器的依赖：避免用对象身份做依赖导致每次 dc:state 都重置定时器）。 */
   const hasCharacter = !!state.character;
 
@@ -404,6 +410,7 @@ export const CharacterApp: React.FC = () => {
       // 记住最新设置：菜单/气泡的 JS 侧卸载计时与 CSS 变量都从这里取，
       // 保证「改设置后下一次开合菜单/弹气泡立即生效」。
       settingsRef.current = s as AppSettings | null;
+      setSettings(s as AppSettings | null);
       applyAnimControl(document, s, 'character');
       // 把桌宠动画的基准时长写进 CSS 变量（写在角色窗 documentElement 上）。
       // CSS 侧一律写成 calc(var(--dc-*-anim, 默认) * var(--anim-speed, 1))，
@@ -868,6 +875,11 @@ export const CharacterApp: React.FC = () => {
             dragging={dragging}
             eyeX={eye.x}
             eyeY={eye.y}
+            // v3.0.8：幅度按角色；门禁与让位全走 ref，不会重建 WebGL 场景。
+            motionAmplitude={state.character.motionAmplitude ?? 1}
+            motionEnabled={idleOn}
+            gazeEnabled={gazeOn}
+            gestureHold={dragging || menuOpen}
             // v3.0.6：桌宠画布被 CSS scale(--dc-scale) 放大，渲染缓冲必须同步放大才不糊；
             // 最低 1.5× 超采样，让 scale=1 时也和舞台一样清晰（舞台不传此 prop）。
             resolutionScale={Math.max(DESKTOP_RESOLUTION_SCALE_MIN, scale)}

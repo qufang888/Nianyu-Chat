@@ -1912,6 +1912,12 @@
  "settings.cursorHotspotHint": "A posição real do clique = o ponto vermelho na imagem. Arraste o ponto para ajustar: aplica-se de imediato durante o arraste e é guardado ao largar.",
  "settings.cursorImageInvalid": "Não foi possível reconhecer o ficheiro. Escolha uma imagem válida (PNG / JPG / WebP).",
  "settings.cursorImageTooLarge": "A imagem é demasiado grande (limite 4 MB). Escolha uma menor.",
- "settings.cursorImageDecodeFailed": "Não foi possível descodificar a imagem. Tente outra."
+ "settings.cursorImageDecodeFailed": "Não foi possível descodificar a imagem. Tente outra.",
+ "characters.motionAmplitude": "Amplitude do movimento",
+ "characters.motionAmplitudeHint": "Afeta apenas a animação em repouso de modelos 3D; 0% mantém a postura natural, o acompanhamento visual continua ativo",
+ "characters.motionAmplitudeValue": "{v}%",
+ "animCtl.groupCharacterIdle": "Movimento em repouso (respiração / cabeça / braços)",
+ "animCtl.groupCharacterGaze": "Acompanhamento visual do mouse (modelos 3D)",
+ "animCtl.groupCharacterSubHint": "Estas opções só se aplicam quando «Animações de personagens de secretária» está ativado"
 }
 

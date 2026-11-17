@@ -24,9 +24,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
-import type { DesktopCharacter } from '../types';
+import type { AppSettings, DesktopCharacter } from '../types';
 import type { CharacterExpression } from '../character/PlaceholderCharacter';
 import { ModelView } from '../character/ModelView';
+import { isGroupEnabled } from '../utils/animControl';
+
+/** 视线归一化除数（与角色窗共享同一口径：角色中心 ±170px ⇒ eye ±1）。 */
+const STAGE_EYE_DIVISOR = 170;
 
 const STAGE_LINES = ['今天想聊点什么？', '我在这里，慢慢说就好。', '你笑的时候，我也跟着开心。', '要不要一起发会儿呆？'];
 /** 舞台缩放范围与步长（集中定义：滚轮与滑块共用，避免两处阈值漂移）。
@@ -56,7 +60,15 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
   const [bubble, setBubble] = useState<string | null>(null);
   const [expression, setExpression] = useState<CharacterExpression>('neutral');
   const [mouth, setMouth] = useState(0);
+  /** v3.0.8：主窗 mousemove 换算出的角色视线（-1~1） */
+  const [eye, setEye] = useState({ x: 0, y: 0 });
+  /** v3.0.8：设置快照（子开关 + character 三档门禁） */
+  const [settings, setSettings] = useState<AppSettings | null>(null);
+  /** v3.0.8：舞台拖动旋转时动作让位（与角色窗拖拽同语义） */
+  const [stageDragging, setStageDragging] = useState(false);
   const [stageError, setStageError] = useState('');
+  /** v3.0.8：视线归一化的参考盒子（.stage-model） */
+  const modelBoxRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ x: number; y: number; rx: number; ry: number } | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const rafRef = useRef(0);
@@ -87,6 +99,41 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
     audioCtxRef.current?.close().catch(() => {});
     if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
   }, [stopMouth]);
+
+  // ===== v3.0.8：舞台窗视线跟随（主窗可交互，直接收 window.mousemove，零 IPC 改动）=====
+  // 角色窗走主进程 30Hz dc:cursor；舞台在主窗里，mousemove 现成可用。
+  // 注意：这里只写 state，ThreeModelView 内部全部走 ref，不会重建 WebGL 场景。
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const el = modelBoxRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      setEye({
+        x: Math.max(-1, Math.min(1, (e.clientX - cx) / STAGE_EYE_DIVISOR)),
+        y: Math.max(-1, Math.min(1, (e.clientY - cy) / STAGE_EYE_DIVISOR)),
+      });
+    };
+    window.addEventListener('mousemove', onMove);
+    return () => window.removeEventListener('mousemove', onMove);
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    const apply = (s: AppSettings | null) => {
+      if (alive) setSettings(s);
+    };
+    void api.getSettings().then((s: any) => apply(s as AppSettings | null));
+    const off = api.onSettingsChanged(() => {
+      void api.getSettings().then((s: any) => apply(s as AppSettings | null));
+    });
+    return () => {
+      alive = false;
+      off();
+    };
+  }, []);
 
   // ===== v3.0.3：外部缩放同步（桌面滚轮 → 舞台滑块）=====
   // 桌面滚轮改大小 → 主进程落盘并广播 settings:changed → 舞台订阅到后按 id 找到角色 → 更新滑块。
@@ -164,6 +211,7 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
   const onPointerDown = (e: React.PointerEvent) => {
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     dragRef.current = { x: e.clientX, y: e.clientY, rx: rotX, ry: rotY };
+    setStageDragging(true);
   };
   const onPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current;
@@ -173,6 +221,7 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
   };
   const onPointerUp = (e: React.PointerEvent) => {
     dragRef.current = null;
+    setStageDragging(false);
     (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
   };
 
@@ -274,6 +323,10 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
     }
   };
 
+  const charGroupOn = settings ? isGroupEnabled(settings, 'character') : true;
+  const idleOn = charGroupOn && settings?.animCharacterIdle !== false;
+  const gazeOn = charGroupOn && settings?.animCharacterGaze !== false;
+
   // 渲染失败提示：区分「缺运行时」与「模型本身加载失败」，前者给一键打开运行库目录
   const needRuntime = stageError === 'missing-cubism4' || stageError === 'missing-cubism2';
   const errText = needRuntime
@@ -316,6 +369,7 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
                   旋转仍是舞台专属的纯预览姿态，不写回桌面。
                   透视距离随 zoom 同步放大 ⇒ 相对畸变不变，旋转手感与 v3.0.2 一致。 */}
               <div
+                ref={modelBoxRef}
                 className="stage-model"
                 style={{ transform: `rotateX(${rotX}deg) rotateY(${rotY}deg)` }}
               >
@@ -325,6 +379,12 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
                   blink={false}
                   dragging={false}
                   mouth={mouth}
+                  eyeX={eye.x}
+                  eyeY={eye.y}
+                  motionAmplitude={character.motionAmplitude ?? 1}
+                  motionEnabled={idleOn}
+                  gazeEnabled={gazeOn}
+                  gestureHold={stageDragging}
                   zoom={zoom}
                   onError={(m) => setStageError(m)}
                 />

@@ -1516,6 +1516,115 @@ check('v3.0.7 双臂左右反相摆动（自然而非整齐划一）',
     broken2 !== threeView && !/applyBone\(armL, 'leftUpperArm'/.test(broken2));
 }
 
+// ---------- K18. v3.0.8：VRM 自然站姿 / 视线跟随 / 按角色幅度 ----------
+const pose = read('src/character/vrmPose.ts');
+
+// K18-1 三层姿态：rest 快照只读、basePose 一次性探测、writeBone 统一合成。
+check('K18-1 三层姿态存在（restPose 冻结 + basePose + writeBone 合成式）',
+  /const restPose/.test(threeView) &&
+  /restPose\[key\] = \{/.test(threeView) &&
+  /basePose: Record<string, Partial<PoseSnapshot>>/.test(pose) &&
+  /basePose\[/.test(pose) &&
+  /writeBone\(/.test(threeView) &&
+  /r\.x \+ b\.x \* blend \+ dx/.test(pose));
+
+// K18-2 自然站姿：世界坐标探测上下臂、atan2 求与竖直夹角、15° 目标与 25° 免修正阈值。
+check('K18-2 自然站姿运行时探测（LowerArm / atan2 / 15° 目标 / <25° 不修正）',
+  /detectNaturalBase\(vrm, rig\)/.test(threeView) &&
+  /getNormalizedBoneNode\?\.\(name\)/.test(pose) &&
+  /leftLowerArm/.test(pose) && /rightLowerArm/.test(pose) &&
+  /atan2\(Math\.abs\(dirWorld\.x\), -dirWorld\.y\)/.test(pose) &&
+  /VRM_BASE_ARM_SLOPE_DEG = 15/.test(pose) &&
+  /VRM_ARM_NATURAL_THRESHOLD_DEG = 25/.test(pose));
+
+// K18-3 视线接线：3.4.0 的真实 API 是 target:Object3D + autoUpdate，不存在 lookAt(yaw,pitch)。
+check('K18-3 vrm.lookAt.target = gazeMarker（scene 挂载 + autoUpdate 受门禁控制）',
+  /vrm\.lookAt\.target = gazeMarker/.test(threeView) &&
+  /scene\.add\(gazeMarker\)/.test(threeView) &&
+  /autoUpdate = groupOn && !!g\.gaze/.test(threeView) &&
+  !/vrm\.lookAt\.lookAt\(/.test(threeView));
+
+// K18-4 视线 prop 全链路：角色窗 dc:cursor 与舞台窗 mousemove 都送到 ThreeModelView。
+check('K18-4 eyeX/eyeY 从角色窗与舞台窗贯通到 ThreeModelView',
+  /eyeX=\{eye\.x\}/.test(appTsx) && /eyeY=\{eye\.y\}/.test(appTsx) &&
+  /eyeX = 0/.test(modelView) &&
+  /<ThreeModelView[\s\S]{0,600}eyeX=\{eyeX\}/.test(modelView) &&
+  /addEventListener\('mousemove'/.test(stage) &&
+  /eyeX=\{eye\.x\}/.test(stage));
+
+// K18-5 数据模型与 UI：幅度按角色、两个子开关按全局。
+check('K18-5 motionAmplitude 角色字段 + 卡片滑块 + 两个子开关',
+  /motionAmplitude\?: number/.test(types) &&
+  /animCharacterIdle\?: boolean/.test(types) &&
+  /animCharacterGaze\?: boolean/.test(types) &&
+  /motionAmplitude: 1/.test(types) &&
+  /patchCharacter\(c\.id, \{ motionAmplitude:/.test(coll) &&
+  /MOTION_AMP_STEP = 0\.05/.test(coll) &&
+  /animCharacterIdle/.test(settings) && /animCharacterGaze/.test(settings));
+
+// K18-6 三档门禁进入 rAF：所有-off 档不再写骨骼（加载时已落一次自然站姿）。
+check('K18-6 VRM rAF 消费 character 三档门禁（不再无条件写骨骼）',
+  /gateRef/.test(threeView) &&
+  /isGroupEnabled\(settings, 'character'\)/.test(appTsx) &&
+  /const groupOn = !!\(g\.motion \|\| g\.gaze\)/.test(threeView) &&
+  /if \(groupOn\) \{/.test(threeView) &&
+  /autoUpdate = groupOn && !!g\.gaze/.test(threeView));
+
+// K18-7 i18n 10 处：6 新键在 translations.ts（zh+en）与 8 个 JSON 中齐全、非空、占位符一致。
+const MOTION_KEYS = [
+  'characters.motionAmplitude', 'characters.motionAmplitudeHint', 'characters.motionAmplitudeValue',
+  'animCtl.groupCharacterIdle', 'animCtl.groupCharacterGaze', 'animCtl.groupCharacterSubHint',
+];
+{
+  const transOk = MOTION_KEYS.every((key) => {
+    const esc = key.replace(/\./g, '\\.');
+    return (trans.match(new RegExp(`'${esc}':`, 'g')) || []).length === 2;
+  });
+  const localesOk = LOCALE_CODES.every((lang) => {
+    let json = {};
+    try {
+      json = JSON.parse(read(`src/i18n/locales/${lang}.json`));
+    } catch {
+      return false;
+    }
+    return MOTION_KEYS.every((key) => typeof json[key] === 'string' && json[key].trim()) &&
+      json['characters.motionAmplitudeValue'] === '{v}%';
+  });
+  const placeholdersOk = (trans.match(/'characters\.motionAmplitudeValue': '\{v\}%'/g) || []).length === 2;
+  check('K18-7 i18n 10 处一致（6 新键 / 无空值 / {v} 占位符一致）',
+    transOk && localesOk && placeholdersOk);
+}
+
+// 变异自证：改坏即失败（5 组）
+{
+  // 1. 删掉 lookAt.target 接线 ⇒ K18-3
+  const b1 = threeView.replace('vrm.lookAt.target = gazeMarker;', '');
+  check('（可证伪）删掉 lookAt.target 后 K18-3 失效',
+    b1 !== threeView && !/vrm\.lookAt\.target = gazeMarker/.test(b1));
+
+  // 2. 删掉自然站姿探测调用 ⇒ K18-2
+  const b2 = threeView.replace('detectNaturalBase(vrm, rig);', '');
+  check('（可证伪）删掉 detectNaturalBase 调用后 K18-2 失效',
+    b2 !== threeView && !/detectNaturalBase\(vrm, rig\)/.test(b2));
+
+  // 3. 只从 ThreeModelView 分支移除 eyeX（占位角色分支仍保留）⇒ K18-4
+  const idx = modelView.indexOf('<ThreeModelView');
+  const b3 = idx < 0 ? modelView : modelView.slice(0, idx) + modelView.slice(idx).replace('eyeX={eyeX}', '');
+  check('（可证伪）ThreeModelView 分支去掉 eyeX 后 K18-4 失效',
+    idx >= 0 && b3 !== modelView &&
+    !/<ThreeModelView[\s\S]{0,600}eyeX=\{eyeX\}/.test(b3));
+
+  // 4. 幅度默认从 1 改成 0 ⇒ K18-5
+  const b4 = types.replace('motionAmplitude: 1,', 'motionAmplitude: 0,');
+  check('（可证伪）幅度默认改 0 后 K18-5 失效',
+    b4 !== types && !/motionAmplitude: 1/.test(b4));
+
+  // 5. rAF 门禁改硬编码 true ⇒ K18-6
+  const b5 = threeView.replace('const groupOn = !!(g.motion || g.gaze);', 'const groupOn = true;');
+  check('（可证伪）rAF 门禁改硬编码 true 后 K18-6 失效',
+    b5 !== threeView && !/const groupOn = !!\(g\.motion \|\| g\.gaze\)/.test(b5));
+}
+
 // ---------- 汇总 ----------
 console.log('\n' + '─'.repeat(70));
 if (failures.length === 0) {

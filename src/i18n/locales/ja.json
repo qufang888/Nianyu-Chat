@@ -1912,6 +1912,12 @@
  "settings.cursorHotspotHint": "実際のクリック位置＝画像上の赤い点。赤い点をドラッグして調整できます。ドラッグ中は即座に反映され、指を離すと保存されます。",
  "settings.cursorImageInvalid": "ファイルを認識できませんでした。有効な画像（PNG / JPG / WebP）を選択してください。",
  "settings.cursorImageTooLarge": "画像ファイルが大きすぎます（上限 4MB）。より小さい画像を選んでください。",
- "settings.cursorImageDecodeFailed": "画像をデコードできませんでした。別の画像をお試しください。"
+ "settings.cursorImageDecodeFailed": "画像をデコードできませんでした。別の画像をお試しください。",
+ "characters.motionAmplitude": "動作の幅",
+ "characters.motionAmplitudeHint": "3Dモデルの待機動作にのみ影響します。0% では自然な立ち姿で静止し、視線追従は維持されます",
+ "characters.motionAmplitudeValue": "{v}%",
+ "animCtl.groupCharacterIdle": "待機動作（呼吸 / 首振り / 腕振り）",
+ "animCtl.groupCharacterGaze": "マウス視線追従（3Dモデル）",
+ "animCtl.groupCharacterSubHint": "これらのスイッチは「デスクトップキャラクターのアニメーション」が有効な場合のみ適用されます"
 }
 

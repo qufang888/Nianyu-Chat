@@ -1,0 +1,181 @@
+classDiagram
+    %% ===== 数据层（src/types.ts）=====
+    class DesktopCharacter {
+        +string id
+        +string name
+        +DesktopCharacterKind kind
+        +string[] files
+        +string entry
+        +boolean enabled
+        +number scale
+        +boolean behavior
+        +boolean bubble
+        +number speakRate
+        +SpeakRateUnit speakRateUnit
+        +number motionAmplitude
+    }
+    note for DesktopCharacter "motionAmplitude 新增：0~1 倍率，缺省 1。\n只缩放 VRM 程序化待机动作，不影响眼球 lookAt / 眨眼 / 口型。"
+
+    class AppSettings {
+        +AnimMode animMode
+        +Record~string,boolean~ animGroups
+        +boolean animCharacterIdle
+        +boolean animCharacterGaze
+        +number animCharacterMenuSec
+        +number animCharacterBubbleSec
+        +DesktopCharacter[] desktopCharacters
+    }
+    note for AppSettings "animCharacterIdle / animCharacterGaze 新增：\ncharacter 分组内的两个独立子开关，缺省 true。"
+
+    class CharacterRuntimeSettings {
+        +boolean enabled
+        +number x
+        +number y
+        +boolean alwaysOnTop
+        +boolean passThroughLocked
+        +string activeId
+    }
+
+    %% ===== 姿态引擎（src/character/vrmPose.ts，新增纯函数模块）=====
+    class PoseSnapshot {
+        +number x
+        +number y
+        +number z
+        +number sx
+        +number sy
+        +number sz
+    }
+
+    class ArmRestProbe {
+        +number armAngleDeg
+        +number sideSign
+        +boolean detected
+        +number correctionDeg
+    }
+
+    class VRMPoseRig {
+        +Record~string,Object3D~ bones
+        +Record~string,PoseSnapshot~ restPose
+        +Record~string,PoseSnapshot~ basePose
+        +number baseBlend
+        +capture(humanoid) VRMPoseRig
+        +detectNaturalBase(vrm, root) ArmRestProbe
+        +writeBone(key, dx, dy, dz, scaleMul) void
+        +applyIdleDeltas(tSec, amp) void
+        +applyGazeHead(yawRad, pitchRad, ratio, dt) void
+    }
+    note for VRMPoseRig "三层姿态：restPose（加载时只读快照，normalized rest 恒为 0/0/0/1/1/1）\n→ basePose（检测后一次性算出的自然站姿偏置）\n→ 每帧重算的 sine/呼吸/凝视增量。\nwriteBone 统一合成：rotation = rest + base*blend + delta。"
+
+    class GazeMapper {
+        +number eyeX
+        +number eyeY
+        +number yawRad
+        +number pitchRad
+        +Object3D marker
+        +mapEye(eyeX, eyeY) void
+        +placeMarker(headWorldPos, frontSign) void
+        +smooth(prev, next, dt, tau) number
+    }
+
+    %% ===== 渲染组件 =====
+    class ModelView {
+        +DesktopCharacter character
+        +CharacterExpression expression
+        +number mouth
+        +boolean blink
+        +boolean dragging
+        +number eyeX
+        +number eyeY
+        +number zoom
+        +number resolutionScale
+        +number motionAmplitude
+        +boolean motionEnabled
+        +boolean gazeEnabled
+        +boolean gestureHold
+        +onError(msg) void
+    }
+
+    class ThreeModelView {
+        -useRef eyeRef
+        -useRef ampRef
+        -useRef gateRef
+        -VRMPoseRig poseRig
+        -VRMLookAt lookAt
+        -Object3D gazeMarker
+        +Props props
+        +mount(THREE, obj) void
+        +startLoop() void
+        +tick(now) void
+        +loadVRM(loader) void
+    }
+    note for ThreeModelView "useEffect 依赖仍只有 [url, kind]；\n新增 props 全部走 ref，改设置/改眼神不重建 WebGL 场景。"
+
+    class CharacterApp {
+        -AppSettings settings
+        -AppSettings settingsRef
+        -Eye eye
+        -boolean dragging
+        -boolean menuOpen
+        +onDcCursor(x, y) void
+        +applySettings(s) void
+        +render() JSX
+    }
+
+    class CharacterStage {
+        -Eye eye
+        +onStageMouseMove(e) void
+        +render() JSX
+    }
+
+    class CharacterCollection {
+        +patchCharacter(id, patch) Promise
+        +renderCard(c) JSX
+    }
+
+    class Settings {
+        +patch(settingsPatch) void
+        +renderAnimDetail() JSX
+    }
+
+    %% ===== 主进程 / IPC =====
+    class DesktopCharacterMain {
+        +setInterval cursorTimer
+        +startCursorBroadcast() void
+        +send_dc_cursor() void
+    }
+    class IpcBridge {
+        +onDcCursor(cb) Off
+        +getSettings() Promise~AppSettings~
+        +onSettingsChanged(cb) Off
+        +dcGetState(id) Promise~State~
+        +saveSettings(patch) Promise
+    }
+
+    %% ===== 动画门禁工具（复用，不新增分组）=====
+    class AnimControl {
+        +isGroupEnabled(settings, groupId) boolean
+        +isCustomAnimMode(settings) boolean
+        +getGroupAnimSpeed(settings, groupId) number
+        +applyAnimControl(doc, settings, kind) void
+    }
+
+    %% ===== 关系 =====
+    DesktopCharacter "1" --> "1" VRMPoseRig : motionAmplitude 驱动
+    AppSettings "1" --> "1" AnimControl : animMode / animGroups
+    AppSettings "1" o-- "*" DesktopCharacter : desktopCharacters[]
+    VRMPoseRig *-- PoseSnapshot : restPose / basePose
+    VRMPoseRig --> ArmRestProbe : detectNaturalBase 产出
+    VRMPoseRig --> GazeMapper : head gaze 增量
+    ModelView ..> ThreeModelView : vrm/glb 分发 + props 透传
+    ModelView ..> PlaceholderCharacter : 占位角色分发（既有）
+    ThreeModelView *-- VRMPoseRig : 每帧驱动
+    ThreeModelView --> GazeMapper : vrm.lookAt.target = marker
+    CharacterApp --> ModelView : eyeX/eyeY + 门禁 + 幅度
+    CharacterApp --> IpcBridge : 订阅光标/设置
+    CharacterStage --> ModelView : mousemove 视线 + 门禁 + 幅度
+    CharacterCollection --> IpcBridge : patchCharacter(motionAmplitude)
+    Settings --> IpcBridge : patch(animCharacterIdle/Gaze)
+    DesktopCharacterMain ..> IpcBridge : dc:cursor 30Hz 推送
+    IpcBridge ..> CharacterApp : onDcCursor / onSettingsChanged
+    AnimControl <.. CharacterApp : isGroupEnabled('character')
+    AnimControl <.. Settings : charGroupOff 置灰

@@ -1912,6 +1912,12 @@
  "settings.cursorHotspotHint": "Реальное место клика = красная точка на изображении. Перетащите точку для настройки — эффект применяется сразу при перетаскивании и сохраняется при отпускании.",
  "settings.cursorImageInvalid": "Не удалось распознать файл. Выберите корректное изображение (PNG / JPG / WebP).",
  "settings.cursorImageTooLarge": "Файл изображения слишком большой (предел 4 МБ). Выберите меньший.",
- "settings.cursorImageDecodeFailed": "Не удалось декодировать изображение. Попробуйте другое."
+ "settings.cursorImageDecodeFailed": "Не удалось декодировать изображение. Попробуйте другое.",
+ "characters.motionAmplitude": "Амплитуда движений",
+ "characters.motionAmplitudeHint": "Влияет только на анимацию покоя 3D-моделей; 0 % — естественная неподвижная поза, слежение взглядом продолжается",
+ "characters.motionAmplitudeValue": "{v}%",
+ "animCtl.groupCharacterIdle": "Анимация покоя (дыхание / голова / руки)",
+ "animCtl.groupCharacterGaze": "Слежение взглядом за мышью (3D-модели)",
+ "animCtl.groupCharacterSubHint": "Эти переключатели действуют только при включённой группе «Анимация настольных персонажей»"
 }
 

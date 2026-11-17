@@ -443,6 +443,8 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
     // V3：桌面角色窗与「桌宠角色」面板里的动画（呼吸 / 气泡 / 菜单 / 舞台气泡）。
     // 角色窗是第 5 个独立 document（character.html），类名与主窗完全不同，
     // 因此必须用 docSelectors.character 单独登记，否则自定义档的开关对它无效。
+    // v3.0.8：本表只管 CSS 动画；VRM rAF 里的骨骼动画由组件读 isGroupEnabled(settings,'character')
+    // 在 tick 内另行门控（CSS 门禁管不到 WebGL），两者共同构成 character 分组的双通道。
     id: 'character',
     labelKey: 'animCtl.groupCharacter',
     selectors: ['.dc-svg', '.dc-modelimg', '.stage-bubble', '.stage-model'],

@@ -2449,6 +2449,26 @@ export const Settings: React.FC<{
                 }}
               >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {/* v3.0.8：character 分组内两个独立子开关；三档门禁由 draft.animGroups.character 统一负责。 */}
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                    <input
+                      type="checkbox"
+                      checked={(draft?.animCharacterIdle ?? true) !== false}
+                      onChange={(e) => patch({ animCharacterIdle: e.target.checked })}
+                    />
+                    <span>{t('animCtl.groupCharacterIdle')}</span>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                    <input
+                      type="checkbox"
+                      checked={(draft?.animCharacterGaze ?? true) !== false}
+                      onChange={(e) => patch({ animCharacterGaze: e.target.checked })}
+                    />
+                    <span>{t('animCtl.groupCharacterGaze')}</span>
+                  </label>
+                  <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--color-text-secondary)' }}>
+                    {t('animCtl.groupCharacterSubHint')}
+                  </div>
                   {/* 菜单弹出/收回时长 */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 150 }}>

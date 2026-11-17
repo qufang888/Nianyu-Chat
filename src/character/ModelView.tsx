@@ -18,9 +18,20 @@ interface Props {
   mouth?: number;
   blink: boolean;
   dragging: boolean;
-  /** 视线跟随（仅原创占位形象有效；图片/模型不跟随） */
+  /**
+   * 视线跟随（-1~1）。v3.0.8 起 VRM / GLB 也消费：VRM 走 lookAt.target + 头部单独跟随；
+   * 图片与原创占位角色仍沿用原有实现。
+   */
   eyeX?: number;
   eyeY?: number;
+  /** v3.0.8：VRM 待机动作幅度倍率 0~1（缺省取角色字段 / 1） */
+  motionAmplitude?: number;
+  /** v3.0.8：character 动画分组 && animCharacterIdle 的合取结果 */
+  motionEnabled?: boolean;
+  /** v3.0.8：character 动画分组 && animCharacterGaze 的合取结果 */
+  gazeEnabled?: boolean;
+  /** v3.0.8：拖拽中 / 菜单打开中（动作让位） */
+  gestureHold?: boolean;
   /**
    * 舞台缩放倍率（v3.0.3）。仅 3D / Live2D 需要它：位图与矢量靠 CSS 盒子放大即可，
    * 而 3D/Live2D 是**运行时渲染**的，必须自己提高渲染分辨率才能保持清晰。
@@ -52,6 +63,10 @@ export const ModelView: React.FC<Props> = ({
   dragging,
   eyeX = 0,
   eyeY = 0,
+  motionAmplitude,
+  motionEnabled = true,
+  gazeEnabled = true,
+  gestureHold = false,
   zoom = 1,
   resolutionScale = 1,
   onError,
@@ -88,6 +103,12 @@ export const ModelView: React.FC<Props> = ({
         expression={expression}
         mouth={mouth}
         blink={blink}
+        eyeX={eyeX}
+        eyeY={eyeY}
+        motionAmplitude={motionAmplitude ?? character.motionAmplitude ?? 1}
+        motionEnabled={motionEnabled}
+        gazeEnabled={gazeEnabled}
+        gestureHold={gestureHold}
         zoom={zoom}
         resolutionScale={resolutionScale}
         onError={onError}

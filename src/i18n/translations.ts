@@ -1050,6 +1050,10 @@ export const translations: Record<Lang, Dict> = {
     'animCtl.bubbleHoldMax': '上限',
     'animCtl.bubbleHoldPreview': '{n} 字 ≈ {v}',
     'animCtl.bubbleHoldDesc': '气泡停留时长按字数分档：基准 {base} 秒，每多 {n} 字 +{step} 秒，最多 {max} 秒',
+    // ===== v3.0.8：character 分组内两个独立子开关 =====
+    'animCtl.groupCharacterIdle': '待机动作（呼吸 / 摇头 / 摆臂）',
+    'animCtl.groupCharacterGaze': '视线跟随鼠标（3D 模型）',
+    'animCtl.groupCharacterSubHint': '以上开关仅在「桌面角色动画」分组开启时生效',
     // ===== v2.3.97 界面动效速度 =====
     'animCtl.speedTitle': '动画速度',
     'animCtl.speedDesc': '统一调节界面动效的播放快慢：弹窗缩放、面板展开、提示条滑入、悬停过渡等全部等比缩放。与上方开关正交——开关决定「动不动」，这里决定「动多快」。AI 回复的逐字打字机动画有独立设置，不受此影响。',
@@ -1620,6 +1624,10 @@ export const translations: Record<Lang, Dict> = {
     'characters.speakRateLessThanOne': '不足 1 条/{unit}',
     'characters.speakRateHint': '按所选单位设置主动说话条数，0 = 不主动说话',
     'characters.speakRateWarn': '频率较高会产生较多模型调用与费用',
+    // ===== v3.0.8 VRM 自然动作 / 视线跟随 =====
+    'characters.motionAmplitude': '动作幅度',
+    'characters.motionAmplitudeHint': '仅影响 3D 模型的待机动作；0% 为自然站姿静止，眼神跟随不受影响',
+    'characters.motionAmplitudeValue': '{v}%',
     'characters.stageSyncHint': '调整后同步到桌面桌宠',
     'characters.say': '说一句',
     'characters.newChat': '新对话',
@@ -2992,6 +3000,10 @@ export const translations: Record<Lang, Dict> = {
     'animCtl.bubbleHoldMax': 'Max',
     'animCtl.bubbleHoldPreview': '{n} chars ≈ {v}',
     'animCtl.bubbleHoldDesc': 'Bubble hold scales with length: base {base}s, +{step}s per {n} chars, max {max}s',
+    // ===== v3.0.8: two independent sub-switches inside the character group =====
+    'animCtl.groupCharacterIdle': 'Idle motion (breathing / head / arms)',
+    'animCtl.groupCharacterGaze': 'Eye tracking (3D models)',
+    'animCtl.groupCharacterSubHint': 'These switches apply only when "Desktop character animations" is enabled',
     // ===== v2.3.97 UI animation speed =====
     'animCtl.speedTitle': 'Animation speed',
     'animCtl.speedDesc': 'Scales how fast all UI animations play: popups, panel expand/collapse, toasts, hover transitions, and so on. Independent of the switch above — the switch decides whether animations play at all, this decides how fast. The typewriter animation of AI replies has its own setting and is not affected.',
@@ -3632,6 +3644,10 @@ export const translations: Record<Lang, Dict> = {
     'characters.speakRateLessThanOne': 'Less than 1 per {unit}',
     'characters.speakRateHint': 'Lines per selected time unit; 0 = never',
     'characters.speakRateWarn': 'High rates increase model calls and cost',
+    // ===== v3.0.8 VRM natural motion / gaze tracking =====
+    'characters.motionAmplitude': 'Motion amplitude',
+    'characters.motionAmplitudeHint': 'Affects idle motion of 3D models only; 0% freezes the natural stance, eye tracking stays on',
+    'characters.motionAmplitudeValue': '{v}%',
     'characters.stageSyncHint': 'Applies to the pet on your desktop',
     'characters.say': 'Say something',
     'characters.newChat': 'New chat',

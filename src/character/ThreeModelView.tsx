@@ -6,6 +6,11 @@
 // 合规：不内置任何第三方模型；用户导入的模型只在其本机渲染，不上传、不打包。
 import React, { useEffect, useRef } from 'react';
 import type { CharacterExpression } from './PlaceholderCharacter';
+import type { VRMPoseRig } from './vrmPose';
+import {
+  capturePoseRig, detectNaturalBase, writeBone, mapEyeToAngles,
+  applyGazeHead, smooth, clamp01, VRM_GAZE_DISTANCE, VRM_GAZE_HEAD_RATIO,
+} from './vrmPose';
 
 interface Props {
   url: string;
@@ -14,6 +19,17 @@ interface Props {
   /** 0~1 口型开合（由舞台的语音分析驱动；桌面窗恒为 0） */
   mouth: number;
   blink: boolean;
+  /** v3.0.8：光标视线（-1~1；0=正中），VRM 眼球 + 头部都消费 */
+  eyeX?: number;
+  eyeY?: number;
+  /** v3.0.8：角色级待机动作幅度倍率 0~1，缺省 1 */
+  motionAmplitude?: number;
+  /** v3.0.8：character 分组 && animCharacterIdle 的合取结果 */
+  motionEnabled?: boolean;
+  /** v3.0.8：character 分组 && animCharacterGaze 的合取结果 */
+  gazeEnabled?: boolean;
+  /** v3.0.8：拖拽中 / 菜单打开中，动作与凝视 0.2s 平滑让位 */
+  gestureHold?: boolean;
   /**
    * 舞台缩放倍率（v3.0.3）。缺省 1 ⇒ 桌宠窗行为与改动前逐字等价。
    *
@@ -134,6 +150,10 @@ const VRM_BODY_SWAY_ANGLE = 0.052;
 export const DESKTOP_RESOLUTION_SCALE_MIN = 1.5;
 /** pixelRatio 硬上限：190×228 的画布 4× 也只有 760×912，成本可控 */
 const MAX_PIXEL_RATIO = 4;
+/** v3.0.8：自然站姿 0.4s 淡入，避免从 T-pose 瞬跳 */
+const VRM_BASE_BLEND_SEC = 0.4;
+/** v3.0.8：拖拽 / 菜单让位的平滑时常数（秒） */
+const VRM_HOLD_SMOOTH_TAU = 0.2;
 
 export const ThreeModelView: React.FC<Props> = ({
   url,
@@ -141,6 +161,12 @@ export const ThreeModelView: React.FC<Props> = ({
   expression,
   mouth,
   blink,
+  eyeX = 0,
+  eyeY = 0,
+  motionAmplitude = 1,
+  motionEnabled = true,
+  gazeEnabled = true,
+  gestureHold = false,
   zoom = 1,
   resolutionScale = 1,
   onError,
@@ -157,6 +183,13 @@ export const ThreeModelView: React.FC<Props> = ({
   // v3.0.6：纯分辨率倍率同样走 ref，避免改桌面缩放时重建 WebGL 场景。
   const resolutionScaleRef = useRef(resolutionScale);
   resolutionScaleRef.current = resolutionScale;
+  // v3.0.8：视线 / 幅度 / 门禁 / 让位全部走 ref —— 改这些设置绝不重建 WebGL 场景。
+  const eyeRef = useRef({ x: eyeX, y: eyeY });
+  eyeRef.current = { x: eyeX, y: eyeY };
+  const ampRef = useRef(motionAmplitude);
+  ampRef.current = motionAmplitude;
+  const gateRef = useRef({ motion: motionEnabled, gaze: gazeEnabled, hold: gestureHold });
+  gateRef.current = { motion: motionEnabled, gaze: gazeEnabled, hold: gestureHold };
   /** 渲染器/模型组的跨渲染引用：供 zoom 变化时在不重建场景的前提下更新分辨率与缩放。 */
   const rendererRef = useRef<any>(null);
   const modelGroupRef = useRef<any>(null);
@@ -193,6 +226,14 @@ export const ThreeModelView: React.FC<Props> = ({
     let mixer: any = null;
     let vrm: any = null;
     let ro: ResizeObserver | null = null;
+    /** v3.0.8：三层姿态运行时（自然站姿探测结果 + 凝视平滑量） */
+    let rig: VRMPoseRig | null = null;
+    /** v3.0.8：挂在 scene 下的视线目标，vrm.lookAt.target 每帧读它的世界坐标 */
+    let gazeMarker: any = null;
+    let headPos: any = null;
+    let lastGazeOn = true;
+    /** v3.0.8：拖拽/菜单让位的当前混合系数（1=全量动作，0=完全让位） */
+    let holdBlend = 1;
     const exprCur: Record<string, number> = {};
     /** v3.0.6：VRM 生命感驱动用的骨骼引用（normalized bone，vrm.update 会同步到原始骨骼） */
     /** v3.0.7：待机动画骨骼 + 各自的 rest 姿态（每帧基于 rest 计算增量，绝不累加） */
@@ -258,6 +299,10 @@ export const ThreeModelView: React.FC<Props> = ({
       spineBone = null;
       blinkNames = [];
       expressionNames = {};
+      if (gazeMarker?.parent) gazeMarker.parent.remove(gazeMarker);
+      gazeMarker = null;
+      headPos = null;
+      rig = null;
     };
 
     /** 把模型归一化到相机前：包围盒居中，最高边缩放到 2 个单位高 */
@@ -283,6 +328,8 @@ export const ThreeModelView: React.FC<Props> = ({
       // v3.0.6：自驱动眨眼调度（与外部的 blink prop 取并集，互不覆盖）
       let nextBlinkAt = last + VRM_BLINK_MIN_GAP_MS + Math.random() * VRM_BLINK_RANDOM_MS;
       let blinkStartedAt = -1;
+      /** v3.0.8：上一帧的门禁态，用于捕捉「开→关」瞬间把未完成的 base 淡入补齐 */
+      let lastGroupOn = true;
       const tick = (now: number) => {
         if (disposed) return;
         raf = requestAnimationFrame(tick);
@@ -291,8 +338,17 @@ export const ThreeModelView: React.FC<Props> = ({
         try {
           mixer?.update(dt);
           const st = stateRef.current;
+          const g = gateRef.current;
+          // 三档门禁的运行时兜底：CSS 的 applyAnimControl 管不到 WebGL 里的骨骼。
+          const groupOn = !!(g.motion || g.gaze);
+          // 拖拽 / 菜单：0.2s 平滑让位，避免动作瞬停瞬起。
+          holdBlend = smooth(holdBlend, g.hold ? 0 : 1, dt, VRM_HOLD_SMOOTH_TAU);
+          // 幅度只缩放程序化待机 delta；lookAt 眼球 / 眨眼 / 口型 / 表情都不受影响。
+          const k = g.motion && groupOn ? clamp01(ampRef.current) * holdBlend : 0;
+          const { yawRad, pitchRad } = mapEyeToAngles(eyeRef.current.x, eyeRef.current.y);
+          const poseRig = rig;
 
-          // ===== v3.0.7：VRM 自驱动待机动画（明显可见）=====
+          // ===== v3.0.7 待机动画 + v3.0.8 自然站姿 / 凝视（明显可见且不漂移）=====
           // 所有骨骼都基于**初始化时记录的 rest 姿态**做正弦增量，绝不累加、不漂移；
           // 必须在 vrm.update(dt) 之前写，update 才会把 normalized bone 同步到原始骨骼。
           const tSec = now / 1000;
@@ -301,46 +357,106 @@ export const ThreeModelView: React.FC<Props> = ({
             if (!bone) return;
             const r = restPose[key];
             if (!r) return;
-            bone.rotation.x = r.x + rx;
-            bone.rotation.y = r.y + ry;
-            bone.rotation.z = r.z + rz;
+            const b = poseRig?.basePose[key];
+            const bl = poseRig?.baseBlend ?? 0;
+            // rest + base*blend + delta（K17 的 rest 字面量保留；base 由 vrmPose 探测得出）
+            bone.rotation.x = r.x + rx + (b?.x ?? 0) * bl;
+            bone.rotation.y = r.y + ry + (b?.y ?? 0) * bl;
+            bone.rotation.z = r.z + rz + (b?.z ?? 0) * bl;
           };
 
-          // ① 身体重心：hips/spine 轻微左右摇摆 + 前后微倾（周期互质，避免整齐划一）
-          const bodySway = wave(VRM_BODY_SWAY_PERIOD_SEC);
-          applyBone(hipsBone, 'hips', 0, 0, bodySway * VRM_BODY_SWAY_ANGLE);
-          applyBone(spineBone, 'spine', wave(VRM_BREATH_PERIOD_SEC, 0.6) * 0.03, 0, -bodySway * VRM_BODY_SWAY_ANGLE * 0.6);
+          // 门禁从开→关：0.4s 自然站姿淡入可能还没走完，此时一次性补到 1 并落一次完整 base 姿态，
+          // 避免手臂永久停在中间角度（关闭动画的结果必须是确定的自然站姿）。之后关闭态的帧零骨骼写入。
+          if (!groupOn && lastGroupOn && poseRig) {
+            poseRig.baseBlend = 1;
+            for (const key of Object.keys(poseRig.bones)) writeBone(poseRig, key);
+          }
+          lastGroupOn = groupOn;
 
-          // ② 呼吸：胸腔前倾-回正 + 轻微缩放起伏（吸气挺胸，肉眼可见）
-          if (breathBone) {
-            const r = restPose[breathBoneKey] || restPose.chest || { x: 0, y: 0, z: 0, sx: 1, sy: 1, sz: 1 };
-            const breath = (wave(VRM_BREATH_PERIOD_SEC) + 1) / 2; // 0..1
-            breathBone.rotation.x = r.x - breath * VRM_BREATH_ANGLE;
-            breathBone.rotation.y = r.y;
-            breathBone.rotation.z = r.z;
-            const s = 1 + breath * VRM_BREATH_SCALE;
-            breathBone.scale.set(r.sx * s, r.sy * s, r.sz * s);
+          // 门禁全关时：本帧不再写任何骨骼（加载 / 门禁关闭瞬间已落一次自然站姿），只保留表情/口型链路。
+          if (groupOn) {
+            if (poseRig) poseRig.baseBlend = Math.min(1, poseRig.baseBlend + dt / VRM_BASE_BLEND_SEC);
+
+            // ① 身体重心：hips/spine 轻微左右摇摆 + 前后微倾（周期互质，避免整齐划一）
+            const bodySway = wave(VRM_BODY_SWAY_PERIOD_SEC) * k;
+            applyBone(hipsBone, 'hips', 0, 0, bodySway * VRM_BODY_SWAY_ANGLE);
+            applyBone(spineBone, 'spine', wave(VRM_BREATH_PERIOD_SEC, 0.6) * 0.03 * k, 0, -bodySway * VRM_BODY_SWAY_ANGLE * 0.6);
+
+            // ② 呼吸：胸腔前倾-回正 + 轻微缩放起伏（吸气挺胸，肉眼可见）
+            if (breathBone) {
+              const r0 = restPose[breathBoneKey] || restPose.chest || { x: 0, y: 0, z: 0, sx: 1, sy: 1, sz: 1 };
+              const b = poseRig?.basePose[breathBoneKey];
+              const bl = poseRig?.baseBlend ?? 0;
+              // r = rest + base*blend 的本帧快照（只读，不跨帧累加；K15/K17 字面量保留）
+              const r = {
+                x: r0.x + (b?.x ?? 0) * bl,
+                y: r0.y + (b?.y ?? 0) * bl,
+                z: r0.z + (b?.z ?? 0) * bl,
+                sx: r0.sx, sy: r0.sy, sz: r0.sz,
+              };
+              const breath = ((wave(VRM_BREATH_PERIOD_SEC) + 1) / 2) * k; // 0..k
+              breathBone.rotation.x = r.x - breath * VRM_BREATH_ANGLE;
+              breathBone.rotation.y = r.y;
+              breathBone.rotation.z = r.z;
+              const s = 1 + breath * VRM_BREATH_SCALE;
+              breathBone.scale.set(r.sx * s, r.sy * s, r.sz * s);
+            }
+
+            // ③ 头部：左右转动 + 点头 + 侧倾 + 凝视分量。
+            //    凝视不受幅度 k 影响（拍板：幅度=0 身体静止但眼神仍跟随）。
+            const headFollow = g.gaze ? VRM_GAZE_HEAD_RATIO * holdBlend : 0;
+            if (poseRig) applyGazeHead(poseRig, yawRad, pitchRad, headFollow, dt);
+            const gz = poseRig?.gaze || { yaw: 0, pitch: 0 };
+            applyBone(
+              headBone,
+              'head',
+              wave(VRM_HEAD_NOD_PERIOD_SEC) * VRM_HEAD_NOD_ANGLE * k + gz.pitch,
+              wave(VRM_HEAD_TURN_PERIOD_SEC) * VRM_HEAD_TURN_ANGLE * k + gz.yaw,
+              wave(VRM_HEAD_TILT_PERIOD_SEC) * VRM_HEAD_TILT_ANGLE * k
+            );
+
+            // ④ 双臂：左右反相自然摆动（k 先乘到波上，保留 K17 断言依赖的调用字面量）
+            const armWave = wave(VRM_ARM_SWAY_PERIOD_SEC) * k;
+            const armSwing = wave(VRM_ARM_SWING_PERIOD_SEC, 1.1) * k;
+            applyBone(armL, 'leftUpperArm', armSwing * VRM_ARM_SWING_ANGLE, 0, armWave * VRM_ARM_SWAY_ANGLE);
+            applyBone(armR, 'rightUpperArm', -armSwing * VRM_ARM_SWING_ANGLE, 0, -armWave * VRM_ARM_SWAY_ANGLE);
+            // 前臂：反相轻摆，basePose 里的肘微屈由 writeBone 一并合成。
+            if (poseRig) {
+              writeBone(poseRig, 'leftLowerArm', armSwing * 0.35, 0, -armWave * 0.15);
+              writeBone(poseRig, 'rightLowerArm', -armSwing * 0.35, 0, armWave * 0.15);
+            }
           }
 
-          // ③ 头部：左右转动 + 点头 + 侧倾（三种周期互质，像真人在四处看）
-          applyBone(
-            headBone,
-            'head',
-            wave(VRM_HEAD_NOD_PERIOD_SEC) * VRM_HEAD_NOD_ANGLE,
-            wave(VRM_HEAD_TURN_PERIOD_SEC) * VRM_HEAD_TURN_ANGLE,
-            wave(VRM_HEAD_TILT_PERIOD_SEC) * VRM_HEAD_TILT_ANGLE
-          );
+          // ⑤ 视线目标：head 世界坐标 + tan(yaw/pitch)*D；three-vrm 在 update 内自动跟随。
+          //    关闭 gaze 子开关时停掉 autoUpdate 并 reset，避免眼球停在最后一个角度。
+          const wantGaze = groupOn && !!g.gaze;
+          if (vrm?.lookAt) {
+            vrm.lookAt.autoUpdate = groupOn && !!g.gaze;
+            if (!wantGaze && lastGazeOn) {
+              try {
+                vrm.lookAt.reset?.();
+              } catch {
+                /* 模型没有 lookAt 预设时静默降级 */
+              }
+            }
+            lastGazeOn = wantGaze;
+          }
+          if (wantGaze && gazeMarker && poseRig?.bones.head) {
+            const head = poseRig.bones.head;
+            if (!headPos) headPos = head.position.clone();
+            head.updateWorldMatrix(true, false);
+            head.getWorldPosition(headPos);
+            gazeMarker.position.set(
+              headPos.x + Math.tan(yawRad) * VRM_GAZE_DISTANCE,
+              headPos.y + Math.tan(pitchRad) * VRM_GAZE_DISTANCE,
+              headPos.z + VRM_GAZE_DISTANCE
+            );
+          }
 
-          // ④ 双臂：左右反相自然摆动（外张/收拢 + 前后轻摆），让"手动起来"
-          const armWave = wave(VRM_ARM_SWAY_PERIOD_SEC);
-          const armSwing = wave(VRM_ARM_SWING_PERIOD_SEC, 1.1);
-          applyBone(armL, 'leftUpperArm', armSwing * VRM_ARM_SWING_ANGLE, 0, armWave * VRM_ARM_SWAY_ANGLE);
-          applyBone(armR, 'rightUpperArm', -armSwing * VRM_ARM_SWING_ANGLE, 0, -armWave * VRM_ARM_SWAY_ANGLE);
-
-          // ⑤ 自动眨眼：随机间隔触发一次「闭合→张开」的正弦脉冲；
+          // ⑥ 自动眨眼：随机间隔触发一次「闭合→张开」的正弦脉冲；
           //    仅在模型确实有 blink preset 时才驱动（否则 setValue 会被 catch 吞掉白费 CPU）。
           let autoBlink = 0;
-          if (blinkNames.length) {
+          if (blinkNames.length && groupOn) {
             if (now >= nextBlinkAt) {
               blinkStartedAt = now;
               nextBlinkAt = now + VRM_BLINK_MIN_GAP_MS + Math.random() * VRM_BLINK_RANDOM_MS;
@@ -419,6 +535,12 @@ export const ThreeModelView: React.FC<Props> = ({
       const rimLight = new THREE.DirectionalLight(0x9fb6ff, 0.5);
       rimLight.position.set(-1.6, 1.2, -1.4);
       scene.add(rimLight);
+      // v3.0.8：视线目标挂在 scene 下 ⇒ 它的 local position 就是世界坐标，
+      // three-vrm 的 lookAt.update() 直接读 target.getWorldPosition()，无需额外换算。
+      gazeMarker = new THREE.Object3D();
+      gazeMarker.name = 'NianyuGazeTarget';
+      gazeMarker.position.set(0, 0, VRM_GAZE_DISTANCE);
+      scene.add(gazeMarker);
 
       const resize = () => {
         if (!renderer || !camera) return;
@@ -477,9 +599,13 @@ export const ThreeModelView: React.FC<Props> = ({
                   armR = get('rightUpperArm');
                   hipsBone = get('hips');
                   spineBone = spine;
+                  // v3.0.8：前臂过去完全没抓，肘部微屈无从谈起；现在一并纳入三层姿态。
+                  const lowerArmL = get('leftLowerArm');
+                  const lowerArmR = get('rightLowerArm');
                   const bones: Record<string, any> = {
                     chest, upperChest, spine, head: headBone, hips: hipsBone,
                     leftUpperArm: armL, rightUpperArm: armR,
+                    leftLowerArm: lowerArmL, rightLowerArm: lowerArmR,
                   };
                   for (const [key, bone] of Object.entries(bones)) {
                     if (!bone) continue;
@@ -488,7 +614,26 @@ export const ThreeModelView: React.FC<Props> = ({
                       sx: bone.scale.x, sy: bone.scale.y, sz: bone.scale.z,
                     };
                   }
+                  // 三层姿态：restPose 已冻结（上面逐字记录），basePose 由世界坐标探测一次性算出。
+                  rig = capturePoseRig(hm, bones, restPose);
+                  detectNaturalBase(vrm, rig);
+                  headPos = headBone ? headBone.position.clone() : null;
+                  // three-vrm 3.4.0 的 lookAt 签名是 lookAt(position: Vector3)；连续跟随必须走
+                  // target:Object3D + autoUpdate(默认 true)。VRMLookAtBoneApplier 只驱动眼球不驱动头，
+                  // 头部跟随由 tick 内单独写 head bone 实现。
+                  if (vrm?.lookAt && gazeMarker) {
+                    vrm.lookAt.target = gazeMarker;
+                    lastGazeOn = true;
+                  }
+                  // 若加载瞬间动画门禁就是关的：直接落一次自然站姿，避免 T-pose 永久残留
+                  // （关闭档下 tick 不再写骨骼，所以这一步是必需的）。
+                  const loadGate = gateRef.current;
+                  if (!(loadGate.motion || loadGate.gaze)) {
+                    rig.baseBlend = 1;
+                    for (const key of Object.keys(bones)) writeBone(rig, key);
+                  }
                 } catch {
+                  rig = null;
                   breathBone = null;
                   headBone = null;
                   armL = null;

@@ -1912,6 +1912,12 @@
  "settings.cursorHotspotHint": "Die tatsächliche Klickposition = der rote Punkt auf dem Bild. Ziehen Sie den Punkt zum Einstellen — die Änderung wirkt sofort beim Ziehen und wird beim Loslassen gespeichert.",
  "settings.cursorImageInvalid": "Die Datei konnte nicht erkannt werden. Bitte wählen Sie ein gültiges Bild (PNG / JPG / WebP).",
  "settings.cursorImageTooLarge": "Das Bild ist zu groß (Limit 4 MB). Bitte wählen Sie ein kleineres Bild.",
- "settings.cursorImageDecodeFailed": "Das Bild konnte nicht dekodiert werden. Bitte versuchen Sie ein anderes."
+ "settings.cursorImageDecodeFailed": "Das Bild konnte nicht dekodiert werden. Bitte versuchen Sie ein anderes.",
+ "characters.motionAmplitude": "Bewegungsamplitude",
+ "characters.motionAmplitudeHint": "Beeinflusst nur die Leerlaufbewegung von 3D-Modellen; 0 % hält die natürliche Haltung, die Blickverfolgung bleibt aktiv",
+ "characters.motionAmplitudeValue": "{v}%",
+ "animCtl.groupCharacterIdle": "Leerlaufbewegung (Atmen / Kopf / Arme)",
+ "animCtl.groupCharacterGaze": "Blickverfolgung der Maus (3D-Modelle)",
+ "animCtl.groupCharacterSubHint": "Diese Schalter wirken nur, wenn „Desktop-Charakter-Animationen“ aktiviert ist"
 }
 

@@ -1912,6 +1912,12 @@
  "settings.cursorHotspotHint": "실제 클릭 위치＝이미지의 빨간 점입니다. 점을 드래그해 조정할 수 있으며, 드래그 중 즉시 반영되고 놓으면 저장됩니다.",
  "settings.cursorImageInvalid": "파일을 인식할 수 없습니다. 유효한 이미지(PNG / JPG / WebP)를 선택하세요.",
  "settings.cursorImageTooLarge": "이미지 파일이 너무 큽니다(최대 4MB). 더 작은 이미지를 선택하세요.",
- "settings.cursorImageDecodeFailed": "이미지를 디코딩할 수 없습니다. 다른 이미지를 사용해 보세요."
+ "settings.cursorImageDecodeFailed": "이미지를 디코딩할 수 없습니다. 다른 이미지를 사용해 보세요.",
+ "characters.motionAmplitude": "동작 진폭",
+ "characters.motionAmplitudeHint": "3D 모델의 대기 동작에만 영향을 줍니다. 0%에서는 자연스러운 자세로 멈추며 시선 추적은 유지됩니다",
+ "characters.motionAmplitudeValue": "{v}%",
+ "animCtl.groupCharacterIdle": "대기 동작 (호흡 / 고개 / 팔)",
+ "animCtl.groupCharacterGaze": "마우스 시선 추적 (3D 모델)",
+ "animCtl.groupCharacterSubHint": "이 스위치는 '데스크톱 캐릭터 애니메이션'이 켜져 있을 때만 적용됩니다"
 }
 
