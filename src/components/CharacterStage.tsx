@@ -29,7 +29,11 @@ import type { CharacterExpression } from '../character/PlaceholderCharacter';
 import { ModelView } from '../character/ModelView';
 import { isGroupEnabled } from '../utils/animControl';
 
-/** 视线归一化除数（与角色窗共享同一口径：角色中心 ±170px ⇒ eye ±1）。 */
+/**
+ * 视线归一化除数基准（与角色窗 CharacterApp 的 DC_EYE_DIVISOR 同值：角色中心 ±170px ⇒ eye ±1）。
+ * v3.0.11：实际除数须乘当前 zoom —— 舞台模型盒按 --stage-zoom 真实放大，光标扫过全宽的
+ * 像素距离同比增大；除数不跟随会放大后眼球转角变小（「眼神跟不上手」）。
+ */
 const STAGE_EYE_DIVISOR = 170;
 
 const STAGE_LINES = ['今天想聊点什么？', '我在这里，慢慢说就好。', '你笑的时候，我也跟着开心。', '要不要一起发会儿呆？'];
@@ -114,13 +118,13 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
       const cx = r.left + r.width / 2;
       const cy = r.top + r.height / 2;
       setEye({
-        x: Math.max(-1, Math.min(1, (e.clientX - cx) / STAGE_EYE_DIVISOR)),
-        y: Math.max(-1, Math.min(1, (e.clientY - cy) / STAGE_EYE_DIVISOR)),
+        x: Math.max(-1, Math.min(1, (e.clientX - cx) / (STAGE_EYE_DIVISOR * zoom))),
+        y: Math.max(-1, Math.min(1, (e.clientY - cy) / (STAGE_EYE_DIVISOR * zoom))),
       });
     };
     window.addEventListener('mousemove', onMove);
     return () => window.removeEventListener('mousemove', onMove);
-  }, []);
+  }, [zoom]);
 
   useEffect(() => {
     let alive = true;

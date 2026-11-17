@@ -628,9 +628,13 @@ export interface DesktopCharacter {
   boundChat?: { type: 'single' | 'group'; id: string; name: string } | null;
   /** 是否在桌面显示 */
   enabled: boolean;
-  /** 桌面窗口左上角屏幕坐标（DIP）；缺省时回退到 runtime.x/y 或右下角默认位 */
+  /**
+   * v3.0.11 起语义为「基准脚点空间」：存储值 = 角色脚点屏幕坐标 −(170,410)，
+   * 不再随 scale 变化（窗口原点由主进程按 scale 从脚点反解）。缺省时回退到 runtime.x/y 或右下角默认位。
+   * 旧版窗口恒 340×420，故全部存量数据天然满足 foot=(x+170,y+410)，零数据迁移。
+   */
   x?: number;
-  /** 桌面窗口左上角屏幕坐标（DIP）；缺省时回退到 runtime.x/y 或右下角默认位 */
+  /** 同 x：基准脚点空间纵坐标（脚点 y −410），详见 x 字段说明。 */
   y?: number;
   /** 显示缩放（0.6~5.0；v3.0.10 由 2.0 放宽到 5.0，桌面滚轮与舞台滑块共用此区间） */
   scale: number;

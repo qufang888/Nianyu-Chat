@@ -36,9 +36,14 @@ import type { CharacterRuntimeSettings, DesktopCharacter } from '../src/types';
 
 const dm = getDataManager();
 
-/** 角色窗尺寸（DIP）。角色立绘在窗内底部，气泡在上方，右键菜单在窗内浮层。 */
-export const DC_WIN_W = 340;
-export const DC_WIN_H = 420;
+/**
+ * 基准角色窗尺寸（DIP）。角色立绘在窗内底部，气泡在上方，右键菜单在窗内浮层。
+ * v3.0.11：窗口**实际**尺寸由 winSizeForScale(scale) 动态扩张；这两个常量恒为 340×420，
+ * 承担两个职责：① S<=1 时的尺寸下限（保护气泡/菜单固定像素布局）；
+ *              ② 「基准脚点空间」的换算基（存储 x/y = 脚点 −(170,410)，对所有存量数据成立）。
+ */
+export const DC_WIN_BASE_W = 340;
+export const DC_WIN_BASE_H = 420;
 /** 弹簧参数与积分步长（需求给定参考值） */
 const SPRING_K = 200;
 const SPRING_C = 30;
@@ -116,6 +121,9 @@ interface DragState {
   watchdogCursorY: number;
   /** 渲染层上报的可交互意愿（指针是否落在 drag/interactive 命中区） */
   wantInteractive: boolean;
+  /** v3.0.11：本窗口的「有效 scale」缓存（预览期由主进程写入，落盘期同步）。
+   *  clampPos 与 moved 事件都读它，保证 setBounds 后的重钳用新尺寸、幂等不跳位。 */
+  scale: number;
 }
 
 /** 角色窗集合：key = 角色 id。多窗口同显的核心容器。 */
@@ -144,6 +152,8 @@ let cursorTimer: ReturnType<typeof setInterval> | null = null;
 let dragTimer: ReturnType<typeof setInterval> | null = null;
 /** 拖拽看门狗定时器（低频；超时强制收尾漏发的 drag-end）。 */
 let dragWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+/** v3.0.11 预览兜底计时器（per id）：舞台异常关闭未提交时，把窗口尺寸恢复到落盘 scale。 */
+const previewRestoreTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 // ===================== 工具 =====================
 
@@ -177,58 +187,103 @@ function rectsOverlap(a: Electron.Rectangle, b: Electron.Rectangle): boolean {
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 }
 
-/** 被悬浮球遮挡时做位移避让：优先放到球左侧，放不下再放球右侧，仍不行则放球上方/下方。 */
-function avoidBall(x: number, y: number): { x: number; y: number } {
+/** 被悬浮球遮挡时做位移避让：优先放到球左侧，放不下再放球右侧，仍不行则放球上方/下方。
+ *  v3.0.11：窗口尺寸随 scale 变化，避让必须按当前 w/h 计算，不能再用基准 340×420。 */
+function avoidBall(x: number, y: number, w: number, h: number): { x: number; y: number } {
   const ball = getBallWindowBounds();
   if (!ball) return { x, y };
   const wa = workArea();
-  const rect = { x, y, width: DC_WIN_W, height: DC_WIN_H };
+  const rect = { x, y, width: w, height: h };
   if (!rectsOverlap(rect, ball)) return { x, y };
 
-  const tryX: number[] = [ball.x - DC_WIN_W - BALL_GAP, ball.x + ball.width + BALL_GAP];
+  const tryX: number[] = [ball.x - w - BALL_GAP, ball.x + ball.width + BALL_GAP];
   for (const nx of tryX) {
-    if (nx >= wa.x && nx + DC_WIN_W <= wa.x + wa.width) return { x: nx, y };
+    if (nx >= wa.x && nx + w <= wa.x + wa.width) return { x: nx, y };
   }
-  const tryY: number[] = [ball.y - DC_WIN_H - BALL_GAP, ball.y + ball.height + BALL_GAP];
+  const tryY: number[] = [ball.y - h - BALL_GAP, ball.y + ball.height + BALL_GAP];
   for (const ny of tryY) {
-    if (ny >= wa.y && ny + DC_WIN_H <= wa.y + wa.height) return { x, y: ny };
+    if (ny >= wa.y && ny + h <= wa.y + wa.height) return { x, y: ny };
   }
   return { x, y };
 }
 
+// ===================== v3.0.11 几何唯一真源 =====================
 /** 角色可见区几何（与 src/styles/character.css 的 `.dc-character` 保持一致）：
  *  left:50% / bottom:10px / width:190 / height:228 / transform-origin:bottom center / scale(--dc-scale)。
- *  用于「按角色本体而非透明整窗」做位置钳制。 */
+ *  用于「按角色本体而非透明整窗」做位置钳制，也用于推导动态窗口尺寸与脚点锚点。 */
 const CHAR_BODY_W = 190;
 const CHAR_BODY_H = 228;
 const CHAR_BODY_BOTTOM_GAP = 10;
 const DC_SCALE_MIN = 0.6;
 // v3.0.10：上限由 2.0 放宽到 5.0（用户要求最大 500% 且不糊），下限/步长不变
 const DC_SCALE_MAX = 5.0;
+/** 角色左右留白：(340−190)/2 = 75px（放大后仍恒定，保证观感与 scale=1 一致） */
+const DC_PAD_X = (DC_WIN_BASE_W - CHAR_BODY_W) / 2;
+/** 角色头顶留白：420−10−228 = 182px（放大后仍恒定，避免放大后头被截断） */
+const DC_HEAD_TOP = DC_WIN_BASE_H - CHAR_BODY_BOTTOM_GAP - CHAR_BODY_H;
+/** 预览兜底：最后一次 live 后无 commit 则恢复落盘尺寸（略晚于 renderer 的 3000ms） */
+const DC_PREVIEW_RESTORE_MS = 3100;
+
+/** scale 钳制（唯一真源，IPC / 几何 / 钳制共用同一口径）。 */
+function clampScale(s: number): number {
+  return Math.max(DC_SCALE_MIN, Math.min(DC_SCALE_MAX, Number.isFinite(s) ? s : 1));
+}
+
+/** 窗口尺寸：S<=1 保持基准 340×420（保护气泡 286px / 菜单 168px 固定像素布局）；
+ *  S>1 随角色线性扩张，使左右恒留 75px、头顶恒留 182px —— 与 CSS 190×228/bottom:10 严格同源。 */
+function winSizeForScale(s: number): { w: number; h: number } {
+  const k = clampScale(s);
+  return {
+    w: Math.max(DC_WIN_BASE_W, Math.ceil(CHAR_BODY_W * k + 2 * DC_PAD_X)),
+    h: Math.max(DC_WIN_BASE_H, Math.ceil(CHAR_BODY_H * k + CHAR_BODY_BOTTOM_GAP + DC_HEAD_TOP)),
+  };
+}
+
+/** 历史/现行存储坐标 → 脚点。旧版窗口恒 340×420，故对所有存量数据 foot=(x+170, y+410) 无条件成立。 */
+function footFromStored(x: number, y: number): { x: number; y: number } {
+  return { x: x + DC_WIN_BASE_W / 2, y: y + DC_WIN_BASE_H - CHAR_BODY_BOTTOM_GAP }; // +170, +410
+}
+/** 脚点 → 存储坐标（所有 x/y 写入的唯一出口，零数据迁移、零双写）。 */
+function storedFromFoot(fx: number, fy: number): { x: number; y: number } {
+  return { x: fx - DC_WIN_BASE_W / 2, y: fy - (DC_WIN_BASE_H - CHAR_BODY_BOTTOM_GAP) };
+}
+
+/** 反转安全的单轴钳制：lo<=hi 时把 v 夹在 [lo,hi]（角色完整落工作区内）；
+ *  lo>hi 说明角色比工作区还大 ⇒ 改为夹在 [hi,lo]（让角色覆盖工作区），
+ *  这样仍能贴边且保留整段可拖动行程，而不是被钳成单一值（「空气墙」根因）。 */
+function clampAxis(v: number, lo: number, hi: number): number {
+  if (lo <= hi) return Math.max(lo, Math.min(v, hi));
+  return Math.max(hi, Math.min(v, lo));
+}
+
+/** 有效 scale：优先 per-window 缓存（预览期已被写入），否则读落盘 settings，否则 1。 */
+function effectiveScale(id?: string): number {
+  if (id) {
+    const st = dragStates.get(id);
+    if (st && Number.isFinite(st.scale)) return clampScale(st.scale);
+    const c = findChar(id);
+    if (c && typeof c.scale === 'number' && Number.isFinite(c.scale)) return clampScale(c.scale);
+  }
+  return 1;
+}
 
 /**
- * 位置钳制（Bug 2）：按「角色可见区」而非整窗矩形（340×420）钳制到工作区。
+ * 位置钳制（Bug 2 + v3.0.11 动态尺寸）：按「角色可见区」而非整窗矩形钳制到工作区。
  * 旧实现把整窗锁在 workArea 内，而角色本体只在窗内底部中间（顶部约 wa.y+182、左缘约 wa.x+75），
  * 导致角色拖不到上半部、贴不到左边沿。现允许透明窗口部分越出 workArea，只要求角色本体整块落在
  * 工作区内；气泡（bottom:246px）是临时层，允许偶发出屏，优先满足用户「角色贴边」。
- * transform-origin:bottom center → 放大时角色更高/更宽，取该角色当前 scale（缺省 1，钳制到合法区间）
- * 算出保守可见矩形；scale 在每次钳制时现读，缩放后再次拖拽即时生效。
+ * v3.0.11：窗口尺寸随 scale 扩张，故 centerX/bodyBottom 改读当前 winW/winH；
+ * lo>hi（角色大于工作区）时由 clampAxis 反转区间，避免 y 被钳成单值。
+ * 签名保持三参不变（门禁五处调用零改），scale 由 effectiveScale(id) 内部读取。
  */
 function clampPos(x: number, y: number, id?: string): { x: number; y: number } {
   const wa = workArea();
-  let scale = 1;
-  if (id) {
-    const s = dm.getSettings();
-    const list = Array.isArray(s.desktopCharacters) ? s.desktopCharacters : [];
-    const c = list.find((ch) => ch.id === id);
-    if (c && typeof c.scale === 'number' && Number.isFinite(c.scale)) {
-      scale = Math.max(DC_SCALE_MIN, Math.min(DC_SCALE_MAX, c.scale));
-    }
-  }
+  const scale = effectiveScale(id);
+  const { w: winW, h: winH } = winSizeForScale(scale);
   const halfW = (CHAR_BODY_W * scale) / 2;
   const bodyH = CHAR_BODY_H * scale;
-  const bodyBottom = DC_WIN_H - CHAR_BODY_BOTTOM_GAP; // 角色底缘相对窗口顶部的 y
-  const centerX = DC_WIN_W / 2;
+  const bodyBottom = winH - CHAR_BODY_BOTTOM_GAP; // 角色底缘相对窗口顶部的 y
+  const centerX = winW / 2;
   // 角色可见矩形相对窗口左上角：left=centerX-halfW / right=centerX+halfW
   //                              top=bodyBottom-bodyH / bottom=bodyBottom
   // 令其落在 workArea 内 ⇒ 反解出窗口原点的合法区间（透明部分可越界）。
@@ -237,8 +292,8 @@ function clampPos(x: number, y: number, id?: string): { x: number; y: number } {
   const minY = wa.y - (bodyBottom - bodyH);
   const maxY = wa.y + wa.height - bodyBottom;
   return {
-    x: Math.max(minX, Math.min(x, maxX)),
-    y: Math.max(minY, Math.min(y, maxY)),
+    x: clampAxis(x, minX, maxX),
+    y: clampAxis(y, minY, maxY),
   };
 }
 
@@ -261,6 +316,7 @@ function getDragState(id: string): DragState {
       watchdogCursorX: 0,
       watchdogCursorY: 0,
       wantInteractive: false,
+      scale: 1,
     };
     dragStates.set(id, st);
   }
@@ -287,6 +343,62 @@ function applyPos(id: string, x: number, y: number): void {
   if (w && !w.isDestroyed()) {
     w.setPosition(Math.round(x), Math.round(y));
   }
+}
+
+/** 取消某角色的预览兜底计时器（提交 / 关窗时调用）。 */
+function cancelPreviewRestore(id: string): void {
+  const timer = previewRestoreTimers.get(id);
+  if (timer) {
+    clearTimeout(timer);
+    previewRestoreTimers.delete(id);
+  }
+}
+
+/** 排一次预览兜底：舞台异常关闭（未提交）时，窗口尺寸回到落盘 scale 对应值。不落盘、不广播。 */
+function schedulePreviewRestore(id: string): void {
+  cancelPreviewRestore(id);
+  const timer = setTimeout(() => {
+    previewRestoreTimers.delete(id);
+    const c = findChar(id);
+    const storedScale = c && typeof c.scale === 'number' && Number.isFinite(c.scale) ? c.scale : 1;
+    resizeCharacterWindow(id, storedScale);
+    // 渲染层 3000ms 已自行回退预览值，这里只把窗口尺寸同步回来（不落盘）
+    sendState(id);
+  }, DC_PREVIEW_RESTORE_MS);
+  previewRestoreTimers.set(id, timer);
+}
+
+/**
+ * v3.0.11 核心：保持角色脚点屏幕坐标不变地调整窗口尺寸。
+ *
+ * - 单次 setBounds 原子设置 x/y/width/height，避免「先变大再跳位」的中间帧；
+ * - 尺寸未变时早退（滑块 step=0.05 全程 89 档，去重后每档最多一次 setBounds）；
+ * - st.scale 先于 clampPos / setBounds 写入 ⇒ 紧随其后的 moved 事件用新 scale 重钳，幂等不回弹；
+ * - 全程不写 settings，预览通道复用本函数也不会落盘。
+ */
+function resizeCharacterWindow(id: string, scale: number): void {
+  const win = dcWindows.get(id);
+  if (!win || win.isDestroyed()) return;
+  const st = getDragState(id);
+  // 脚点必须从「未取整的逻辑原点 + 逻辑旧尺寸」反解，绝不读 getBounds()：
+  // Electron 的 setBounds 取整、getBounds 回读整数，若用它反推脚点，0.5px 会被固化成 1px，
+  // 滑块逐档缩放往返即累积漂移（实测 3 轮 +120px、存储 x 漂移 120）。
+  // st.curX/curY 是拖拽/创建/钳制全程维护的未取整逻辑原点，是这里唯一可靠的锚。
+  const prevSize = winSizeForScale(st.scale);
+  const footX = st.curX + prevSize.w / 2;
+  const footY = st.curY + prevSize.h - CHAR_BODY_BOTTOM_GAP;
+  const s = clampScale(scale);
+  const { w, h } = winSizeForScale(s);
+  st.scale = s; // 先写：clampPos / moved 用新尺寸，保证幂等
+  if (prevSize.w === w && prevSize.h === h) return; // 尺寸未变：跳过 setBounds，避免抖动
+  const nx = footX - w / 2;
+  const ny = footY - (h - CHAR_BODY_BOTTOM_GAP);
+  const c = clampPos(nx, ny, id);
+  win.setBounds({ x: Math.round(c.x), y: Math.round(c.y), width: w, height: h });
+  st.curX = c.x;
+  st.curY = c.y;
+  st.vx = 0;
+  st.vy = 0;
 }
 
 /** 停止单一全局拖拽/惯性定时器。 */
@@ -327,16 +439,26 @@ function startCursorBroadcast(): void {
   }, CURSOR_TICK_MS);
 }
 
-/** 持久化某角色窗口位置到其 `DesktopCharacter.x/y`（走 dm.saveSettings + settingsSink，不污染 runtime.x/y）。 */
+/** 持久化某角色窗口位置到其 `DesktopCharacter.x/y`（走 dm.saveSettings + settingsSink，不污染 runtime.x/y）。
+ *  v3.0.11：写入「基准脚点空间」——由当前原点 + 当前窗口尺寸反解脚点，再减 (170,410)。
+ *  这样 scale 变化只改窗口原点、不改存储坐标，旧数据零迁移。 */
 function persistPos(id: string): void {
   const st = dragStates.get(id);
   if (!st) return;
+  const win = dcWindows.get(id);
+  const bounds = win && !win.isDestroyed() ? win.getBounds() : null;
+  const { w, h } = bounds
+    ? { w: bounds.width, h: bounds.height }
+    : winSizeForScale(effectiveScale(id));
+  const footX = st.curX + w / 2;
+  const footY = st.curY + h - CHAR_BODY_BOTTOM_GAP;
+  const stored = storedFromFoot(footX, footY);
   const s = dm.getSettings();
   const list = Array.isArray(s.desktopCharacters) ? s.desktopCharacters : [];
   const idx = list.findIndex((c) => c.id === id);
   if (idx < 0) return;
   const next = list.slice();
-  next[idx] = { ...next[idx], x: Math.round(st.curX), y: Math.round(st.curY) };
+  next[idx] = { ...next[idx], x: Math.round(stored.x), y: Math.round(stored.y) };
   dm.saveSettings({ desktopCharacters: next });
   // 广播给所有窗口（面板据此刷新位置，不会覆盖其它字段）
   settingsSink?.({ desktopCharacters: next });
@@ -426,23 +548,35 @@ export function createDesktopCharacter(id: string): void {
   // 级联偏移：第 n 个启用角色额外偏移，避免多个窗口完全重叠
   const enabledList = list.filter((ch) => ch.enabled);
   const cascade = Math.max(0, enabledList.findIndex((ch) => ch.id === id)) * CASCADE_OFFSET;
+  // v3.0.11：按落盘 scale 直接建窗（动态尺寸），脚点由「基准脚点空间」存储坐标反解。
+  const scale = clampScale(typeof c.scale === 'number' && Number.isFinite(c.scale) ? c.scale : 1);
+  const { w, h } = winSizeForScale(scale);
+  // 默认脚点沿用 v3.0.10 右下角默认位：基准窗原点(wa 右下内缩 24) + 脚点偏移，
+  // 这样新增角色仍落在与旧版相同的屏幕位置，扩窗只向上/左生长。
+  const defFoot = {
+    x: wa.x + wa.width - DC_WIN_BASE_W - 24 + DC_WIN_BASE_W / 2,
+    y: wa.y + wa.height - DC_WIN_BASE_H - 24 + (DC_WIN_BASE_H - CHAR_BODY_BOTTOM_GAP),
+  };
+  const defStored = storedFromFoot(defFoot.x, defFoot.y);
   const baseX = c.x ?? rt.x;
   const baseY = c.y ?? rt.y;
-  const defX = wa.x + wa.width - DC_WIN_W - 24;
-  const defY = wa.y + wa.height - DC_WIN_H - 24;
-  let x = baseX || defX;
-  let y = baseY || defY;
-  x += cascade;
-  y += cascade;
-  const avoided = avoidBall(x, y);
+  const foot = footFromStored(baseX || defStored.x, baseY || defStored.y);
+  foot.x += cascade;
+  foot.y += cascade;
+  let x = foot.x - w / 2;
+  let y = foot.y - (h - CHAR_BODY_BOTTOM_GAP);
+  // clampPos 之前先写有效 scale，保证 moved 事件用新尺寸重钳（幂等）
+  const st = getDragState(id);
+  st.scale = scale;
+  const avoided = avoidBall(x, y, w, h);
   const clamped = clampPos(avoided.x, avoided.y, id);
   x = clamped.x;
   y = clamped.y;
 
   const dev = process.env.NIANYU_DEV === '1';
   const win = new BrowserWindow({
-    width: DC_WIN_W,
-    height: DC_WIN_H,
+    width: w,
+    height: h,
     x: Math.round(x),
     y: Math.round(y),
     frame: false,
@@ -467,8 +601,7 @@ export function createDesktopCharacter(id: string): void {
   (win as unknown as { _charId: string })._charId = id;
   dcWindows.set(id, win);
 
-  // 初始化该窗口的拖拽原点（与创建坐标一致）
-  const st = getDragState(id);
+  // 初始化该窗口的拖拽原点（与创建坐标一致）；st.scale 已在 clampPos 前写好
   st.curX = x;
   st.curY = y;
   st.vx = 0;
@@ -498,6 +631,7 @@ export function createDesktopCharacter(id: string): void {
     startCursorBroadcast();
   });
   win.on('closed', () => {
+    cancelPreviewRestore(id);
     dcWindows.delete(id);
     dragStates.delete(id);
     if (dcWindows.size === 0) {
@@ -505,22 +639,32 @@ export function createDesktopCharacter(id: string): void {
       stopCursorBroadcast();
     }
   });
-  // 窗口被系统移动（多显示器/DPI 变化）后重算位置并回存
+  // 窗口被系统移动（多显示器/DPI 变化）后重算位置并回存。
+  // v3.0.11：st.scale 已在 setBounds 前写好，此处用新尺寸重钳；比较取整数避免分数端点反复 setPosition。
   win.on('moved', () => {
     const stt = dragStates.get(id);
     if (!stt) return;
     if (stt.dragging || stt.inertia) return;
     const b = win.getBounds();
+    // QA P1 第二层：setBounds 取整后 Electron 会发 moved，若无条件把整数 b.x 回灌 st.curX，
+    // 下次 resize 又从整数反解脚点，0.5px 固化成 1px 逐档累积（实测 3 轮 +120px）。
+    // 故只有「真实外部移动」（差异 >0.5px）才回灌；≤0.5px 的 resize 回响保留未取整逻辑原点。
+    const externallyMovedX = Math.abs(b.x - stt.curX) > 0.5;
+    const externallyMovedY = Math.abs(b.y - stt.curY) > 0.5;
     const c = clampPos(b.x, b.y, id);
-    if (c.x !== b.x || c.y !== b.y) win.setPosition(Math.round(c.x), Math.round(c.y));
-    stt.curX = c.x;
-    stt.curY = c.y;
+    if (Math.round(c.x) !== b.x || Math.round(c.y) !== b.y) {
+      win.setPosition(Math.round(c.x), Math.round(c.y));
+    }
+    // 真实外部移动即便被 clampPos 修正，也要回灌修正值（externallyMoved* 为真即覆盖）
+    if (externallyMovedX) stt.curX = c.x;
+    if (externallyMovedY) stt.curY = c.y;
   });
 }
 
 /** 关闭指定角色窗口；不传 id 则关闭全部（主开关 off 用）。 */
 export function destroyDesktopCharacter(id?: string): void {
   if (id) {
+    cancelPreviewRestore(id);
     const w = dcWindows.get(id);
     if (w && !w.isDestroyed()) w.destroy();
     dcWindows.delete(id);
@@ -531,6 +675,7 @@ export function destroyDesktopCharacter(id?: string): void {
     }
     return;
   }
+  for (const cid of previewRestoreTimers.keys()) cancelPreviewRestore(cid);
   for (const [, w] of dcWindows) {
     if (!w.isDestroyed()) w.destroy();
   }
@@ -875,8 +1020,10 @@ export function registerDesktopCharacterIPC(): void {
     st.grabDX = Number(gdx) || 0;
     st.grabDY = Number(gdy) || 0;
     const b = w.getBounds();
-    st.curX = b.x;
-    st.curY = b.y;
+    // 仅在「真实外部移动」（差异 >0.5px）时才用整数回读覆盖逻辑原点。
+    // 平时 setBounds 取整造成的 ≤0.5px 差异必须保留逻辑值，否则脚点又被回灌一次（与 resize 同类漂移）。
+    if (Math.abs(st.curX - b.x) > 0.5) st.curX = b.x;
+    if (Math.abs(st.curY - b.y) > 0.5) st.curY = b.y;
     st.vx = 0;
     st.vy = 0;
     w.setIgnoreMouseEvents(false);
@@ -932,9 +1079,14 @@ export function registerDesktopCharacterIPC(): void {
     const idx = list.findIndex((c) => c.id === id);
     if (idx < 0) return;
     const clamped = Math.max(0.6, Math.min(DC_SCALE_MAX, Number(scale) || 1));
+    cancelPreviewRestore(id); // 手势已提交：撤销 3.1s 兜底
+    // v3.0.11：x/y 存储坐标是「基准脚点空间」，scale 变化只改窗口原点 ⇒ 此处只写 scale。
     const next = list.slice();
     next[idx] = { ...next[idx], scale: clamped };
     dm.saveSettings({ desktopCharacters: next });
+    // 窗口随 scale 扩张（脚点钉死）。先扩窗再广播，避免滚轮直改时角色先被放大而短暂截断；
+    // 尺寸通常与预览末帧相同 ⇒ 内部早退，不额外 setBounds。
+    resizeCharacterWindow(id, clamped);
     // 广播给所有窗口（设置页据此刷新滑块/数值，不会覆盖 x/y 等其它字段）
     settingsSink?.({ desktopCharacters: next });
     // 立即刷新角色窗显示
@@ -946,15 +1098,18 @@ export function registerDesktopCharacterIPC(): void {
   // 为什么需要独立通道（对比只发 dc:set-scale）：
   //   - dc:set-scale 会落盘 + 广播 settings:changed ⇒ 拖一次就是 N 次写盘 + N 次广播，
   //     既拖不动（主线程被 IO 拖慢），又违反「同一轮操作内只广播 1 次」；
-  //   - 预览通道**只改角色窗本地的 --dc-scale**，不落盘、不广播 ⇒ 拖动全程跟手且零 IO。
+  //   - 预览通道**只改角色窗本地的 --dc-scale + 窗口尺寸**，不落盘、不广播 ⇒ 拖动全程跟手且零 IO。
   //
-  // 提交（落盘）仍走既有的 dc:set-scale，由舞台在手势结束时发起一次。
+  // v3.0.11：预览期窗口同步扩张（避免放大后头被裁），并排 3.1s 兜底恢复落盘尺寸。
+  // 提交（落盘）仍走既有的 dc:set-scale，由舞台在手势结束时发起一次并取消兜底。
   ipcMain.on('dc:set-scale-live', (_e, id: string, scale: number) => {
     if (!id) return;
     const w = dcWindows.get(id);
     if (!w || w.isDestroyed()) return;
     const clamped = Math.max(0.6, Math.min(DC_SCALE_MAX, Number(scale) || 1));
+    resizeCharacterWindow(id, clamped); // 脚点不变的原子 resize，内部不写 settings
     w.webContents.send('dc:scale-preview', { id, scale: clamped });
+    schedulePreviewRestore(id);
   });
 
   ipcMain.handle('dc:get-state', (_e, id?: string) => getDesktopCharacterSnapshot(id));

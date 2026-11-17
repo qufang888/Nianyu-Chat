@@ -1,0 +1,66 @@
+sequenceDiagram
+    autonumber
+    %% 念语 Nianyu-Chat v3.0.11 桌宠动态窗口尺寸 —— 关键调用流程
+    %% 配套文档：docs/dynamic-window-v3.0.11-design.md
+
+    participant R as CharacterApp（渲染层）
+    participant S as CharacterStage（舞台）
+    participant M as main.ts / preload
+    participant D as desktopCharacter.ts（主进程物理层）
+    participant W as BrowserWindow(角色窗)
+
+    Note over D,W: ① 创建（按角色落盘 scale 直接建窗，脚点由存储坐标反解）
+    D->>D: c = findChar(id); s = clampScale(c.scale)
+    D->>D: {w,h} = winSizeForScale(s)
+    D->>D: foot = footFromStored(c.x, c.y)  %% (x+170, y+410)
+    D->>D: origin = (foot.x - w/2, foot.y - (h-10))
+    D->>D: avoidBall(origin, w, h) → clampPos(..., id)（st.scale=s 先写好）
+    D->>W: new BrowserWindow({width:w, height:h, x, y, transparent,frame:false,...})
+    D->>D: st.curX/st.curY = origin; st.scale = s
+
+    Note over S,D: ② 舞台拖动滑块（实时预览，每档）
+    S->>M: dcSetScaleLive(id, v)
+    M->>D: ipcMain 'dc:set-scale-live'
+    D->>D: s = clampScale(v); old = w.getBounds()
+    D->>D: foot = (old.x+old.width/2, old.y+old.height-10)
+    D->>D: {w,h} = winSizeForScale(s); nx=foot.x-w/2; ny=foot.y-(h-10)
+    D->>D: c = clampPos(nx, ny, id)  %% 内部读 st.scale（下方先写）
+    D->>D: st.scale = s（先写，moved 事件用新值，幂等）
+    D->>W: setBounds({x:c.x,y:c.y,width:w,height:h})（尺寸未变则早退去重）
+    D->>D: st.curX=c.x; st.curY=c.y; vx=vy=0
+    D->>W: webContents.send('dc:scale-preview', {id, scale:s})
+    D->>D: schedulePreviewRestore(id)  %% 3.1s 无提交则回退落盘尺寸
+    W->>R: setState(character.scale = s) → --dc-scale=s（角色与窗口同步放大，无截断）
+
+    Note over S,D: ③ 手势结束提交（落盘一次）
+    S->>M: dcSetScale(id, next)
+    M->>D: ipcMain 'dc:set-scale'
+    D->>D: cancelPreviewRestore(id)
+    D->>D: next[idx] = {...next[idx], scale:clamped}; saveSettings  %% x/y 不动（脚点未变）
+    D->>D: resizeCharacterWindow(id, clamped)  %% 尺寸通常与预览末帧相同→早退
+    D->>W: sendState() → 广播 settings:changed
+
+    Note over R,D: ④ 滚轮缩放（桌宠本体）
+    R->>R: onCharacterWheel → next=clamp(0.6,5.0, cur±0.05)
+    R->>M: dcSetScale(id, next)  %% 本地 state 先更新，跟手
+    M->>D: 同上 ③ 提交路径
+
+    Note over R,D: ⑤ 拖拽（坐标基准不变）
+    R->>M: dcDragStart(gdx,gdy)  %% gdx=screenX-window.screenX（当前原点）
+    M->>D: ipcMain 'dc:drag-start' → st.grabDX/gdy; st.curX=win.getBounds().x
+    loop 60Hz
+        D->>D: springStep: target=(光标−grabDX/grabDY); 积分子步
+        D->>D: clampPos(curX,curY,id)（用当前尺寸 + effectiveScale）
+        D->>W: applyPos → setPosition(round(x),round(y))
+    end
+    R->>M: dcDragEnd → endDragState → persistPos
+    D->>D: foot = (st.curX+w/2, st.curY+h-10); store = storedFromFoot(foot)
+    D->>D: saveSettings(desktopCharacters[idx].x/y = store)  %% 基准脚点空间
+
+    Note over D,W: ⑥ 系统移动 / 多显示器（moved）
+    W-->>D: 'moved' → c = clampPos(b.x,b.y,id)（动态尺寸）；setPosition 回钳
+
+    Note over D,W: ⑦ 预览超时兜底（舞台异常关闭未提交）
+    D->>D: schedulePreviewRestore 触发（3100ms）
+    D->>D: s = 落盘 scale；resizeCharacterWindow(id, s)
+    D->>W: setBounds 回到落盘尺寸（与渲染层 3000ms 回退同步）

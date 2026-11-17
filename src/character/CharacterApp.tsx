@@ -52,6 +52,13 @@ const DEFAULT_RUNTIME: CharacterRuntimeSettings = {
 
 const HIT_SELECTOR = '.dc-character, .dc-bubble, .dc-menu';
 const DRAG_THRESHOLD = 5;
+/**
+ * 视线归一化除数基准（v3.0.11）：角色中心 ±170px ⇒ eye ±1。
+ * 与 src/components/CharacterStage.tsx 的 STAGE_EYE_DIVISOR 同值，保持桌宠/舞台同一口径。
+ * 实际除数必须乘当前 scale：角色放大后渲染尺寸同比变大，光标扫过全宽的像素距离也变大；
+ * 除数不同步放大 ⇒ 眼球/头部转角随 scale 缩小，表现为「放大后眼神跟不上手」。
+ */
+const DC_EYE_DIVISOR = 170;
 
 // ===== 桌宠互动语句生成参数（v3.0.1-beta.9；v3.0.3 频率改为按设置派生）=====
 // 这些值只控制「触发节奏 / 展示形态」，不参与任何文案内容；文案一律由模型输出。
@@ -650,6 +657,8 @@ export const CharacterApp: React.FC = () => {
   }, [menuOpen, closeMenu]);
 
   // ===== 视线全屏跟随（主进程轮询全局光标，约 30Hz 推送；窗口整体穿透，窗内 mousemove 收不到屏外光标）=====
+  // v3.0.11：除数乘 scale —— 光标坐标与 getBoundingClientRect() 同处窗口局部空间，
+  // 角色随 --dc-scale 放大后，只有除数同步放大才能让「光标扫过角色全宽」的转角幅度保持恒定。
   useEffect(() => {
     const off = api.onDcCursor(({ x, y }) => {
       const el = charRef.current;
@@ -658,12 +667,12 @@ export const CharacterApp: React.FC = () => {
       const cx = r.left + r.width / 2;
       const cy = r.top + r.height / 2;
       setEye({
-        x: Math.max(-1, Math.min(1, (x - cx) / 170)),
-        y: Math.max(-1, Math.min(1, (y - cy) / 170)),
+        x: Math.max(-1, Math.min(1, (x - cx) / (DC_EYE_DIVISOR * scale))),
+        y: Math.max(-1, Math.min(1, (y - cy) / (DC_EYE_DIVISOR * scale))),
       });
     });
     return off;
-  }, []);
+  }, [scale]);
 
   // 菜单打开时保持可交互；关闭后若光标不在命中区则恢复穿透
   useEffect(() => {

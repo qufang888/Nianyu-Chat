@@ -1,0 +1,100 @@
+classDiagram
+    %% 念语 Nianyu-Chat v3.0.11 桌宠动态窗口尺寸 —— 类/数据结构图
+    %% 配套文档：docs/dynamic-window-v3.0.11-design.md
+
+    class DragState {
+        +number curX
+        +number curY
+        +number vx
+        +number vy
+        +number targetX
+        +number targetY
+        +number grabDX
+        +number grabDY
+        +boolean dragging
+        +boolean inertia
+        +number dragStartedAt
+        +number watchdogCursorX
+        +number watchdogCursorY
+        +boolean wantInteractive
+        +number scale  "新增：per-window 有效 scale（预览期由主进程写入）"
+    }
+
+    class Geometry {
+        <<pure functions / 唯一真源>>
+        +number DC_WIN_BASE_W  "340（恒量）"
+        +number DC_WIN_BASE_H  "420（恒量）"
+        +number CHAR_BODY_W  "190"
+        +number CHAR_BODY_H  "228"
+        +number CHAR_BODY_BOTTOM_GAP  "10"
+        +number DC_PAD_X  "75 = (340-190)/2"
+        +number DC_HEAD_TOP  "182 = 420-10-228"
+        +number DC_SCALE_MIN  "0.6"
+        +number DC_SCALE_MAX  "5.0"
+        +number DC_PREVIEW_RESTORE_MS  "3100"
+        +clampScale(s: number) number
+        +winSizeForScale(s: number) WinSize
+        +footFromStored(x: number, y: number) Point
+        +storedFromFoot(fx: number, fy: number) Point
+        +clampAxis(v: number, lo: number, hi: number) number
+    }
+    class WinSize {
+        +number w
+        +number h
+    }
+    class Point {
+        +number x
+        +number y
+    }
+
+    class WindowManager {
+        +Map~string, BrowserWindow~ dcWindows
+        +Map~string, DragState~ dragStates
+        +createDesktopCharacter(id: string) void
+        +clampPos(x: number, y: number, id?: string) Point
+        +resizeCharacterWindow(id: string, scale: number) void
+        +effectiveScale(id?: string) number
+        +applyPos(id: string, x: number, y: number) void
+        +persistPos(id: string) void
+        +avoidBall(x: number, y: number, w: number, h: number) Point
+        +onMoved(id: string) void
+    }
+
+    class IPCBridge {
+        +dcSetScale(id: string, scale: number) void
+        +dcSetScaleLive(id: string, scale: number) void
+        +dcDragStart(gdx: number, gdy: number) void
+        +dcReposition(x: number, y: number) void
+        +Map~string, Timeout~ previewRestoreTimers
+        +schedulePreviewRestore(id: string) void
+        +cancelPreviewRestore(id: string) void
+    }
+
+    class BrowserWindow {
+        +getBounds() Rectangle
+        +setBounds(b: Rectangle) void
+        +setPosition(x: number, y: number) void
+        +webContents
+    }
+
+    class CharacterAppRenderer {
+        +onDcScalePreview(d) void
+        +onDcCursor({x,y}) void
+        +onCharacterWheel(e) void
+        --dc-scale: CSS 自定义属性（只写在 .dc-character）
+    }
+
+    class CharacterStage {
+        +api.dcSetScaleLive(id, v) void
+        +api.dcSetScale(id, next) void
+    }
+
+    Geometry ..> WinSize : produces
+    Geometry ..> Point : produces
+    WindowManager --> Geometry : 尺寸/钳制/基准换算（唯一真源）
+    WindowManager *-- DragState : 每角色一个
+    WindowManager --> BrowserWindow : setBounds / getBounds / setPosition
+    IPCBridge --> WindowManager : resizeCharacterWindow / clampPos / persistPos
+    IPCBridge --> CharacterAppRenderer : dc:scale-preview / dc:cursor / dc:state
+    CharacterAppRenderer --> IPCBridge : dc:drag-start(gdx,gdy) / dc:reposition / dc:set-scale
+    CharacterStage --> IPCBridge : 预览 live + 手势结束 commit

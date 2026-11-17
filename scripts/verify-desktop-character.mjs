@@ -576,8 +576,9 @@ check('Bug2 clampPos 传入角色 id（创建/移动/弹簧/惯性/重定位全�
   /clampPos\(st\.curX, st\.curY, id\)/.test(mainDc) &&
   /clampPos\(nx, ny, id\)/.test(mainDc) &&
   /clampPos\(Number\(x\) \|\| 0, Number\(y\) \|\| 0, id\)/.test(mainDc));
-check('Bug2 保留 avoidBall 悬浮球避让且 clamp 在其后（不冲突）',
-  /const avoided = avoidBall\(x, y\);[\s\S]{0,80}clampPos\(avoided\.x, avoided\.y, id\)/.test(mainDc));
+check('Bug2 保留 avoidBall 悬浮球避让且 clamp 在其后（不冲突；v3.0.11 传动态 w/h）',
+  /function avoidBall\(x: number, y: number, w: number, h: number\)/.test(mainDc) &&
+  /const avoided = avoidBall\(x, y, w, h\);[\s\S]{0,80}clampPos\(avoided\.x, avoided\.y, id\)/.test(mainDc));
 
 // Bug 3：偶发松开仍处拖动状态。renderer window 级兜底 + 主进程看门狗。
 check('Bug3 renderer pointer capture 设在 currentTarget（稳定元素，非 e.target）',
@@ -979,6 +980,12 @@ check('K6 存在「实时预览」通道：dc:set-scale-live（渲染→主）�
 check('K6 预览通道不落盘、不广播（只推给该角色窗改本地 --dc-scale）',
   /dc:set-scale-live[\s\S]{0,400}webContents\.send\('dc:scale-preview'/.test(mainDc) &&
   !/dc:set-scale-live[\s\S]{0,400}saveSettings/.test(mainDc));
+check('K6 v3.0.11 预览同步调窗口尺寸（resizeCharacterWindow 内绝不 saveSettings）',
+  /dc:set-scale-live[\s\S]{0,300}resizeCharacterWindow\(id, clamped\)/.test(mainDc) &&
+  /function resizeCharacterWindow\(/.test(mainDc) && // 防止 extractFnBody 空串导致「恒真」假阳性
+  !/saveSettings/.test(extractFnBody(mainDc, 'function resizeCharacterWindow(')) &&
+  /cancelPreviewRestore\(id\)/.test(mainDc) &&
+  /DC_PREVIEW_RESTORE_MS\s*=\s*3100/.test(mainDc));
 check('K6 舞台写回只发生在用户手势里（外部同步只读，绝不回写）',
   /zoomSourceRef/.test(stage) &&
   /api\.dcSetScaleLive\(/.test(stage) &&
@@ -1678,6 +1685,99 @@ check('v3.0.10 舞台盒子放大与像素密度解耦（pr 不含 zoom，5× �
     'const rs = Math.max(1, Math.min(1.6, resolutionScaleRef.current));');
   check('（可证伪）rs 加回 1.6 clamp 后 K20 断言失效',
     broken !== threeView && !/const rs = Math\.max\(1, resolutionScaleRef\.current\);/.test(broken));
+}
+
+// ---------- K21. v3.0.11：动态窗口尺寸 / 脚点锚点 / 反转钳制 / 预览 resize / 视线除数 ----------
+check('K21 窗口尺寸随 scale 扩张且 S<=1 不收缩（脚点锚定公式唯一真源）',
+  /DC_WIN_BASE_W\s*=\s*340/.test(mainDc) && /DC_WIN_BASE_H\s*=\s*420/.test(mainDc) &&
+  /DC_PAD_X\s*=\s*\(DC_WIN_BASE_W - CHAR_BODY_W\) \/ 2/.test(mainDc) &&
+  /DC_HEAD_TOP\s*=\s*DC_WIN_BASE_H - CHAR_BODY_BOTTOM_GAP - CHAR_BODY_H/.test(mainDc) &&
+  /w: Math\.max\(DC_WIN_BASE_W, Math\.ceil\(CHAR_BODY_W \* k \+ 2 \* DC_PAD_X\)\)/.test(mainDc) &&
+  /h: Math\.max\(DC_WIN_BASE_H, Math\.ceil\(CHAR_BODY_H \* k \+ CHAR_BODY_BOTTOM_GAP \+ DC_HEAD_TOP\)\)/.test(mainDc));
+{
+  const resizeBody = stripComments(extractFnBody(mainDc, 'function resizeCharacterWindow('));
+  const resizeBodyOk = resizeBody.length > 0; // 防止空串时「不含 getBounds」恒真
+  const scaleWriteAt = resizeBody.indexOf('st.scale = s;');
+  const clampAt = resizeBody.indexOf('clampPos(nx, ny, id)');
+  check('K21 脚点屏幕坐标不变：逻辑原点反解脚点 − 新半宽/新底距（单次 setBounds 原子）',
+    /const prevSize = winSizeForScale\(st\.scale\)/.test(mainDc) &&
+    /footX = st\.curX \+ prevSize\.w \/ 2/.test(mainDc) &&
+    /footY = st\.curY \+ prevSize\.h - CHAR_BODY_BOTTOM_GAP/.test(mainDc) &&
+    /setBounds\(\{[\s\S]{0,200}width: w, height: h[\s\S]{0,80}\}\)/.test(mainDc) &&
+    // QA P1：resize 内禁止回读整数 getBounds（否则缩放往返累积漂移）
+    resizeBodyOk && !/getBounds\(/.test(resizeBody) &&
+    // st.scale 必须先写后钳（moved 幂等），且全程只有一个 setBounds
+    scaleWriteAt >= 0 && clampAt > scaleWriteAt &&
+    (resizeBody.match(/setBounds\(/g) || []).length === 1);
+}
+check('K21 clampAxis 在 min>max 时反转区间（角色大于工作区仍可贴边，无空气墙）',
+  /function clampAxis\(v: number, lo: number, hi: number\)/.test(mainDc) &&
+  /if \(lo <= hi\) return Math\.max\(lo, Math\.min\(v, hi\)\)/.test(mainDc) &&
+  /return Math\.max\(hi, Math\.min\(v, lo\)\)/.test(mainDc) &&
+  /x: clampAxis\(x, minX, maxX\)/.test(mainDc) &&
+  /y: clampAxis\(y, minY, maxY\)/.test(mainDc));
+check('K21 持久化走基准脚点空间（x=fx−170, y=fy−410），零数据迁移',
+  /footFromStored/.test(mainDc) && /storedFromFoot/.test(mainDc) &&
+  /x: fx - DC_WIN_BASE_W \/ 2/.test(mainDc) &&
+  /y: fy - \(DC_WIN_BASE_H - CHAR_BODY_BOTTOM_GAP\)/.test(mainDc) &&
+  /footX = st\.curX \+ w \/ 2/.test(mainDc) &&
+  /footY = st\.curY \+ h - CHAR_BODY_BOTTOM_GAP/.test(mainDc) &&
+  /const stored = storedFromFoot\(footX, footY\)/.test(mainDc));
+check('K21 预览通道 live 调窗口尺寸 + 3.1s 兜底恢复，但不落盘',
+  /dc:set-scale-live[\s\S]{0,300}resizeCharacterWindow/.test(mainDc) &&
+  /DC_PREVIEW_RESTORE_MS\s*=\s*3100/.test(mainDc) &&
+  /schedulePreviewRestore/.test(mainDc) &&
+  /cancelPreviewRestore\(id\)/.test(mainDc) &&
+  !/dc:set-scale-live[\s\S]{0,400}saveSettings/.test(mainDc));
+{
+  const movedBlock = (mainDc.match(/win\.on\('moved', \(\) => \{[\s\S]{0,1600}?\}\);/) || [''])[0];
+  const movedCode = stripComments(movedBlock);
+  check('K21 moved 只回灌真实外部移动（>0.5px），断开 resize 取整回响闭环',
+    /externallyMovedX = Math\.abs\(b\.x - stt\.curX\) > 0\.5/.test(movedCode) &&
+    /externallyMovedY = Math\.abs\(b\.y - stt\.curY\) > 0\.5/.test(movedCode) &&
+    /if \(externallyMovedX\) stt\.curX = c\.x/.test(movedCode) &&
+    /if \(externallyMovedY\) stt\.curY = c\.y/.test(movedCode) &&
+    !/\n\s*stt\.curX = c\.x;/.test(movedCode) &&
+    !/\n\s*stt\.curY = c\.y;/.test(movedCode));
+}
+check('K21 视线除法除数随 scale / zoom 放大（放大后转角幅度不变；桌宠与舞台同口径）',
+  /const DC_EYE_DIVISOR = 170/.test(appTsx) &&
+  /\(x - cx\) \/ \(DC_EYE_DIVISOR \* scale\)/.test(appTsx) &&
+  /\(y - cy\) \/ \(DC_EYE_DIVISOR \* scale\)/.test(appTsx) &&
+  /return off;\s*\}, \[scale\]\)/.test(appTsx) &&
+  /const STAGE_EYE_DIVISOR = 170/.test(stage) &&
+  /\(e\.clientX - cx\) \/ \(STAGE_EYE_DIVISOR \* zoom\)/.test(stage) &&
+  /\(e\.clientY - cy\) \/ \(STAGE_EYE_DIVISOR \* zoom\)/.test(stage) &&
+  /removeEventListener\('mousemove', onMove\);\s*\}, \[zoom\]\)/.test(stage));
+
+// 可证伪：把 K21 的关键机制各自回退，对应断言必须变红
+{
+  const broken = mainDc.replace('if (lo <= hi) return Math.max(lo, Math.min(v, hi));', '');
+  check('（可证伪）删除 clampAxis 反转兜底后 K21 断言失效',
+    broken !== mainDc && !/if \(lo <= hi\) return Math\.max\(lo, Math\.min\(v, hi\)\)/.test(broken));
+  const broken2 = mainDc.replace(
+    'h: Math.max(DC_WIN_BASE_H, Math.ceil(CHAR_BODY_H * k + CHAR_BODY_BOTTOM_GAP + DC_HEAD_TOP)),',
+    'h: DC_WIN_BASE_H,');
+  check('（可证伪）窗口高度退回固定 420 后 K21 尺寸断言失效',
+    broken2 !== mainDc &&
+    !/h: Math\.max\(DC_WIN_BASE_H, Math\.ceil\(CHAR_BODY_H \* k \+ CHAR_BODY_BOTTOM_GAP \+ DC_HEAD_TOP\)\)/.test(broken2));
+  const broken3 = appTsx.replace('(DC_EYE_DIVISOR * scale)', 'DC_EYE_DIVISOR');
+  check('（可证伪）视线除数退回固定 170 后 K21 断言失效',
+    broken3 !== appTsx && !/\(x - cx\) \/ \(DC_EYE_DIVISOR \* scale\)/.test(broken3));
+  const broken4 = mainDc.replace('const stored = storedFromFoot(footX, footY);', 'const stored = { x: st.curX, y: st.curY };');
+  check('（可证伪）持久化退回直接写原点后 K21 断言失效',
+    broken4 !== mainDc && !/const stored = storedFromFoot\(footX, footY\)/.test(broken4));
+  const broken5 = mainDc.replace(
+    'footX = st.curX + prevSize.w / 2;',
+    'footX = win.getBounds().x + win.getBounds().width / 2;');
+  check('（可证伪）脚点退回整数 getBounds 回读后 K21 断言失效（QA P1 漂移回归）',
+    broken5 !== mainDc &&
+    !/footX = st\.curX \+ prevSize\.w \/ 2/.test(broken5) &&
+    /getBounds\(/.test(extractFnBody(broken5, 'function resizeCharacterWindow(')));
+  const broken6 = mainDc.replace('if (externallyMovedX) stt.curX = c.x;', 'stt.curX = c.x;');
+  check('（可证伪）moved 改回无条件回灌后 K21 断言失效（QA Round 2 闭环回归）',
+    broken6 !== mainDc &&
+    !/if \(externallyMovedX\) stt\.curX = c\.x/.test(broken6));
 }
 
 // ---------- 汇总 ----------
