@@ -59,6 +59,7 @@ const l2dView = read('src/character/Live2DView.tsx');
 const coll = read('src/components/CharacterCollection.tsx');
 const stage = read('src/components/CharacterStage.tsx');
 const charCss = read('src/styles/character.css');
+const charPanelCss = read('src/styles/character-panel.css');
 const indexCss = read('src/styles/index.css');
 const panelCss = read('src/styles/character-panel.css');
 const settings = read('src/components/Settings.tsx');
@@ -678,9 +679,9 @@ check('I3 缩放变量写在 .dc-character 自身（父元素 transform 才消�
   /className=\{`dc-character\$\{dragging \? ' dragging' : ''\}`\}[\s\S]{0,200}--dc-scale/.test(appTsx) &&
   !/className="dc-stage"[^>]*--dc-scale/.test(appTsx) &&
   /transform: translateX\(-50%\) scale\(var\(--dc-scale, 1\)\)/.test(charCss));
-check('I3 滚轮链路完整：onWheel + 0.6~2.0 钳制 + dcSetScale 持久化 + 原生 passive:false 阻止滚动',
+check('I3 滚轮链路完整：onWheel + 0.6~5.0 钳制 + dcSetScale 持久化 + 原生 passive:false 阻止滚动',
   /onWheel=\{onCharacterWheel\}/.test(appTsx) &&
-  /Math\.max\(0\.6, Math\.min\(2\.0, Math\.round\(\(cur \+ step\) \* 100\) \/ 100\)\)/.test(appTsx) &&
+  /Math\.max\(0\.6, Math\.min\(5\.0, Math\.round\(\(cur \+ step\) \* 100\) \/ 100\)\)/.test(appTsx) &&
   /api\.dcSetScale\(c\.id, next\)/.test(appTsx) &&
   /addEventListener\('wheel',[\s\S]{0,200}\{ passive: false \}\)/.test(appTsx));
 
@@ -963,8 +964,8 @@ check('K5 菜单项先播收回动画再执行业务动作（收回可见）',
 // ---------- K6. 舞台 ⇄ 桌面缩放双向同步 ----------
 // 只取缩放常量声明块来判定「1.9 是否残留」——注释里提到 1.9（说明已删除）不算残留。
 const stageZoomConsts = (stage.match(/const STAGE_ZOOM_[A-Z]+ = [0-9.]+;/g) || []).join(' ');
-check('K6 舞台缩放区间放宽到 0.6~2.0（v3.0.9）',
-  /const STAGE_ZOOM_MAX = 2\.0/.test(stage) &&
+check('K6 舞台缩放区间放宽到 0.6~5.0（v3.0.10）',
+  /const STAGE_ZOOM_MAX = 5\.0/.test(stage) &&
   !/1\.9/.test(stageZoomConsts) &&
   /const STAGE_ZOOM_MIN = 0\.6/.test(stage));
 check('K6 存在「实时预览」通道：dc:set-scale-live（渲染→主）与 dc:scale-preview（主→角色窗）',
@@ -1400,13 +1401,15 @@ check('v3.0.6 桌宠传 resolutionScale（最低 1.5× 超采样）',
   /resolutionScale=\{Math\.max\(DESKTOP_RESOLUTION_SCALE_MIN, scale\)\}/.test(appTsx) &&
   /resolutionScale/.test(modelView) &&
   /export const DESKTOP_RESOLUTION_SCALE_MIN/.test(threeView));
-check('v3.0.6 pixelRatio 同时含 zoom 与 resolutionScale（舞台行为不变）',
-  /dpr \* z \* rs/.test(threeView) &&
-  /Math\.min\(MAX_PIXEL_RATIO/.test(threeView) &&
+check('v3.0.10 pixelRatio = dpr × resolutionScale（zoom 不再重复乘，避免舞台双重放大）',
+  /const pr = Math\.max\(1, Math\.min\(MAX_PIXEL_RATIO, Math\.round\(dpr \* rs \* 100\) \/ 100\)\)/.test(threeView) &&
+  /const MAX_PIXEL_RATIO = 12/.test(threeView) &&
+  !/dpr \* z \* rs/.test(threeView) &&
   /\[zoom, resolutionScale\]/.test(threeView));
-check('v3.0.6 Live2D 同步支持 resolutionScale（同类模糊一并修）',
+check('v3.0.10 Live2D 分辨率同步：dpr × rs 无双重放大、上限 12',
   /resolutionScaleRef\.current/.test(l2dView) &&
-  /dpr \* z \* rs/.test(l2dView) &&
+  /Math\.min\(12, Math\.round\(dpr \* rs \* 100\)/.test(l2dView) &&
+  !/dpr \* z \* rs/.test(l2dView) &&
   /\[zoom, resolutionScale\]/.test(l2dView));
 check('v3.0.6 舞台不传 resolutionScale（保持原清晰路径）',
   !/resolutionScale/.test(stage));
@@ -1630,14 +1633,16 @@ const MOTION_KEYS = [
 check('v3.0.9 视线 pitch 屏幕 Y 翻转（光标往上=抬头，眼球 marker）',
   /pitchRad: -y \* VRM_GAZE_MAX_PITCH_DEG \* DEG2RAD/.test(vrmPose) &&
   /headPos\.y \+ Math\.tan\(pitchRad\) \* VRM_GAZE_DISTANCE/.test(threeView));
-check('v3.0.9 头部 gaze.pitch 取反（rotation.x 正值=低头，抬头需负值）',
-  /rig\.gaze\.pitch = smooth\(rig\.gaze\.pitch, -pitchRad \* r, dt, VRM_GAZE_SMOOTH_TAU\)/.test(vrmPose) &&
+check('v3.0.10 头部 gaze 按 faceSign 分版（VRM0 正 / VRM1 负，实测修复上下反向）',
+  /rig\.gaze\.pitch = smooth\(rig\.gaze\.pitch, pitchRad \* sign \* r, dt, VRM_GAZE_SMOOTH_TAU\)/.test(vrmPose) &&
+  /faceSign: \(faceFrontZ \?\? 1\) < 0 \? 1 : -1/.test(vrmPose) &&
+  /vrm\?\.lookAt\?\.faceFront\?\.z/.test(threeView) &&
   /\+ gz\.pitch,/.test(threeView));
-check('v3.0.9 缩放上限 2.0 主进程/渲染层/类型三处一致',
-  /const DC_SCALE_MAX = 2\.0/.test(mainDc) &&
+check('v3.0.10 缩放上限 5.0 主进程/渲染层/类型三处一致',
+  /const DC_SCALE_MAX = 5\.0/.test(mainDc) &&
   /Math\.max\(0\.6, Math\.min\(DC_SCALE_MAX, Number\(scale\) \|\| 1\)\)/.test(mainDc) &&
-  /const STAGE_ZOOM_MAX = 2\.0/.test(stage) &&
-  /显示缩放（0\.6~2\.0/.test(types));
+  /const STAGE_ZOOM_MAX = 5\.0/.test(stage) &&
+  /显示缩放（0\.6~5\.0/.test(types));
 // 变异自证 27：pitch 改回不翻转 ⇒ K19 视线断言失效
 {
   const broken = vrmPose.replace(
@@ -1646,13 +1651,33 @@ check('v3.0.9 缩放上限 2.0 主进程/渲染层/类型三处一致',
   check('（可证伪）pitch 去掉屏幕Y翻转后 K19 视线断言失效',
     broken !== vrmPose && !/pitchRad: -y \* VRM_GAZE_MAX_PITCH_DEG/.test(broken));
   const broken2 = vrmPose.replace(
-    'rig.gaze.pitch = smooth(rig.gaze.pitch, -pitchRad * r, dt, VRM_GAZE_SMOOTH_TAU);',
-    'rig.gaze.pitch = smooth(rig.gaze.pitch, pitchRad * r, dt, VRM_GAZE_SMOOTH_TAU);');
-  check('（可证伪）头部 pitch 去掉取反后 K19 断言失效',
-    broken2 !== vrmPose && !/smooth\(rig\.gaze\.pitch, -pitchRad/.test(broken2));
-  const broken3 = stage.replace('const STAGE_ZOOM_MAX = 2.0;', 'const STAGE_ZOOM_MAX = 1.6;');
-  check('（可证伪）舞台缩放退回 1.6 后 K19 断言失效',
-    broken3 !== stage && !/const STAGE_ZOOM_MAX = 2\.0/.test(broken3));
+    'const sign = typeof rig.faceSign === \'number\' ? rig.faceSign : -1;',
+    'const sign = -1;');
+  check('（可证伪）头部 faceSign 写死为 VRM1 后 K19 断言失效',
+    broken2 !== vrmPose && !/rig\.faceSign === 'number' \? rig\.faceSign : -1/.test(broken2));
+  const broken3 = stage.replace('const STAGE_ZOOM_MAX = 5.0;', 'const STAGE_ZOOM_MAX = 2.0;');
+  check('（可证伪）舞台缩放退回 2.0 后 K19 断言失效',
+    broken3 !== stage && !/const STAGE_ZOOM_MAX = 5\.0/.test(broken3));
+}
+
+// ---------- K20. v3.0.10：500% 不糊 + VRM0/VRM1 视线分版 ----------
+check('v3.0.10 桌宠 resolutionScale 直接跟随 scale（不再 clamp 1.6），支持 5× 清晰',
+  /const rs = Math\.max\(1, resolutionScaleRef\.current\);/.test(threeView) &&
+  !/Math\.min\(1\.6, resolutionScaleRef\.current\)/.test(threeView) &&
+  /resolutionScale=\{Math\.max\(DESKTOP_RESOLUTION_SCALE_MIN, scale\)\}/.test(appTsx));
+check('v3.0.10 pixelRatio 上限 12（覆盖 dpr2 × scale5 = pr10）',
+  /const MAX_PIXEL_RATIO = 12/.test(threeView) &&
+  /Math\.min\(12, Math\.round\(dpr \* rs \* 100\)/.test(l2dView));
+check('v3.0.10 舞台盒子放大与像素密度解耦（pr 不含 zoom，5× 不浪费显存）',
+  !/dpr \* z \* rs/.test(threeView) && !/dpr \* z \* rs/.test(l2dView) &&
+  /width: calc\(190px \* var\(--stage-zoom/.test(charPanelCss));
+// 变异 28：rs 加回 1.6 clamp ⇒ 大缩放模糊回归，断言必红
+{
+  const broken = threeView.replace(
+    'const rs = Math.max(1, resolutionScaleRef.current);',
+    'const rs = Math.max(1, Math.min(1.6, resolutionScaleRef.current));');
+  check('（可证伪）rs 加回 1.6 clamp 后 K20 断言失效',
+    broken !== threeView && !/const rs = Math\.max\(1, resolutionScaleRef\.current\);/.test(broken));
 }
 
 // ---------- 汇总 ----------

@@ -89,19 +89,17 @@ export const Live2DView: React.FC<Props> = ({
   const appRef = useRef<any>(null);
 
   /**
-   * Live2D 的渲染分辨率（等价于 three 的 pixelRatio）。
+   * Live2D 的渲染分辨率（等价于 three 的 pixelRatio）——v3.0.10 与 ThreeModelView 同步重写。
    *
-   * 舞台放大后画布 CSS 尺寸变大，若后备缓冲只按 1× 分配，模型就是「1× 渲染被放大」⇒ 糊。
-   * 这里让分辨率随 zoom 一起涨（上限 3，避免高倍缩放把 GPU 压垮，见设计文档 Q-6），
-   * 于是放大后的 Live2D 是**按更大分辨率重新渲染**的，而不是拉伸旧帧。
+   * 桌宠靠 transform:scale(S) 放大 ⇒ 需 resolutionScale=S 把缓冲同步抬起；
+   * 舞台盒子已按 zoom 放大 ⇒ 只要 pr=dpr 即 1:1，不再把 zoom 乘进 pr（否则 5× 时 25 倍浪费）。
+   * 上限 12 覆盖 dpr=2 + scale=5 极端。
    */
   const targetResolution = () => {
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const z = Math.max(1, zoomRef.current);
-    // v3.0.6：桌宠传 max(1.5, scale) ⇒ 即使 scale=1 也有 1.5× 超采样；
-    // 上限由 3 提到 4（190×228 × 4 仅 760×912，成本可控，见硬编码清单）。
-    const rs = Math.max(1, Math.min(1.6, resolutionScaleRef.current));
-    return Math.max(1, Math.min(4, Math.round(dpr * z * rs * 100) / 100));
+    // 桌宠传 max(1.5, scale)；舞台不传(=1)。不再对 rs 设 1.6 上限。
+    const rs = Math.max(1, resolutionScaleRef.current);
+    return Math.max(1, Math.min(12, Math.round(dpr * rs * 100) / 100));
   };
 
   useEffect(() => {

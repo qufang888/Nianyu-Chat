@@ -632,7 +632,7 @@ export interface DesktopCharacter {
   x?: number;
   /** 桌面窗口左上角屏幕坐标（DIP）；缺省时回退到 runtime.x/y 或右下角默认位 */
   y?: number;
-  /** 显示缩放（0.6~2.0；v3.0.9 由 1.6 放宽到 2.0，桌面滚轮与舞台滑块共用此区间） */
+  /** 显示缩放（0.6~5.0；v3.0.10 由 2.0 放宽到 5.0，桌面滚轮与舞台滑块共用此区间） */
   scale: number;
   /** 是否启用自主行为（随机动作 / 主动气泡） */
   behavior: boolean;

@@ -44,8 +44,14 @@ export interface VRMPoseRig {
   /** 0→1，自然站姿淡入用（VRM_BASE_BLEND_SEC） */
   baseBlend: number;
   armProbes: { left: ArmRestProbe; right: ArmRestProbe };
-  /** 平滑后的头部凝视分量（弧度），由 applyGazeHead 写入 */
+  /** 平滑后的头部凝视分量（弧度），由 applyGazeHead 写入；已按 faceSign 修正，可直接加到 rotation.x */
   gaze: { yaw: number; pitch: number };
+  /**
+   * 头部俯仰符号（v3.0.10）：VRM1(faceFront +Z) 抬头需 rotation.x 负 ⇒ -1；
+   * VRM0(faceFront -Z，rotateVRM0 后) 抬头需 rotation.x 正 ⇒ +1。
+   * three-vrm 的 normalized head bone 局部轴在两版相反，实测确认，不能统一写死。
+   */
+  faceSign: number;
 }
 
 /** 自然站姿目标：臂干离竖直 15°（T-pose 需修正 −75°；选 15° 避免手臂插进身体）。 */
@@ -91,7 +97,8 @@ export function clamp01(v: number | undefined | null): number {
 export function capturePoseRig(
   humanoid: any,
   bones?: Record<string, Object3D | null>,
-  rest?: Record<string, PoseSnapshot>
+  rest?: Record<string, PoseSnapshot>,
+  faceFrontZ?: number
 ): VRMPoseRig {
   const get = (name: string): Object3D | null => humanoid?.getNormalizedBoneNode?.(name) || null;
   const usedBones: Record<string, Object3D | null> = bones || {
@@ -123,6 +130,8 @@ export function capturePoseRig(
     baseBlend: 0,
     armProbes: { left: { ...unknown }, right: { ...unknown, sideSign: -1 } },
     gaze: { yaw: 0, pitch: 0 },
+    // VRM0 faceFront.z=-1 ⇒ +1（抬头是 rotation.x 正）；VRM1 +1 ⇒ -1。
+    faceSign: (faceFrontZ ?? 1) < 0 ? 1 : -1,
   };
 }
 
@@ -252,11 +261,15 @@ export function smooth(prev: number, next: number, dt: number, tau: number): num
  * 头部凝视分量平滑（不覆盖 idle 的 head sine，ThreeModelView 会把它加在 writeBone 的 dx/dy 上）。
  * ratio 已含「开关 + gestureHold + 头部 35%」语义；幅度=0 时仍传 ratio，故眼神不受幅度影响。
  *
- * ⚠️ v3.0.9 pitch 符号：入参 pitchRad 是「抬头为正」的 gaze 目标角（marker 用 tan(pitchRad) 放在头上方，
- * 已由 mapEyeToAngles 修好）。但 head bone 的 `rotation.x` 是「正值=低头」（VRM0/VRM1 一致，见 QA 实测），
- * 因此写入 rig.gaze.pitch（作为 rotation.x 增量）时**必须取反**：抬头 ⇒ rotation.x 为负。
- * 不取反会导致「光标往上、眼球看上但头往下」的分裂观感（用户 v3.0.8 实测 bug）。
- * yaw 无需取反：rotation.y 正值与屏幕右向一致。
+ * ⚠️ v3.0.10 pitch 符号（推翻 v3.0.9 的「两版一致」错误结论）：
+ * 入参 pitchRad 是「抬头为正」的 gaze 目标角（mapEyeToAngles 已翻屏幕 Y；marker 用
+ * tan(pitchRad) 放在头上方）。但 head bone 的 rotation.x 正负**在 VRM0/VRM1 相反**：
+ *   - VRM1(faceFront +Z)：抬头 ⇒ rotation.x 负（faceSign=-1）
+ *   - VRM0(faceFront -Z，rotateVRM0 后)：抬头 ⇒ rotation.x 正（faceSign=+1）
+ * v3.0.9 写死取反只对 VRM1 成立，导致用户导入的 VRM0「光标往上头仍往下」。
+ * 现在按 rig.faceSign 动态决定：rig.gaze.pitch = pitchRad * faceSign * r，
+ * 结果直接可作为 rotation.x 增量加到 head bone。
+ * yaw 不乘 faceSign：rotation.y 正值与屏幕右向在两版都一致。
  */
 export function applyGazeHead(
   rig: VRMPoseRig,
@@ -266,6 +279,7 @@ export function applyGazeHead(
   dt: number
 ): void {
   const r = Math.max(0, Math.min(1, Number(ratio) || 0));
+  const sign = typeof rig.faceSign === 'number' ? rig.faceSign : -1;
   rig.gaze.yaw = smooth(rig.gaze.yaw, yawRad * r, dt, VRM_GAZE_SMOOTH_TAU);
-  rig.gaze.pitch = smooth(rig.gaze.pitch, -pitchRad * r, dt, VRM_GAZE_SMOOTH_TAU);
+  rig.gaze.pitch = smooth(rig.gaze.pitch, pitchRad * sign * r, dt, VRM_GAZE_SMOOTH_TAU);
 }

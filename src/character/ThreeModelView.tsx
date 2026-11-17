@@ -148,8 +148,12 @@ const VRM_BODY_SWAY_PERIOD_SEC = 8.3;
 const VRM_BODY_SWAY_ANGLE = 0.052;
 /** 桌宠窗最低超采样倍率：即使 scale=1 也按 1.5× 渲染，避免「舞台清晰桌面糊」 */
 export const DESKTOP_RESOLUTION_SCALE_MIN = 1.5;
-/** pixelRatio 硬上限：190×228 的画布 4× 也只有 760×912，成本可控 */
-const MAX_PIXEL_RATIO = 4;
+/**
+ * pixelRatio 硬上限（v3.0.10 由 4 提到 12）：缩放上限放宽到 5× 后，
+ * 桌宠 190×228 画布按 5× 显示时，缓冲必须达到 950×1140 才不糊。
+ * 极端 dpr=2 + scale=5 需 pr≈12（190×12=2280px 缓冲，约 260 万像素，单窗可接受）。
+ */
+const MAX_PIXEL_RATIO = 12;
 /** v3.0.8：自然站姿 0.4s 淡入，避免从 T-pose 瞬跳 */
 const VRM_BASE_BLEND_SEC = 0.4;
 /** v3.0.8：拖拽 / 菜单让位的平滑时常数（秒） */
@@ -196,20 +200,26 @@ export const ThreeModelView: React.FC<Props> = ({
   const baseScaleRef = useRef(1);
 
   /**
-   * 渲染分辨率随舞台缩放提升：后备缓冲的像素数 = CSS 尺寸 × pixelRatio。
-   * 放大时若 pixelRatio 不变，3D 就是「1× 渲染结果被放大」⇒ 模糊。
-   * 上限 MAX_PIXEL_RATIO=4（v3.0.6 由 3 上调：桌宠画布仅 190×228，4× 也只有 760×912，
-   * 成本可控；见硬编码清单），避免高倍缩放把 GPU 压垮。
+   * 渲染像素比（v3.0.10 重写）：buffer 像素 = CSS 尺寸 × pixelRatio，必须 ≥ 屏幕物理像素才不糊。
+   *
+   * 两种放大路径**不可混用同一个倍率**：
+   *  - 桌宠：host CSS 固定 190×228，靠 `transform: scale(--dc-scale)` 放大 ⇒ 屏幕物理 = 190×S×dpr。
+   *    `resolutionScale` 传的就是 S ⇒ pr = dpr × S（缓冲 190×dpr×S），与屏幕 1:1，不糊。
+   *  - 舞台：host CSS 盒子已按 `zoom` 真实放大到 190×zoom（见 character-panel.css），
+   *    屏幕物理 = 190×zoom×dpr；此时 buffer = (190×zoom) × pr，只要 pr=dpr 即 1:1。
+   *    ⚠️ v3.0.9 及更早把 zoom 又乘进 pr（dpr×zoom），导致 buffer=190×zoom²×dpr —— 舞台缩放越大
+   *    越浪费显存（5× 时 25 倍），且桌宠路径被 `rs` clamp 1.6 卡死 ⇒ 放到 5× 时糊 3 倍。
+   *    现在 zoom 只管几何（modelGroup.scale），pr 只看 dpr × resolutionScale。
+   *
+   * 上限 MAX_PIXEL_RATIO=12：覆盖 dpr=2 + scale=5 的极端（pr=10）。
    */
   const applyPixelRatio = (r: any) => {
     if (!r) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    // 舞台：pixelRatio 只在放大时提升；缩小时保持 dpr 下限，避免 0.6 档把缓冲降到 1px 以下。
-    const z = Math.max(0.6, zoomRef.current);
-    // 桌宠：画布被 CSS scale(--dc-scale) 放大，缓冲必须同步放大才不糊。
-    // 桌宠传入 max(1.5, scale)，所以 scale=1 也有 1.5× 超采样；舞台不传（=1），行为不变。
-    const rs = Math.max(1, Math.min(1.6, resolutionScaleRef.current));
-    const pr = Math.max(1, Math.min(MAX_PIXEL_RATIO, Math.round(dpr * z * rs * 100) / 100));
+    // 桌宠传 max(1.5, scale)；舞台不传(=1) ⇒ pr=dpr，配合已放大的盒子正好 1:1。
+    // 不再对 rs 设 1.6 上限：那是 v3.0.9「放到 2× 就糊」的根因。
+    const rs = Math.max(1, resolutionScaleRef.current);
+    const pr = Math.max(1, Math.min(MAX_PIXEL_RATIO, Math.round(dpr * rs * 100) / 100));
     if (typeof r.getPixelRatio === 'function' && r.getPixelRatio() === pr) return;
     r.setPixelRatio(pr);
   };
@@ -615,7 +625,8 @@ export const ThreeModelView: React.FC<Props> = ({
                     };
                   }
                   // 三层姿态：restPose 已冻结（上面逐字记录），basePose 由世界坐标探测一次性算出。
-                  rig = capturePoseRig(hm, bones, restPose);
+                  // v3.0.10：把 faceFront.z 传入，决定 head 俯仰符号（VRM0 +1 / VRM1 -1）
+                  rig = capturePoseRig(hm, bones, restPose, vrm?.lookAt?.faceFront?.z);
                   detectNaturalBase(vrm, rig);
                   headPos = headBone ? headBone.position.clone() : null;
                   // three-vrm 3.4.0 的 lookAt 签名是 lookAt(position: Vector3)；连续跟随必须走
