@@ -500,8 +500,9 @@ export interface NianyuAPI {
   dcSetActive: (id: string) => void;
   dcSetScale: (id: string, scale: number) => void;
   /**
-   * v3.0.3 预览通道：舞台拖动缩放滑块时，把中间值推给该角色窗做实时预览。
-   * **不落盘、不广播**；最终提交仍走 dcSetScale（手势结束时一次）。
+   * v3.0.3 预览通道（v3.0.12 语义细化）：滚轮每档 / 舞台手势中间值，主进程经
+   * ResizeCoalescer 每帧至多同步一次窗口尺寸并推给该角色窗做本地预览。
+   * **不落盘、不广播**；最终提交仍走 dcSetScale（滚轮停手 180ms / 舞台手势末一次）。
    */
   dcSetScaleLive: (id: string, scale: number) => void;
   /** 订阅预览值（主进程 → 角色窗）。 */

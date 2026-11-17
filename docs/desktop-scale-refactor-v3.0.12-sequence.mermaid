@@ -1,0 +1,88 @@
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant CA as CharacterApp<br/>(桌宠窗 renderer)
+    participant IB as IpcBridge<br/>(preload/ipc.ts)
+    participant MW as 主进程<br/>CharacterWindowManager
+    participant RC as ResizeCoalescer<br/>(新增)
+    participant CS as CharacterStage<br/>(主窗 renderer)
+
+    %% ============ 路线 B 初始化 ============
+    rect rgb(235,245,255)
+    Note over U,MW: ① 建窗：窗口尺寸 = 角色本体 + 固定 UI 留白（沿用 v3.0.11 公式，零数据迁移）
+    U->>MW: 启用桌宠 / 新增角色
+    MW->>MW: scale = clampScale(c.scale ?? 1)
+    MW->>MW: {w,h} = winSizeForScale(scale)  // 340..1100 × 420..1332
+    MW->>MW: foot = footFromStored(c.x,c.y)  // (x+170, y+410)
+    MW->>MW: origin = foot − (w/2, h−10) → clampPos
+    MW->>MW: new BrowserWindow({width:w,height:h,...}) ; st.scale=scale
+    MW-->>CA: ready-to-show → dc:state
+    CA->>CA: 在 .dc-root 写 --dc-scale=scale（不写 .dc-character 的 transform）
+    end
+
+    %% ============ 问题1：滚轮抖动 —— 合并 resize + 布局盒渲染 ============
+    rect rgb(255,246,230)
+    Note over U,RC: ② 滚轮缩放：渲染即时跟手，主进程每帧至多一次 setBounds
+    U->>CA: wheel on .dc-character (每档 0.05)
+    CA->>CA: next = clamp(round((cur±0.05)*100)/100, 0.6, 5.0)
+    CA->>CA: setState(scale:next) → .dc-root --dc-scale 更新
+    Note right of CA: 布局盒 width/height=calc(190/228px*scale)<br/>即时真实放大，无 transform 合成层、<br/>无分辨率突变（resolutionScale 恒 1）⇒ 跟手且不闪
+    CA->>IB: dcSetScaleLive(id, next)  (不落盘)
+    IB->>MW: dc:set-scale-live
+    MW->>RC: request(id, next)
+    RC->>RC: pendingScale[id]=next；本帧已排程则早退
+    RC-->>MW: 下一帧 flush(id)
+    MW->>MW: resizeCharacterWindow(id, latest)  // 脚点钉死、单次 setBounds
+    MW->>CA: dc:scale-preview {id, scale} (兜底同步)
+    CA->>CA: 3s 预览兜底计时（异常未提交时拉回落盘值）
+    U->>CA: 停止滚轮 ~180ms
+    CA->>IB: dcSetScale(id, next)  (一次提交)
+    IB->>MW: dc:set-scale
+    MW->>MW: cancelPreviewRestore + saveSettings(scale) 一次
+    MW->>RC: cancel(id) 清待合并项
+    MW->>IB: settings:changed 广播（一次）
+    MW-->>CS: settings:changed → stage.setZoom(只读回声抑制)
+    end
+
+    %% ============ 问题2：舞台放大超界 + 闪动 —— 单通道 ============
+    rect rgb(240,255,240)
+    Note over U,CS: ③ 舞台缩放：手势内只动舞台自身，提交时才一次 resize 桌宠窗
+    U->>CS: 拖「模型大小」滑块 / 舞台滚轮
+    CS->>CS: applyZoom(v) → setZoom(v)（--stage-zoom 布局盒放大）
+    Note right of CS: 不再每档 dcSetScaleLive →<br/>消除"舞台zoom + 桌宠resize"双通道叠加
+    CS->>CS: scheduleCommit(v)（200ms 去抖）
+    U->>CS: pointerup / 停下 200ms
+    CS->>CS: commitZoom(v) 判重（lastCommittedZoomRef）
+    CS->>IB: dcSetScale(id, v)  (唯一一次写回)
+    IB->>MW: dc:set-scale
+    MW->>MW: resizeCharacterWindow(id, v) 单次 setBounds
+    MW->>IB: settings:changed 广播
+    IB-->>CS: onSettingsChanged → 回声抑制命中 → 不回写
+    MW-->>CA: dc:state / dc:scale-preview → --dc-scale 对齐
+    Note over CS,MW: 舞台自身 zoom 与桌宠 scale 由单一权威<br/>settings.desktopCharacters[].scale 收口，无双通道竞争
+    end
+
+    %% ============ 问题3：右键菜单错位 —— 锚定角色本体 ============
+    rect rgb(250,240,255)
+    Note over U,CA: ④ 右键菜单：按角色本体 rect 定位，不再相对窗口右下角
+    U->>CA: 在角色上右键
+    CA->>CA: onContextMenu → charRef.getBoundingClientRect()
+    CA->>CA: anchor = {x: rect.left+rect.width/2, y: rect.top}
+    CA->>CA: clampToWindow(anchor) 防溢出
+    CA->>CA: setMenuAnchor(anchor) → .dc-menu-anchor{left,top}
+    Note right of CA: .dc-menu 居中于角色顶部上方，<br/>窗口放大后仍贴本体，不随窗口右下角漂移
+    end
+
+    %% ============ 拖拽 ============
+    rect rgb(245,245,245)
+    Note over U,MW: ⑤ 拖拽（保持 v3.0.11 零漂移成果）
+    U->>CA: pointerdown + move 越过阈值
+    CA->>IB: dcDragStart(gdx,gdy)
+    IB->>MW: dc:drag-start
+    loop 60Hz 弹簧
+        MW->>MW: springStep → clampPos(用 st.scale 当前尺寸) → applyPos
+    end
+    U->>CA: pointerup
+    CA->>IB: dcDragEnd()
+    IB->>MW: dc:drag-end → endDragState → persistPos(脚点空间)
+    end

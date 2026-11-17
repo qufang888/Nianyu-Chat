@@ -14,7 +14,6 @@ import { useI18n } from '../i18n/I18nContext';
 import type { AppSettings, CharacterRuntimeSettings, DesktopCharacter } from '../types';
 import type { CharacterExpression } from './PlaceholderCharacter';
 import { ModelView } from './ModelView';
-import { DESKTOP_RESOLUTION_SCALE_MIN } from './ThreeModelView';
 import { pickIdleAction } from './behaviors';
 import { applyAnimControl, getGroupAnimSpeed, isGroupEnabled, type AnimSettingsLike } from '../utils/animControl';
 import { playSoundSync } from '../utils/sound';
@@ -59,6 +58,35 @@ const DRAG_THRESHOLD = 5;
  * 除数不同步放大 ⇒ 眼球/头部转角随 scale 缩小，表现为「放大后眼神跟不上手」。
  */
 const DC_EYE_DIVISOR = 170;
+/** v3.0.12：滚轮每档即时 live，停手这么久后一次落盘（避免逐档 saveSettings + 窗口 resize 竞争）。 */
+const DC_WHEEL_COMMIT_DEBOUNCE_MS = 180;
+
+/** v3.0.12：右键菜单锚点，相对 .dc-root（=窗口内容区）的 DIP 坐标。 */
+interface MenuAnchor {
+  localX: number;
+  localY: number;
+}
+
+/**
+ * 右键时按「角色本体真实矩形」算菜单锚点：窗口物理放大后仍贴着角色，而不是贴窗口右下角。
+ * v3.0.12 角色是 1:1 布局盒 ⇒ getBoundingClientRect() 已是真实像素，无需再乘 scale。
+ * clamp 边界：水平 ±90px（菜单 min-width 168 + padding），纵向 210px 起（菜单高约 200），
+ * 下界 win.h-8 防止锚点跑出窗口。
+ */
+function computeMenuAnchor(
+  charEl: HTMLElement,
+  rootEl: HTMLElement,
+  win: { w: number; h: number }
+): MenuAnchor {
+  const r = charEl.getBoundingClientRect();
+  const rr = rootEl.getBoundingClientRect();
+  const x = r.left - rr.left + r.width / 2; // 角色水平中心
+  const y = r.top - rr.top; // 角色头顶
+  return {
+    localX: Math.max(90, Math.min(win.w - 90, x)),
+    localY: Math.max(210, Math.min(win.h - 8, y - 8)),
+  };
+}
 
 // ===== 桌宠互动语句生成参数（v3.0.1-beta.9；v3.0.3 频率改为按设置派生）=====
 // 这些值只控制「触发节奏 / 展示形态」，不参与任何文案内容；文案一律由模型输出。
@@ -135,7 +163,10 @@ export const CharacterApp: React.FC = () => {
   const [menuOpen, setMenuOpen] = useState(false);
   /** 菜单正在播放收回动画：此时仍挂载 .dc-menu.closing，动画结束/动画被关后立刻卸载。 */
   const [menuClosing, setMenuClosing] = useState(false);
+  /** v3.0.12：菜单锚点（按角色本体矩形实时算），不再写死窗口右下角。 */
+  const [menuAnchor, setMenuAnchor] = useState<MenuAnchor>({ localX: 170, localY: 210 });
   const [modelError, setModelError] = useState<string>('');
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const charRef = useRef<HTMLDivElement | null>(null);
   const interactiveRef = useRef(false);
   // from：这次按下发生在角色本体还是气泡上。只有角色本体的「点一下」才等于点角色
@@ -156,6 +187,8 @@ export const CharacterApp: React.FC = () => {
   /** 预览兜底过期计时器：舞台异常关闭（未提交）时，预览值不能永久留在桌宠上。 */
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const actionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** v3.0.12：滚轮提交去抖计时器（停手后一次落盘并取消在途预览 resize）。 */
+  const scaleCommitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draggingRef = useRef(false);
   const menuOpenRef = useRef(false);
   const menuClosingRef = useRef(false);
@@ -612,6 +645,7 @@ export const CharacterApp: React.FC = () => {
       if (menuActionTimer.current) clearTimeout(menuActionTimer.current);
       if (bubbleHoldTimer.current) clearTimeout(bubbleHoldTimer.current);
       if (bubbleOutTimer.current) clearTimeout(bubbleOutTimer.current);
+      if (scaleCommitTimer.current) clearTimeout(scaleCommitTimer.current);
     },
     []
   );
@@ -760,16 +794,23 @@ export const CharacterApp: React.FC = () => {
   const onCharacterWheel = (e: React.WheelEvent) => {
     const c = charRefState.current;
     if (!c || runtime.passThroughLocked) return;
+    // v3.0.12：拖拽中主进程弹簧正在 60Hz 改窗口原点，此时再 resize 会互相抢尺寸 ⇒ 暂停滚轮
+    if (draggingRef.current) return;
     const step = e.deltaY < 0 ? 0.05 : -0.05;
     const cur = c.scale ?? 1;
     // 四舍五入到两位小数，避免浮点累积误差（0.05 步长在二进制下不精确）
     const next = Math.max(0.6, Math.min(5.0, Math.round((cur + step) * 100) / 100));
     if (next === cur) return;
-    // 本地先更新，保证缩放手感跟手；持久化交给主进程广播回写。
-    // 注意 --dc-scale 必须写在 .dc-character 自身：CSS 自定义属性只向下继承，
-    // 写在子元素 .dc-stage 上不会改变父元素的 transform（这正是「滚轮无反应」的根因）。
+    // 本地先更新：1:1 布局盒由 .dc-root 的 --dc-scale 驱动，角色/气泡/菜单同步真实放大。
     setState((s) => (s.character ? { ...s, character: { ...s.character, scale: next } } : s));
-    api.dcSetScale(c.id, next);
+    // 每档走 live：主进程 ResizeCoalescer 每帧至多一次 resize，不落盘、不广播。
+    api.dcSetScaleLive(c.id, next);
+    // 停手 180ms 后一次落盘：原实现每档 saveSettings + 广播，是抖动与同步 IO 的来源。
+    if (scaleCommitTimer.current) clearTimeout(scaleCommitTimer.current);
+    scaleCommitTimer.current = setTimeout(() => {
+      scaleCommitTimer.current = null;
+      api.dcSetScale(c.id, next);
+    }, DC_WHEEL_COMMIT_DEBOUNCE_MS);
   };
 
   // React 17+ 的 onWheel 挂的是 passive 监听器，里面 preventDefault() 会被忽略并告警。
@@ -799,6 +840,14 @@ export const CharacterApp: React.FC = () => {
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    // v3.0.12：按角色本体真实矩形算锚点（S=5 窗口 1100 宽也不再贴在窗口右下角）
+    const charEl = charRef.current;
+    const rootEl = rootRef.current;
+    if (charEl && rootEl) {
+      setMenuAnchor(
+        computeMenuAnchor(charEl, rootEl, { w: window.innerWidth, h: window.innerHeight })
+      );
+    }
     openMenu();
   };
 
@@ -835,11 +884,21 @@ export const CharacterApp: React.FC = () => {
 
   // 角色未启用时不留可见内容（窗口本身会由主进程销毁，这里只是兜底）
   if (!state.character) {
-    return <div className="dc-root" />;
+    return (
+      <div
+        className="dc-root"
+        ref={rootRef}
+        style={{ ['--dc-scale' as string]: String(scale) } as React.CSSProperties}
+      />
+    );
   }
 
   return (
-    <div className="dc-root">
+    <div
+      className="dc-root"
+      ref={rootRef}
+      style={{ ['--dc-scale' as string]: String(scale) } as React.CSSProperties}
+    >
       {bubble && (
         <div
           // key 随 bubbleSeq 变化 ⇒ 每次新气泡都是全新 DOM 节点 ⇒ 弹入动画必定重播，
@@ -864,11 +923,11 @@ export const CharacterApp: React.FC = () => {
         </div>
       )}
 
-      {/* 缩放变量必须落在 .dc-character 自身（其 transform 才消费它），不能写在 .dc-stage 上 */}
+      {/* v3.0.12：--dc-scale 写在根层 .dc-root（见上方 style）——角色本体 / 气泡 / 菜单
+          同处一个真实像素空间；角色改为 1:1 布局盒，不再在自身 transform 上 scale。 */}
       <div
         ref={charRef}
         className={`dc-character${dragging ? ' dragging' : ''}`}
-        style={{ ['--dc-scale' as string]: String(scale) } as React.CSSProperties}
         onPointerDown={beginPointer}
         onPointerMove={movePointer}
         onPointerUp={endPointer}
@@ -890,9 +949,9 @@ export const CharacterApp: React.FC = () => {
             motionEnabled={idleOn}
             gazeEnabled={gazeOn}
             gestureHold={dragging || menuOpen}
-            // v3.0.6：桌宠画布被 CSS scale(--dc-scale) 放大，渲染缓冲必须同步放大才不糊；
-            // 最低 1.5× 超采样，让 scale=1 时也和舞台一样清晰（舞台不传此 prop）。
-            resolutionScale={Math.max(DESKTOP_RESOLUTION_SCALE_MIN, scale)}
+            // v3.0.12：桌面恒 1 —— 角色是 1:1 布局盒、窗口物理放大，pr=dpr 即屏幕 1:1；
+            // 旧的 max(1.5,scale) 每档触发帧缓冲重分配，是「滚轮放大一跳一跳」的首因。
+            resolutionScale={1}
             onError={(m) => setModelError(m)}
           />
         </div>
@@ -909,34 +968,37 @@ export const CharacterApp: React.FC = () => {
       </div>
 
       {menuOpen && (
-        <div
-          className={`dc-menu${menuClosing ? ' closing' : ''}`}
-          onPointerDown={(e) => {
-            // 收回期间不再吃指针事件，也不再阻止外部关闭判定
-            if (!menuClosing) e.stopPropagation();
-          }}
-        >
-          {menu.map((m) => (
-            <button
-              key={m.key}
-              type="button"
-              className={`dc-menu-item${m.checked ? ' checked' : ''}`}
-              onClick={() => {
-                // v3.0.3：先播完收回动画，再执行该项业务动作 ——
-                // 否则业务动作（打开舞台 / 隐藏角色）会瞬间把收回动画盖过，用户看不到收回。
-                closeMenu();
-                if (menuActionTimer.current) clearTimeout(menuActionTimer.current);
-                const delay = isAnimOff() ? 0 : menuAnimMs(settingsRef.current);
-                menuActionTimer.current = setTimeout(() => {
-                  menuActionTimer.current = null;
-                  m.onClick();
-                }, delay);
-              }}
-            >
-              <span className="dc-menu-check">{m.checked ? '✓' : ''}</span>
-              <span>{m.label}</span>
-            </button>
-          ))}
+        /* v3.0.12：锚点按角色本体矩形定位；内层 .dc-menu 的 class / 动画 / 关闭链路逐字保留 */
+        <div className="dc-menu-anchor" style={{ left: menuAnchor.localX, top: menuAnchor.localY }}>
+          <div
+            className={`dc-menu${menuClosing ? ' closing' : ''}`}
+            onPointerDown={(e) => {
+              // 收回期间不再吃指针事件，也不再阻止外部关闭判定
+              if (!menuClosing) e.stopPropagation();
+            }}
+          >
+            {menu.map((m) => (
+              <button
+                key={m.key}
+                type="button"
+                className={`dc-menu-item${m.checked ? ' checked' : ''}`}
+                onClick={() => {
+                  // v3.0.3：先播完收回动画，再执行该项业务动作 ——
+                  // 否则业务动作（打开舞台 / 隐藏角色）会瞬间把收回动画盖过，用户看不到收回。
+                  closeMenu();
+                  if (menuActionTimer.current) clearTimeout(menuActionTimer.current);
+                  const delay = isAnimOff() ? 0 : menuAnimMs(settingsRef.current);
+                  menuActionTimer.current = setTimeout(() => {
+                    menuActionTimer.current = null;
+                    m.onClick();
+                  }, delay);
+                }}
+              >
+                <span className="dc-menu-check">{m.checked ? '✓' : ''}</span>
+                <span>{m.label}</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>

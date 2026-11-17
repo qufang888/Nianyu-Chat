@@ -199,9 +199,10 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
   );
 
   /**
-   * 手势内的实时预览 + 延迟提交。
-   * - 预览（dcSetScaleLive）：只推给角色窗改本地 --dc-scale，**不落盘、不广播** ⇒ 拖动全程跟手；
+   * 手势内的实时预览 + 延迟提交（v3.0.12 单通道）。
+   * - 预览：只 setZoom 改舞台本地 1:1 布局盒 ⇒ 手势期桌宠窗不再被 resize（双通道是闪动根因）；
    * - 提交（dcSetScale）：去抖 200ms 后落盘一次；指针抬起时立即提交（不等去抖）。
+   *   主进程落盘后广播一次，桌宠窗与舞台在同一语义下各自同步，无互相追帧。
    */
   const scheduleCommit = useCallback(
     (v: number) => {
@@ -240,9 +241,9 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
       const v = Math.max(STAGE_ZOOM_MIN, Math.min(STAGE_ZOOM_MAX, raw));
       zoomSourceRef.current = 'user';
       setZoom(v);
-      // 实时预览：桌宠窗立即跟随（不落盘、不广播）
-      api.dcSetScaleLive(character.id, v);
-      // 落盘提交：去抖后一次
+      // v3.0.12：删除 api.dcSetScaleLive —— 手势期只动舞台自己的 1:1 布局盒，
+      // 不再并行 resize 桌宠窗（两条缩放通道互相追帧才是「舞台放大闪动」的根因）。
+      // P3 拍板：舞台拖动时桌宠不实时跟随，提交后一次同步。
       scheduleCommit(v);
     },
     [character.id, scheduleCommit]

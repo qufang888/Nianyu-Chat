@@ -675,11 +675,24 @@ check('I2 管理角色先清舞台请求再进角色面板；舞台路径仍带 
   /api\.onDcOpenCollection\(\(\) => \{[\s\S]{0,120}setDcStageRequest\(null\);[\s\S]{0,80}setView\('characters'\);/.test(appRoot) &&
   /api\.onDcOpenStage\(\(id\) => \{[\s\S]{0,120}setDcStageRequest\(\{ id, nonce: Date\.now\(\) \}\)/.test(appRoot));
 
-// I3：滚轮缩放 —— 真因是 --dc-scale 写在子元素上不会向上继承，父元素 transform 永远取默认 1
-check('I3 缩放变量写在 .dc-character 自身（父元素 transform 才消费它），不在 .dc-stage 上',
-  /className=\{`dc-character\$\{dragging \? ' dragging' : ''\}`\}[\s\S]{0,200}--dc-scale/.test(appTsx) &&
-  !/className="dc-stage"[^>]*--dc-scale/.test(appTsx) &&
-  /transform: translateX\(-50%\) scale\(var\(--dc-scale, 1\)\)/.test(charCss));
+// I3：v3.0.12 路线 B —— --dc-scale 上移到 .dc-root，角色改 1:1 布局盒（无 transform scale）
+check('I3 --dc-scale 写在 .dc-root（唯一渲染驱动），.dc-character 用 calc 宽高的 1:1 布局盒、transform 无 scale',
+  /className="dc-root"[\s\S]{0,160}--dc-scale/.test(appTsx) &&
+  !/className=\{`dc-character[\s\S]{0,200}--dc-scale/.test(appTsx) &&
+  /width: calc\(190px \* var\(--dc-scale/.test(charCss) &&
+  /height: calc\(228px \* var\(--dc-scale/.test(charCss) &&
+  !/scale\(var\(--dc-scale/.test(charCss) &&
+  !/scale\(/.test((charCss.match(/\.dc-character \{[\s\S]*?\}/) || [''])[0]));
+check('I3 v3.0.12 气泡 bottom calc 化（S=1 等价 246px）且菜单锚点相对角色本体（不再 right:6px）',
+  /bottom: calc\(10px \+ 228px \* var\(--dc-scale, 1\) \+ 8px\)/.test(charCss) &&
+  /\.dc-menu-anchor \{/.test(charCss) &&
+  !/right: 6px/.test((charCss.match(/\.dc-menu \{[\s\S]*?\}/) || [''])[0]) &&
+  /className="dc-menu-anchor" style=\{\{ left: menuAnchor\.localX, top: menuAnchor\.localY \}\}/.test(appTsx));
+check('I3 滚轮每档 live + 停手 180ms 一次提交（去抖，避免逐档写盘 + 逐档 setBounds）',
+  /api\.dcSetScaleLive\(c\.id, next\)/.test(appTsx) &&
+  /DC_WHEEL_COMMIT_DEBOUNCE_MS = 180/.test(appTsx) &&
+  /\}, DC_WHEEL_COMMIT_DEBOUNCE_MS\)/.test(appTsx) &&
+  /if \(draggingRef\.current\) return;/.test(appTsx));
 check('I3 滚轮链路完整：onWheel + 0.6~5.0 钳制 + dcSetScale 持久化 + 原生 passive:false 阻止滚动',
   /onWheel=\{onCharacterWheel\}/.test(appTsx) &&
   /Math\.max\(0\.6, Math\.min\(5\.0, Math\.round\(\(cur \+ step\) \* 100\) \/ 100\)\)/.test(appTsx) &&
@@ -743,10 +756,17 @@ check('I7 六项菜单 IPC 通道齐全且隐藏角色走 sender 归属（不多
   check('（可证伪）删掉舞台请求清理后 I2 断言失效',
     !/api\.onDcOpenCollection\(\(\) => \{[\s\S]{0,120}setDcStageRequest\(null\)/.test(m2));
 
-  const m3 = appTsx.replace(/className=\{`dc-character\$\{dragging \? ' dragging' : ''\}`\}[\s\S]{0,200}--dc-scale/,
-    "className=\"dc-character\"");
-  check('（可证伪）把 --dc-scale 挪回子元素后 I3 断言失效',
-    !/className=\{`dc-character\$\{dragging \? ' dragging' : ''\}`\}[\s\S]{0,200}--dc-scale/.test(m3));
+  const m3 = appTsx.replaceAll(/className="dc-root"[\s\S]{0,160}--dc-scale/g, 'className="dc-root"');
+  check('（可证伪）把 --dc-scale 挪回 .dc-character 后 I3 断言失效',
+    !/className="dc-root"[\s\S]{0,160}--dc-scale/.test(m3));
+  const m3b = charCss.replace('width: calc(190px * var(--dc-scale, 1));', 'width: 190px;');
+  check('（可证伪）角色布局盒退回固定 190px 后 I3 断言失效',
+    !/width: calc\(190px \* var\(--dc-scale/.test(m3b));
+  const m3c = charCss.replace(
+    'transform: translateX(-50%);',
+    'transform: translateX(-50%) scale(var(--dc-scale, 1));');
+  check('（可证伪）把 transform scale 加回 .dc-character 后 I3 断言失效',
+    /scale\(/.test((m3c.match(/\.dc-character \{[\s\S]*?\}/) || [''])[0]));
 
   const m4 = charCss.replace('animation: dcBubbleIn 0.18s linear', 'animation: dcBubbleIn 0.18s ease');
   check('（可证伪）气泡动画改回 ease 后 I4 断言失效', !/animation: dcBubbleIn 0\.18s linear/.test(m4));
@@ -980,16 +1000,19 @@ check('K6 存在「实时预览」通道：dc:set-scale-live（渲染→主）�
 check('K6 预览通道不落盘、不广播（只推给该角色窗改本地 --dc-scale）',
   /dc:set-scale-live[\s\S]{0,400}webContents\.send\('dc:scale-preview'/.test(mainDc) &&
   !/dc:set-scale-live[\s\S]{0,400}saveSettings/.test(mainDc));
-check('K6 v3.0.11 预览同步调窗口尺寸（resizeCharacterWindow 内绝不 saveSettings）',
-  /dc:set-scale-live[\s\S]{0,300}resizeCharacterWindow\(id, clamped\)/.test(mainDc) &&
+check('K6 v3.0.12 预览 resize 走 ResizeCoalescer（每帧一次），resizeCharacterWindow 内绝不 saveSettings',
+  /dc:set-scale-live[\s\S]{0,300}resizeCoalescer\.request\(id, clamped\)/.test(mainDc) &&
+  /class ResizeCoalescer/.test(mainDc) &&
+  /FRAME_MS = 16/.test(mainDc) &&
   /function resizeCharacterWindow\(/.test(mainDc) && // 防止 extractFnBody 空串导致「恒真」假阳性
   !/saveSettings/.test(extractFnBody(mainDc, 'function resizeCharacterWindow(')) &&
   /cancelPreviewRestore\(id\)/.test(mainDc) &&
   /DC_PREVIEW_RESTORE_MS\s*=\s*3100/.test(mainDc));
-check('K6 舞台写回只发生在用户手势里（外部同步只读，绝不回写）',
+check('K6 舞台写回单通道：applyZoom 只 setZoom，不再调 dcSetScaleLive；提交仍走 dcSetScale',
   /zoomSourceRef/.test(stage) &&
-  /api\.dcSetScaleLive\(/.test(stage) &&
-  /api\.dcSetScale\(/.test(stage));
+  !/api\.dcSetScaleLive\(/.test(stage) &&
+  /api\.dcSetScale\(/.test(stage) &&
+  /setZoom\(v\);/.test(stage));
 check('K6 舞台反向订阅 settings:changed（桌面滚轮 → 舞台滑块 ≤300ms）',
   /api\.onSettingsChanged/.test(stage) &&
   /desktopCharacters/.test(stage));
@@ -999,6 +1022,15 @@ check('K6 舞台滑块仍是 0.6~2.0 / 步长 0.05，且复用既有 dc:set-scal
   /step=\{STAGE_ZOOM_STEP\}/.test(stage) &&
   /api\.dcSetScale\(character\.id, next\)/.test(stage) &&
   /const next = list\.slice\(\);[\s\S]{0,120}next\[idx\] = \{ \.\.\.next\[idx\], scale: clamped \};[\s\S]{0,120}dm\.saveSettings\(\{ desktopCharacters: next \}\)/.test(mainDc));
+
+// 可证伪：把舞台双通道加回来，K6 单通道断言必须变红
+{
+  const k6SingleChannel = (src) =>
+    /zoomSourceRef/.test(src) && !/api\.dcSetScaleLive\(/.test(src) && /api\.dcSetScale\(/.test(src);
+  const brokenStage = stage.replace('      setZoom(v);', '      setZoom(v);\n      api.dcSetScaleLive(character.id, v);');
+  check('（可证伪）把 dcSetScaleLive 加回 applyZoom 后 K6 单通道断言失效',
+    brokenStage !== stage && k6SingleChannel(stage) && !k6SingleChannel(brokenStage));
+}
 
 // ---------- K7. 舞台高清渲染 ----------
 check('K7 舞台模型盒子按 --stage-zoom 放大（不再靠 transform: scale 插值）',
@@ -1403,11 +1435,11 @@ check('v3.0.6 呼吸/待机基于 rest 角度计算，不累加漂移（v3.0.7 �
   /applyBone\(\s*headBone,/.test(threeView));
 check('v3.0.6 VRM0 兼容 rotateVRM0 仍在（老模型朝向）',
   /VRMUtils\.rotateVRM0/.test(threeView));
-check('v3.0.6 桌宠传 resolutionScale（最低 1.5× 超采样）',
-  /DESKTOP_RESOLUTION_SCALE_MIN = 1\.5/.test(threeView) &&
-  /resolutionScale=\{Math\.max\(DESKTOP_RESOLUTION_SCALE_MIN, scale\)\}/.test(appTsx) &&
-  /resolutionScale/.test(modelView) &&
-  /export const DESKTOP_RESOLUTION_SCALE_MIN/.test(threeView));
+check('v3.0.12 桌宠 resolutionScale 恒 1（1:1 布局盒 + 物理窗口放大，帧缓冲不再随 scale 重分配）',
+  /resolutionScale=\{1\}/.test(appTsx) &&
+  !/resolutionScale=\{Math\.max\(DESKTOP_RESOLUTION_SCALE_MIN, scale\)\}/.test(appTsx) &&
+  /resolutionScale\?: number/.test(modelView) &&
+  /const rs = Math\.max\(1, resolutionScaleRef\.current\)/.test(threeView));
 check('v3.0.10 pixelRatio = dpr × resolutionScale（zoom 不再重复乘，避免舞台双重放大）',
   /const pr = Math\.max\(1, Math\.min\(MAX_PIXEL_RATIO, Math\.round\(dpr \* rs \* 100\) \/ 100\)\)/.test(threeView) &&
   /const MAX_PIXEL_RATIO = 12/.test(threeView) &&
@@ -1445,11 +1477,11 @@ check('v3.0.6 舞台不传 resolutionScale（保持原清晰路径）',
   check('（可证伪）表情名改回 name 后 QA P0 断言失效',
     broken5 !== threeView &&
     !/typeof e\?\.expressionName === 'string' \? e\.expressionName : ''/.test(broken5));
-  // 变异 23：桌宠不再传 resolutionScale ⇒ 模糊回归
+  // 变异 23b：桌宠恢复按 scale 抬 resolutionScale（帧缓冲重分配抖动回归）⇒ 新断言必红
   const broken4 = appTsx.replace(
-    'resolutionScale={Math.max(DESKTOP_RESOLUTION_SCALE_MIN, scale)}', '');
-  check('（可证伪）桌宠去掉 resolutionScale 后 K15 断言失效',
-    broken4 !== appTsx && !/resolutionScale=\{Math\.max\(DESKTOP_RESOLUTION_SCALE_MIN, scale\)\}/.test(broken4));
+    'resolutionScale={1}', 'resolutionScale={Math.max(DESKTOP_RESOLUTION_SCALE_MIN, scale)}');
+  check('（可证伪）桌宠 resolutionScale 恢复随 scale 变化后 K20 断言失效',
+    broken4 !== appTsx && !/resolutionScale=\{1\}/.test(broken4));
 }
 
 // ---------- K16. v3.0.6：模型包兼容性 ----------
@@ -1668,10 +1700,10 @@ check('v3.0.10 缩放上限 5.0 主进程/渲染层/类型三处一致',
 }
 
 // ---------- K20. v3.0.10：500% 不糊 + VRM0/VRM1 视线分版 ----------
-check('v3.0.10 桌宠 resolutionScale 直接跟随 scale（不再 clamp 1.6），支持 5× 清晰',
-  /const rs = Math\.max\(1, resolutionScaleRef\.current\);/.test(threeView) &&
+check('v3.0.12 桌宠 resolutionScale 恒 1（不 clamp 1.6、也不随 scale 变化）；5× 清晰由物理窗口 + dpr 保证',
+  /const rs = Math\.max\(1, resolutionScaleRef\.current\)/.test(threeView) &&
   !/Math\.min\(1\.6, resolutionScaleRef\.current\)/.test(threeView) &&
-  /resolutionScale=\{Math\.max\(DESKTOP_RESOLUTION_SCALE_MIN, scale\)\}/.test(appTsx));
+  /resolutionScale=\{1\}/.test(appTsx));
 check('v3.0.10 pixelRatio 上限 12（覆盖 dpr2 × scale5 = pr10）',
   /const MAX_PIXEL_RATIO = 12/.test(threeView) &&
   /Math\.min\(12, Math\.round\(dpr \* rs \* 100\)/.test(l2dView));
@@ -1723,8 +1755,8 @@ check('K21 持久化走基准脚点空间（x=fx−170, y=fy−410），零数�
   /footX = st\.curX \+ w \/ 2/.test(mainDc) &&
   /footY = st\.curY \+ h - CHAR_BODY_BOTTOM_GAP/.test(mainDc) &&
   /const stored = storedFromFoot\(footX, footY\)/.test(mainDc));
-check('K21 预览通道 live 调窗口尺寸 + 3.1s 兜底恢复，但不落盘',
-  /dc:set-scale-live[\s\S]{0,300}resizeCharacterWindow/.test(mainDc) &&
+check('K21 预览通道 live 经 ResizeCoalescer 调窗口尺寸 + 3.1s 兜底恢复，但不落盘',
+  /dc:set-scale-live[\s\S]{0,300}resizeCoalescer\.request/.test(mainDc) &&
   /DC_PREVIEW_RESTORE_MS\s*=\s*3100/.test(mainDc) &&
   /schedulePreviewRestore/.test(mainDc) &&
   /cancelPreviewRestore\(id\)/.test(mainDc) &&

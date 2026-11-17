@@ -40,10 +40,10 @@ interface Props {
    */
   zoom?: number;
   /**
-   * 纯渲染分辨率倍率（v3.0.6）：**只抬高 WebGL 后备缓冲，不改变模型几何尺寸**。
-   * 桌宠窗传 `max(1.5, scale)` —— 它的画布被 CSS `transform: scale(--dc-scale)` 放大，
-   * 若缓冲仍按 1× 分配，放大后就是插值模糊；舞台不传（=1），沿用盒子放大方案即可。
-   * 与 zoom 的区别：zoom 会同时缩放 modelGroup（模型真的变大），resolutionScale 只影响像素密度。
+   * 纯渲染分辨率倍率（v3.0.6 引入，v3.0.12 桌面恒 1）：**只抬高 WebGL 后备缓冲，不改变模型几何尺寸**。
+   * 桌宠窗传 1 —— 角色改为 1:1 布局盒、窗口物理放大，pr=dpr 即为屏幕 1:1；
+   * 舞台不传（=1），沿用盒子放大方案。与 zoom 的区别：zoom 会同时缩放 modelGroup，
+   * resolutionScale 只影响像素密度，不参与几何。
    */
   resolutionScale?: number;
   onError?: (message: string) => void;
@@ -146,7 +146,11 @@ const VRM_ARM_SWING_ANGLE = 0.16;
 /** 身体重心左右微移：周期 8.3s、幅度约 3°（hips/spine 轻微摇摆） */
 const VRM_BODY_SWAY_PERIOD_SEC = 8.3;
 const VRM_BODY_SWAY_ANGLE = 0.052;
-/** 桌宠窗最低超采样倍率：即使 scale=1 也按 1.5× 渲染，避免「舞台清晰桌面糊」 */
+/**
+ * 【已退役·仅留兼容导出】v3.0.6 的桌宠最低超采样倍率 1.5。
+ * v3.0.12 起桌宠走 1:1 布局盒 + 物理窗口放大，恒传 resolutionScale={1}，本常量不再被渲染链使用；
+ * 保留导出以免外部引用报错，勿在新代码里恢复 `max(MIN, scale)`（那会重新引入帧缓冲重分配抖动）。
+ */
 export const DESKTOP_RESOLUTION_SCALE_MIN = 1.5;
 /**
  * pixelRatio 硬上限（v3.0.10 由 4 提到 12）：缩放上限放宽到 5× 后，
@@ -200,24 +204,21 @@ export const ThreeModelView: React.FC<Props> = ({
   const baseScaleRef = useRef(1);
 
   /**
-   * 渲染像素比（v3.0.10 重写）：buffer 像素 = CSS 尺寸 × pixelRatio，必须 ≥ 屏幕物理像素才不糊。
+   * 渲染像素比（v3.0.12 重写）：buffer 像素 = CSS 尺寸 × pixelRatio。
    *
-   * 两种放大路径**不可混用同一个倍率**：
-   *  - 桌宠：host CSS 固定 190×228，靠 `transform: scale(--dc-scale)` 放大 ⇒ 屏幕物理 = 190×S×dpr。
-   *    `resolutionScale` 传的就是 S ⇒ pr = dpr × S（缓冲 190×dpr×S），与屏幕 1:1，不糊。
-   *  - 舞台：host CSS 盒子已按 `zoom` 真实放大到 190×zoom（见 character-panel.css），
-   *    屏幕物理 = 190×zoom×dpr；此时 buffer = (190×zoom) × pr，只要 pr=dpr 即 1:1。
-   *    ⚠️ v3.0.9 及更早把 zoom 又乘进 pr（dpr×zoom），导致 buffer=190×zoom²×dpr —— 舞台缩放越大
-   *    越浪费显存（5× 时 25 倍），且桌宠路径被 `rs` clamp 1.6 卡死 ⇒ 放到 5× 时糊 3 倍。
-   *    现在 zoom 只管几何（modelGroup.scale），pr 只看 dpr × resolutionScale。
+   * - 桌宠：host CSS 布局盒已按 S 真实放大到 190S×228S（窗口也物理变大到 1100×1332），
+   *   屏幕物理 = 190S×dpr；resolutionScale 恒 1 ⇒ pr=dpr，缓冲与屏幕 1:1。
+   *   ⚠️ v3.0.11 及更早随 scale 提高 resolutionScale（max(1.5,S)）会在每档滚轮时触发
+   *   setPixelRatio → WebGL 帧缓冲重分配，是「一跳一跳」闪动的首因，v3.0.12 已移除。
+   * - 舞台：host CSS 盒子按 zoom 放大到 190×zoom；buffer=(190×zoom)×pr，pr=dpr 即 1:1。
+   *   zoom 只管几何（modelGroup.scale），不再乘进 pr（v3.0.9 的 25 倍显存浪费已修）。
    *
-   * 上限 MAX_PIXEL_RATIO=12：覆盖 dpr=2 + scale=5 的极端（pr=10）。
+   * 上限 MAX_PIXEL_RATIO=12 保留作极端 dpr 兜底（舞台/外部传值超限时截断）。
    */
   const applyPixelRatio = (r: any) => {
     if (!r) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    // 桌宠传 max(1.5, scale)；舞台不传(=1) ⇒ pr=dpr，配合已放大的盒子正好 1:1。
-    // 不再对 rs 设 1.6 上限：那是 v3.0.9「放到 2× 就糊」的根因。
+    // 不再对 rs 设 1.6 上限（v3.0.9「放到 2× 就糊」的根因）；桌面恒传 1 ⇒ pr=dpr 不再随 scale 变化。
     const rs = Math.max(1, resolutionScaleRef.current);
     const pr = Math.max(1, Math.min(MAX_PIXEL_RATIO, Math.round(dpr * rs * 100) / 100));
     if (typeof r.getPixelRatio === 'function' && r.getPixelRatio() === pr) return;

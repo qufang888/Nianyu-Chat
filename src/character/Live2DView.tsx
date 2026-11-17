@@ -22,8 +22,8 @@ interface Props {
    */
   zoom?: number;
   /**
-   * 纯渲染分辨率倍率（v3.0.6）：只抬后备缓冲，不改模型尺寸。
-   * 桌宠窗传 `max(1.5, scale)` 抵消 CSS `transform: scale()` 的插值模糊；舞台不传（=1）。
+   * 纯渲染分辨率倍率（v3.0.6 引入，v3.0.12 桌面恒 1）：只抬后备缓冲，不改模型尺寸。
+   * 桌宠窗传 1（1:1 布局盒 + 物理窗口放大，pr=dpr 即 1:1）；舞台不传（=1）。
    */
   resolutionScale?: number;
   onError?: (message: string) => void;
@@ -89,15 +89,15 @@ export const Live2DView: React.FC<Props> = ({
   const appRef = useRef<any>(null);
 
   /**
-   * Live2D 的渲染分辨率（等价于 three 的 pixelRatio）——v3.0.10 与 ThreeModelView 同步重写。
-   *
-   * 桌宠靠 transform:scale(S) 放大 ⇒ 需 resolutionScale=S 把缓冲同步抬起；
-   * 舞台盒子已按 zoom 放大 ⇒ 只要 pr=dpr 即 1:1，不再把 zoom 乘进 pr（否则 5× 时 25 倍浪费）。
-   * 上限 12 覆盖 dpr=2 + scale=5 极端。
+   * Live2D 的渲染分辨率（等价于 three 的 pixelRatio）——v3.0.12 与 ThreeModelView 同步：
+   * 桌宠画布已是 1:1 布局盒（190S×228S，窗口物理变大）⇒ resolutionScale 恒 1、pr=dpr 即清晰；
+   * 舞台盒子已按 zoom 放大 ⇒ 同样只要 pr=dpr，不再把 zoom 乘进 pr（否则 5× 时 25 倍浪费）。
+   * v3.0.11 及更早按 scale 抬 rs 会在每档滚轮时重建后备缓冲，是闪动首因，已移除。
+   * 上限 12 仅作极端 dpr 兜底。
    */
   const targetResolution = () => {
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    // 桌宠传 max(1.5, scale)；舞台不传(=1)。不再对 rs 设 1.6 上限。
+    // 不再对 rs 设 1.6 上限；桌面恒传 1 ⇒ pr=dpr 不再随 scale 变化。
     const rs = Math.max(1, resolutionScaleRef.current);
     return Math.max(1, Math.min(12, Math.round(dpr * rs * 100) / 100));
   };
@@ -148,7 +148,7 @@ export const Live2DView: React.FC<Props> = ({
         backgroundAlpha: 0,
         antialias: true,
         autoDensity: true,
-        // v3.0.3：渲染分辨率随舞台缩放提升（上限 3），避免放大后是「1× 帧被拉伸」
+        // v3.0.12：pr 恒为 dpr（桌宠 resolutionScale=1 / 舞台不传），不再随 scale 重分配缓冲
         resolution: targetResolution(),
         autoStart: true,
       });

@@ -361,12 +361,54 @@ function schedulePreviewRestore(id: string): void {
     previewRestoreTimers.delete(id);
     const c = findChar(id);
     const storedScale = c && typeof c.scale === 'number' && Number.isFinite(c.scale) ? c.scale : 1;
+    resizeCoalescer.cancel(id); // 丢弃可能还在排队的预览 resize，终值唯一
     resizeCharacterWindow(id, storedScale);
     // 渲染层 3000ms 已自行回退预览值，这里只把窗口尺寸同步回来（不落盘）
     sendState(id);
   }, DC_PREVIEW_RESTORE_MS);
   previewRestoreTimers.set(id, timer);
 }
+
+/**
+ * v3.0.12 高频 scale 变更合并器（路线 B / R1）：
+ * 滚轮每档、舞台预览每帧都会请求 resize；这里保证「每个 id 每帧至多一次」真正的
+ * resizeCharacterWindow。真正执行仍走原原子函数（脚点钉死 + 单次 setBounds），
+ * 故 K21 / 行为脚本对 resizeCharacterWindow 的所有断言完全不受影响。
+ * 选取 setTimeout(16) 而非 rAF：主进程无渲染帧，16ms 与 TICK_MS 同口径（≈60Hz）。
+ */
+class ResizeCoalescer {
+  /** id → 本帧最新 scale（后来的值覆盖前值） */
+  private pendingScale = new Map<string, number>();
+  /** id → 本帧是否已排程 flush */
+  private scheduled = new Map<string, boolean>();
+  /** 合并窗口：≈60Hz，与 TICK_MS 同口径 */
+  private readonly FRAME_MS = 16;
+
+  /** 登记一次 resize 请求；同帧内后来的值覆盖前值，不额外排程。 */
+  request(id: string, scale: number): void {
+    if (!id) return;
+    this.pendingScale.set(id, clampScale(scale));
+    if (this.scheduled.get(id)) return; // 本帧已排程 → 早退
+    this.scheduled.set(id, true);
+    setTimeout(() => this.flush(id), this.FRAME_MS);
+  }
+
+  /** 帧到期：取最新值执行一次原子 resize；尺寸未变由 resizeCharacterWindow 内部早退。 */
+  flush(id: string): void {
+    this.scheduled.delete(id);
+    const s = this.pendingScale.get(id);
+    if (s === undefined) return;
+    this.pendingScale.delete(id);
+    resizeCharacterWindow(id, s);
+  }
+
+  /** 提交 / 关窗 / 兜底时清空待合并项，保证「提交值 = 终值」且不与排队预览竞争。 */
+  cancel(id: string): void {
+    this.pendingScale.delete(id);
+    this.scheduled.delete(id); // 已排程的 flush 因 pendingScale 缺失而空转
+  }
+}
+const resizeCoalescer = new ResizeCoalescer();
 
 /**
  * v3.0.11 核心：保持角色脚点屏幕坐标不变地调整窗口尺寸。
@@ -632,6 +674,7 @@ export function createDesktopCharacter(id: string): void {
   });
   win.on('closed', () => {
     cancelPreviewRestore(id);
+    resizeCoalescer.cancel(id);
     dcWindows.delete(id);
     dragStates.delete(id);
     if (dcWindows.size === 0) {
@@ -665,6 +708,7 @@ export function createDesktopCharacter(id: string): void {
 export function destroyDesktopCharacter(id?: string): void {
   if (id) {
     cancelPreviewRestore(id);
+    resizeCoalescer.cancel(id);
     const w = dcWindows.get(id);
     if (w && !w.isDestroyed()) w.destroy();
     dcWindows.delete(id);
@@ -676,6 +720,7 @@ export function destroyDesktopCharacter(id?: string): void {
     return;
   }
   for (const cid of previewRestoreTimers.keys()) cancelPreviewRestore(cid);
+  for (const cid of dcWindows.keys()) resizeCoalescer.cancel(cid);
   for (const [, w] of dcWindows) {
     if (!w.isDestroyed()) w.destroy();
   }
@@ -710,6 +755,7 @@ export function refreshDesktopCharacter(): void {
     for (const [id, w] of dcWindows) {
       const stillEnabled = list.some((ch) => ch.id === id && ch.enabled);
       if (!stillEnabled) {
+        resizeCoalescer.cancel(id);
         if (!w.isDestroyed()) w.destroy();
         dcWindows.delete(id);
         dragStates.delete(id);
@@ -1080,6 +1126,7 @@ export function registerDesktopCharacterIPC(): void {
     if (idx < 0) return;
     const clamped = Math.max(0.6, Math.min(DC_SCALE_MAX, Number(scale) || 1));
     cancelPreviewRestore(id); // 手势已提交：撤销 3.1s 兜底
+    resizeCoalescer.cancel(id); // v3.0.12：先清排队预览，保证终值唯一、不与在途帧竞争
     // v3.0.11：x/y 存储坐标是「基准脚点空间」，scale 变化只改窗口原点 ⇒ 此处只写 scale。
     const next = list.slice();
     next[idx] = { ...next[idx], scale: clamped };
@@ -1100,14 +1147,15 @@ export function registerDesktopCharacterIPC(): void {
   //     既拖不动（主线程被 IO 拖慢），又违反「同一轮操作内只广播 1 次」；
   //   - 预览通道**只改角色窗本地的 --dc-scale + 窗口尺寸**，不落盘、不广播 ⇒ 拖动全程跟手且零 IO。
   //
-  // v3.0.11：预览期窗口同步扩张（避免放大后头被裁），并排 3.1s 兜底恢复落盘尺寸。
-  // 提交（落盘）仍走既有的 dc:set-scale，由舞台在手势结束时发起一次并取消兜底。
+  // v3.0.12：预览期窗口 resize 经 ResizeCoalescer 合并到每帧一次（原实现每档一次 setBounds，
+  // 叠加帧缓冲重分配造成滚轮放大抖动）；仍不落盘、不广播。
+  // 提交（落盘）仍走既有的 dc:set-scale，由舞台/滚轮去抖在手势结束时发起一次并取消兜底。
   ipcMain.on('dc:set-scale-live', (_e, id: string, scale: number) => {
     if (!id) return;
     const w = dcWindows.get(id);
     if (!w || w.isDestroyed()) return;
     const clamped = Math.max(0.6, Math.min(DC_SCALE_MAX, Number(scale) || 1));
-    resizeCharacterWindow(id, clamped); // 脚点不变的原子 resize，内部不写 settings
+    resizeCoalescer.request(id, clamped); // 每帧至多一次脚点不变的原子 resize，内部不写 settings
     w.webContents.send('dc:scale-preview', { id, scale: clamped });
     schedulePreviewRestore(id);
   });

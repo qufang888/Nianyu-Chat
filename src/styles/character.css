@@ -28,6 +28,10 @@ body {
   position: fixed;
   inset: 0;
   pointer-events: none;
+  /* v3.0.12：桌宠窗唯一渲染驱动。写在根层（而非 .dc-character），
+     角色本体 / 气泡 / 菜单同处一个真实像素空间；角色改走 1:1 布局盒，不再有 transform scale。
+     默认 1 保证首帧（dc:state 尚未到达）与降级路径尺寸正确。 */
+  --dc-scale: 1;
 }
 .dc-character,
 .dc-bubble,
@@ -35,14 +39,18 @@ body {
   pointer-events: auto;
 }
 
-/* ===== 角色主体 ===== */
+/* ===== 角色主体 =====
+   v3.0.12 路线 B：1:1 布局盒。旧实现是固定 190×228 + transform 上叠一层 var(--dc-scale) 缩放，
+   浏览器先按 1× 栅格化再插值放大 ⇒ 每档缩放都是一次重采样跳变（用户反馈「滚轮放大抖动」的首因）。
+   现在盒子本身就是 190S×228S，由浏览器按最终尺寸栅格化；left/bottom 不变，脚点语义与
+   electron/desktopCharacter.ts 的 winSizeForScale 严格同源（75px 左右留白 / 10px 底距）。 */
 .dc-character {
   position: absolute;
   left: 50%;
   bottom: 10px;
-  width: 190px;
-  height: 228px;
-  transform: translateX(-50%) scale(var(--dc-scale, 1));
+  width: calc(190px * var(--dc-scale, 1));
+  height: calc(228px * var(--dc-scale, 1));
+  transform: translateX(-50%);
   transform-origin: bottom center;
   cursor: grab;
   display: flex;
@@ -143,7 +151,9 @@ body {
 .dc-bubble {
   position: absolute;
   left: 50%;
-  bottom: 246px;
+  /* v3.0.12：随角色本体真实高度上移（脚点上 10px + 角色高 228px×S + 8px 间隙）。
+     旧固定 246px 在 S=1 等价（10+228+8=246），S=5 时会与角色重叠 ≈904px（#298）。 */
+  bottom: calc(10px + 228px * var(--dc-scale, 1) + 8px);
   transform: translateX(-50%);
   max-width: 286px;
   min-width: 66px;
@@ -208,11 +218,20 @@ body {
   }
 }
 
-/* ===== 右键菜单（配色走主题变量） ===== */
-.dc-menu {
+/* ===== 右键菜单（配色走主题变量） =====
+   v3.0.12：菜单不再锚在窗口右下角（right:6px/bottom:96px）——S=5 窗口宽 1100 时
+   与角色中心相距约 450px（用户反馈「菜单离本体很远」）。改为由 CharacterApp 在右键时
+   按角色 getBoundingClientRect() 算出 MenuAnchor，写进 .dc-menu-anchor 的 left/top。
+   transform 承担「水平居中 + 以锚点为底边」（translateY(-100%)），因此锚点即菜单底中点，
+   正好贴在角色头顶；动画只作用于内层 .dc-menu，关闭链路与 class 一字未动（I5 守恒）。 */
+.dc-menu-anchor {
   position: absolute;
-  right: 6px;
-  bottom: 96px;
+  transform: translateX(-50%) translateY(-100%);
+  /* 锚点自身不吞指针；只有菜单本体恢复可交互（与 .dc-menu 的 pointer-events:auto 配套）。 */
+  pointer-events: none;
+}
+.dc-menu {
+  position: relative;
   min-width: 168px;
   padding: 6px;
   background: var(--color-panel);

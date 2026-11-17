@@ -311,8 +311,10 @@
   /* v3.0.3：视口最小高度 380px —— 容纳 190×220×1.6 = 304×352 的放大模型 */
   min-height: 380px;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  /* v3.0.12：外层改 safe center —— 内容大于视口时自动退化为起点对齐，
+     起点侧（top/left）仍可滚动；旧的 center 会把超界内容的起点侧裁掉且滚不到（R2 根因之一）。 */
+  align-items: safe center;
+  justify-content: safe center;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-panel-alt);
@@ -328,16 +330,21 @@
 .stage-viewport:active {
   cursor: grabbing;
 }
-/* v3.0.3 新增内层：让放大的模型能撑出滚动区（否则 flex 居中 + overflow 会裁掉两侧） */
+/* v3.0.3 新增内层：让放大的模型能撑出滚动区（否则 flex 居中 + overflow 会裁掉两侧）
+   v3.0.12 修 R2：flex 居中在子元素大于容器时会裁掉起点侧且不可滚；改 block + auto margin
+   安全居中——放得下时 .stage-model 的 margin:auto 居中，放不下时 auto margin 退化为 0，
+   模型从 padding 起点开始排布，top/left 都能滚到。 */
 .stage-inner {
   min-width: 100%;
   min-height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
+  /* 给滚动留边：模型贴到滚动区边缘时不会被 border 咬住 */
+  padding: 12px;
 }
 .stage-model {
   position: relative;
+  /* v3.0.12：block 布局下的安全居中（溢出时自动退化为起点对齐，两端可滚） */
+  margin: auto;
   /* v3.0.3：盒子按 --stage-zoom 真实放大（浏览器按最终尺寸重采样 ⇒ 清晰）。
      旧实现是固定 190×220 + transform: scale()，Chromium 会先按 1× 栅格化再插值放大 ⇒ 模糊。
      另注：旧实现的 will-change: transform 会把元素提升为合成层，强制按 1× 栅格化后插值，

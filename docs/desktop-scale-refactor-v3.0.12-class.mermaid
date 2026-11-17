@@ -1,0 +1,143 @@
+classDiagram
+    %% ================= 主进程：几何与物理层（electron/desktopCharacter.ts） =================
+    class DcGeometry {
+        <<pure functions · 唯一真源· 保持不变>>
+        +number DC_WIN_BASE_W = 340
+        +number DC_WIN_BASE_H = 420
+        +number CHAR_BODY_W = 190
+        +number CHAR_BODY_H = 228
+        +number CHAR_BODY_BOTTOM_GAP = 10
+        +number DC_PAD_X = 75
+        +number DC_HEAD_TOP = 182
+        +number DC_SCALE_MIN = 0.6
+        +number DC_SCALE_MAX = 5.0
+        +clampScale(s: number): number
+        +winSizeForScale(s: number): {w:number,h:number}
+        +footFromStored(x: number, y: number): {x:number,y:number}
+        +storedFromFoot(fx: number, fy: number): {x:number,y:number}
+        +clampAxis(v: number, lo: number, hi: number): number
+        +clampPos(x: number, y: number, id?: string): {x:number,y:number}
+    }
+    note right of DcGeometry
+      路线 B 关键决策：窗口尺寸公式、脚点锚点、
+      反转钳制全部沿用 v3.0.11，不动一行。
+      改动只在"角色在窗口内如何渲染"。
+    end note
+
+    class ResizeCoalescer {
+        <<new · 主进程>>
+        -Map~string, number~ pendingScale
+        -Map~string, boolean~ scheduled
+        -number FRAME_MS = 16
+        +request(id: string, scale: number): void
+        +flush(id: string): void
+        +cancel(id: string): void
+    }
+    note right of ResizeCoalescer
+      滚轮/预览高频 scale 合并为
+      每帧至多一次 resizeCharacterWindow；
+      消除 setBounds 风暴 → 抖动主因之一。
+    end note
+
+    class CharacterWindowManager {
+        <<electron/desktopCharacter.ts>>
+        -Map~string, BrowserWindow~ dcWindows
+        -Map~string, DragState~ dragStates
+        +createDesktopCharacter(id: string): void
+        +resizeCharacterWindow(id: string, scale: number): void
+        +persistPos(id: string): void
+        +movedHandler(id: string): void
+        +ipcSetScale(id: string, scale: number): void
+        +ipcSetScaleLive(id: string, scale: number): void
+    }
+    class DragState {
+        +number curX
+        +number curY
+        +number scale
+        +boolean dragging
+        +boolean inertia
+    }
+    class DcScaleIpc {
+        <<channels>>
+        +setScale  "dc:set-scale(id, scale) 持久化提交"
+        +setScaleLive  "dc:set-scale-live(id, scale) 合并预览·不落盘"
+        +scalePreview  "dc:scale-preview{id,scale} 主→角色窗"
+        +settingsChanged  "settings:changed 广播"
+    }
+
+    CharacterWindowManager --> DcGeometry : 复用几何纯函数
+    CharacterWindowManager --> ResizeCoalescer : 高频 resize 合并
+    CharacterWindowManager "1" *-- "many" DragState : per id
+    CharacterWindowManager --> DcScaleIpc : 实现
+
+    %% ================= 渲染层：桌宠窗（src/character/CharacterApp.tsx） =================
+    class CharacterApp {
+        <<renderer · desktop pet window>>
+        +number scale
+        +onCharacterWheel(e): void
+        +onDcScalePreview(d): void
+        +onContextMenu(e): MenuAnchor
+        +applyRootScaleVar(scale): void
+        +showBubble(text): void
+    }
+    class DcDomGeometry {
+        <<new · CSS 单一真源>>
+        +scaleVar  "--dc-scale 写在 .dc-root"
+        +charBox  ".dc-character width/height = calc(190/228px * var(--dc-scale))"
+        +charTransform  "transform: translateX(-50%) 仅居中·不缩放"
+        +bubbleBottom  "calc(10px + 228px * var(--dc-scale) + 8px)"
+        +menuAnchor  ".dc-menu-anchor left/top = 角色 rect 中心"
+    }
+    note right of DcDomGeometry
+      路线 B 核心：去掉 transform: scale()，
+      改为布局盒按 scale 真实放大 →
+      渲染/命中/菜单/气泡同处真实像素空间。
+    end note
+    class MenuAnchor {
+        <<new · state>>
+        +number localX
+        +number localY
+        +clampToWindow(anchor, win): void
+    }
+    class ModelView {
+        +number resolutionScale = 1
+        +applyPixelRatio(pr): void
+    }
+    note right of ModelView
+      resolutionScale 恒为 1（pr=dpr 恒定），
+      消除每档滚轮 setPixelRatio→帧缓冲重分配
+      → 闪动主因。K20 桌面断言改写。
+    end note
+
+    CharacterApp --> DcDomGeometry : 写 --dc-scale / 读 rect
+    CharacterApp --> MenuAnchor : onContextMenu 计算
+    CharacterApp --> ModelView : resolutionScale=1
+    CharacterApp --> DcScaleIpc : dcSetScale / dcSetScaleLive
+
+    %% ================= 渲染层：角色舞台（src/components/CharacterStage.tsx） =================
+    class CharacterStage {
+        <<renderer · main window>>
+        +number zoom
+        +applyZoom(raw): void
+        +commitZoom(v): void
+        +onWheel(e): void
+        +STAGE_SCALE_COMMIT_DEBOUNCE_MS = 200
+    }
+    note right of CharacterStage
+      手势内只改舞台自身 zoom（单通道），
+      不再 dcSetScaleLive 推桌宠窗 resize；
+      手势末一次 dc:set-scale 提交。
+    end note
+    CharacterStage --> DcScaleIpc : 仅 commit 时 dcSetScale
+    CharacterStage --> DcScaleIpc : 只读订阅 settings:changed
+
+    %% ================= 渲染层：IPC 包装（src/ipc.ts / electron/preload.ts） =================
+    class IpcBridge {
+        <<src/ipc.ts + electron/preload.ts>>
+        +dcSetScale(id, scale)
+        +dcSetScaleLive(id, scale)
+        +onDcScalePreview(cb): () => void
+    }
+    DcScaleIpc <.. IpcBridge : 桥接
+    IpcBridge <.. CharacterApp
+    IpcBridge <.. CharacterStage
