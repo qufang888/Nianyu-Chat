@@ -171,12 +171,20 @@ export const Live2DView: React.FC<Props> = ({
       app.stage.addChild(model);
 
       /** 等比铺满容器并底部对齐 */
+      let lastW = 0;
+      let lastH = 0;
+      let lastRes = 0;
       const fit = () => {
         if (!model) return;
         const cw = host.clientWidth || w;
         const ch = host.clientHeight || h;
         // 分辨率变化时先同步 renderer.resolution，再 resize，让后备缓冲按新分辨率重建
         const wantRes = targetResolution();
+        // v3.0.13：滚轮逐档改盒子时 ResizeObserver 高频触发；PixiJS 的 renderer.resize
+        // 会重建后备缓冲并清空画布，若等到下一帧 ticker 才画就会合成出透明空帧。
+        // 尺寸/分辨率未变直接早退；真变时 resize 后立刻同步 render 一帧，杜绝闪动。
+        if (cw === lastW && ch === lastH && wantRes === lastRes) return;
+        lastW = cw; lastH = ch; lastRes = wantRes;
         try {
           if (app?.renderer && app.renderer.resolution !== wantRes) {
             app.renderer.resolution = wantRes;
@@ -189,6 +197,8 @@ export const Live2DView: React.FC<Props> = ({
         model.scale.set(k);
         model.x = (cw - mw * k) / 2;
         model.y = ch - mh * k;
+        // resize 会清空后备缓冲；摆放完立刻同步绘一帧，避免合成器抓到透明空帧。
+        try { app?.render?.(); } catch { /* PixiJS 版本差异时静默降级到 ticker 下一帧 */ }
       };
       fit();
 

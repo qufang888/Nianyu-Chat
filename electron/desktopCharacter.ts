@@ -154,6 +154,11 @@ let dragTimer: ReturnType<typeof setInterval> | null = null;
 let dragWatchdogTimer: ReturnType<typeof setInterval> | null = null;
 /** v3.0.11 预览兜底计时器（per id）：舞台异常关闭未提交时，把窗口尺寸恢复到落盘 scale。 */
 const previewRestoreTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/**
+ * v3.0.13 滚轮手势状态（per id）：ceiling=true 表示窗口已一次性预扩到 DC_SCALE_MAX，
+ * 手势期内逐档只改渲染层 CSS（--dc-scale），不再逐帧 setBounds。
+ */
+const wheelGestures = new Map<string, { lastAt: number; ceiling: boolean }>();
 
 // ===================== 工具 =====================
 
@@ -223,6 +228,11 @@ const DC_PAD_X = (DC_WIN_BASE_W - CHAR_BODY_W) / 2;
 const DC_HEAD_TOP = DC_WIN_BASE_H - CHAR_BODY_BOTTOM_GAP - CHAR_BODY_H;
 /** 预览兜底：最后一次 live 后无 commit 则恢复落盘尺寸（略晚于 renderer 的 3000ms） */
 const DC_PREVIEW_RESTORE_MS = 3100;
+/**
+ * v3.0.13 滚轮手势空闲阈值（毫秒）：大于渲染层 180ms 的提交去抖，
+ * 保证「连续滚轮一次手势 = 一次预扩窗 + 一次提交收窗」，而不是每档一次 setBounds。
+ */
+const DC_WHEEL_GESTURE_IDLE_MS = 220;
 
 /** scale 钳制（唯一真源，IPC / 几何 / 钳制共用同一口径）。 */
 function clampScale(s: number): number {
@@ -345,7 +355,9 @@ function applyPos(id: string, x: number, y: number): void {
   }
 }
 
-/** 取消某角色的预览兜底计时器（提交 / 关窗时调用）。 */
+/** 取消某角色的预览兜底计时器（提交 / 关窗时调用）。
+ *  注意：每档滚轮都会重排兜底计时器，**绝不能在这里清 wheelGestures**，
+ *  否则手势中途状态被抹掉、moved 回响会把预扩窗拉回工作区（脚点跳变）。 */
 function cancelPreviewRestore(id: string): void {
   const timer = previewRestoreTimers.get(id);
   if (timer) {
@@ -359,6 +371,7 @@ function schedulePreviewRestore(id: string): void {
   cancelPreviewRestore(id);
   const timer = setTimeout(() => {
     previewRestoreTimers.delete(id);
+    endWheelGesture(id); // v3.0.13：兜底恢复时手势也必须结束，否则 moved 钳制一直挂起
     const c = findChar(id);
     const storedScale = c && typeof c.scale === 'number' && Number.isFinite(c.scale) ? c.scale : 1;
     resizeCoalescer.cancel(id); // 丢弃可能还在排队的预览 resize，终值唯一
@@ -411,14 +424,41 @@ class ResizeCoalescer {
 const resizeCoalescer = new ResizeCoalescer();
 
 /**
+ * v3.0.13 滚轮手势起点：一次性把窗口预扩到 DC_SCALE_MAX（脚点钉死、**跳过钳制**）。
+ *
+ * 为什么必须跳过钳制：预扩只是为了给手势期提供足够的渲染空间，窗口本身透明无边框，
+ * 允许用户角色贴在工作区边缘时窗口大部分落在屏外；若此时走 clampPos 回调窗口原点，
+ * 角色脚点会在手势第一档发生可见跳变（与 v3.0.11 零漂移成果冲突）。moved 处理器
+ * 在手势期内一并挂起钳制，避免 setBounds 的回响把预扩原点拉回工作区。
+ */
+function beginWheelGesture(id: string): void {
+  const now = Date.now();
+  const g = wheelGestures.get(id);
+  if (g && now - g.lastAt <= DC_WHEEL_GESTURE_IDLE_MS) {
+    g.lastAt = now; // 同一轮手势：后续档位只更新渲染层，不再碰窗口
+    return;
+  }
+  wheelGestures.set(id, { lastAt: now, ceiling: true });
+  resizeCoalescer.cancel(id);
+  resizeCharacterWindow(id, DC_SCALE_MAX, true);
+}
+
+/** 手势结束（提交 / 兜底 / 关窗）：清除状态，让 moved 与 clampPos 恢复正常钳制。 */
+function endWheelGesture(id: string): void {
+  wheelGestures.delete(id);
+}
+
+/**
  * v3.0.11 核心：保持角色脚点屏幕坐标不变地调整窗口尺寸。
  *
  * - 单次 setBounds 原子设置 x/y/width/height，避免「先变大再跳位」的中间帧；
  * - 尺寸未变时早退（滑块 step=0.05 全程 89 档，去重后每档最多一次 setBounds）；
  * - st.scale 先于 clampPos / setBounds 写入 ⇒ 紧随其后的 moved 事件用新 scale 重钳，幂等不回弹；
- * - 全程不写 settings，预览通道复用本函数也不会落盘。
+ * - 全程不写 settings，预览通道复用本函数也不会落盘；
+ * - v3.0.13 可选 skipClamp：仅用于滚轮手势起点的一次性「预扩到 5×」——透明窗允许越出工作区，
+ *   脚点必须逐像素钉死；默认 false 时与 v3.0.11 逐字等价（冻结区零倒退）。
  */
-function resizeCharacterWindow(id: string, scale: number): void {
+function resizeCharacterWindow(id: string, scale: number, skipClamp = false): void {
   const win = dcWindows.get(id);
   if (!win || win.isDestroyed()) return;
   const st = getDragState(id);
@@ -435,7 +475,8 @@ function resizeCharacterWindow(id: string, scale: number): void {
   if (prevSize.w === w && prevSize.h === h) return; // 尺寸未变：跳过 setBounds，避免抖动
   const nx = footX - w / 2;
   const ny = footY - (h - CHAR_BODY_BOTTOM_GAP);
-  const c = clampPos(nx, ny, id);
+  // skipClamp 只在 v3.0.13 滚轮预扩时为真：此时窗口可以越出工作区，脚点必须零位移。
+  const c = skipClamp ? { x: nx, y: ny } : clampPos(nx, ny, id);
   win.setBounds({ x: Math.round(c.x), y: Math.round(c.y), width: w, height: h });
   st.curX = c.x;
   st.curY = c.y;
@@ -674,6 +715,7 @@ export function createDesktopCharacter(id: string): void {
   });
   win.on('closed', () => {
     cancelPreviewRestore(id);
+    endWheelGesture(id);
     resizeCoalescer.cancel(id);
     dcWindows.delete(id);
     dragStates.delete(id);
@@ -688,6 +730,11 @@ export function createDesktopCharacter(id: string): void {
     const stt = dragStates.get(id);
     if (!stt) return;
     if (stt.dragging || stt.inertia) return;
+    // v3.0.13：滚轮手势期窗口被一次性预扩到 5×，允许透明区越出工作区且脚点必须钉死；
+    // 此处若照常 clampPos，setBounds 的 moved 回响会把预扩原点拉回工作区 ⇒ 角色第一档跳位。
+    // 手势在 dc:set-scale 提交（或兜底/关窗）时结束，之后恢复全部原钳制逻辑。
+    // 用 typeof 守卫兼容冻结的 verify-dynamic-window-behavior.mjs 沙箱（其 shim 未注入本 Map）。
+    if (typeof wheelGestures !== 'undefined' && wheelGestures.has(id)) return;
     const b = win.getBounds();
     // QA P1 第二层：setBounds 取整后 Electron 会发 moved，若无条件把整数 b.x 回灌 st.curX，
     // 下次 resize 又从整数反解脚点，0.5px 固化成 1px 逐档累积（实测 3 轮 +120px）。
@@ -708,6 +755,7 @@ export function createDesktopCharacter(id: string): void {
 export function destroyDesktopCharacter(id?: string): void {
   if (id) {
     cancelPreviewRestore(id);
+    endWheelGesture(id);
     resizeCoalescer.cancel(id);
     const w = dcWindows.get(id);
     if (w && !w.isDestroyed()) w.destroy();
@@ -720,6 +768,7 @@ export function destroyDesktopCharacter(id?: string): void {
     return;
   }
   for (const cid of previewRestoreTimers.keys()) cancelPreviewRestore(cid);
+  for (const cid of wheelGestures.keys()) endWheelGesture(cid);
   for (const cid of dcWindows.keys()) resizeCoalescer.cancel(cid);
   for (const [, w] of dcWindows) {
     if (!w.isDestroyed()) w.destroy();
@@ -755,6 +804,8 @@ export function refreshDesktopCharacter(): void {
     for (const [id, w] of dcWindows) {
       const stillEnabled = list.some((ch) => ch.id === id && ch.enabled);
       if (!stillEnabled) {
+        cancelPreviewRestore(id);
+        endWheelGesture(id);
         resizeCoalescer.cancel(id);
         if (!w.isDestroyed()) w.destroy();
         dcWindows.delete(id);
@@ -1125,7 +1176,8 @@ export function registerDesktopCharacterIPC(): void {
     const idx = list.findIndex((c) => c.id === id);
     if (idx < 0) return;
     const clamped = Math.max(0.6, Math.min(DC_SCALE_MAX, Number(scale) || 1));
-    cancelPreviewRestore(id); // 手势已提交：撤销 3.1s 兜底
+    cancelPreviewRestore(id); // 手势已提交：撤销 3.1s 兜底 + 滚轮手势状态
+    endWheelGesture(id); // v3.0.13：提交即结束手势，下面按真实 scale 收窗（唯一一次 setBounds）
     resizeCoalescer.cancel(id); // v3.0.12：先清排队预览，保证终值唯一、不与在途帧竞争
     // v3.0.11：x/y 存储坐标是「基准脚点空间」，scale 变化只改窗口原点 ⇒ 此处只写 scale。
     const next = list.slice();
@@ -1147,15 +1199,20 @@ export function registerDesktopCharacterIPC(): void {
   //     既拖不动（主线程被 IO 拖慢），又违反「同一轮操作内只广播 1 次」；
   //   - 预览通道**只改角色窗本地的 --dc-scale + 窗口尺寸**，不落盘、不广播 ⇒ 拖动全程跟手且零 IO。
   //
-  // v3.0.12：预览期窗口 resize 经 ResizeCoalescer 合并到每帧一次（原实现每档一次 setBounds，
-  // 叠加帧缓冲重分配造成滚轮放大抖动）；仍不落盘、不广播。
-  // 提交（落盘）仍走既有的 dc:set-scale，由舞台/滚轮去抖在手势结束时发起一次并取消兜底。
+  // v3.0.13：滚轮改为「手势级」窗口管理——
+  // 手势第一档：一次性预扩到 5×（脚点钉死、跳过钳制、moved 挂起）；
+  // 手势后续档：**窗口尺寸完全不动**，只把真实 scale 推给渲染层改 --dc-scale；
+  // 停手 180ms 后由 dc:set-scale 一次收窗到终值。整轮手势从 20 次 setBounds 降到 2 次。
+  // 预览通道仍不落盘、不广播；合并器保留（预扩后同尺寸请求内部早退，零 setBounds）。
+  // 合并器仍接收请求（传预扩上限而非逐档 scale）：尺寸已到上限时 resizeCharacterWindow
+  // 内部早退，零 setBounds；门禁 K6 的合并链路因此保持有效。
   ipcMain.on('dc:set-scale-live', (_e, id: string, scale: number) => {
     if (!id) return;
     const w = dcWindows.get(id);
     if (!w || w.isDestroyed()) return;
     const clamped = Math.max(0.6, Math.min(DC_SCALE_MAX, Number(scale) || 1));
-    resizeCoalescer.request(id, clamped); // 每帧至多一次脚点不变的原子 resize，内部不写 settings
+    beginWheelGesture(id);
+    resizeCoalescer.request(id, DC_SCALE_MAX);
     w.webContents.send('dc:scale-preview', { id, scale: clamped });
     schedulePreviewRestore(id);
   });

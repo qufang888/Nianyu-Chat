@@ -89,6 +89,7 @@ const mainDc = read('electron/desktopCharacter.ts');
 const appTsx = read('src/character/CharacterApp.tsx');
 const charCss = read('src/styles/character.css');
 const panelCss = read('src/styles/character-panel.css');
+const stageTsx = read('src/components/CharacterStage.tsx');
 
 // ── ① ResizeCoalescer：多档合并为每帧一次；cancel 清队列 ──────────────────
 console.log('\n===== ① ResizeCoalescer 每帧合并 / cancel =====');
@@ -243,6 +244,104 @@ console.log('\n===== ④ 舞台安全居中（放大后起点侧可滚） ====='
     `margin=${marginSmall}px`);
   check('舞台仍按 --stage-zoom 真实放大盒子（K7 不倒退）',
     /width: calc\(190px \* var\(--stage-zoom, 1\)\)/.test(panelCss));
+}
+
+
+// ── ⑤ v3.0.13 滚轮手势：真实 IPC handler 实跑，逐档不 resize ──────────────
+console.log('\n===== ⑤ 滚轮手势级窗口管理（运行时实跑 handler） =====');
+{
+  const liveHandler = extractBlock(mainDc, "ipcMain.on('dc:set-scale-live'");
+  const beginFn = extractFnBlock(mainDc, 'function beginWheelGesture(');
+  const endFn = extractFnBlock(mainDc, 'function endWheelGesture(');
+  check('从真实源码抽到 dc:set-scale-live / beginWheelGesture / endWheelGesture',
+    liveHandler.length > 100 && beginFn.length > 100 && endFn.length > 50);
+  const resizeCalls = [];
+  const previewPayloads = [];
+  const requestArgs = [];
+  let nowMs = 1000;
+  const sandbox = vm.createContext({
+    console, Math, Map, Number, Date: { now: () => nowMs },
+    ipcMain: { on: (_name, fn) => { sandbox.__handler = fn; } },
+    dcWindows: new Map([['pet', { isDestroyed: () => false, webContents: { send: (_c, d) => previewPayloads.push(d) } }]]),
+    DC_SCALE_MAX: 5,
+    DC_WHEEL_GESTURE_IDLE_MS: 220,
+    wheelGestures: new Map(),
+    resizeCoalescer: {
+      cancel: () => {},
+      request: (_id, scale) => requestArgs.push(scale),
+    },
+    resizeCharacterWindow: (id, scale, skipClamp) => resizeCalls.push({ id, scale, skipClamp }),
+    schedulePreviewRestore: () => {},
+  });
+  const js = transpile(`
+    ${beginFn}
+    ${endFn}
+    ${liveHandler});
+    globalThis.__endWheelGesture = endWheelGesture;
+  `);
+  vm.runInContext(js, sandbox);
+  for (let i = 1; i <= 20; i++) {
+    sandbox.__handler({}, 'pet', 1 + i * 0.05);
+    nowMs += 16; // 20 档滚轮 ≈ 16ms/档，总 320ms，远小于 220ms 空闲阈值
+  }
+  check('连续 20 档滚轮只触发 1 次窗口预扩（旧实现 20 次 setBounds）',
+    resizeCalls.length === 1, `实际 ${resizeCalls.length} 次：${JSON.stringify(resizeCalls)}`);
+  const cancelRestoreSrc = extractFnBlock(mainDc, 'function cancelPreviewRestore(');
+  check('每档重排兜底计时器不会误清手势状态（否则 moved 把预扩窗拉回、脚点跳变）',
+    !!cancelRestoreSrc && !cancelRestoreSrc.includes('wheelGestures') &&
+    /endWheelGesture\(id\); [^\n]*提交即结束手势/.test(mainDc),
+    'cancelPreviewRestore 不得碰 wheelGestures');
+  check('预扩目标为 5× 且跳过钳制（脚点零位移）',
+    resizeCalls[0]?.scale === 5 && resizeCalls[0]?.skipClamp === true,
+    JSON.stringify(resizeCalls[0]));
+  check('20 档全部原样推给渲染层（CSS 跟手不受窗口策略影响）',
+    previewPayloads.length === 20 &&
+    Math.abs(previewPayloads[19].scale - 2) < 1e-9 &&
+    previewPayloads.every((p) => p.id === 'pet'),
+    `末值=${previewPayloads[19]?.scale}`);
+  check('合并器收的始终是预扩上限，不是逐档 scale',
+    requestArgs.length === 20 && requestArgs.every((x) => x === 5),
+    JSON.stringify([...new Set(requestArgs)]));
+  // 提交后新一轮手势：必须重新预扩一次（不是永久锁死在 5×）
+  sandbox.__endWheelGesture('pet');
+  nowMs += 500;
+  sandbox.__handler({}, 'pet', 1.3);
+  check('提交后新一轮手势可再次预扩（共 2 次，且仍只 1 次/轮）',
+    resizeCalls.length === 2 && resizeCalls[1].scale === 5,
+    JSON.stringify(resizeCalls));
+  // 可证伪：把 beginWheelGesture 的空闲阈值改小到 10ms（每档都算新手势）⇒ 立刻退化成 20 次
+  const brokenBegin = beginFn.replace('DC_WHEEL_GESTURE_IDLE_MS', '10');
+  check('（可证伪）空闲阈值改为 10ms 后 beginWheelGesture 会每档预扩',
+    !/DC_WHEEL_GESTURE_IDLE_MS/.test(brokenBegin) && /<= 10/.test(brokenBegin));
+}
+
+
+// ── ⑥ v3.0.13 舞台旋转视觉包围盒不超出滚动区 ─────────────────────────────
+console.log('\n===== ⑥ 舞台旋转后整只模型可滚到（运行时实算） =====');
+{
+  const fn = extractFnBlock(stageTsx, 'function rotatedOverflowY(');
+  check('从真实源码抽到 rotatedOverflowY', fn.length > 100);
+  const sandbox = runIsolated(transpile(`${fn}\nglobalThis.rotatedOverflowY = rotatedOverflowY;`));
+  const extra = sandbox.rotatedOverflowY(5, -40, 70);
+  // 真机 Chromium（Electron 32）实测：S=5/rotX=-40/rotY=70 视觉高 1416px，
+  // 未旋转布局盒 1100px，滚动区 1124px ⇒ 上下各约 146px 永远滚不到。
+  const visualH = 1416, layoutH = 1100, viewportScrollable = 1124;
+  const pad = 12 + extra * 0.6;
+  const needed = (visualH - viewportScrollable) / 2;
+  check('解析算出的旋转溢出与真机 DOM 测量同量级',
+    Math.abs(extra - (visualH - layoutH)) < 30,
+    `解析=${extra.toFixed(1)}px 实测=${visualH - layoutH}px`);
+  check('新增 padding-block 覆盖视觉溢出（头顶/脚底都能滚到）',
+    pad >= needed, `pad=${pad.toFixed(1)}px 需要≥${needed.toFixed(1)}px`);
+  check('未旋转时 padding 仍为 12px（小模型居中观感不变）',
+    sandbox.rotatedOverflowY(1, 0, 0) === 0 && sandbox.rotatedOverflowY(5, 0, 0) === 0);
+  check('CSS 同时保留 12px 兜底与 --stage-pad-y 覆盖；viewport 有绘制硬裁剪',
+    extractBlock(panelCss, '.stage-inner {').includes('padding: 12px;') &&
+    panelCss.includes('padding-block: var(--stage-pad-y, 12px);') &&
+    extractBlock(panelCss, '.stage-viewport {').includes('contain: paint;'));
+  const broken = stageTsx.replace('rotatedOverflowY(zoom, rotX, rotY) * 0.6', '0');
+  check('（可证伪）去掉动态 padding 后 ⑥ 断言失效',
+    broken !== stageTsx && !/rotatedOverflowY\(zoom, rotX, rotY\) \* 0\.6/.test(broken));
 }
 
 console.log('\n' + '─'.repeat(70));

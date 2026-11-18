@@ -318,6 +318,9 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-panel-alt);
+  /* v3.0.13：硬裁剪兜底——3D 变换层（WebGL canvas / preserve-3d）在某些合成路径下
+     可能画出滚动容器边界；contain:paint 从绘制层面保证舞台内容绝不越框。 */
+  contain: paint;
   /* v3.0.3：语义从「视口内放大」改为「角色真实大小」后，放大的模型可能超出视口 ⇒ 允许滚动 */
   overflow: auto;
   cursor: grab;
@@ -340,6 +343,9 @@
   display: block;
   /* 给滚动留边：模型贴到滚动区边缘时不会被 border 咬住 */
   padding: 12px;
+  /* v3.0.13：旋转后视觉包围盒高于布局盒，纵向内边距由 CharacterStage 按实际角度算出
+     （--stage-pad-y，rot=0 时仍为 12px），保证放大+旋转后整只模型都能滚到。 */
+  padding-block: var(--stage-pad-y, 12px);
 }
 .stage-model {
   position: relative;

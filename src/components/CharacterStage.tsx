@@ -21,7 +21,7 @@
 //
 // 合规：舞台配色/布局为念语自有样式，与任何商业产品的视觉稿无关；Live2D/VRM/GLB 本版不内置
 // 专有运行时，仅对图片/原创占位角色提供原生渲染，其余格式在舞台内明确提示。
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../ipc';
 import { useI18n } from '../i18n/I18nContext';
 import type { AppSettings, DesktopCharacter } from '../types';
@@ -51,6 +51,26 @@ const STAGE_WHEEL_SENSITIVITY = 0.0012;
 const STAGE_SCALE_COMMIT_DEBOUNCE_MS = 200;
 /** 缩放值比较容差：滑块步长 0.05，用 1e-6 判定「同一个值」（与回声抑制口径一致）。 */
 const STAGE_ZOOM_EPS = 1e-6;
+
+/**
+ * v3.0.13：旋转后的**视觉**包围盒高度超出未旋转布局盒的部分。
+ *
+ * 舞台 scroll 容器只按布局盒（190×zoom / 220×zoom）撑开，而 `rotateX(a) rotateY(b)`
+ * 把平面的水平边也投影出竖直分量：visualH = |sin a·sin b|·w + |cos a|·h。
+ * 在 S=5 + rotX=-40° + rotY=70° 时 visualH≈1417px，滚动区只有 1124px ⇒
+ * 头顶/脚底各有约 145px 永远滚不到（真机 Chromium 实测，用户所谓「超出舞台边界」）。
+ * 把多出的高度折半写进 .stage-inner 的 padding-block，滚动范围即可完整覆盖视觉盒；
+ * rot=0 时 extra=0 ⇒ padding 仍是 12px，小模型居中观感零变化。
+ */
+function rotatedOverflowY(zoom: number, rotX: number, rotY: number): number {
+  const w = 190 * zoom;
+  const h = 220 * zoom;
+  const a = (rotX * Math.PI) / 180;
+  const b = (rotY * Math.PI) / 180;
+  const visualH = Math.abs(Math.sin(a) * Math.sin(b)) * w + Math.abs(Math.cos(a)) * h;
+  return Math.max(0, visualH - h);
+}
+
 /** 本次 zoom 变化来源：user=用户手势（允许写回）；external=外部同步（只读）。 */
 type ZoomSource = 'user' | 'external';
 
@@ -333,6 +353,11 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
   const charGroupOn = settings ? isGroupEnabled(settings, 'character') : true;
   const idleOn = charGroupOn && settings?.animCharacterIdle !== false;
   const gazeOn = charGroupOn && settings?.animCharacterGaze !== false;
+  /** v3.0.13：把旋转后多出来的视觉高度折进滚动区内边距（×1.2 留透视安全量）。 */
+  const stagePadY = useMemo(
+    () => 12 + rotatedOverflowY(zoom, rotX, rotY) * 0.6,
+    [zoom, rotX, rotY]
+  );
 
   // 渲染失败提示：区分「缺运行时」与「模型本身加载失败」，前者给一键打开运行库目录
   const needRuntime = stageError === 'missing-cubism4' || stageError === 'missing-cubism2';
@@ -358,7 +383,12 @@ export const CharacterStage: React.FC<{ character: DesktopCharacter; onClose: ()
             // CSS 自定义属性只向下继承，写在子元素上父元素读不到 ——
             // 视口要用它算 perspective、模型要用它算盒子尺寸，两者必须是同一个值。
             // （与 v3.0.2 的 --dc-scale 必须写在 .dc-character 自身同理）
-            style={{ ['--stage-zoom' as string]: String(zoom) } as React.CSSProperties}
+            style={{
+              ['--stage-zoom' as string]: String(zoom),
+              // v3.0.13：旋转盒的视觉高度可能远大于布局盒，滚动区内边距按实际旋转量撑开，
+              // 保证放大 + 任意旋转后头顶/脚底都能滚到、绝不越出舞台边界。
+              ['--stage-pad-y' as string]: `${stagePadY}px`,
+            } as React.CSSProperties}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}

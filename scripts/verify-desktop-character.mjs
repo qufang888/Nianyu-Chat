@@ -1000,8 +1000,11 @@ check('K6 存在「实时预览」通道：dc:set-scale-live（渲染→主）�
 check('K6 预览通道不落盘、不广播（只推给该角色窗改本地 --dc-scale）',
   /dc:set-scale-live[\s\S]{0,400}webContents\.send\('dc:scale-preview'/.test(mainDc) &&
   !/dc:set-scale-live[\s\S]{0,400}saveSettings/.test(mainDc));
-check('K6 v3.0.12 预览 resize 走 ResizeCoalescer（每帧一次），resizeCharacterWindow 内绝不 saveSettings',
-  /dc:set-scale-live[\s\S]{0,300}resizeCoalescer\.request\(id, clamped\)/.test(mainDc) &&
+check('K6 v3.0.13 预览 resize 走 ResizeCoalescer（手势级预扩上限，逐档零 setBounds），resizeCharacterWindow 内绝不 saveSettings',
+  /dc:set-scale-live[\s\S]{0,300}resizeCoalescer\.request\(id, DC_SCALE_MAX\)/.test(mainDc) &&
+  /beginWheelGesture\(id\)/.test(mainDc) &&
+  /DC_WHEEL_GESTURE_IDLE_MS = 220/.test(mainDc) &&
+  /typeof wheelGestures !== 'undefined' && wheelGestures\.has\(id\)/.test(mainDc) &&
   /class ResizeCoalescer/.test(mainDc) &&
   /FRAME_MS = 16/.test(mainDc) &&
   /function resizeCharacterWindow\(/.test(mainDc) && // 防止 extractFnBody 空串导致「恒真」假阳性
@@ -1030,6 +1033,11 @@ check('K6 舞台滑块仍是 0.6~2.0 / 步长 0.05，且复用既有 dc:set-scal
   const brokenStage = stage.replace('      setZoom(v);', '      setZoom(v);\n      api.dcSetScaleLive(character.id, v);');
   check('（可证伪）把 dcSetScaleLive 加回 applyZoom 后 K6 单通道断言失效',
     brokenStage !== stage && k6SingleChannel(stage) && !k6SingleChannel(brokenStage));
+  // v3.0.13 可证伪：把合并器目标退回逐档 scale（= 每档一次 setBounds）后 K6 必须变红
+  const k6Gesture = (src) => /dc:set-scale-live[\s\S]{0,300}resizeCoalescer\.request\(id, DC_SCALE_MAX\)/.test(src);
+  const brokenLive = mainDc.replace('resizeCoalescer.request(id, DC_SCALE_MAX);', 'resizeCoalescer.request(id, clamped);');
+  check('（可证伪）预览合并器退回逐档 scale 后 K6 手势级预扩断言失效',
+    brokenLive !== mainDc && k6Gesture(mainDc) && !k6Gesture(brokenLive));
 }
 
 // ---------- K7. 舞台高清渲染 ----------

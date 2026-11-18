@@ -553,15 +553,30 @@ export const ThreeModelView: React.FC<Props> = ({
       gazeMarker.position.set(0, 0, VRM_GAZE_DISTANCE);
       scene.add(gazeMarker);
 
+      /**
+       * v3.0.13：滚动调尺寸时，1:1 布局盒每档都会改 host 尺寸 ⇒ ResizeObserver 每档触发。
+       * 旧实现每次都调 renderer.setSize（Canvas 后备缓冲被重置 = 至少一帧全透明），
+       * 而真正的场景绘制要等到下一帧 rAF ⇒ 滚轮过程中肉眼可见「闪一下」。
+       * 现在：① 尺寸未变直接早退；② 尺寸真变时在同一任务内立即补一次同步渲染，
+       * 让合成器永远看不到被清空的后备缓冲（零空帧），不必降低最终渲染分辨率。
+       */
+      let lastW = 0;
+      let lastH = 0;
       const resize = () => {
         if (!renderer || !camera) return;
         const w = host.clientWidth || 1;
         const h = host.clientHeight || 1;
+        if (w === lastW && h === lastH) return;
+        lastW = w;
+        lastH = h;
         // 画布尺寸随盒子变化（CSS 100%），像素比随 zoom 提升 ⇒ 后备缓冲像素数同步增长
         applyPixelRatio(renderer);
         renderer.setSize(w, h, false);
         camera.aspect = w / h;
         camera.updateProjectionMatrix();
+        // 同帧补绘：setSize 会清空 WebGL 后备缓冲，若等下一帧 rAF 才画，
+        // 中间可能合成出一帧透明画布（= 用户看到的闪动）。
+        if (scene) renderer.render(scene, camera);
       };
       resize();
       ro = new ResizeObserver(resize);
