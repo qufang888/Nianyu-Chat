@@ -219,14 +219,12 @@ body {
 }
 
 /* ===== 右键菜单（配色走主题变量） =====
-   v3.0.12：菜单不再锚在窗口右下角（right:6px/bottom:96px）——S=5 窗口宽 1100 时
-   与角色中心相距约 450px（用户反馈「菜单离本体很远」）。改为由 CharacterApp 在右键时
-   按角色 getBoundingClientRect() 算出 MenuAnchor，写进 .dc-menu-anchor 的 left/top。
-   transform 承担「水平居中 + 以锚点为底边」（translateY(-100%)），因此锚点即菜单底中点，
-   正好贴在角色头顶；动画只作用于内层 .dc-menu，关闭链路与 class 一字未动（I5 守恒）。 */
+   v3.0.15：菜单锚定右键光标，出现在光标右侧（垂直居中于光标）；
+   localX/localY 由 computeMenuAnchor 算成**菜单左上角**并直接写进 left/top，
+   因此这里不再有 transform 位移。右侧空间不足时由 JS 翻到光标左侧，上下越界时钳制，
+   菜单始终完整可见。菜单 class / 动画 / 关闭链路逐字未动（I5 守恒）。 */
 .dc-menu-anchor {
   position: absolute;
-  transform: translateX(-50%) translateY(-100%);
   /* 锚点自身不吞指针；只有菜单本体恢复可交互（与 .dc-menu 的 pointer-events:auto 配套）。 */
   pointer-events: none;
 }

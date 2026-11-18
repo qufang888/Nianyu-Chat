@@ -61,31 +61,72 @@ const DC_EYE_DIVISOR = 170;
 /** v3.0.12：滚轮每档即时 live，停手这么久后一次落盘（避免逐档 saveSettings + 窗口 resize 竞争）。 */
 const DC_WHEEL_COMMIT_DEBOUNCE_MS = 180;
 
-/** v3.0.12：右键菜单锚点，相对 .dc-root（=窗口内容区）的 DIP 坐标。 */
+/**
+ * v3.0.15：右键菜单锚定**右键光标**，出现在光标右侧（垂直居中于光标）。
+ * localX/localY 是 .dc-menu 的**左上角**（窗口局部 DIP），不再有 CSS transform 位移。
+ */
 interface MenuAnchor {
   localX: number;
   localY: number;
+  /** 是否因右侧空间不足翻到光标左侧（供真机探针/验证断言使用）。 */
+  flipped: boolean;
+}
+
+/** 屏幕工作区 + 窗口内容区原点（frameless 窗的 screenX/Y 即内容区原点）。 */
+interface MenuScreenSpace {
+  originX: number;
+  originY: number;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
 }
 
 /**
- * 右键时按「角色本体真实矩形」算菜单锚点：窗口物理放大后仍贴着角色，而不是贴窗口右下角。
- * v3.0.12 角色是 1:1 布局盒 ⇒ getBoundingClientRect() 已是真实像素，无需再乘 scale。
- * clamp 边界：水平 ±90px（菜单 min-width 168 + padding），纵向 210px 起（菜单高约 200），
- * 下界 win.h-8 防止锚点跑出窗口。
+ * 菜单外形上界（与 character.css 的 .dc-menu 实测一致：168×200；留 2px 抗字体/主题差异）。
+ * 高度取实测值而非 padding 累加值，保证「垂直居中于光标」无系统偏差。
+ */
+const DC_MENU_W = 182;
+const DC_MENU_H = 200;
+/** 菜单与光标的水平间距；右侧放不下时翻到左侧，用同一间距。 */
+const DC_MENU_CURSOR_GAP = 10;
+/** 菜单与屏幕工作区边缘的最小留白。 */
+const DC_MENU_EDGE_PAD = 6;
+
+/** 区间反转安全的钳制（工作区比菜单还小时仍能贴边，不出现空气墙）。 */
+function clampMenuAxis(v: number, lo: number, hi: number): number {
+  return lo <= hi ? Math.max(lo, Math.min(v, hi)) : Math.max(hi, Math.min(v, lo));
+}
+
+/**
+ * v3.0.15 右键菜单定位：**全部在屏幕空间决策**，再把结果换算回窗口局部坐标。
+ * 恒定大窗原点常为负（如 (350,-422)），只夹窗口局部坐标会让贴屏幕顶边右键的菜单翻出屏
+ * （QA P1）⇒ 必须拿 window.screenX/Y + screen.avail* 做边界，这是 P0/P1 的根治点。
+ * 光标右侧优先、垂直居中；右侧溢出则翻到光标左侧；上下溢出则夹进工作区。
+ * 与角色尺寸 / --dc-scale 完全无关，且只在右键那一刻算一次。
  */
 function computeMenuAnchor(
-  charEl: HTMLElement,
-  rootEl: HTMLElement,
-  win: { w: number; h: number }
+  cursorX: number,
+  cursorY: number,
+  win: { w: number; h: number },
+  space: MenuScreenSpace
 ): MenuAnchor {
-  const r = charEl.getBoundingClientRect();
-  const rr = rootEl.getBoundingClientRect();
-  const x = r.left - rr.left + r.width / 2; // 角色水平中心
-  const y = r.top - rr.top; // 角色头顶
-  return {
-    localX: Math.max(90, Math.min(win.w - 90, x)),
-    localY: Math.max(210, Math.min(win.h - 8, y - 8)),
-  };
+  const mw = Math.min(DC_MENU_W, Math.max(40, space.right - space.left - 2 * DC_MENU_EDGE_PAD));
+  const mh = Math.min(DC_MENU_H, Math.max(40, space.bottom - space.top - 2 * DC_MENU_EDGE_PAD));
+  const sx = cursorX + space.originX;
+  const sy = cursorY + space.originY;
+  let left = sx + DC_MENU_CURSOR_GAP;
+  let flipped = false;
+  if (left + mw > space.right - DC_MENU_EDGE_PAD) {
+    left = sx - DC_MENU_CURSOR_GAP - mw; // 右侧空间不足 → 翻到光标左侧
+    flipped = true;
+  }
+  left = clampMenuAxis(left, space.left + DC_MENU_EDGE_PAD, space.right - mw - DC_MENU_EDGE_PAD);
+  const top = clampMenuAxis(sy - mh / 2, space.top + DC_MENU_EDGE_PAD, space.bottom - mh - DC_MENU_EDGE_PAD);
+  // win 只做极端兜底（screen API 缺失时也不让锚点跑出窗口）
+  const localX = Math.round(clampMenuAxis(left - space.originX, DC_MENU_EDGE_PAD, win.w - mw - DC_MENU_EDGE_PAD));
+  const localY = Math.round(clampMenuAxis(top - space.originY, DC_MENU_EDGE_PAD, win.h - mh - DC_MENU_EDGE_PAD));
+  return { localX, localY, flipped };
 }
 
 // ===== 桌宠互动语句生成参数（v3.0.1-beta.9；v3.0.3 频率改为按设置派生）=====
@@ -163,8 +204,8 @@ export const CharacterApp: React.FC = () => {
   const [menuOpen, setMenuOpen] = useState(false);
   /** 菜单正在播放收回动画：此时仍挂载 .dc-menu.closing，动画结束/动画被关后立刻卸载。 */
   const [menuClosing, setMenuClosing] = useState(false);
-  /** v3.0.12：菜单锚点（按角色本体矩形实时算），不再写死窗口右下角。 */
-  const [menuAnchor, setMenuAnchor] = useState<MenuAnchor>({ localX: 170, localY: 210 });
+  /** v3.0.15：右键时光标位置算出的菜单左上角（窗口局部 DIP，固定不动，不随 scale 漂移）。 */
+  const [menuAnchor, setMenuAnchor] = useState<MenuAnchor>({ localX: 170, localY: 210, flipped: false });
   const [modelError, setModelError] = useState<string>('');
   const rootRef = useRef<HTMLDivElement | null>(null);
   const charRef = useRef<HTMLDivElement | null>(null);
@@ -803,7 +844,7 @@ export const CharacterApp: React.FC = () => {
     if (next === cur) return;
     // 本地先更新：1:1 布局盒由 .dc-root 的 --dc-scale 驱动，角色/气泡/菜单同步真实放大。
     setState((s) => (s.character ? { ...s, character: { ...s.character, scale: next } } : s));
-    // 每档走 live：主进程 ResizeCoalescer 每帧至多一次 resize，不落盘、不广播。
+    // 每档走 live：只推渲染层 CSS（v3.0.14 主进程零 setBounds），不落盘、不广播。
     api.dcSetScaleLive(c.id, next);
     // 停手 180ms 后一次落盘：原实现每档 saveSettings + 广播，是抖动与同步 IO 的来源。
     if (scaleCommitTimer.current) clearTimeout(scaleCommitTimer.current);
@@ -840,14 +881,26 @@ export const CharacterApp: React.FC = () => {
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    // v3.0.12：按角色本体真实矩形算锚点（S=5 窗口 1100 宽也不再贴在窗口右下角）
-    const charEl = charRef.current;
-    const rootEl = rootRef.current;
-    if (charEl && rootEl) {
-      setMenuAnchor(
-        computeMenuAnchor(charEl, rootEl, { w: window.innerWidth, h: window.innerHeight })
-      );
-    }
+    // v3.0.15：锚点 = 右键光标 + 屏幕工作区（window.screenX/Y 是 frameless 窗内容区原点）。
+    // 恒定大窗原点常为负，必须在屏幕空间做边界翻转/钳制，菜单才不会跑到物理屏外。
+    // 与角色矩形 / --dc-scale 完全无关，且只在右键这一刻算一次 ⇒ 缩放时菜单不会跟着乱跑。
+    // Chromium 的 Screen 类型在部分 TS lib 里没有 availLeft/availTop；真机 Electron 有，用结构类型读取。
+    const scr = window.screen as unknown as {
+      availLeft?: number; availTop?: number; availWidth?: number; availHeight?: number;
+    };
+    const sl = Number.isFinite(scr?.availLeft) ? scr.availLeft! : 0;
+    const st = Number.isFinite(scr?.availTop) ? scr.availTop! : 0;
+    const sw = Number.isFinite(scr?.availWidth) ? scr.availWidth! : window.innerWidth;
+    const sh = Number.isFinite(scr?.availHeight) ? scr.availHeight! : window.innerHeight;
+    setMenuAnchor(
+      computeMenuAnchor(e.clientX, e.clientY,
+        { w: window.innerWidth, h: window.innerHeight },
+        {
+          originX: Number.isFinite(window.screenX) ? window.screenX : 0,
+          originY: Number.isFinite(window.screenY) ? window.screenY : 0,
+          left: sl, top: st, right: sl + sw, bottom: st + sh,
+        })
+    );
     openMenu();
   };
 

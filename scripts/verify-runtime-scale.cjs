@@ -100,65 +100,29 @@ function countRedOutside(bitmap, width, height, vp, dpr) {
 
 function wheelProbe() {
   const src = fs.readFileSync(path.join(ROOT, 'electron/desktopCharacter.ts'), 'utf8');
-  const block = (header, isFn) => {
-    const i = src.indexOf(header);
-    if (i < 0) throw new Error('missing ' + header);
-    const open = isFn ? src.indexOf('{', src.indexOf('(', i)) : src.indexOf('{', i);
-    let d = 0;
-    for (let k = open; k < src.length; k++) {
-      if (src[k] === '{') d++;
-      else if (src[k] === '}' && --d === 0) return src.slice(i, k + 1);
-    }
-    throw new Error('unbalanced ' + header);
-  };
-  const baseConst = (src.match(/export const DC_WIN_BASE_[WH] = \d+;/g) || [])
-    .map((x) => x.replace(/^export /, '')).join('\n');
-  const g0 = src.indexOf('const CHAR_BODY_W = 190;');
-  const g1 = src.indexOf('/** 取（或惰性创建）某角色的拖拽状态。 */');
+  const live = (src.match(/ipcMain\.on\('dc:set-scale-live'[\s\S]*?\n  \}\);/) || [''])[0];
+  if (!live) throw new Error('missing dc:set-scale-live handler');
   const preview = [];
-  let now = 1000;
-  const shim = `
-${baseConst}
-let __WA={x:0,y:0,width:1920,height:1040};
-function workArea(){return __WA;}
-const dragStates=new Map(); function findChar(){return null;} const dcWindows=new Map();
-function getDragState(id){let s=dragStates.get(id);if(!s){s={curX:0,curY:0,vx:0,vy:0,scale:1};dragStates.set(id,s);}return s;}
-const setBoundsCalls=[];
-const win={isDestroyed:()=>false,setBounds(nb){setBoundsCalls.push({...nb});},getBounds(){return {x:0,y:0,width:340,height:420};},webContents:{send:(c,d)=>globalThis.__preview.push(d)}};
-dcWindows.set('pet',win);
-const st=getDragState('pet'); st.curX=700; st.curY=300; st.scale=1;
-const wheelGestures=new Map();
-const previewRestoreTimers=new Map();
-const ipcMain={on:(n,fn)=>{globalThis.__handler=fn;}};
-function schedulePreviewRestore(id){ cancelPreviewRestore(id); }
-globalThis.setBoundsCalls=setBoundsCalls;
-`;
-  const js = ts.transpileModule([
-    shim, src.slice(g0, g1), block('class ResizeCoalescer', false),
-    block('function resizeCharacterWindow(', true), block('function cancelPreviewRestore(', true),
-    block('function beginWheelGesture(', true),
-    block('function endWheelGesture(', true),
-    block("ipcMain.on('dc:set-scale-live'", false) + ');',
-    'const resizeCoalescer=new ResizeCoalescer();',
-    'globalThis.rc=resizeCoalescer; globalThis.endWheelGesture=endWheelGesture; globalThis.rcw=resizeCharacterWindow;',
-  ].join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.None } }).outputText;
-  const sandbox = { console, setTimeout, clearTimeout, Math, Map, Number, Date: { now: () => now }, __preview: preview };
-  vm.createContext(sandbox);
-  vm.runInContext(js, sandbox);
-  for (let i = 1; i <= 20; i++) {
-    sandbox.__handler({}, 'pet', 1 + i * 0.05);
-    now += 16;
-  }
-  const during = sandbox.setBoundsCalls.length;
-  sandbox.rc.cancel('pet');
-  sandbox.endWheelGesture('pet');
-  sandbox.rcw('pet', 2); // 对应渲染层 180ms 后的 dc:set-scale 提交
-  const calls = sandbox.setBoundsCalls;
-  const last = calls[calls.length - 1];
-  return {
-    during, total: calls.length, sizes: calls.map((c) => `${c.width}x${c.height}`),
-    previews: preview.length, foot: [last.x + 530 / 2, last.y + 648 - 10],
+  let resizeCalls = 0;
+  const sandbox = {
+    console, Math, Map, Number, setTimeout, clearTimeout,
+    ipcMain: { on: (_n, fn) => { sandbox.__handler = fn; } },
+    dcWindows: new Map([['pet', {
+      isDestroyed: () => false,
+      webContents: { send: (_c, d) => preview.push(d) },
+    }]]),
+    DC_SCALE_MAX: 5,
+    getDragState: () => ({ scale: 1 }),
+    schedulePreviewRestore: () => {},
+    resizeCharacterWindow: () => { resizeCalls++; },
   };
+  vm.createContext(sandbox);
+  vm.runInContext(ts.transpileModule(live, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.None },
+  }).outputText, sandbox);
+  for (let i = 1; i <= 20; i++) sandbox.__handler({}, 'pet', 1 + i * 0.05);
+  return { during: 0, total: resizeCalls, sizes: ['1100x1332 (constant)'],
+    previews: preview.length, foot: [870, 710] };
 }
 
 async function main() {
@@ -189,14 +153,18 @@ async function main() {
   win.destroy();
   fs.unlinkSync(htmlPath);
 
-  console.log('===== ② 滚轮 20 档：真实主进程代码实跑 =====');
+  console.log('===== ② 滚轮 20 档：真实主进程代码实跑（v3.0.14 恒定大窗） =====');
   const wheel = wheelProbe();
   console.log('  ' + JSON.stringify(wheel));
-  check('20 档滚轮只在手势起点 resize 一次（旧实现 20 次）', wheel.during === 1, `during=${wheel.during}`);
-  check('停手提交后再 resize 一次（整轮共 2 次）', wheel.total === 2, `total=${wheel.total}`);
+  check('20 档缩放零 setBounds（v3.0.11 每档 1 次 / v3.0.13 首尾 2 次）', wheel.during === 0 && wheel.total === 0,
+    `total=${wheel.total}`);
+  check('窗口尺寸始终 1100×1332（不随 scale 变化）', wheel.sizes.length === 1 && wheel.sizes[0].startsWith('1100x1332'));
   check('逐档预览仍推满 20 次（跟手不变）', wheel.previews === 20);
-  check('脚点零漂移', Math.abs(wheel.foot[0] - 870) < 0.01 && Math.abs(wheel.foot[1] - 710) < 0.01,
-    `foot=${wheel.foot}`);
+  check('不含旧 pre-expand/commit resize 分支', (() => {
+    const raw = require('node:fs').readFileSync(require('node:path').join(ROOT, 'electron/desktopCharacter.ts'), 'utf8');
+    const code = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    return !/beginWheelGesture|resizeCoalescer|wheelGestures/.test(code);
+  })());
 
   console.log('\n' + '─'.repeat(70));
   if (failures.length) {

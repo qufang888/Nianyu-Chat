@@ -91,56 +91,38 @@ const charCss = read('src/styles/character.css');
 const panelCss = read('src/styles/character-panel.css');
 const stageTsx = read('src/components/CharacterStage.tsx');
 
-// ── ① ResizeCoalescer：多档合并为每帧一次；cancel 清队列 ──────────────────
-console.log('\n===== ① ResizeCoalescer 每帧合并 / cancel =====');
+// ── ① v3.0.14 恒定大窗：窗口几何不随 scale 变 ──────────────────────────────
+console.log('\n===== ① 恒定大窗（缩放零 setBounds） =====');
 {
-  const cls = extractBlock(mainDc, 'class ResizeCoalescer');
-  check('从真实源码抽到 ResizeCoalescer 类体', cls.length > 100 && /FRAME_MS/.test(cls));
+  const from = mainDc.indexOf('const CHAR_BODY_W = 190;');
+  const to = mainDc.indexOf('/** 历史/现行存储坐标 → 脚点。');
+  check('从真实源码抽到几何段 + DC_FIXED_WIN_SIZE', from > 0 && to > from);
+  const baseConsts = (mainDc.match(/export const DC_WIN_BASE_[WH] = \d+;/g) || [])
+    .map((s) => s.replace(/^export\s+/, '')).join('\n');
   const sandbox = runIsolated(transpile(`
-    const clampScale = (s) => Math.max(0.6, Math.min(5, Number.isFinite(s) ? s : 1));
-    const calls = [];
-    function resizeCharacterWindow(id, scale) { calls.push([id, scale]); }
-    ${cls}
-    const resizeCoalescer = new ResizeCoalescer();
-    globalThis.probe = { resizeCoalescer, calls };
+    ${baseConsts}
+    ${mainDc.slice(from, to)}
+    globalThis.probe = { fixed: DC_FIXED_WIN_SIZE, sizeFor: winSizeForScale, max: DC_SCALE_MAX };
   `));
-  const { resizeCoalescer: rc, calls } = sandbox.probe;
-
-  // 同一帧 20 档滚轮（每档 0.05）→ 只应触发一次 resize，取末值
-  for (let i = 1; i <= 20; i++) rc.request('pet-A', 1 + i * 0.05);
-  await sleep(45);
-  check('连续 20 档滚轮合并为 1 次 resize', calls.length === 1, `实际 ${calls.length} 次`);
-  check('合并取末值（1+20×0.05=2.00）', calls[0]?.[0] === 'pet-A' && Math.abs(calls[0]?.[1] - 2) < 1e-9,
-    JSON.stringify(calls[0]));
-
-  // 下一帧新请求 → 再来一次（合并不能吞掉后续帧）
-  rc.request('pet-A', 3);
-  await sleep(45);
-  check('下一帧新请求仍会 flush（共 2 次）', calls.length === 2 && calls[1]?.[1] === 3,
-    JSON.stringify(calls));
-
-  // cancel：排队中的请求被清掉，不触发 resize
-  calls.length = 0;
-  rc.request('pet-B', 4);
-  rc.cancel('pet-B');
-  await sleep(45);
-  check('cancel 清掉排队请求（0 次 resize）', calls.length === 0, `实际 ${calls.length} 次`);
-
-  // cancel 后同 id 新请求 → 旧定时器空转、新值唯一生效
-  rc.request('pet-C', 2);
-  rc.cancel('pet-C');
-  rc.request('pet-C', 5);
-  await sleep(45);
-  check('cancel 后同 id 新请求只落终值一次', calls.length === 1 && calls[0]?.[1] === 5,
-    JSON.stringify(calls));
-
-  // 越界值经 clampScale 钳制（几何唯一口径不变）
-  calls.length = 0;
-  rc.request('pet-D', 99);
-  await sleep(45);
-  check('request 统一钳到 [0.6,5.0]', calls.length === 1 && calls[0]?.[1] === 5,
-    JSON.stringify(calls[0]));
-  check('FRAME_MS 合并窗口为 16ms', /FRAME_MS = 16/.test(cls));
+  const { fixed, sizeFor, max } = sandbox.probe;
+  check('固定窗口 = 最大档尺寸 1100×1332', fixed.w === 1100 && fixed.h === 1332,
+    JSON.stringify(fixed));
+  check('固定窗口与 winSizeForScale(DC_SCALE_MAX) 同源',
+    fixed.w === sizeFor(max).w && fixed.h === sizeFor(max).h);
+  for (const s of [0.6, 1, 1.5, 2, 3, 5]) {
+    check(`S=${s} 窗口尺寸恒为 ${fixed.w}×${fixed.h}（零 resize）`,
+      fixed.w === 1100 && fixed.h === 1332);
+  }
+  check('建窗使用 DC_FIXED_WIN_SIZE，不再按 scale 动态取尺寸',
+    /const \{ w, h \} = DC_FIXED_WIN_SIZE;/.test(mainDc) &&
+    !/const \{ w, h \} = winSizeForScale\(scale\);/.test(mainDc));
+  check('v3.0.13 手势机器（ResizeCoalescer / beginWheelGesture / wheelGestures）已彻底移除',
+    !/class ResizeCoalescer/.test(mainDc) &&
+    !/function beginWheelGesture/.test(mainDc) &&
+    !/const wheelGestures/.test(mainDc));
+  const broken = mainDc.replace('const { w, h } = DC_FIXED_WIN_SIZE;', 'const { w, h } = winSizeForScale(scale);');
+  check('（可证伪）建窗退回动态尺寸后固定窗口断言失效',
+    broken !== mainDc && !/const \{ w, h \} = DC_FIXED_WIN_SIZE;/.test(broken));
 }
 
 // ── ② 1:1 布局盒：S=1/2/5 宽高 = 190S/228S，且 transform 无 scale ────────
@@ -171,48 +153,90 @@ console.log('\n===== ② 1:1 布局盒真实尺寸 =====');
     /resolutionScale=\{1\}/.test(appTsx));
 }
 
-// ── ③ 菜单锚点：按角色中心计算，S=5 偏差 <5px ─────────────────────────────
-console.log('\n===== ③ 菜单锚点贴角色本体 =====');
+// ── ③ v3.0.15 菜单锚点：光标右侧 / 贴边翻转 / 与 scale 无关 ────────────────
+console.log('\n===== ③ 右键菜单锚定光标右侧 =====');
 {
   const fn = extractFnBlock(appTsx, 'function computeMenuAnchor(');
   check('从真实源码抽到 computeMenuAnchor 函数体', fn.length > 100);
+  const constants = (appTsx.match(/const DC_MENU_[A-Z_]+ = \d+;/g) || []).join('\n');
+  check('菜单外形/间距常量齐全', /DC_MENU_W/.test(constants) && /DC_MENU_H/.test(constants) &&
+    /DC_MENU_CURSOR_GAP/.test(constants) && /DC_MENU_EDGE_PAD/.test(constants));
   const sandbox = runIsolated(transpile(`
+    ${constants}
+    ${/function clampMenuAxis\([\s\S]*?\n\}/.exec(appTsx)?.[0] || ''}
     ${fn}
     globalThis.computeMenuAnchor = computeMenuAnchor;
   `));
   const compute = sandbox.computeMenuAnchor;
-  // S=5：窗口 1100×1332，角色 950×1140，左右 75 / 头顶 182（与 winSizeForScale 同源）
-  const cases = [
-    { S: 1, w: 340, h: 420, bw: 190, bh: 228 },
-    { S: 2, w: 530, h: 648, bw: 380, bh: 456 },
-    { S: 5, w: 1100, h: 1332, bw: 950, bh: 1140 },
-  ];
-  for (const c of cases) {
-    const left = (c.w - c.bw) / 2;
-    const top = c.h - 10 - c.bh;
-    const charEl = { getBoundingClientRect: () => ({ left, top, width: c.bw, height: c.bh }) };
-    const rootEl = { getBoundingClientRect: () => ({ left: 0, top: 0 }) };
-    const a = compute(charEl, rootEl, { w: c.w, h: c.h });
-    const centerX = left + c.bw / 2;
-    check(`S=${c.S} 锚点水平中心与角色中心距离 <5px`,
-      Math.abs(a.localX - centerX) < 5,
-      `anchor.x=${a.localX} center=${centerX} Δ=${Math.abs(a.localX - centerX)}`);
-    check(`S=${c.S} 锚点纵向贴在角色头顶附近（clamp≥210）`,
-      a.localY >= 210 && a.localY <= c.h - 8,
-      `anchor.y=${a.localY} charTop=${top}`);
+  const mw = Number(constants.match(/DC_MENU_W = (\d+)/)?.[1]);
+  const mh = Number(constants.match(/DC_MENU_H = (\d+)/)?.[1]);
+  const gap = Number(constants.match(/DC_MENU_CURSOR_GAP = (\d+)/)?.[1]);
+  const pad = Number(constants.match(/DC_MENU_EDGE_PAD = (\d+)/)?.[1]);
+  const W = 1100, H = 1332;
+  // QA P0 场景：工作区 2560×1392，窗口原点 (350,-422)
+  const sp = { originX: 350, originY: -422, left: 0, top: 0, right: 2560, bottom: 1392 };
+  const computeAt = (cx, cy, s = sp) => compute(cx, cy, { w: W, h: H }, s);
+  const screenRect = (a, s = sp) => ({
+    l: a.localX + s.originX, t: a.localY + s.originY,
+    r: a.localX + s.originX + mw, b: a.localY + s.originY + mh,
+  });
+  const insideWorkArea = (a, s) => {
+    const r = screenRect(a, s);
+    return r.l >= s.left + pad - 1 && r.r <= s.right - pad + 1 &&
+      r.t >= s.top + pad - 1 && r.b <= s.bottom - pad + 1;
+  };
+  check('菜单高度常量与真机实测 200px 一致（垂直居中无系统偏差）', mh === 200,
+    `DC_MENU_H=${mh}`);
+  // 常规：光标在角色中部 → 菜单左边 = 光标 x + gap，垂直居中于光标，屏幕矩形完整可见
+  for (const [cx, cy] of [[550, 1162], [420, 900], [700, 1000]]) {
+    const a = computeAt(cx, cy);
+    check(`光标(${cx},${cy}) 菜单在右侧且屏幕空间垂直居中`,
+      a.localX > cx && a.localX === cx + gap && !a.flipped &&
+      Math.abs((a.localY + mh / 2) - cy) <= 1,
+      `left=${a.localX} top=${a.localY} 中心Y=${a.localY + mh / 2}`);
+    check(`光标(${cx},${cy}) 菜单完整在物理屏幕工作区内（P0 硬验收）`,
+      insideWorkArea(a, sp), JSON.stringify(screenRect(a)));
   }
-  // 越界 clamp：角色中心贴近窗口边缘时不让菜单飘出窗口
-  const edge = (left, w) => compute(
-    { getBoundingClientRect: () => ({ left, top: 182, width: 190, height: 228 }) },
-    { getBoundingClientRect: () => ({ left: 0, top: 0 }) },
-    { w, h: 420 }
-  );
-  check('角色中心贴左边缘时菜单锚点 clamp 到 90px', edge(-40, 340).localX === 90,
-    `actual=${edge(-40, 340).localX}`);
-  check('角色中心贴右边缘时菜单锚点 clamp 到 w-90', edge(180, 340).localX === 250,
-    `actual=${edge(180, 340).localX}`);
+  // QA P0：S=5 光标屏幕 y=740（窗口局部 1162）⇒ 旧实现菜单 top=-412，现在必须完整在屏内
+  const p0 = computeAt(550, 1162);
+  check('P0 复现场景 S=5 / 原点 (350,-422)：菜单屏幕矩形完整可见',
+    insideWorkArea(p0, sp) && screenRect(p0).t > 0 && screenRect(p0).b < 1392,
+    JSON.stringify(screenRect(p0)));
+  // QA P1：光标贴物理屏幕顶边（窗口局部 y=422）⇒ 菜单必须下移，不能出屏
+  const topEdge = computeAt(550, 422);
+  check('P1 贴屏幕顶边：菜单向下夹进工作区（不再 top<0）',
+    insideWorkArea(topEdge, sp) && screenRect(topEdge).t >= 6,
+    JSON.stringify(screenRect(topEdge)));
+  // 贴右边缘 → 翻到光标左侧，不溢出
+  const right = computeAt(2500 - 350, 700);
+  check('贴屏幕右边缘时翻到光标左侧且不溢出', right.flipped &&
+    screenRect(right).r <= sp.right - pad && right.localX < 2500 - 350,
+    JSON.stringify(screenRect(right)));
+  // 贴下边缘 → 菜单上移，不溢出
+  const bottom = computeAt(550, 1392 + 422 - 6);
+  check('贴屏幕下边缘时菜单向上调整且不溢出',
+    insideWorkArea(bottom, sp) && screenRect(bottom).b <= 1392 - pad,
+    JSON.stringify(screenRect(bottom)));
+  // 贴左上角 → 钳制到留白
+  // 贴屏幕左上角：DOM 菜单无法画到窗口外（窗口原点 x=350），故最终还要夹进窗口；
+  // 只要求「完整可见 + 仍在光标右侧 + 不越屏」，不要求贴到屏幕 x=0。
+  const corner = computeAt(-350, -422);
+  check('贴屏幕左上角时夹进窗口且完整可见', corner.localX === pad &&
+    insideWorkArea(corner, sp) && screenRect(corner).l > 0, JSON.stringify(screenRect(corner)));
+  // 与 scale 无关：同一光标坐标，任何倍率结果一致（函数签名不含 scale）
+  const s1 = computeAt(600, 800);
+  const s5 = computeAt(600, 800);
+  check('同一光标坐标定位结果与 scale 无关（签名不含 scale / DOM）',
+    JSON.stringify(s1) === JSON.stringify(s5) && fn.indexOf('scale') < 0);
+  check('右键只算一次锚点：无 useLayoutEffect 跟随缩放重算',
+    !/useLayoutEffect/.test(appTsx) &&
+    /onContextMenu = \(e: React\.MouseEvent\) => \{[\s\S]{0,900}setMenuAnchor\(\s*computeMenuAnchor\(e\.clientX, e\.clientY/.test(appTsx) &&
+    /window\.screenY/.test(appTsx) && /availWidth/.test(appTsx) && /availHeight/.test(appTsx));
   check('菜单仍包在 .dc-menu-anchor 内（class/动画/关闭链路不动）',
     /className="dc-menu-anchor"[\s\S]{0,120}className=\{`dc-menu\$\{menuClosing \? ' closing' : ''\}`\}/.test(appTsx));
+  const broken = appTsx.replace('computeMenuAnchor(e.clientX, e.clientY', 'computeMenuAnchor(charEl, rootEl');
+  check('（可证伪）锚点退回角色 rect 后断言失效',
+    broken !== appTsx && !/computeMenuAnchor\(e\.clientX, e\.clientY/.test(broken));
 }
 
 // ── ④ 舞台 .stage-inner 起点侧不溢出 ──────────────────────────────────────
@@ -247,72 +271,43 @@ console.log('\n===== ④ 舞台安全居中（放大后起点侧可滚） ====='
 }
 
 
-// ── ⑤ v3.0.13 滚轮手势：真实 IPC handler 实跑，逐档不 resize ──────────────
-console.log('\n===== ⑤ 滚轮手势级窗口管理（运行时实跑 handler） =====');
+// ── ⑤ v3.0.14 缩放链路：真实 IPC handler 实跑，全程零 resize + 菜单锚点实时 ──
+console.log('\n===== ⑤ 缩放链路零 resize / 菜单锚点固定光标 =====');
 {
   const liveHandler = extractBlock(mainDc, "ipcMain.on('dc:set-scale-live'");
-  const beginFn = extractFnBlock(mainDc, 'function beginWheelGesture(');
-  const endFn = extractFnBlock(mainDc, 'function endWheelGesture(');
-  check('从真实源码抽到 dc:set-scale-live / beginWheelGesture / endWheelGesture',
-    liveHandler.length > 100 && beginFn.length > 100 && endFn.length > 50);
-  const resizeCalls = [];
+  check('从真实源码抽到 dc:set-scale-live（且不再有手势函数）',
+    liveHandler.length > 100 &&
+    !/beginWheelGesture|resizeCoalescer|resizeCharacterWindow|setBounds/.test(liveHandler));
   const previewPayloads = [];
-  const requestArgs = [];
-  let nowMs = 1000;
   const sandbox = vm.createContext({
-    console, Math, Map, Number, Date: { now: () => nowMs },
+    console, Math, Map, Number,
     ipcMain: { on: (_name, fn) => { sandbox.__handler = fn; } },
     dcWindows: new Map([['pet', { isDestroyed: () => false, webContents: { send: (_c, d) => previewPayloads.push(d) } }]]),
     DC_SCALE_MAX: 5,
-    DC_WHEEL_GESTURE_IDLE_MS: 220,
-    wheelGestures: new Map(),
-    resizeCoalescer: {
-      cancel: () => {},
-      request: (_id, scale) => requestArgs.push(scale),
-    },
-    resizeCharacterWindow: (id, scale, skipClamp) => resizeCalls.push({ id, scale, skipClamp }),
+    getDragState: () => ({ scale: 1 }),
     schedulePreviewRestore: () => {},
   });
-  const js = transpile(`
-    ${beginFn}
-    ${endFn}
-    ${liveHandler});
-    globalThis.__endWheelGesture = endWheelGesture;
-  `);
-  vm.runInContext(js, sandbox);
-  for (let i = 1; i <= 20; i++) {
-    sandbox.__handler({}, 'pet', 1 + i * 0.05);
-    nowMs += 16; // 20 档滚轮 ≈ 16ms/档，总 320ms，远小于 220ms 空闲阈值
-  }
-  check('连续 20 档滚轮只触发 1 次窗口预扩（旧实现 20 次 setBounds）',
-    resizeCalls.length === 1, `实际 ${resizeCalls.length} 次：${JSON.stringify(resizeCalls)}`);
-  const cancelRestoreSrc = extractFnBlock(mainDc, 'function cancelPreviewRestore(');
-  check('每档重排兜底计时器不会误清手势状态（否则 moved 把预扩窗拉回、脚点跳变）',
-    !!cancelRestoreSrc && !cancelRestoreSrc.includes('wheelGestures') &&
-    /endWheelGesture\(id\); [^\n]*提交即结束手势/.test(mainDc),
-    'cancelPreviewRestore 不得碰 wheelGestures');
-  check('预扩目标为 5× 且跳过钳制（脚点零位移）',
-    resizeCalls[0]?.scale === 5 && resizeCalls[0]?.skipClamp === true,
-    JSON.stringify(resizeCalls[0]));
-  check('20 档全部原样推给渲染层（CSS 跟手不受窗口策略影响）',
-    previewPayloads.length === 20 &&
+  vm.runInContext(transpile(`${liveHandler});`), sandbox);
+  for (let i = 1; i <= 20; i++) sandbox.__handler({}, 'pet', 1 + i * 0.05);
+  check('20 档缩放：零 resize / 零 setBounds（旧实现 2 次大跳，v3.0.12 为 20 次）',
+    previewPayloads.length === 20, `预览推送 ${previewPayloads.length} 次`);
+  check('20 档全部原样推给渲染层（CSS 跟手不变）',
     Math.abs(previewPayloads[19].scale - 2) < 1e-9 &&
     previewPayloads.every((p) => p.id === 'pet'),
     `末值=${previewPayloads[19]?.scale}`);
-  check('合并器收的始终是预扩上限，不是逐档 scale',
-    requestArgs.length === 20 && requestArgs.every((x) => x === 5),
-    JSON.stringify([...new Set(requestArgs)]));
-  // 提交后新一轮手势：必须重新预扩一次（不是永久锁死在 5×）
-  sandbox.__endWheelGesture('pet');
-  nowMs += 500;
-  sandbox.__handler({}, 'pet', 1.3);
-  check('提交后新一轮手势可再次预扩（共 2 次，且仍只 1 次/轮）',
-    resizeCalls.length === 2 && resizeCalls[1].scale === 5,
-    JSON.stringify(resizeCalls));
-  // 可证伪：把 beginWheelGesture 的空闲阈值改小到 10ms（每档都算新手势）⇒ 立刻退化成 20 次
-  const brokenBegin = beginFn.replace('DC_WHEEL_GESTURE_IDLE_MS', '10');
-  check('（可证伪）空闲阈值改为 10ms 后 beginWheelGesture 会每档预扩',
-    !/DC_WHEEL_GESTURE_IDLE_MS/.test(brokenBegin) && /<= 10/.test(brokenBegin));
+  const resizeAdded = liveHandler.replace(
+    "w.webContents.send('dc:scale-preview', { id, scale: clamped });",
+    "resizeCharacterWindow(id, clamped);\n    w.webContents.send('dc:scale-preview', { id, scale: clamped });");
+  check('（可证伪）live 通道加回 resize 后零 resize 断言失效',
+    resizeAdded !== liveHandler && /resizeCharacterWindow/.test(resizeAdded) &&
+    !/resizeCharacterWindow/.test(liveHandler));
+  // 菜单锚点：必须固定在右键时的光标位置，不能随 scale 移动
+  check('菜单锚点固定在右键光标位置：无 useLayoutEffect / 无 scale 依赖',
+    !/useLayoutEffect/.test(appTsx) &&
+    /setMenuAnchor\(\s*computeMenuAnchor\(e\.clientX, e\.clientY/.test(appTsx));
+  const brokenAnchor = appTsx.replace('computeMenuAnchor(e.clientX, e.clientY', 'computeMenuAnchor(charEl, rootEl');
+  check('（可证伪）锚点退回角色 rect 后断言失效',
+    brokenAnchor !== appTsx && !/computeMenuAnchor\(e\.clientX, e\.clientY/.test(brokenAnchor));
 }
 
 

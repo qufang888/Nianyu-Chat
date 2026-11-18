@@ -683,11 +683,14 @@ check('I3 --dc-scale 写在 .dc-root（唯一渲染驱动），.dc-character 用
   /height: calc\(228px \* var\(--dc-scale/.test(charCss) &&
   !/scale\(var\(--dc-scale/.test(charCss) &&
   !/scale\(/.test((charCss.match(/\.dc-character \{[\s\S]*?\}/) || [''])[0]));
-check('I3 v3.0.12 气泡 bottom calc 化（S=1 等价 246px）且菜单锚点相对角色本体（不再 right:6px）',
+check('I3 v3.0.15 气泡 bottom calc 化 + 右键菜单锚定光标右侧（贴边翻转，不再贴角色头顶）',
   /bottom: calc\(10px \+ 228px \* var\(--dc-scale, 1\) \+ 8px\)/.test(charCss) &&
   /\.dc-menu-anchor \{/.test(charCss) &&
+  !/transform:\s*translateX\(-50%\)/.test((charCss.match(/\.dc-menu-anchor \{[\s\S]*?\}/) || [''])[0]) &&
   !/right: 6px/.test((charCss.match(/\.dc-menu \{[\s\S]*?\}/) || [''])[0]) &&
-  /className="dc-menu-anchor" style=\{\{ left: menuAnchor\.localX, top: menuAnchor\.localY \}\}/.test(appTsx));
+  /className="dc-menu-anchor" style=\{\{ left: menuAnchor\.localX, top: menuAnchor\.localY \}\}/.test(appTsx) &&
+  /computeMenuAnchor\(e\.clientX, e\.clientY/.test(appTsx) &&
+  !/useLayoutEffect/.test(appTsx));
 check('I3 滚轮每档 live + 停手 180ms 一次提交（去抖，避免逐档写盘 + 逐档 setBounds）',
   /api\.dcSetScaleLive\(c\.id, next\)/.test(appTsx) &&
   /DC_WHEEL_COMMIT_DEBOUNCE_MS = 180/.test(appTsx) &&
@@ -1000,13 +1003,21 @@ check('K6 存在「实时预览」通道：dc:set-scale-live（渲染→主）�
 check('K6 预览通道不落盘、不广播（只推给该角色窗改本地 --dc-scale）',
   /dc:set-scale-live[\s\S]{0,400}webContents\.send\('dc:scale-preview'/.test(mainDc) &&
   !/dc:set-scale-live[\s\S]{0,400}saveSettings/.test(mainDc));
-check('K6 v3.0.13 预览 resize 走 ResizeCoalescer（手势级预扩上限，逐档零 setBounds），resizeCharacterWindow 内绝不 saveSettings',
-  /dc:set-scale-live[\s\S]{0,300}resizeCoalescer\.request\(id, DC_SCALE_MAX\)/.test(mainDc) &&
-  /beginWheelGesture\(id\)/.test(mainDc) &&
-  /DC_WHEEL_GESTURE_IDLE_MS = 220/.test(mainDc) &&
-  /typeof wheelGestures !== 'undefined' && wheelGestures\.has\(id\)/.test(mainDc) &&
-  /class ResizeCoalescer/.test(mainDc) &&
-  /FRAME_MS = 16/.test(mainDc) &&
+// v3.0.14：缩放期窗口零变化（恒定最大档窗）——真机证据显示 v3.0.13 的首尾两次大跳
+// （实测原点 −912px / +684px）就是「瞬移/闪烁/抽搐」根因。门禁改为断言 live 通道零 resize。
+const __liveBlock = (src) => (src.match(/ipcMain\.on\('dc:set-scale-live'[\s\S]*?\n  \}\);/) || [''])[0];
+const __liveZeroResize = (src) => {
+  const b = __liveBlock(src);
+  return b.length > 100 &&
+    /webContents\.send\('dc:scale-preview'/.test(b) &&
+    !/resizeCharacterWindow/.test(b) && !/resizeCoalescer/.test(b) &&
+    !/beginWheelGesture/.test(b) && !/wheelGestures/.test(b) && !/setBounds/.test(b);
+};
+check('K6 v3.0.14 缩放期零 resize：live 通道只推 --dc-scale，不碰窗口 bounds；resizeCharacterWindow 内绝不 saveSettings',
+  __liveZeroResize(mainDc) &&
+  /const DC_FIXED_WIN_SIZE[\s\S]{0,120}= Object\.freeze\(winSizeForScale\(DC_SCALE_MAX\)\)/.test(mainDc) &&
+  /const \{ w, h \} = DC_FIXED_WIN_SIZE;/.test(mainDc) &&
+  !/resizeCharacterWindow\(id, clamped\)/.test(mainDc) &&
   /function resizeCharacterWindow\(/.test(mainDc) && // 防止 extractFnBody 空串导致「恒真」假阳性
   !/saveSettings/.test(extractFnBody(mainDc, 'function resizeCharacterWindow(')) &&
   /cancelPreviewRestore\(id\)/.test(mainDc) &&
@@ -1033,11 +1044,12 @@ check('K6 舞台滑块仍是 0.6~2.0 / 步长 0.05，且复用既有 dc:set-scal
   const brokenStage = stage.replace('      setZoom(v);', '      setZoom(v);\n      api.dcSetScaleLive(character.id, v);');
   check('（可证伪）把 dcSetScaleLive 加回 applyZoom 后 K6 单通道断言失效',
     brokenStage !== stage && k6SingleChannel(stage) && !k6SingleChannel(brokenStage));
-  // v3.0.13 可证伪：把合并器目标退回逐档 scale（= 每档一次 setBounds）后 K6 必须变红
-  const k6Gesture = (src) => /dc:set-scale-live[\s\S]{0,300}resizeCoalescer\.request\(id, DC_SCALE_MAX\)/.test(src);
-  const brokenLive = mainDc.replace('resizeCoalescer.request(id, DC_SCALE_MAX);', 'resizeCoalescer.request(id, clamped);');
-  check('（可证伪）预览合并器退回逐档 scale 后 K6 手势级预扩断言失效',
-    brokenLive !== mainDc && k6Gesture(mainDc) && !k6Gesture(brokenLive));
+  // v3.0.14 可证伪：把 resizeCharacterWindow 塞回 live 通道（恢复逐档 resize）⇒ K6 立刻变红
+  const brokenLive = mainDc.replace(
+    "    w.webContents.send('dc:scale-preview', { id, scale: clamped });",
+    "    resizeCharacterWindow(id, clamped);\n    w.webContents.send('dc:scale-preview', { id, scale: clamped });");
+  check('（可证伪）live 通道加回 resizeCharacterWindow 后 K6 零 resize 断言失效',
+    brokenLive !== mainDc && __liveZeroResize(mainDc) && !__liveZeroResize(brokenLive));
 }
 
 // ---------- K7. 舞台高清渲染 ----------
@@ -1763,11 +1775,12 @@ check('K21 持久化走基准脚点空间（x=fx−170, y=fy−410），零数�
   /footX = st\.curX \+ w \/ 2/.test(mainDc) &&
   /footY = st\.curY \+ h - CHAR_BODY_BOTTOM_GAP/.test(mainDc) &&
   /const stored = storedFromFoot\(footX, footY\)/.test(mainDc));
-check('K21 预览通道 live 经 ResizeCoalescer 调窗口尺寸 + 3.1s 兜底恢复，但不落盘',
-  /dc:set-scale-live[\s\S]{0,300}resizeCoalescer\.request/.test(mainDc) &&
+check('K21 v3.0.14 预览零 resize + 3.1s 兜底只重发状态（不落盘、不改窗口）',
+  __liveZeroResize(mainDc) &&
   /DC_PREVIEW_RESTORE_MS\s*=\s*3100/.test(mainDc) &&
   /schedulePreviewRestore/.test(mainDc) &&
   /cancelPreviewRestore\(id\)/.test(mainDc) &&
+  !/resizeCharacterWindow/.test(extractFnBody(mainDc, 'function schedulePreviewRestore(')) &&
   !/dc:set-scale-live[\s\S]{0,400}saveSettings/.test(mainDc));
 {
   const movedBlock = (mainDc.match(/win\.on\('moved', \(\) => \{[\s\S]{0,1600}?\}\);/) || [''])[0];

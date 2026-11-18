@@ -25,3 +25,6 @@ ehthumbs.db
 
 # Git 凭据（本地私有，勿提交）
 .git/nianyu/
+
+# 真机验证证据截图/日志（本地调试产物，不进仓库）
+.probe-evidence/
