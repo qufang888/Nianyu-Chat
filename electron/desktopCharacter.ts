@@ -606,6 +606,14 @@ export function createDesktopCharacter(id: string): void {
     movable: false,
     hasShadow: false,
     focusable: true,
+    // v3.0.15 白框根治（真机复现，见 scripts/probe-whiteflash-matrix.cjs）：
+    // Windows 下 transparent:true 的窗若始终 non-topmost（用户关掉「置顶人物」时
+    // applyAlwaysOnTop 会 setAlwaysOnTop(false,'pop-up-menu')），DWM 会把它当成
+    // 不透明层合成 ⇒ 整个 1100×1332 大窗显示为纯白底，角色只在底部正常绘制。
+    // 给一个略小于 1 的 opacity 会强制 Electron 走 LWA_ALPHA 分层通道，
+    // 非置顶窗也按逐像素 alpha 合成，透明区永远露出桌面；0.99 肉眼不可分辨。
+    // 冻结区：窗口尺寸/几何/置顶等级/穿透/菜单位置全部不动，仅此一个渲染层标志。
+    opacity: 0.99,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
