@@ -3,6 +3,8 @@ import path from 'node:path';
 import { getDataManager } from './db';
 // v3.0.1-beta.9：置顶层级统一由 windowLevels 定义（悬浮球 > 桌宠 > 小窗）。
 import { applyAlwaysOnTop, FLOATING_BALL_LEVEL } from './windowLevels';
+// v3.0.15+：拖动坐标进入原生 setPosition 前的有限数护栏（纯几何，不触碰光标仲裁逻辑）。
+import { isFiniteCoord, safeSetPosition } from './safeWindowGeometry';
 // v2.3.126（QA P1/P2-A）：覆盖关系（covered）与面板可交互态的**单一真源**纯函数模块。
 // 谓词同源 + 只在变化沿推送 = 根治「hover 推 true / 轮询推 false」5Hz 永久振荡（光标闪烁）。
 import {
@@ -1118,8 +1120,11 @@ export function registerBallIPC(): void {
     // v2.3.116：拖球期间球窗独占光标 —— 通知面板窗压制自身动态光标，杜绝「快速往面板
     // 方向拖球时面板多亮一个动态光标 / 整机两个光标」。
     if (panelWindow && !panelWindow.isDestroyed()) panelWindow.webContents.send('ball:dragging', true);
-    dragOffsetX = gx;
-    dragOffsetY = gy;
+    // v3.0.15+：非法 gx/gy 回落为球心抓取偏移(0)，**不提前 return** ——
+    // 保持上方 setIgnoreMouseEvents(false)、ball:dragging 推送与下方 dragTimer 初始化完整，
+    // 避免留下半开的拖拽状态比崩溃更难排查。
+    dragOffsetX = isFiniteCoord(gx) ? gx : 0;
+    dragOffsetY = isFiniteCoord(gy) ? gy : 0;
     dragStartX = ballX;
     dragStartY = ballY;
     dragMaxDisp = 0;
@@ -1154,10 +1159,11 @@ export function registerBallIPC(): void {
       ny = Math.max(primary.y + 4, Math.min(ny, primary.y + primary.height - DRAG_CLAMP));
       ballX = nx;
       ballY = ny;
-      ballWindow.setPosition(Math.round(nx), Math.round(ny));
+      safeSetPosition(ballWindow, Math.round(nx), Math.round(ny));
       // 面板窗跟随：面板窗相对球窗的偏移由当前方向决定（方向不变期间恒定）
       if (panelVisible && panelWindow && !panelWindow.isDestroyed()) {
-        panelWindow.setPosition(
+        safeSetPosition(
+          panelWindow,
           Math.round(nx + panelOffsetX(panelDir)),
           Math.round(ny + panelOffsetY(panelVDir))
         );
@@ -1168,7 +1174,7 @@ export function registerBallIPC(): void {
       if (menuDragBase && menuWindow && !menuWindow.isDestroyed()) {
         const mx = Math.max(primary.x + 4, Math.min(menuDragBase.x + (nx - dragStartX), primary.x + primary.width - MENU_W - 4));
         const my = Math.max(primary.y + 4, Math.min(menuDragBase.y + (ny - dragStartY), primary.y + primary.height - MENU_H - 4));
-        menuWindow.setPosition(Math.round(mx), Math.round(my));
+        safeSetPosition(menuWindow, Math.round(mx), Math.round(my));
       }
       dragMaxDisp = Math.max(dragMaxDisp, Math.abs(nx - dragStartX) + Math.abs(ny - dragStartY));
       // ===== 拖动中面板出界检测（两阶段换向）=====

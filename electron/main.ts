@@ -51,6 +51,8 @@ import {
 import { createBackup, restoreBackup, peekBackupVersion } from './backup';
 // v3.0.1-beta.9：所有置顶窗口的 level 统一由 windowLevels 定义（悬浮球 > 桌宠 > 小窗）。
 import { applyAlwaysOnTop, MINI_WINDOW_LEVEL } from './windowLevels';
+// v3.0.15+：坐标进入原生 setPosition 前的有限数护栏，杜绝 gin 参数转换失败炸主进程。
+import { safeSetPosition } from './safeWindowGeometry';
 // v2.3.97：自绘弹窗桥。接管原先 2 处 dialog.showMessageBox + 9 处
 // dialog.showOpenDialog/showSaveDialog —— 全部改为「推给渲染层弹主题内弹窗 + 等回传」。
 import {
@@ -832,7 +834,7 @@ function createMiniWindow(): void {
     if (Math.abs(x + b.width - (wa.x + wa.width)) < SNAP) x = wa.x + wa.width - b.width;
     if (Math.abs(y - wa.y) < SNAP) y = wa.y;
     if (Math.abs(y + b.height - (wa.y + wa.height)) < SNAP) y = wa.y + wa.height - b.height;
-    if (x !== b.x || y !== b.y) miniWindow.setPosition(x, y);
+    if (x !== b.x || y !== b.y) safeSetPosition(miniWindow, x, y);
   });
 
   // 小窗整体 UI 随窗口尺寸等比缩放（字体/间距/图标一并缩放），缩放因子基于窗口真实像素、无反馈回路
@@ -879,7 +881,7 @@ function showMiniWindow(): void {
   if (!miniWindow.isVisible()) {
     const wa = screen.getPrimaryDisplay().workArea;
     const b = miniWindow.getBounds();
-    miniWindow.setPosition(wa.x + wa.width - b.width - 16, wa.y + wa.height - b.height - 16);
+    safeSetPosition(miniWindow, wa.x + wa.width - b.width - 16, wa.y + wa.height - b.height - 16);
   }
   safeSend(miniWindow, 'mini:switch', null);
   miniWindow.setOpacity(1);
@@ -951,7 +953,7 @@ function ensureNotifyWindow(): void {
 function positionNotifyWindow(): void {
   if (!notifyWindow) return;
   const wa = screen.getPrimaryDisplay().workArea;
-  notifyWindow.setPosition(wa.x + wa.width - 360 - 16, wa.y + wa.height - 120 - 16);
+  safeSetPosition(notifyWindow, wa.x + wa.width - 360 - 16, wa.y + wa.height - 120 - 16);
 }
 
 // 收到一条 AI 消息：默认「主窗与小窗均隐藏或最小化（软件在后台）」才弹提醒卡片。
@@ -7779,9 +7781,17 @@ function registerIPC(): void {
     }
   );
 
+  // v3.0.15+ 原生框根治：本 handler 是「渲染层坐标 → 主进程原生 setPosition」的直接入口。
+  // 旧实现 `Math.round(x)` / `Math.round(y)` 对 undefined / NaN / 非数字对象会得到 NaN，
+  // 传给 Electron 32 的 setPosition(x, y) 时第二个参数为 NaN ⇒ gin 抛
+  // `Error processing argument at index 1, conversion failure from `（错误串末尾为空），
+  // 冒泡到 uncaughtException → 原生错误框 + app.quit()。
+  // 现在：类型 + 有限数双重校验在 Math.round 之前完成，非法载荷整帧跳过（窗口不动一帧远好过闪到左上角）。
   ipcMain.on('window-drag-to', (_e, x: number, y: number) => {
+    if (typeof x !== 'number' || typeof y !== 'number') return;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
     const win = BrowserWindow.fromWebContents(_e.sender);
-    if (win && !win.isDestroyed()) win.setPosition(Math.round(x), Math.round(y));
+    safeSetPosition(win, Math.round(x), Math.round(y));
   });
 
   // ---------- 确认对话框（v2.3.97：已从原生 dialog.showMessageBox 改为自绘）----------

@@ -32,6 +32,8 @@ import { getDataManager } from './db';
 import { getBallWindowBounds, reassertFloatingBallOnTop } from './floatingBall';
 // v3.0.1-beta.9：置顶层级统一由 windowLevels 定义（悬浮球 > 桌宠 > 小窗）。
 import { applyAlwaysOnTop, DESKTOP_CHARACTER_LEVEL } from './windowLevels';
+// v3.0.15+：坐标进入原生 setPosition 前的有限数护栏（NaN 会触发主进程原生错误框）。
+import { isFiniteCoord, safeSetPosition } from './safeWindowGeometry';
 import type { CharacterRuntimeSettings, DesktopCharacter } from '../src/types';
 
 const dm = getDataManager();
@@ -344,15 +346,18 @@ function winToId(sender: unknown): string | undefined {
 
 /** 按 id 定位某角色窗口（设置位置 / 切穿透等）。 */
 function applyPos(id: string, x: number, y: number): void {
+  // 非有限坐标整帧丢弃：既避免污染物理状态（NaN 会在弹簧积分里永久传播），
+  // 也避免 NaN 进入原生 setPosition 触发 gin 参数转换失败 → 主进程原生错误框。
+  if (!isFiniteCoord(x) || !isFiniteCoord(y)) {
+    console.warn('[nianyu] dc applyPos skipped non-finite coords:', String(x), String(y));
+    return;
+  }
   const st = dragStates.get(id);
   if (st) {
     st.curX = x;
     st.curY = y;
   }
-  const w = dcWindows.get(id);
-  if (w && !w.isDestroyed()) {
-    w.setPosition(Math.round(x), Math.round(y));
-  }
+  safeSetPosition(dcWindows.get(id), Math.round(x), Math.round(y));
 }
 
 /** 取消某角色的预览兜底计时器（提交 / 关窗时调用）。v3.0.14：窗口恒定， Cancel 只影响渲染层回退计时。 */
@@ -678,7 +683,13 @@ export function createDesktopCharacter(id: string): void {
     const externallyMovedX = Math.abs(b.x - stt.curX) > 0.5;
     const externallyMovedY = Math.abs(b.y - stt.curY) > 0.5;
     const c = clampPos(b.x, b.y, id);
-    if (Math.round(c.x) !== b.x || Math.round(c.y) !== b.y) {
+    // v3.0.15+：clampPos 依赖 workArea/scale，异常几何下可能产出 NaN；
+    // 用内联 Number.isFinite 护栏（不引入外部 helper，保持冻结验证脚本可原样抽取本处理器）
+    // 杜绝非有限值进入原生 setPosition（否则 index 1 转换失败 → 原生错误框 + 退出）。
+    if (
+      Number.isFinite(c.x) && Number.isFinite(c.y) &&
+      (Math.round(c.x) !== b.x || Math.round(c.y) !== b.y)
+    ) {
       win.setPosition(Math.round(c.x), Math.round(c.y));
     }
     // 真实外部移动即便被 clampPos 修正，也要回灌修正值（externallyMoved* 为真即覆盖）
