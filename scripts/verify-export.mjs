@@ -3,7 +3,7 @@
 // 用法：node scripts/verify-export.mjs
 //
 // 把「不可回退的结构契约」固化成断言：
-//   A. 桌宠滚轮缩放（dc:set-scale IPC + 渲染层 onWheel + 0.6~1.6 钳制）
+//   A. 桌宠滚轮缩放（dc:set-scale IPC + 渲染层 onWheel + 0.6~5.0 钳制）
 //   B. 导出工具模块（5 个 build* 函数 + 酒馆兼容结构）
 //   C. 5 处导出按钮（角色卡 / 世界书 / 规则单条 / 规则全部 / 记忆 / 聊天记录）
 //   D. 10 处 i18n 导出键齐全
@@ -57,10 +57,16 @@ const trans = read('src/i18n/translations.ts');
 section('A. 桌宠滚轮缩放');
 check('desktopCharacter.ts 注册 dc:set-scale IPC', dcMain.includes("ipcMain.on('dc:set-scale'"));
 check('dc:set-scale 持久化 desktopCharacters 并落盘', dcMain.includes('saveSettings({ desktopCharacters: next })') && dcMain.includes('sendState()'));
-check('dc:set-scale 钳制 0.6~1.6', /Math\.max\(0\.6,\s*Math\.min\(1\.6/.test(dcMain));
+check(
+  'dc:set-scale 钳制 0.6~5.0（DC_SCALE_MAX=5.0）',
+  /DC_SCALE_MAX\s*=\s*5\.0\b/.test(dcMain) && /Math\.max\(0\.6,\s*Math\.min\(DC_SCALE_MAX/.test(dcMain)
+);
 check('CharacterApp.tsx 绑定 onWheel 到角色本体', dcRender.includes('onWheel={onCharacterWheel}'));
 check('CharacterApp.tsx 定义 onCharacterWheel 处理器', dcRender.includes('const onCharacterWheel ='));
-check('onCharacterWheel 钳制 0.6~1.6 并四舍五入到两位小数', dcRender.includes('0.6') && dcRender.includes('1.6') && dcRender.includes('Math.round'));
+check(
+  'onCharacterWheel 钳制 0.6~5.0 并四舍五入到两位小数',
+  /Math\.max\(0\.6,\s*Math\.min\(5\.0,\s*Math\.round\(\(cur\s*\+\s*step\)\s*\*\s*100\)\s*\/\s*100\)/.test(dcRender)
+);
 check('onCharacterWheel 调用 api.dcSetScale', dcRender.includes('api.dcSetScale('));
 check('ipc.ts 声明 dcSetScale 接口', ipcTs.includes('dcSetScale: (id: string, scale: number)'));
 check('ipc.ts 转发 dcSetScale', ipcTs.includes('dcSetScale: (id, scale) => raw.dcSetScale(id, scale)'));
