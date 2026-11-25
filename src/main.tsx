@@ -10,6 +10,9 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 // 于是主窗与小窗共享同一套宿主，两个窗口都能弹主题内弹窗。
 import ConfirmHost from './components/ConfirmHost';
 import FilePickerHost from './components/FilePickerHost';
+// v3.0.19：可携带备份宿主（与 ConfirmHost / FilePickerHost 并列，两窗共享）
+import BackupRestoreHost from './components/BackupRestoreHost';
+import { backupBus, isPortableBackupFile } from './utils/backupBus';
 import { registerGlobalErrorHandlers, showErrorDialog } from './utils/globalErrorHandler';
 import { api } from './ipc';
 import { installGlobalSoundListeners } from './utils/sound';
@@ -58,8 +61,81 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
               确认框与文件选择器都始终可用。 */}
           <ConfirmHost />
           <FilePickerHost />
+          <BackupRestoreHost />
         </ErrorBoundary>
       </ThemeProvider>
     </I18nProvider>
   </React.StrictMode>
+);
+
+/**
+ * v3.0.19 可携带备份：document **捕获阶段**全局拖放监听。
+ *
+ * main.tsx 是主窗 <App /> 与小窗 <MiniChat /> 的共用入口，这里挂一次即两窗都支持。
+ * 仅当拖入的文件含 `.ny`（大小写不敏感）才接管：preventDefault + stopPropagation
+ * （drop 再加 stopImmediatePropagation），阻止事件到达 React root，因而不会触发
+ * App.tsx 既有快速导入或 ChatWindow 输入区下落逻辑。其他文件（角色卡 zip/vrm 等）
+ * 完全放行，既有行为零回归。
+ */
+function dragHasPortableBackup(dt: DataTransfer | null): boolean {
+  if (!dt) return false;
+  const files = Array.from(dt.files || []);
+  if (files.some((f) => isPortableBackupFile(f.name))) return true;
+  const items = Array.from(dt.items || []);
+  return items.some((item) => {
+    if (item.kind !== 'file') return false;
+    try {
+      const f = item.getAsFile();
+      return !!f && isPortableBackupFile(f.name);
+    } catch {
+      return false;
+    }
+  });
+}
+
+document.addEventListener(
+  'dragenter',
+  (e: DragEvent) => {
+    if (!dragHasPortableBackup(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    backupBus.setDragActive(true);
+  },
+  true
+);
+document.addEventListener(
+  'dragover',
+  (e: DragEvent) => {
+    if (!dragHasPortableBackup(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    backupBus.setDragActive(true);
+  },
+  true
+);
+document.addEventListener(
+  'dragleave',
+  (e: DragEvent) => {
+    if (!dragHasPortableBackup(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // 只有在真正离开窗口（relatedTarget 为空）时收起 overlay，避免子元素间移动闪烁
+    if (!e.relatedTarget) backupBus.setDragActive(false);
+  },
+  true
+);
+document.addEventListener(
+  'drop',
+  (e: DragEvent) => {
+    if (!dragHasPortableBackup(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    backupBus.setDragActive(false);
+    const file = Array.from(e.dataTransfer?.files || []).find((f) => isPortableBackupFile(f.name));
+    if (!file) return;
+    const realPath = api.getPathForFile(file);
+    if (realPath) backupBus.requestRestore({ path: realPath, source: 'drag' });
+  },
+  true
 );

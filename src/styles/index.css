@@ -7589,3 +7589,63 @@ html[data-anim-off~='panel'] .msg-action-divider {
 .diary-orphans { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--color-border); }
 .diary-orphan-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 13px; color: var(--color-text); }
 .diary-orphan-row select { width: auto; }
+
+/* ===== v3.0.19 可携带备份：一次性口令弹窗 + 拖入 overlay =====
+   容器样式复用 .modal-mask / .modal 三件套，动画沿用 theme 组（不新建关键帧、不新增分组）。
+   全部配色走主题变量，14 主题下正文保持 --color-text（WCAG AA）。 */
+.pass-dialog .modal-head { align-items: center; }
+.pass-dialog .confirm-title { color: var(--color-text); }
+.pass-dialog .confirm-message { color: var(--color-text); line-height: 1.7; white-space: pre-line; }
+.pass-value {
+  margin: 12px 0 8px;
+  padding: 12px 14px;
+  border: 1px dashed var(--color-primary);
+  border-radius: 10px;
+  background: var(--color-panel);
+  color: var(--color-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: calc(16px * var(--font-scale));
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-align: center;
+  user-select: all;
+  word-break: break-all;
+}
+.pass-copy { width: 100%; margin-bottom: 10px; color: var(--color-text); }
+.pass-warning {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-danger) 14%, transparent);
+  color: var(--color-text);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.pass-input-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.pass-input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-panel);
+  color: var(--color-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: calc(14px * var(--font-scale));
+  letter-spacing: 0.04em;
+}
+.pass-input::placeholder { color: var(--color-text); opacity: 0.6; }
+.pass-toggle { flex: 0 0 auto; color: var(--color-text); }
+.pass-error {
+  margin: 10px 0 0;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-danger) 14%, transparent);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.pass-foot { gap: 8px; justify-content: flex-end; }
+/* 拖入 .ny 时即使指针正悬在聊天输入区，也保留备份还原引导层
+   （文档捕获阶段已 stopPropagation，App 的 ny-drop-chat 本不会置位；此规则兜底）。 */
+body.ny-drop-chat .backup-drop-overlay { display: flex; }

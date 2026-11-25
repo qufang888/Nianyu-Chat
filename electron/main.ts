@@ -48,7 +48,7 @@ import {
   ModelErrorInfo,
   ModelApiError,
 } from './ai';
-import { createBackup, restoreBackup, peekBackupVersion, convertLegacyBackup, BACKUP_EXTENSION } from './backup';
+import { createBackup, restoreBackup, peekBackupVersion, convertLegacyBackup, BACKUP_EXTENSION, createPortableBackup, restorePortableBackup, peekBackupInfo } from './backup';
 // v3.0.18：对局归档 JSON 也纳入加密范围（dataDir/matches/*.json）。
 import { readBinary, writeBinary, writeText } from './secureStore';
 // v3.0.18：分册日记数据层 / 门控唯一真源 / 语气分类。
@@ -7021,6 +7021,41 @@ function registerIPC(): void {
   ipcMain.handle('backup:convertLegacy', (_e, zipPath: string) =>
     convertLegacyBackup(String(zipPath || ''))
   );
+
+  // ===== v3.0.19 可携带备份（全部追加；上面既有 backup 通道一行未动）=====
+  // 创建：防覆盖改名 → 生成一次性口令并封装主密钥 → 全量收集打包。口令仅随返回值回传一次。
+  ipcMain.handle('backup:createPortable', (_e, destPath: string) => {
+    const dest = uniquifyBackupDest(String(destPath || ''));
+    if (!dest) throw new Error('备份保存路径为空');
+    const result = createPortableBackup(dm.dataDirectory, dest, app.getVersion());
+    dm.saveSettings({ lastBackupTime: new Date().toISOString() });
+    return result;
+  });
+  // 一键导出：复用默认备份目录与文件名生成器，无原生对话框。
+  ipcMain.handle('backup:exportPortable', () => {
+    const s = dm.getSettings();
+    if (!s.backupDir) throw new Error('尚未设置默认备份目录');
+    fs.mkdirSync(s.backupDir, { recursive: true });
+    const dest = uniquifyBackupDest(path.join(s.backupDir, backupFileName()));
+    const result = createPortableBackup(dm.dataDirectory, dest, app.getVersion());
+    dm.saveSettings({ lastBackupTime: new Date().toISOString() });
+    return result;
+  });
+  // 还原：仅成功返回后才 reload + relaunch + exit；任何失败都在替换前抛出，数据零写入。
+  ipcMain.handle('backup:restorePortable', (_e, backupPath: string, passphrase: string) => {
+    restorePortableBackup(String(backupPath || ''), dm.dataDirectory, String(passphrase || ''));
+    dm.reloadAll();
+    app.relaunch();
+    app.exit(0);
+  });
+  // 免口令探测：v2 只读明文头；v1/zip 读清单；任何异常返回 unknown（不输出密钥材料）。
+  ipcMain.handle('backup:peekInfo', (_e, backupPath: string) => {
+    try {
+      return peekBackupInfo(String(backupPath || ''));
+    } catch {
+      return { kind: 'unknown', appVersion: null, format: null, size: 0 };
+    }
+  });
 
   // ===== v3.0.18 日记与加密（全部追加；既有 cursor / backup 通道逐字不动）=====
   // list/get 附带该篇的摘要产物（只给 UI 展示；门控注入仍只在 buildSystemPrompt 内发生）。

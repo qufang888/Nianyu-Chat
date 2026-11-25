@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../ipc';
+import { backupBus } from '../utils/backupBus';
 import { useTheme } from '../theme/ThemeContext';
 import { useI18n } from '../i18n/I18nContext';
 import { LANGS, localeOf, type Lang } from '../i18n/translations';
@@ -82,7 +83,6 @@ import {
   type SoundTheme,
   type SoundType,
 } from '../utils/sound';
-import { compareVersions } from '../utils/versionCompare';
 // v3.0.3：桌宠动画细调的唯一真源（与角色窗共用同一份 ⇒ 设置页的换算示例与实际表现一致）。
 import {
   bubbleHoldSeconds,
@@ -306,7 +306,7 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-datapath', key: 'settings.dataPath', kw: ['数据', '路径', 'data', 'path', '存储'] },
   { id: 'sec-closebehavior', key: 'settings.closeBehavior', kw: ['关闭', '退出', 'close', '退出行为'] },
   { id: 'sec-errorlog', key: 'settings.errorLog', kw: ['错误', '日志', 'error', 'log', '报错'] },
-  { id: 'sec-backup', key: 'settings.backup', kw: ['备份', 'backup', '恢复', '转换', 'converter', 'zip', 'ny', '格式转换'] },
+  { id: 'sec-backup', key: 'settings.backup', kw: ['备份', 'backup', '恢复', '转换', 'converter', 'zip', 'ny', '格式转换', '口令', 'passphrase', '换机', 'portable', '可携带'] },
   { id: 'sec-reset', key: 'settings.resetSettings', kw: ['重置', 'reset', '恢复默认', '清空'] },
 ];
 
@@ -1572,11 +1572,17 @@ export const Settings: React.FC<{
       setStatus('');
       return;
     }
-    // v2.3.33：主进程防覆盖后可能改名，状态栏显示实际写入路径
-    const actual = (await api.createBackup(dest)) || dest;
-    await reloadSettings();
-    setBusy(false);
-    setStatus(t('settings.backupDone', { dest: actual }));
+    try {
+      // v3.0.19：v2 可携带备份，口令仅随返回值交给 Host 一次性展示
+      const result = await api.createPortableBackup(dest);
+      await reloadSettings();
+      setStatus(t('settings.backupDone', { dest: result.path }));
+      backupBus.showCreated(result);
+    } catch (e: any) {
+      setStatus(t('settings.backupFailed', { err: e?.message || String(e) }));
+    } finally {
+      setBusy(false);
+    }
   };
 
   // v3.0.18：旧明文 ZIP → .NY（只读原包，同目录写 _converted.ny）
@@ -1609,36 +1615,11 @@ export const Settings: React.FC<{
       setStatus('');
       return;
     }
-    // v2.3.48：高版本备份恢复警告——先读备份包内版本清单，高于当前软件版本时先确认
-    try {
-      const bv = await api.peekBackupVersion(zip);
-      const cur = updateSt?.currentVersion || (await api.updateStatus()).currentVersion;
-      if (bv && cur && compareVersions(bv, cur) > 0) {
-        const go = await api.showConfirm!(
-          t('settings.backupVersionWarn', { backup: bv, current: cur }),
-          t('settings.backupVersionWarnTitle')
-        );
-        if (!go) {
-          setBusy(false);
-          setStatus('');
-          return;
-        }
-      }
-    } catch {
-      // 版本探测失败不阻断恢复流程（旧备份无清单属正常情况）
-    }
-    if (!(await api.showConfirm!(t('settings.confirmRestore')))) {
-      setBusy(false);
-      setStatus('');
-      return;
-    }
-    try {
-      await api.restoreBackup(zip);
-      setStatus(t('settings.restoreDone'));
-    } catch (e: any) {
-      setBusy(false);
-      setStatus(t('settings.restoreFailed', { err: e?.message || String(e) }));
-    }
+    // v3.0.19：三态分流 / 高版本告警 / 二次确认统一由 BackupRestoreHost 处理，
+    // 设置页与拖拽共用同一条口令体验（v2 弹自绘口令框；v1/zip 走旧通道）。
+    setStatus('');
+    backupBus.requestRestore({ path: zip, source: 'settings' });
+    setBusy(false);
   };
 
   // 选择默认备份目录
@@ -1666,9 +1647,10 @@ export const Settings: React.FC<{
   const exportBackup = async () => {
     setBusy(true);
     try {
-      const dest = await api.exportBackup();
+      const result = await api.exportPortable();
       await reloadSettings();
-      setStatus(t('settings.backupDone', { dest }));
+      setStatus(t('settings.backupDone', { dest: result.path }));
+      backupBus.showCreated(result);
     } catch (e: any) {
       setStatus(t('settings.exportFailed', { err: e?.message || String(e) }));
     } finally {
@@ -5496,6 +5478,7 @@ export const Settings: React.FC<{
         <div style={{ marginTop: 8, fontSize: 12, color: 'var(--color-text-secondary)' }}>
           {t('settings.backupDesc')}
           {' '}{t('settings.backupFormatNy')}
+          {' '}{t('settings.backupPortableDesc')}
           {draft.lastBackupTime && (
             <>
               {' '}

@@ -184,6 +184,10 @@ console.log('\n【断言 5】16 处既有 + 1 处 v3.0.18 日记新增调用点�
   // 「这 7 个文件本次改造一行都没动」，那才是"零改动"最强的证据）。
   // v3.0.18：DiaryView 删除日记新增 1 处自绘确认框调用（不是替换既有调用点），
   // 故最低计数 16 → 17；既有 16 处与 7 个原文件仍单独做零改动断言。
+  // v3.0.19：可携带备份把 Settings.restore() 里的「高版本告警 / 还原二次确认」
+  // 两处调用**平移**到 BackupRestoreHost（设置页与拖拽共用同一体验），总数仍为 17，
+  // 但分布从 8 个文件变为 9 个（新增 Host）；Settings 自身由 6 → 4，Host 新增 2。
+  // 这是有意的逻辑下沉，不是确认框丢失 —— 下方另加 Host 2 处断言锁死。
   const EXPECTED_MIN = 17;
   // 只统计**调用点**（api.showConfirm! / api.showConfirm(），排除类型声明与实现
   const callRe = /api\.showConfirm!?\s*\(/g;
@@ -203,8 +207,8 @@ console.log('\n【断言 5】16 处既有 + 1 处 v3.0.18 日记新增调用点�
     calls >= EXPECTED_MIN,
     `实际 ${calls} 处（${perFile.join(', ')}）`
   );
-  // 调用点分布在 8 个文件里（原 7 个 + v3.0.18 DiaryView 新增 1 个）
-  check('调用点分布在预期的 8 个文件里', perFile.length === 8, `实际 ${perFile.length} 个文件：${perFile.join(', ')}`);
+  // 调用点分布在 9 个文件里（原 7 个 + v3.0.18 DiaryView + v3.0.19 BackupRestoreHost）
+  check('调用点分布在预期的 9 个文件里', perFile.length === 9, `实际 ${perFile.length} 个文件：${perFile.join(', ')}`);
   const diarySrc = read(path.join(SRC, 'components', 'DiaryView.tsx'));
   check('DiaryView 删除日记走自绘确认框（无 window.confirm）',
     /api\.showConfirm!\s*\(\s*t\('diary\.confirmDelete'\)\s*\)/.test(diarySrc) &&
@@ -221,10 +225,12 @@ console.log('\n【断言 5】16 处既有 + 1 处 v3.0.18 日记新增调用点�
     'src/components/RoleList.tsx',
     'src/components/SelfRoleSettings.tsx',
   ];
-  // Settings.tsx 因并行改动（另两位工程师）会变，但**showConfirm 相关行**不得变：
-  // 断言它仍有 6 处调用点。
+  // Settings.tsx 保留 4 处与备份/还原无关的确认；v3.0.19 起还原相关 2 处平移到 Host。
   const settingsCalls = (read(path.join(SRC, 'components', 'Settings.tsx')).match(callRe) || []).length;
-  check('Settings.tsx 的 6 处 showConfirm 调用点仍在', settingsCalls === 6, `实际 ${settingsCalls} 处`);
+  check('Settings.tsx 的 4 处既有 showConfirm 调用点仍在', settingsCalls === 4, `实际 ${settingsCalls} 处`);
+  const hostSrc = read(path.join(SRC, 'components', 'BackupRestoreHost.tsx'));
+  const hostCalls = (hostSrc.match(callRe) || []).length;
+  check('BackupRestoreHost 承接还原的 2 处自绘确认（高版本告警 + 二次确认）', hostCalls === 2, `实际 ${hostCalls} 处`);
 
   // preload 里 showConfirm 仍是 invoke('app:confirm') —— 签名未变
   const preload = read(path.join(ELECTRON, 'preload.ts'));

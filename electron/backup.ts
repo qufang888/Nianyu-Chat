@@ -4,6 +4,21 @@ import AdmZip from 'adm-zip';
 import { app } from 'electron';
 // v3.0.18：整包信封加密（容器首字节 N 而非 PK，通用解压工具打不开）。
 import { decryptBackup, encryptBackup, isEncrypted } from './secureStore';
+// v3.0.19：可携带备份 v2 内核转发（既有 v1 / 转换器路径逐字不动）。
+import {
+  createPortableBackup as createPortableBackupFile,
+  restorePortableBackup as restorePortableBackupFile,
+  peekBackupInfo as peekBackupInfoFile,
+} from './portableBackup';
+import type { BackupPeekInfo, PortableCreateResult } from '../src/types';
+// 门控纯函数的唯一真源再导出，供 IPC / QA 共用（不另写魔数判断）。
+export {
+  detectBackupKind,
+  isBackupNewer,
+  isExcludedFromBackup,
+  isPortableBackupFile,
+  needsPassphrase,
+} from './portableBackup';
 
 // 备份包内版本清单文件名（v2.3.48）：固定写入 zip 根目录（data/ 之外），
 // 恢复时会先被剔除，不会混入数据目录。
@@ -139,4 +154,39 @@ export function peekBackupVersion(zipPath: string): string | null {
   } catch {
     return null;
   }
+}
+
+// ===== v3.0.19 可携带备份 v2 转发（追加；上面 v1 / 转换器 / peek 实现逐字未动）=====
+
+/** 创建 v2 备份：路径由主进程注入，口令只随返回值回传一次。 */
+export function createPortableBackup(
+  dataDir: string,
+  dest: string,
+  appVersion?: string
+): PortableCreateResult {
+  return createPortableBackupFile({
+    dataDir,
+    userData: app.getPath('userData'),
+    dest,
+    appVersion: appVersion || getAppVersion(),
+  });
+}
+
+/** 还原 v2 备份：全量原子替换 + 主密钥采纳；失败在替换前抛出，不重启。 */
+export function restorePortableBackup(
+  backupPath: string,
+  dataDir: string,
+  passphrase: string
+): void {
+  restorePortableBackupFile({
+    backupPath,
+    passphrase,
+    dataDir,
+    userData: app.getPath('userData'),
+  });
+}
+
+/** 只读头 / 清单的免口令探测。 */
+export function peekBackupInfo(backupPath: string): BackupPeekInfo {
+  return peekBackupInfoFile(backupPath);
 }

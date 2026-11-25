@@ -23,7 +23,8 @@ export const HEADER_BYTES = 36;
 export const KEY_FILE_NAME = 'nianyu-master.key';
 
 const IV_BYTES = 12;
-const KEY_BYTES = 32;
+/** 主密钥字节数（v3.0.19 起导出，供可携带备份内核复用；原值一行未改）。 */
+export const KEY_BYTES = 32;
 const ALG = 'aes-256-gcm';
 
 export interface MigrationResult {
@@ -298,4 +299,14 @@ export function getLastMigration(): MigrationResult {
     failed: [...(lastMigration?.failed || [])],
     error: lastMigration?.error,
   };
+}
+
+/**
+ * v3.0.19：清空内存密钥缓存（跨机还原采纳备份机主密钥后调用）。
+ * 重启本就清空；此函数保证同进程内 reloadAll 之前缓存不会继续吐出旧密钥。
+ * 既有信封 / 加解密 / 迁移逻辑一行未动。
+ */
+export function resetKeyCache(): void {
+  cachedKey = null;
+  cachePath = '';
 }

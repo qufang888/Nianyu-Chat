@@ -26,6 +26,8 @@ import type {
   DiaryEntry,
   DiaryAiResult,
   EncryptionStatus,
+  BackupPeekInfo,
+  PortableCreateResult,
 } from '../src/types';
 import type { ImportCharacterResult } from '../src/utils/characterCard';
 
@@ -388,6 +390,11 @@ export interface NianyuAPI {
   pickBackupDir: () => Promise<string | null>;
   exportBackup: () => Promise<string>;
   peekBackupVersion: (zipPath: string) => Promise<string | null>;
+  // v3.0.19 可携带备份（只追加；上面 v1 签名保持不变）
+  createPortableBackup: (destPath: string) => Promise<PortableCreateResult>;
+  exportPortable: () => Promise<PortableCreateResult>;
+  restorePortableBackup: (path: string, passphrase: string) => Promise<void>;
+  peekBackupInfo: (path: string) => Promise<BackupPeekInfo>;
 
   // ===== 应用数据保存路径（实时数据，非备份）=====
   getDataPath: () => Promise<{ current: string; custom: string | null; def: string }>;
@@ -1073,6 +1080,11 @@ const api: NianyuAPI = {
   pickBackupDir: () => ipcRenderer.invoke('backup:pickDir'),
   exportBackup: () => ipcRenderer.invoke('backup:export'),
   peekBackupVersion: (zipPath: string) => ipcRenderer.invoke('backup:peekVersion', zipPath),
+  // v3.0.19 可携带备份（只追加）
+  createPortableBackup: (destPath) => ipcRenderer.invoke('backup:createPortable', destPath),
+  exportPortable: () => ipcRenderer.invoke('backup:exportPortable'),
+  restorePortableBackup: (path, passphrase) => ipcRenderer.invoke('backup:restorePortable', path, passphrase),
+  peekBackupInfo: (path) => ipcRenderer.invoke('backup:peekInfo', path),
 
   getDataPath: () => ipcRenderer.invoke('data:getPath'),
   setDataPath: (dir) => ipcRenderer.invoke('data:setPath', dir),

@@ -1978,6 +1978,21 @@
  "settings.backupConvertDesc": "Elige una ZIP antigua en texto plano; se crea _converted.ny en la misma carpeta. La ZIP original no se modifica.",
  "settings.backupConvertBtn": "Convertir ZIP antigua",
  "settings.backupConvertDone": "Convertido: {path}",
- "settings.backupFormatNy": "Las copias nuevas son contenedores cifrados .NY; las ZIP antiguas siguen restaurándose directamente."
+ "settings.backupFormatNy": "Las copias nuevas son contenedores cifrados .NY; las ZIP antiguas siguen restaurándose directamente.",
+ "settings.backupPortableDesc": "Las copias v2 se restauran en otro equipo con una frase de contraseña de un solo uso (sin archivo de clave); las copias v1 / convertidas siguen necesitando nianyu-master.key entre equipos; la configuración local como path-config no se incluye ni se sobrescribe.",
+ "settings.backupFailed": "Error de copia: {err}",
+ "settings.backupPassTitle": "Copia creada: guarda la contraseña de restauración",
+ "settings.backupPassDesc": "Esta copia está protegida con la siguiente contraseña. En otro equipo, arrastra el archivo .NY a Nianyu e introduce la contraseña para restaurar todos los datos.",
+ "settings.backupPassCopy": "Copiar contraseña",
+ "settings.backupPassCopied": "Copiado",
+ "settings.backupPassOnce": "Esta contraseña se muestra una sola vez y no se puede volver a ver después de cerrar. Cópiala y guárdala ahora; una contraseña olvidada no se puede recuperar.",
+ "settings.backupPassDone": "Guardada, cerrar",
+ "settings.restorePassTitle": "Introduce la contraseña de restauración",
+ "settings.restorePassDesc": "Introduce la contraseña guardada al crear la copia. Tras la verificación se restaurarán todos los datos y se reiniciará la app.",
+ "settings.restorePassWrong": "Contraseña incorrecta. Comprueba la que guardaste al crear la copia.",
+ "settings.restorePassSubmit": "Iniciar restauración",
+ "settings.restoreDropHint": "Suelta para restaurar una copia de Nianyu; después introducirás la contraseña",
+ "settings.passShow": "Mostrar",
+ "settings.passHide": "Ocultar"
 }
 

@@ -1978,6 +1978,21 @@
  "settings.backupConvertDesc": "Alte Klartext-ZIP auswählen; _converted.ny wird im selben Ordner erstellt. Die ZIP bleibt unverändert.",
  "settings.backupConvertBtn": "Alte ZIP konvertieren",
  "settings.backupConvertDone": "Konvertiert: {path}",
- "settings.backupFormatNy": "Neue Backups sind verschlüsselte .NY-Container; alte ZIPs lassen sich weiterhin direkt wiederherstellen."
+ "settings.backupFormatNy": "Neue Backups sind verschlüsselte .NY-Container; alte ZIPs lassen sich weiterhin direkt wiederherstellen.",
+ "settings.backupPortableDesc": "v2-Backups lassen sich auf einem anderen Rechner mit einem einmaligen Passwort wiederherstellen (keine Schlüsseldatei nötig); v1-/konvertierte Backups benötigen über Rechnergrenzen hinweg weiterhin nianyu-master.key; maschinenlokale Einstellungen wie path-config werden nicht gepackt und nicht überschrieben.",
+ "settings.backupFailed": "Backup fehlgeschlagen: {err}",
+ "settings.backupPassTitle": "Backup erstellt – Wiederherstellungspasswort speichern",
+ "settings.backupPassDesc": "Dieses Backup ist mit dem folgenden Passwort geschützt. Ziehen Sie die .NY-Datei auf einem anderen Rechner in Nianyu und geben Sie das Passwort ein, um alle Daten wiederherzustellen.",
+ "settings.backupPassCopy": "Passwort kopieren",
+ "settings.backupPassCopied": "Kopiert",
+ "settings.backupPassOnce": "Dieses Passwort wird nur einmal angezeigt und kann nach dem Schließen nicht erneut aufgerufen werden. Bitte jetzt kopieren und sicher aufbewahren – ein vergessenes Passwort kann nicht wiederhergestellt werden.",
+ "settings.backupPassDone": "Gespeichert, schließen",
+ "settings.restorePassTitle": "Wiederherstellungspasswort eingeben",
+ "settings.restorePassDesc": "Geben Sie das beim Erstellen des Backups gespeicherte Passwort ein. Nach erfolgreicher Prüfung werden alle Daten wiederhergestellt und die App neu gestartet.",
+ "settings.restorePassWrong": "Falsches Passwort. Bitte prüfen Sie das beim Erstellen gespeicherte Passwort.",
+ "settings.restorePassSubmit": "Wiederherstellung starten",
+ "settings.restoreDropHint": "Loslassen, um ein Nianyu-Backup wiederherzustellen; danach Passwort eingeben",
+ "settings.passShow": "Anzeigen",
+ "settings.passHide": "Verbergen"
 }
 

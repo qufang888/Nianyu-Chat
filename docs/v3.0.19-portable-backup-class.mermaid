@@ -1,0 +1,146 @@
+classDiagram
+    class PortableCrypto {
+        +string MAGIC_V2
+        +number FORMAT_VERSION
+        +number HEADER_BYTES
+        +object KDF
+        +string CROCKFORD
+        +generatePassphrase() string
+        +normalizePassphrase(p string) string
+        +deriveKey(pass string, salt Buffer) Buffer
+        +wrapMasterKey(masterKey Buffer, pass string) WrappedKey
+        +unwrapMasterKey(header Buffer, pass string) Buffer
+        +buildHeader(appVersion string, salt Buffer, wrap WrappedKey, payloadLen number) Buffer
+        +parseHeader(buf Buffer) V2Header
+    }
+    class PortableBackupService {
+        +string dataDir
+        +string userData
+        +createPortableBackup(dest string, appVersion string) PortableCreateResult
+        +restorePortableBackup(backupPath string, passphrase string) void
+        +peekBackupInfo(backupPath string) BackupPeekInfo
+        +collectFullStateSources() BackupSource[]
+        +detectBackupKind(buf Buffer) BackupKind
+    }
+    class V2Header {
+        +string magic
+        +number formatVersion
+        +number headerBytes
+        +string appVersion
+        +Buffer salt
+        +Buffer wrapIv
+        +Buffer wrapTag
+        +Buffer wrappedKey
+        +number payloadLen
+    }
+    class WrappedKey {
+        +Buffer salt
+        +Buffer iv
+        +Buffer tag
+        +Buffer ciphertext
+    }
+    class BackupSource {
+        +BackupSourceKey key
+        +string srcPath
+        +string prefix
+        +string targetPath
+        +boolean isDirectory
+    }
+    class AtomicRestorer {
+        +BackupSource[] sources
+        +Buffer recoveredMasterKey
+        +plan() void
+        +backupOlds() void
+        +replaceAll() void
+        +rollback() void
+        +commit() void
+        +execute() void
+    }
+    class SecureStore {
+        +string MAGIC
+        +loadKeyOrThrow(path string) Buffer
+        +encryptBackup(buf Buffer, key Buffer) Buffer
+        +decryptBackup(buf Buffer, key Buffer) Buffer
+        +initSecureStore(path string) void
+        +resetKeyCache() void
+    }
+    class BackupService {
+        +createBackup(dataDir string, dest string, ver string) void
+        +restoreBackup(path string, dataDir string) void
+        +peekBackupVersion(path string) string
+        +convertLegacyBackup(zipPath string) string
+        +createPortableBackup(dest string, ver string) PortableCreateResult
+        +restorePortableBackup(path string, pass string) void
+        +peekBackupInfo(path string) BackupPeekInfo
+    }
+    class MainIpcHandlers {
+        +backupCreatePortable(dest string) PortableCreateResult
+        +backupExportPortable() PortableCreateResult
+        +backupRestorePortable(path string, pass string) void
+        +backupPeekInfo(path string) BackupPeekInfo
+    }
+    class PreloadBridge {
+        +createPortableBackup(dest string) Promise~PortableCreateResult~
+        +exportPortable() Promise~PortableCreateResult~
+        +restorePortableBackup(path string, pass string) Promise~void~
+        +peekBackupInfo(path string) Promise~BackupPeekInfo~
+    }
+    class IpcApi {
+        +createPortableBackup(dest string) Promise~PortableCreateResult~
+        +exportPortable() Promise~PortableCreateResult~
+        +restorePortableBackup(path string, pass string) Promise~void~
+        +peekBackupInfo(path string) Promise~BackupPeekInfo~
+    }
+    class BackupBus {
+        +showCreated(result PortableCreateResult) void
+        +onShowCreated(cb Function) Function
+        +requestRestore(req RestoreRequest) void
+        +onRequestRestore(cb Function) Function
+        +setDragActive(active boolean) void
+        +onDragActive(cb Function) Function
+    }
+    class BackupRestoreHost {
+        +useState created PortableCreateResult
+        +useState restore RestoreRequest
+        +useState dragActive boolean
+        +onCreated(result PortableCreateResult) void
+        +onRestoreRequest(req RestoreRequest) void
+        +runRestore(path string, pass string) void
+    }
+    class PassphraseDialog {
+        +string mode
+        +string passphrase
+        +string error
+        +boolean busy
+        +onCopy() void
+        +onSubmit(pass string) void
+        +onClose() void
+    }
+    class DragBridge {
+        +documentCaptureDragHandlers()
+        +isNinyFile(f File) boolean
+    }
+    class SettingsView {
+        +backup() void
+        +exportBackup() void
+        +restore() void
+        +SETTING_SEARCH_INDEX SearchItem[]
+    }
+
+    PortableBackupService "1" *-- "1" PortableCrypto
+    PortableBackupService "1" *-- "0..*" BackupSource
+    PortableBackupService ..> V2Header : builds/parses
+    PortableCrypto ..> WrappedKey : produces/consumes
+    PortableBackupService "1" *-- "1" AtomicRestorer
+    AtomicRestorer ..> SecureStore : adopt master key
+    BackupService ..> PortableBackupService : delegates v2
+    BackupService ..> SecureStore : v1 envelope
+    MainIpcHandlers ..> BackupService : calls
+    PreloadBridge ..> MainIpcHandlers : ipcRenderer.invoke
+    IpcApi ..> PreloadBridge : window.api
+    BackupBus ..> BackupRestoreHost : drives
+    DragBridge ..> BackupBus : requestRestore + dragActive
+    BackupRestoreHost ..> PassphraseDialog : renders
+    BackupRestoreHost ..> IpcApi : peek/restore/showConfirm
+    SettingsView ..> BackupBus : showCreated + requestRestore
+    SettingsView ..> IpcApi : createPortable/exportPortable

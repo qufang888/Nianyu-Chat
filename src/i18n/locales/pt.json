@@ -1978,6 +1978,21 @@
  "settings.backupConvertDesc": "Escolha um ZIP antigo em texto simples; _converted.ny é criado na mesma pasta. O ZIP original não é alterado.",
  "settings.backupConvertBtn": "Converter ZIP antigo",
  "settings.backupConvertDone": "Convertido: {path}",
- "settings.backupFormatNy": "Os novos backups são contentores encriptados .NY; os ZIP antigos continuam a restaurar diretamente."
+ "settings.backupFormatNy": "Os novos backups são contentores encriptados .NY; os ZIP antigos continuam a restaurar diretamente.",
+ "settings.backupPortableDesc": "Backups v2 restauram-se noutro computador com uma frase-passe de uso único (sem ficheiro de chave); backups v1 / convertidos continuam a precisar de nianyu-master.key entre máquinas; configurações locais como path-config não são incluídas nem sobrescritas.",
+ "settings.backupFailed": "Falha no backup: {err}",
+ "settings.backupPassTitle": "Backup criado — guarde a frase-passe de restauração",
+ "settings.backupPassDesc": "Este backup está protegido pela frase-passe abaixo. Noutro computador, arraste o ficheiro .NY para o 念语 e introduza-a para restaurar todo o estado.",
+ "settings.backupPassCopy": "Copiar frase-passe",
+ "settings.backupPassCopied": "Copiado",
+ "settings.backupPassOnce": "Esta frase-passe só é mostrada uma vez e não pode ser vista após fechar. Copie e guarde agora — uma frase esquecida não pode ser recuperada.",
+ "settings.backupPassDone": "Guardei, fechar",
+ "settings.restorePassTitle": "Introduzir frase-passe de restauração",
+ "settings.restorePassDesc": "Introduza a frase-passe guardada ao criar o backup. Após validação, todos os dados serão restaurados e a aplicação reiniciará.",
+ "settings.restorePassWrong": "Frase-passe incorreta. Confirme a que guardou ao criar o backup.",
+ "settings.restorePassSubmit": "Iniciar restauração",
+ "settings.restoreDropHint": "Solte para restaurar um backup do 念语; depois introduza a frase-passe",
+ "settings.passShow": "Mostrar",
+ "settings.passHide": "Ocultar"
 }
 

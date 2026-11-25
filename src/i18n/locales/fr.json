@@ -1978,6 +1978,21 @@
  "settings.backupConvertDesc": "Choisissez un ZIP ancien en clair ; _converted.ny est créé dans le même dossier. Le ZIP d’origine n’est pas modifié.",
  "settings.backupConvertBtn": "Convertir l’ancien ZIP",
  "settings.backupConvertDone": "Converti : {path}",
- "settings.backupFormatNy": "Les nouvelles sauvegardes sont des conteneurs chiffrés .NY ; les anciens ZIP restent restaurables directement."
+ "settings.backupFormatNy": "Les nouvelles sauvegardes sont des conteneurs chiffrés .NY ; les anciens ZIP restent restaurables directement.",
+ "settings.backupPortableDesc": "Les sauvegardes v2 se restaurent sur un autre ordinateur avec une phrase secrète à usage unique (aucun fichier de clé requis) ; les sauvegardes v1 / converties nécessitent toujours nianyu-master.key d'un appareil à l'autre ; les paramètres locaux comme path-config ne sont ni inclus ni écrasés.",
+ "settings.backupFailed": "Échec de la sauvegarde : {err}",
+ "settings.backupPassTitle": "Sauvegarde créée — enregistrez la phrase secrète",
+ "settings.backupPassDesc": "Cette sauvegarde est protégée par la phrase secrète ci-dessous. Sur un autre ordinateur, déposez le fichier .NY dans Nianyu et saisissez-la pour tout restaurer.",
+ "settings.backupPassCopy": "Copier la phrase secrète",
+ "settings.backupPassCopied": "Copié",
+ "settings.backupPassOnce": "Cette phrase secrète n'est affichée qu'une seule fois et ne peut plus être consultée après fermeture. Copiez-la et conservez-la maintenant : une phrase oubliée est irrécupérable.",
+ "settings.backupPassDone": "Enregistrée, fermer",
+ "settings.restorePassTitle": "Saisir la phrase secrète de restauration",
+ "settings.restorePassDesc": "Saisissez la phrase secrète enregistrée lors de la création. Après vérification, toutes les données seront restaurées et l'application redémarrera.",
+ "settings.restorePassWrong": "Phrase secrète incorrecte. Vérifiez celle enregistrée lors de la création.",
+ "settings.restorePassSubmit": "Lancer la restauration",
+ "settings.restoreDropHint": "Relâchez pour restaurer une sauvegarde Nianyu, puis saisissez la phrase secrète",
+ "settings.passShow": "Afficher",
+ "settings.passHide": "Masquer"
 }
 

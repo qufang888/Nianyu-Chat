@@ -1,6 +1,6 @@
 {
   "name": "nianyu-client",
-  "version": "3.0.18",
+  "version": "3.0.19",
   "description": "念语 - AI 数字人聊天客户端 (Electron + React + TypeScript)",
   "main": "dist-electron/electron/main.js",
   "author": "前方",
@@ -33,7 +33,11 @@
     "verify:diary-i18n-10": "node scripts/verify-diary-i18n-10.mjs",
     "verify:diary-storage-unreadable": "node scripts/verify-diary-storage-unreadable.mjs",
     "verify:chat-loading-contrast": "node scripts/verify-chat-loading-contrast.mjs",
-    "verify:chat-media-ux": "node scripts/verify-chat-media-ux.mjs"
+    "verify:chat-media-ux": "node scripts/verify-chat-media-ux.mjs",
+    "verify:portable-container": "node scripts/verify-portable-container.mjs",
+    "verify:portable-restore-atomic": "node scripts/verify-portable-restore-atomic.mjs",
+    "verify:portable-compat": "node scripts/verify-portable-compat.mjs",
+    "verify:portable-i18n-10": "node scripts/verify-portable-i18n-10.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

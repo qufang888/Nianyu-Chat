@@ -1978,6 +1978,21 @@
  "settings.backupConvertDesc": "旧平文 ZIP を選ぶと同階層に _converted.ny を生成します。元の ZIP は変更されません。",
  "settings.backupConvertBtn": "旧 ZIP を変換",
  "settings.backupConvertDone": "変換済み：{path}",
- "settings.backupFormatNy": "新しいバックアップは暗号化 .NY コンテナです。旧 ZIP も引き続き直接復元できます。"
+ "settings.backupFormatNy": "新しいバックアップは暗号化 .NY コンテナです。旧 ZIP も引き続き直接復元できます。",
+ "settings.backupPortableDesc": "v2 バックアップは一度限りのパスフレーズで別のパソコンに復元できます（キーファイル不要）。v1／変換したバックアップは他端末間では引き続き nianyu-master.key が必要です。path-config など端末固有の設定はパッケージに含まれず、上書きもされません。",
+ "settings.backupFailed": "バックアップに失敗しました：{err}",
+ "settings.backupPassTitle": "バックアップを作成しました。復元用パスフレーズを保存してください",
+ "settings.backupPassDesc": "このバックアップは以下のパスフレーズで保護されています。別のパソコンで .NY ファイルを念语にドラッグし、パスフレーズを入力するとすべて復元されます。",
+ "settings.backupPassCopy": "パスフレーズをコピー",
+ "settings.backupPassCopied": "コピーしました",
+ "settings.backupPassOnce": "このパスフレーズが表示されるのは今回だけです。閉じると再表示できません。今すぐコピーして安全に保管してください。忘れた場合は復元できません。",
+ "settings.backupPassDone": "保存しました。閉じる",
+ "settings.restorePassTitle": "復元用パスフレーズを入力",
+ "settings.restorePassDesc": "バックアップ作成時に保存したパスフレーズを入力してください。検証に成功すると全データを復元し、アプリを再起動します。",
+ "settings.restorePassWrong": "パスフレーズが正しくありません。作成時に保存したものを確認してください。",
+ "settings.restorePassSubmit": "復元を開始",
+ "settings.restoreDropHint": "離すと念语バックアップを復元します。続いてパスフレーズを入力してください",
+ "settings.passShow": "表示",
+ "settings.passHide": "非表示"
 }
 

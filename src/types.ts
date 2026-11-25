@@ -1720,3 +1720,42 @@ export interface MomentMediaStatusEvent {
   cardShown?: boolean;
   ts: number; // 事件发出时的 Date.now()
 }
+
+// ===== v3.0.19 可携带备份（一次性口令 + 跨机全量还原）=====
+/** 备份容器三态识别：v2(NYENC002) / v1(NYENC001) / 旧明文 zip(PK) / 未知。 */
+export type BackupKind = 'v2' | 'v1' | 'zip' | 'unknown';
+/** 全量还原目标 key（6 类源 + 1 个采纳主密钥）。 */
+export type BackupSourceKey = 'data' | 'skills' | 'proactive' | 'sounds' | 'runtime' | 'master-key';
+
+export interface BackupPeekInfo {
+  kind: BackupKind;
+  /** v2 读明文头；v1/zip 读 _backup_meta.json；失败为 null。 */
+  appVersion: string | null;
+  /** v2 = 2；其余 null。 */
+  format: number | null;
+  /** 文件字节数。 */
+  size: number;
+}
+
+export interface PortableCreateResult {
+  /** 实际写入路径（已过 uniquifyBackupDest）。 */
+  path: string;
+  /** 24 位 Crockford base32，6 组 ×4，带 '-'；仅此一次返回，不落盘。 */
+  passphrase: string;
+}
+
+export interface RestoreRequest {
+  path: string;
+  source: 'drag' | 'settings';
+}
+
+export interface BackupSource {
+  key: BackupSourceKey;
+  /** 解包临时目录中的源，或（master-key）解封出的 key Buffer 所在路径。 */
+  srcPath: string;
+  /** 容器内前缀。 */
+  prefix: string;
+  /** 还原目标绝对路径。 */
+  targetPath: string;
+  isDirectory: boolean;
+}

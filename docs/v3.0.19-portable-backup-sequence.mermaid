@@ -1,0 +1,74 @@
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant S as Settings / main.tsx 拖放
+    participant Bus as backupBus (渲染层)
+    participant Host as BackupRestoreHost
+    participant Dlg as PassphraseDialog
+    participant Api as src/ipc.ts → preload
+    participant M as main.ts IPC handlers
+    participant PB as PortableBackupService
+    participant PC as PortableCrypto (pure)
+    participant SS as secureStore
+    participant FS as 文件系统 (dataDir + userData)
+
+    %% ===== 创建：生成口令 → 封装主密钥 → 一次性展示 =====
+    U->>S: 点「创建备份」/「一键导出」
+    S->>Api: createPortableBackup(dest) / exportPortable()
+    Api->>M: ipcRenderer.invoke('backup:createPortable')
+    M->>PB: createPortableBackup(dest, appVersion)
+    PB->>PC: generatePassphrase() → 24 位 Crockford (randomBytes 15)
+    PB->>PC: deriveKey(pass, salt=randomBytes16) scrypt N=2^15,r=8,p=1
+    PB->>SS: loadKeyOrThrow(userData/nianyu-master.key) → masterKey32
+    PB->>PC: wrapMasterKey(masterKey32, derivedKey, AAD=head[0:44]) → ct/tag
+    PB->>FS: collectFullStateSources() → data/+userdata/ 分区（排除项过滤）
+    PB->>PB: AdmZip 内存生成 zip → encryptBackup(zip, masterKey32) 得 v1 信封载荷
+    PB->>PC: buildHeader(appVersion,salt,wrap,payloadLen) → 112B
+    PB->>FS: writeAtomic(dest, header‖payload) (.ny, 经 uniquify)
+    PB-->>M: { path, passphrase }  (口令仅此一次回传；不落盘/不写日志)
+    M-->>S: PortableCreateResult
+    S->>Bus: showCreated(result)
+    Bus->>Host: onShowCreated
+    Host->>Dlg: mode='display' 展示明文口令 + 复制按钮 + 「仅显示一次」
+    U->>Dlg: 点「复制」→「已复制」→「我已保存，关闭」
+    Dlg-->>Host: onClose → setCreated(null)（口令不再留存）
+
+    %% ===== 还原：拖入 → 三态识别 → 口令 → 解封 → 原子替换 → 重启 =====
+    U->>S: 把 .ny 拖入主窗或小窗
+    S->>Bus: setDragActive(true)（document 捕获，仅 .ny 接管，其他文件放行）
+    Bus->>Host: overlay「松开以还原」（复用 .quick-import-overlay）
+    U->>S: 松开 → getPathForFile → requestRestore({path, source:'drag'})
+    S->>Bus: requestRestore
+    Bus->>Host: onRequestRestore(req)
+    Host->>Api: peekBackupInfo(path)  (无需口令)
+    Api->>M: backup:peekInfo
+    M->>PB: peekBackupInfo → detectBackupKind
+    alt kind = v2
+        PB-->>M: {kind:'v2', appVersion, format:2, size}
+        opt appVersion 高于当前版本
+            Host->>Api: showConfirm(backupVersionWarn)
+            Api-->>Host: 用户确认继续
+        end
+        Host->>Dlg: mode='input' 输入还原口令
+        U->>Dlg: 输入口令 →「开始还原」
+        Dlg->>Host: onSubmit(pass)
+        Host->>Api: restorePortableBackup(path, pass)
+        Api->>M: backup:restorePortable
+        M->>PB: restorePortableBackup(path, pass)
+        PB->>PC: parseHeader → deriveKey(pass,salt) → unwrapMasterKey (AAD=head[0:44])
+        Note over PB,PC: 解封失败 → E_BAD_PASSPHRASE，阶段 0 抛出，零写入
+        PB->>SS: decryptBackup(payload, masterKey32) → zip  (AEAD 校验)
+        Note over PB,SS: 篡改/截断 → E_DECRYPT_FAILED，零写入
+        PB->>FS: 解压到 _restore_tmp_<ts> → 校验 meta + data/store|settings.json + sources
+        PB->>PB: AtomicRestorer.execute(): 逐目标 _restore_old_* → 替换(6+1 目标) → 全成功删安全备份
+        Note over PB,FS: 任一目标失败 → rollback() 逆序还原已替换目标；无空目录、无重启
+        PB->>SS: resetKeyCache()（采纳主机主密钥）
+        PB-->>M: ok
+        M->>M: dm.reloadAll(); app.relaunch(); app.exit(0)
+    else kind = v1 / zip / unknown
+        PB-->>M: {kind, appVersion|null,...}
+        Host->>Api: showConfirm(settings.confirmRestore)
+        Api->>M: (既有 app:confirm → ConfirmHost 自绘)
+        Host->>Api: restoreBackup(path)（既有 v1/zip 原子四步；跨机无密钥 → E_KEY_MISSING）
+        Api->>M: backup:restore → 成功则 relaunch
+    end

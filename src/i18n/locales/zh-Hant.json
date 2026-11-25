@@ -1978,6 +1978,21 @@
  "settings.backupConvertDesc": "選擇舊版明文 ZIP 備份，在同目錄產生 _converted.ny 檔案；原 ZIP 不會被修改。",
  "settings.backupConvertBtn": "轉換舊 ZIP 備份",
  "settings.backupConvertDone": "已轉換：{path}",
- "settings.backupFormatNy": "新備份為 .NY 加密容器（首位元組非 PK，通用解壓工具打不開）；舊 ZIP 仍可直接還原。"
+ "settings.backupFormatNy": "新備份為 .NY 加密容器（首位元組非 PK，通用解壓工具打不開）；舊 ZIP 仍可直接還原。",
+ "settings.backupPortableDesc": "v2 備份用一次性口令跨機還原（不需拷貝密鑰）；v1／轉換器產品跨機仍需 nianyu-master.key；path-config 等機器本機設定不進包、也不覆蓋。",
+ "settings.backupFailed": "備份失敗：{err}",
+ "settings.backupPassTitle": "備份已建立，請儲存還原口令",
+ "settings.backupPassDesc": "這份備份已用下列口令保護。換電腦時把 .NY 拖進念語並輸入該口令即可還原全部狀態。",
+ "settings.backupPassCopy": "複製口令",
+ "settings.backupPassCopied": "已複製",
+ "settings.backupPassOnce": "此口令僅顯示這一次，關閉後無法再次查看。請立即複製並妥善保存，遺忘將無法還原。",
+ "settings.backupPassDone": "我已儲存，關閉",
+ "settings.restorePassTitle": "輸入備份還原口令",
+ "settings.restorePassDesc": "請輸入建立這份備份時保存的口令片語。驗證通過後將從備份還原全部資料並重新啟動。",
+ "settings.restorePassWrong": "口令錯誤，請核對建立備份時記下的口令。",
+ "settings.restorePassSubmit": "開始還原",
+ "settings.restoreDropHint": "放開以還原念語備份，接著將輸入建立時的口令",
+ "settings.passShow": "顯示",
+ "settings.passHide": "隱藏"
 }
 
