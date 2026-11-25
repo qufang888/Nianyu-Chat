@@ -1,0 +1,55 @@
+sequenceDiagram
+    participant U as 用户
+    participant V as DiaryView (renderer)
+    participant P as preload/api (src/ipc.ts)
+    participant M as main.ts IPC handlers
+    participant D as DiaryStore (electron/diary.ts)
+    participant G as DiaryGate (pure)
+    participant T as DiaryTone (pure)
+    participant AI as queryAI / enqueueAndWait
+    participant B as buildSystemPrompt (per role)
+    participant C as ChatWindow / MiniChat
+
+    U->>V: 写日记，勾选 allowAi 与可见角色
+    V->>P: diaryCreate / diaryUpdate
+    P->>M: ipcRenderer.invoke
+    M->>D: createDiary / updateDiary
+    D->>G: applyRevoke(旧产物, 移除的 roleIds)
+    Note over G: 关闭 allowAi → 全部失效<br/>正文变更 → 全部失效（sourceUpdatedAt）
+    D->>D: secureStore.writeText(diary.json)
+    D-->>M: DiaryEntry (id, updated_at)
+    M-->>V: 立即返回（保存不阻塞）
+
+    alt allowAi=true 且 visibleRoleIds 非空（shouldGenerateComments）
+        loop 每个 visibleRoleId
+            M->>T: classifyDiaryCommentTone(role.affinity, role.mood)
+            T-->>M: warm / neutral / snarky / skip
+            M->>B: buildSystemPrompt(role) + 留言后缀
+            M->>AI: enqueueAndWait + queryAI（system prompt 含角色人设）
+            AI-->>M: 留言正文
+            M->>D: addComment(diaryId, {roleId, tone, affinityAt, moodAt})
+        end
+        M->>V: diary:changed {kind:'comments'}
+    else allowAi=false 或名单为空
+        Note over M,AI: 零 queryAI 调用、零网络请求（硬隔离）
+    end
+
+    opt settings.diaryAutoSummarize=true 或用户点手动总结
+        M->>G: shouldSummarize(diary, auto)（游标 = sourceUpdatedAt）
+        loop 每个可见 roleId
+            M->>AI: queryAI(总结提示词 + 该篇允许内容)
+            AI-->>M: 要点
+            M->>D: addSummary({diaryId, roleId, selfRoleId, visibleRoleIdsSnapshot, sourceUpdatedAt})
+        end
+        M->>V: diary:changed {kind:'summary'}
+    end
+
+    U->>C: 在单聊/群聊发消息
+    C->>M: api.sendUserMessage + api.sendAIMessages（两窗同源）
+    M->>B: buildMessagesForRole / buildGroupMessages(role, ..., selfRole)
+    B->>G: buildDiaryContextBlock(role.id, selfRole?.id ?? 'none')
+    G->>D: collectArtifactsForRole(...)
+    D-->>G: 仅"已产生且当前可见"的留言/摘要
+    G-->>B: 注入片段（无片段 = 不注入任何日记信息）
+    B->>AI: queryAI（system prompt 已按该角色门控）
+    AI-->>C: 回复；名单外/无产物角色答"不知道"

@@ -23,6 +23,9 @@ import type {
   MomentMediaStatusEvent,
   VoiceListResult,
   ListVoicesOptions,
+  DiaryEntry,
+  DiaryAiResult,
+  EncryptionStatus,
 } from '../src/types';
 import type { ImportCharacterResult } from '../src/utils/characterCard';
 
@@ -664,6 +667,20 @@ export interface NianyuAPI {
 
   // ===== 打开外部网页（点击联网搜索结果编号） =====
   openExternal: (url: string) => void;
+
+  // ===== v3.0.18 日记与加密（追加，不影响任何既有通道；cursor 段零改动）=====
+  diaryList: (selfRoleId?: string) => Promise<DiaryEntry[]>;
+  diaryGet: (id: string) => Promise<DiaryEntry | undefined>;
+  diaryCreate: (p: { selfRoleId: string; date: string; title?: string; content: string }) => Promise<DiaryEntry>;
+  diaryUpdate: (id: string, patch: Partial<DiaryEntry>) => Promise<DiaryEntry>;
+  diaryDelete: (id: string) => Promise<boolean>;
+  diaryRegenerateComments: (id: string, roleIds?: string[]) => Promise<DiaryAiResult>;
+  diarySummarize: (id: string, roleIds?: string[]) => Promise<DiaryAiResult>;
+  diaryListOrphans: () => Promise<DiaryEntry[]>;
+  diaryReassignOrphans: (from: string, to: string) => Promise<number>;
+  encryptionStatus: () => Promise<EncryptionStatus>;
+  onDiaryChanged: (cb: (payload: { diaryId: string; kind: 'comments' | 'summary' | 'entry' }) => void) => () => void;
+  convertLegacyBackup: (zipPath: string) => Promise<string>;
 }
 
 const windowStateListeners = new Map<
@@ -1384,6 +1401,24 @@ const api: NianyuAPI = {
 
   // ===== 打开外部网页（点击联网搜索结果编号） =====
   openExternal: (url) => ipcRenderer.send('app:openExternal', url),
+
+  // ===== v3.0.18 日记与加密（追加，独立段落；cursor 段零改动）=====
+  diaryList: (selfRoleId) => ipcRenderer.invoke('diary:list', selfRoleId),
+  diaryGet: (id) => ipcRenderer.invoke('diary:get', id),
+  diaryCreate: (p) => ipcRenderer.invoke('diary:create', p),
+  diaryUpdate: (id, patch) => ipcRenderer.invoke('diary:update', id, patch),
+  diaryDelete: (id) => ipcRenderer.invoke('diary:delete', id),
+  diaryRegenerateComments: (id, roleIds) => ipcRenderer.invoke('diary:regenerateComments', id, roleIds),
+  diarySummarize: (id, roleIds) => ipcRenderer.invoke('diary:summarize', id, roleIds),
+  diaryListOrphans: () => ipcRenderer.invoke('diary:listOrphans'),
+  diaryReassignOrphans: (from, to) => ipcRenderer.invoke('diary:reassignOrphans', from, to),
+  encryptionStatus: () => ipcRenderer.invoke('encryption:status'),
+  onDiaryChanged: (cb) => {
+    const listener = (_e: any, payload: any) => cb(payload);
+    ipcRenderer.on('diary:changed', listener);
+    return () => ipcRenderer.removeListener('diary:changed', listener);
+  },
+  convertLegacyBackup: (zipPath) => ipcRenderer.invoke('backup:convertLegacy', zipPath),
 };
 
 contextBridge.exposeInMainWorld('api', api);

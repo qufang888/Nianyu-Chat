@@ -456,6 +456,13 @@ export const ANIM_GROUPS: AnimGroupDef[] = [
       character: ['.dc-svg', '.dc-modelimg', '.dc-bubble', '.dc-bubble.closing', '.dc-menu', '.dc-err'],
     },
   },
+  {
+    // v3.0.18：分册日记视图的面板入场 / 卡片浮现 / 留言与摘要淡入。
+    // 刻意只登记具体类名，不使用通配，避免误伤流式 .stream-char / .pseudo-char 恒开豁免。
+    id: 'diary',
+    labelKey: 'animCtl.groupDiary',
+    selectors: ['.diary-panel', '.diary-card', '.diary-comment', '.diary-summary'],
+  },
 ];
 
 /** 全部分组 id（设置页渲染列表的顺序即此数组顺序） */

@@ -283,6 +283,11 @@ const PROBE = String.raw`
     ['引导高亮环',            'tutorial', 'tutorial-ring',           '新建组'],
     ['引导卡片',              'tutorial', 'tutorial-card',           '新建组'],
     ['引导居中卡片',          'tutorial', 'tutorial-card-center',    '新建组'],
+    // v3.0.18：日记视图 4 个选择器（关 diary 组必须死，关 panel 等其他组必须活）。
+    ['日记面板',              'diary',    'diary-panel',             'v3.0.18 新增分组'],
+    ['日记卡片',              'diary',    'diary-card',              'v3.0.18 新增分组'],
+    ['日记留言',              'diary',    'diary-comment',           'v3.0.18 新增分组'],
+    ['日记摘要',              'diary',    'diary-summary',           'v3.0.18 新增分组'],
   ];
   for (const [label, group, cls, note] of ADDED) {
     const sel = cls.replace(/ /g, '.');

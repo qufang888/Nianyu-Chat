@@ -8,6 +8,8 @@ import { app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { AppSettings, ChatMessage } from '../src/types';
+// v3.0.18：行为模型属派生结构化文本，落盘统一走加密读写（userData/proactive-nhpp.json）。
+import { readText, writeText } from './secureStore';
 
 // ===== 数据结构（新表）=====
 export interface ProactivePrior {
@@ -77,7 +79,7 @@ function loadStore(): void {
   try {
     storePath = path.join(app.getPath('userData'), STORE_FILE);
     if (fs.existsSync(storePath)) {
-      const raw = JSON.parse(fs.readFileSync(storePath, 'utf-8')) as Partial<ProactiveStore>;
+      const raw = JSON.parse(readText(storePath)) as Partial<ProactiveStore>;
       // 逐字段合并而非整对象覆盖：老版本存档没有 replyGapEma 字段时保留默认空表（v2.3.92）
       store = {
         priors: raw.priors || {},
@@ -98,7 +100,7 @@ function saveStore(): void {
   saveTimer = setTimeout(() => {
     saveTimer = null;
     try {
-      fs.writeFileSync(storePath, JSON.stringify(store, null, 2), 'utf-8');
+      writeText(storePath, JSON.stringify(store, null, 2));
     } catch {
       /* ignore */
     }

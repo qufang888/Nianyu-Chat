@@ -26,6 +26,9 @@ import type {
   CharacterRuntimeSettings,
   DesktopCharacter,
   CharacterImportResult,
+  DiaryEntry,
+  DiaryAiResult,
+  EncryptionStatus,
 } from './types';
 import type { ImportCharacterResult } from './utils/characterCard';
 export type { ImportCharacterResult };
@@ -617,6 +620,20 @@ export interface NianyuAPI {
 
   // ===== 打开外部网页（点击联网搜索结果编号） =====
   openExternal: (url: string) => void;
+
+  // ===== v3.0.18 日记与加密（同名同签名透传；cursor 段零改动）=====
+  diaryList: (selfRoleId?: string) => Promise<DiaryEntry[]>;
+  diaryGet: (id: string) => Promise<DiaryEntry | undefined>;
+  diaryCreate: (p: { selfRoleId: string; date: string; title?: string; content: string }) => Promise<DiaryEntry>;
+  diaryUpdate: (id: string, patch: Partial<DiaryEntry>) => Promise<DiaryEntry>;
+  diaryDelete: (id: string) => Promise<boolean>;
+  diaryRegenerateComments: (id: string, roleIds?: string[]) => Promise<DiaryAiResult>;
+  diarySummarize: (id: string, roleIds?: string[]) => Promise<DiaryAiResult>;
+  diaryListOrphans: () => Promise<DiaryEntry[]>;
+  diaryReassignOrphans: (from: string, to: string) => Promise<number>;
+  encryptionStatus: () => Promise<EncryptionStatus>;
+  onDiaryChanged: (cb: (payload: { diaryId: string; kind: 'comments' | 'summary' | 'entry' }) => void) => () => void;
+  convertLegacyBackup: (zipPath: string) => Promise<string>;
 }
 
 const raw = (window as any).api as NianyuAPI;
@@ -770,4 +787,18 @@ export const api: NianyuAPI = {
   clearErrorLog: () => raw.clearErrorLog(),
   onModelError: (cb) => raw.onModelError!(cb),
   offModelError: (cb) => raw.offModelError?.(cb),
+
+  // ===== v3.0.18 日记与加密（渲染层包装器，同名同签名透传）=====
+  diaryList: (selfRoleId) => raw.diaryList(selfRoleId),
+  diaryGet: (id) => raw.diaryGet(id),
+  diaryCreate: (p) => raw.diaryCreate(p),
+  diaryUpdate: (id, patch) => raw.diaryUpdate(id, patch),
+  diaryDelete: (id) => raw.diaryDelete(id),
+  diaryRegenerateComments: (id, roleIds) => raw.diaryRegenerateComments(id, roleIds),
+  diarySummarize: (id, roleIds) => raw.diarySummarize(id, roleIds),
+  diaryListOrphans: () => raw.diaryListOrphans(),
+  diaryReassignOrphans: (from, to) => raw.diaryReassignOrphans(from, to),
+  encryptionStatus: () => raw.encryptionStatus(),
+  onDiaryChanged: (cb) => raw.onDiaryChanged(cb),
+  convertLegacyBackup: (zipPath) => raw.convertLegacyBackup(zipPath),
 };

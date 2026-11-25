@@ -28,6 +28,16 @@ import {
 } from './skills';
 import type { Skill, SkillImportResult } from '../src/types';
 import { migrateCursorHotspot } from './cursorHotspotMigration';
+// v3.0.18：所有 JSON 落盘统一收敛到 secureStore（明文迁移 + AES-256-GCM 信封）。
+import {
+  collectEncryptableFiles,
+  getEncryptionStatus as readEncryptionStatus,
+  initSecureStore,
+  KEY_FILE_NAME,
+  migratePlaintextFiles,
+  readText,
+  writeText,
+} from './secureStore';
 // 再导出：迁移的**纯逻辑**放在独立模块（electron/cursorHotspotMigration.ts），
 // 这样 scripts/verify-cursor-engine.mjs 能直接转译执行它做**行为级**断言
 // （幂等性、单位换算），而 db.ts 这里仍保留既有调用点与落盘逻辑。
@@ -383,6 +393,15 @@ class DataManager {
     this.storePath = path.join(this.dataDir, 'store.json');
     this.settingsPath = path.join(this.dataDir, 'settings.json');
     this.errorLogPath = path.join(this.dataDir, 'errors.json');
+    // v3.0.18：启动时透明迁移存量明文。密钥独立于 dataDir，不进备份。
+    // 迁移失败保留原文件、status=failed，不阻断启动（secureStore 内部吞掉单文件异常）。
+    initSecureStore(path.join(app.getPath('userData'), KEY_FILE_NAME));
+    const userData = app.getPath('userData');
+    migratePlaintextFiles([
+      ...collectEncryptableFiles(this.dataDir),
+      path.join(userData, 'skills.json'),
+      path.join(userData, 'proactive-nhpp.json'),
+    ]);
     this.store = this.loadStore();
     this.settings = this.loadSettings();
     // v2.3.107 需求 7：液态玻璃（liquid）主题已整体删除（THEMES 不再收录、
@@ -427,12 +446,12 @@ class DataManager {
     try {
       let list: import('../src/types').ErrorLogEntry[] = [];
       if (fs.existsSync(this.errorLogPath)) {
-        list = JSON.parse(fs.readFileSync(this.errorLogPath, 'utf-8')) as import('../src/types').ErrorLogEntry[];
+        list = JSON.parse(readText(this.errorLogPath)) as import('../src/types').ErrorLogEntry[];
       }
       this.errorSeq += 1;
       list.push({ id: this.errorSeq, time: new Date().toISOString(), category, message: String(message).slice(0, 2000), detail: detail ? String(detail).slice(0, 8000) : undefined });
       if (list.length > 1000) list = list.slice(-1000);
-      fs.writeFileSync(this.errorLogPath, JSON.stringify(list, null, 2), 'utf-8');
+      writeText(this.errorLogPath, JSON.stringify(list, null, 2));
     } catch {
       /* 错误日志写入失败不应影响主流程 */
     }
@@ -440,7 +459,7 @@ class DataManager {
   getErrorLog(): import('../src/types').ErrorLogEntry[] {
     try {
       if (fs.existsSync(this.errorLogPath)) {
-        return JSON.parse(fs.readFileSync(this.errorLogPath, 'utf-8')) as import('../src/types').ErrorLogEntry[];
+        return JSON.parse(readText(this.errorLogPath)) as import('../src/types').ErrorLogEntry[];
       }
     } catch {
       /* 忽略 */
@@ -551,6 +570,11 @@ class DataManager {
     return this.dataDir;
   }
 
+  /** v3.0.18：只读加密状态（不暴露密钥内容，仅文件名与计数）。 */
+  getEncryptionStatus(): import('../src/types').EncryptionStatus {
+    return readEncryptionStatus();
+  }
+
   get imagesDir(): string {
     return path.join(this.dataDir, 'images');
   }
@@ -558,7 +582,7 @@ class DataManager {
   private loadStore(): Store {
     try {
       if (fs.existsSync(this.storePath)) {
-        const raw = JSON.parse(fs.readFileSync(this.storePath, 'utf-8'));
+        const raw = JSON.parse(readText(this.storePath));
         return {
           roles: raw.roles || [],
           groups: raw.groups || [],
@@ -586,7 +610,7 @@ class DataManager {
   }
 
   private saveStore(): void {
-    fs.writeFileSync(this.storePath, JSON.stringify(this.store, null, 2), 'utf-8');
+    writeText(this.storePath, JSON.stringify(this.store, null, 2));
   }
 
   private nextId(): number {
@@ -1206,7 +1230,7 @@ class DataManager {
   loadSettings(): AppSettings {
     try {
       if (fs.existsSync(this.settingsPath)) {
-        const raw = JSON.parse(fs.readFileSync(this.settingsPath, 'utf-8'));
+        const raw = JSON.parse(readText(this.settingsPath));
         const merged: AppSettings = {
           ...DEFAULT_SETTINGS,
           ...raw,
@@ -1261,7 +1285,7 @@ class DataManager {
           // （比例被再除一次 28 → 热点越用越偏）。写入失败不阻断启动，
           // 下次保存设置时也会把换算后的值带进 settings.json。
           try {
-            fs.writeFileSync(this.settingsPath, JSON.stringify(merged, null, 2), 'utf-8');
+            writeText(this.settingsPath, JSON.stringify(merged, null, 2));
           } catch (e) {
             console.error('写入动态光标热点迁移结果失败', e);
           }
@@ -1331,7 +1355,7 @@ class DataManager {
     // 这样所有仍读扁平字段的老调用点（audio:tts / image:generate / video:generate 等）
     // 无需改动就能拿到当前配置，改造范围与回归风险都显著降低。
     syncActiveMediaConfigs(this.settings);
-    fs.writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2), 'utf-8');
+    writeText(this.settingsPath, JSON.stringify(this.settings, null, 2));
     return this.settings;
   }
 
@@ -1382,7 +1406,7 @@ class DataManager {
    */
   flushCompanionSync(): void {
     try {
-      fs.writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2), 'utf-8');
+      writeText(this.settingsPath, JSON.stringify(this.settings, null, 2));
     } catch (e) {
       console.error('陪伴时长落盘失败', e);
     }
@@ -1408,7 +1432,7 @@ class DataManager {
       fresh.modelGroups = this.settings.modelGroups || [];
     }
     this.settings = fresh;
-    fs.writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2), 'utf-8');
+    writeText(this.settingsPath, JSON.stringify(this.settings, null, 2));
     return this.settings;
   }
 

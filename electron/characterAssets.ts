@@ -15,9 +15,10 @@
  * - Live2D / VRM 的运行时（Cubism Core、Cubism 2 runtime）属于各自权利方，不随软件分发，
  *   由用户自行放入运行库目录（见 runtimeDir 与 UI 提示）。
  */
-import { app, ipcMain, net, protocol } from 'electron';
-import { pathToFileURL } from 'node:url';
+import { app, ipcMain, protocol } from 'electron';
 import fs from 'node:fs';
+// v3.0.18：角色素材也是本地敏感二进制，落盘 / 读取统一走加密内核。
+import { readBinary, writeBinary, writeText } from './secureStore';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
 import iconv from 'iconv-lite';
@@ -221,7 +222,21 @@ function extractZip(zipPath: string, destDir: string): void {
     const resolved = path.resolve(target);
     if (!resolved.startsWith(path.resolve(destDir) + path.sep)) throw new Error('unsafe entry');
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, e.getData());
+    writeBinary(target, e.getData());
+  }
+}
+
+/** 递归复制目录：文件逐个经加密内核落盘（源可能明文或已加密，readBinary 自动识别）。 */
+function copyTreeEncrypted(srcDir: string, destDir: string): void {
+  fs.mkdirSync(destDir, { recursive: true });
+  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    const from = path.join(srcDir, entry.name);
+    const to = path.join(destDir, entry.name);
+    if (entry.isDirectory()) copyTreeEncrypted(from, to);
+    else if (entry.isFile()) {
+      const buf = readBinary(from);
+      if (buf) writeBinary(to, buf);
+    }
   }
 }
 
@@ -237,7 +252,7 @@ async function importOne(srcPath: string): Promise<CharacterImportResult> {
         return { ok: false, name: rawName, error: 'too_large' };
       }
       fs.mkdirSync(destDir, { recursive: true });
-      fs.cpSync(srcPath, destDir, { recursive: true });
+      copyTreeEncrypted(srcPath, destDir);
     } else {
       const ext = (srcPath.split('.').pop() || '').toLowerCase();
       if (ext === 'zip') {
@@ -245,7 +260,9 @@ async function importOne(srcPath: string): Promise<CharacterImportResult> {
         extractZip(srcPath, destDir);
       } else {
         fs.mkdirSync(destDir, { recursive: true });
-        fs.copyFileSync(srcPath, path.join(destDir, path.basename(srcPath)));
+        const buf = readBinary(srcPath);
+        if (!buf) throw new Error('read_failed');
+        writeBinary(path.join(destDir, path.basename(srcPath)), buf);
       }
     }
   } catch (e: any) {
@@ -278,7 +295,7 @@ async function importOne(srcPath: string): Promise<CharacterImportResult> {
     files,
   };
   try {
-    fs.writeFileSync(path.join(destDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf-8');
+    writeText(path.join(destDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
   } catch {
     /* 忽略：manifest 只是辅助信息，丢了也能靠扫描工作 */
   }
@@ -356,12 +373,27 @@ export function registerCharacterProtocol(): void {
       if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
         return new Response('not found', { status: 404 });
       }
-      const res = await net.fetch(pathToFileURL(abs).toString());
-      // 角色窗/主窗与素材不同源（file:// 或 dev server），必须显式允许跨源读取
-      const headers = new Headers(res.headers);
-      headers.set('Access-Control-Allow-Origin', '*');
-      headers.set('Cache-Control', 'no-cache');
-      return new Response(res.body, { status: res.status, headers });
+      // v3.0.18：素材落盘为密文，必须解密到内存返回；不写明文临时文件。
+      const buf = readBinary(abs);
+      if (!buf) return new Response('not found', { status: 404 });
+      const ext = path.extname(abs).toLowerCase();
+      const mimeMap: Record<string, string> = {
+        '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+        '.webp': 'image/webp', '.gif': 'image/gif', '.bmp': 'image/bmp',
+        '.svg': 'image/svg+xml', '.apng': 'image/apng', '.avif': 'image/avif',
+        '.json': 'application/json', '.js': 'application/javascript',
+        '.css': 'text/css', '.wasm': 'application/wasm',
+        '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
+        '.glb': 'model/gltf-binary', '.gltf': 'model/gltf+json', '.vrm': 'model/gltf-binary',
+        '.bin': 'application/octet-stream', '.moc3': 'application/octet-stream',
+        '.moc': 'application/octet-stream', '.frag': 'text/plain', '.vert': 'text/plain',
+      };
+      const headers = new Headers({
+        'Content-Type': mimeMap[ext] || 'application/octet-stream',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-cache',
+      });
+      return new Response(new Uint8Array(buf), { status: 200, headers });
     } catch (e: any) {
       return new Response(`error: ${e?.message || 'unknown'}`, { status: 500 });
     }

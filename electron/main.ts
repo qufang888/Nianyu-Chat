@@ -48,7 +48,22 @@ import {
   ModelErrorInfo,
   ModelApiError,
 } from './ai';
-import { createBackup, restoreBackup, peekBackupVersion } from './backup';
+import { createBackup, restoreBackup, peekBackupVersion, convertLegacyBackup, BACKUP_EXTENSION } from './backup';
+// v3.0.18：对局归档 JSON 也纳入加密范围（dataDir/matches/*.json）。
+import { readBinary, writeBinary, writeText } from './secureStore';
+// v3.0.18：分册日记数据层 / 门控唯一真源 / 语气分类。
+import {
+  buildDiaryContextBlock,
+  canRoleAccessDiary,
+  getDiaryStore,
+  makeDiaryAiResult,
+  planDiaryAiWork,
+  shouldGenerateComments,
+  shouldSummarize,
+  type DiaryCreateParams,
+  type DiaryPatch,
+} from './diary';
+import { classifyDiaryCommentTone } from './diaryTone';
 // v3.0.1-beta.9：所有置顶窗口的 level 统一由 windowLevels 定义（悬浮球 > 桌宠 > 小窗）。
 import { applyAlwaysOnTop, MINI_WINDOW_LEVEL } from './windowLevels';
 // v3.0.15+：坐标进入原生 setPosition 前的有限数护栏，杜绝 gin 参数转换失败炸主进程。
@@ -112,6 +127,8 @@ import type {
   QuickImportRoleField,
   QuickImportRolePreview,
   QuickImportPluginPreview,
+  DiaryAiResult,
+  DiaryEntry,
 } from '../src/types';
 import { normalizeRelation } from '../src/types';
 import { RELATION_TYPES, RELATION_LABELS } from '../src/types';
@@ -253,6 +270,9 @@ let miniWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
 const dm = getDataManager();
+// v3.0.18：日记独立集合（diary.json）由 secureStore 透明加解密，主进程持有唯一实例。
+const diaryStore = getDiaryStore();
+diaryStore.init(dm.dataDirectory);
 
 // ===== 单实例锁：保证念语全局只有一个客户端在运行 =====
 // 已有一个实例时，重复点击启动文件/快捷方式只会把已有窗口聚焦到前台，而不是再开一个新进程。
@@ -1664,7 +1684,7 @@ function saveGeneratedImage(b64: string): string | null {
     const ext = meta === 'image/jpeg' ? '.jpg' : '.png';
     const name = `gen_${Date.now()}_${Math.floor(Math.random() * 1e6)}${ext}`;
     const dest = path.join(dm.imagesDir, name);
-    fs.writeFileSync(dest, Buffer.from(data, 'base64'));
+    writeBinary(dest, Buffer.from(data, 'base64'));
     return dest;
   } catch (e) {
     console.error('保存生图失败', e);
@@ -2232,7 +2252,8 @@ function judgeSceneImageHeuristic(recent: string): { should: boolean; prompt: st
 function readImageDataUrl(filePath: string): string | null {
   try {
     if (!filePath || !fs.existsSync(filePath)) return null;
-    const buf = fs.readFileSync(filePath);
+    const buf = readBinary(filePath);
+    if (!buf) return null;
     const ext = (filePath.split('.').pop() || 'png').toLowerCase();
     const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png';
     return `data:${mime};base64,${buf.toString('base64')}`;
@@ -2309,7 +2330,7 @@ async function triggerSceneImage(chatType: string, chatId: string, roleId: strin
         const buf = Buffer.from(await resp.arrayBuffer());
         const name = `gen_${Date.now()}_${Math.floor(Math.random() * 1e6)}.png`;
         const dest = path.join(dm.imagesDir, name);
-        fs.writeFileSync(dest, buf);
+        writeBinary(dest, buf);
         imagePath = dest;
       } catch {
         /* 下载失败则放弃 —— 下方 !imagePath 分支统一按 failed 上报 */
@@ -2781,7 +2802,12 @@ function appendToFirstSystem(messages: any[], content: string) {
 }
 
 
-function buildSystemPrompt(role: Role, freezeMemory = false, chatId?: string): string {
+function buildSystemPrompt(
+  role: Role,
+  freezeMemory = false,
+  chatId?: string,
+  diarySelfRoleId?: string
+): string {
   const parts: string[] = [];
   parts.push(`你是数字人「${role.name}」。`);
   if (role.gender) parts.push(`性别：${role.gender}。`);
@@ -2833,6 +2859,12 @@ function buildSystemPrompt(role: Role, freezeMemory = false, chatId?: string): s
     }
   }
   parts.push('请始终以该角色身份和口吻回复，不要跳出角色，不要提及你是AI或语言模型。');
+  // v3.0.18：日记片段只按「当前角色 + 当前身份册」注入已产生且仍可见的留言/摘要产物。
+  // 第 4 参未传（如留言生成请求本身）时不注入任何日记信息。
+  if (diarySelfRoleId !== undefined && diarySelfRoleId !== null) {
+    const diaryBlock = buildDiaryContextBlock(role.id, diarySelfRoleId);
+    if (diaryBlock) parts.push(diaryBlock);
+  }
   return parts.join('\n');
 }
 
@@ -2843,7 +2875,10 @@ function copyImageToStore(absPath: string | null): string | null {
     const ext = path.extname(absPath) || '.png';
     const name = `img_${Date.now()}_${Math.floor(Math.random() * 1e6)}${ext}`;
     const dest = path.join(dm.imagesDir, name);
-    fs.copyFileSync(absPath, dest);
+    const buf = readBinary(absPath);
+    if (!buf) return null;
+    // 源可能是外部明文图片，也可能是已加密内部图片；readBinary 自动识别，落盘统一加密。
+    writeBinary(dest, buf);
     return dest;
   } catch (e) {
     console.error('复制图片失败', e);
@@ -2918,7 +2953,7 @@ function writeBase64Avatar(b64: string): string | null {
     const ext = mime === 'image/jpeg' ? '.jpg' : mime === 'image/webp' ? '.webp' : '.png';
     const name = `avatar_${Date.now()}_${Math.floor(Math.random() * 1e6)}${ext}`;
     const dest = path.join(dm.imagesDir, name);
-    fs.writeFileSync(dest, buf);
+    writeBinary(dest, buf);
     return dest;
   } catch (e) {
     console.error('写入 base64 头像失败', e);
@@ -2939,8 +2974,9 @@ function imageToDataUrl(p: string): string | null {
           : ext === '.gif'
             ? 'image/gif'
             : 'image/png';
-    const b64 = fs.readFileSync(p).toString('base64');
-    return `data:${mime};base64,${b64}`;
+    const buf = readBinary(p);
+    if (!buf) return null;
+    return `data:${mime};base64,${buf.toString('base64')}`;
   } catch {
     return null;
   }
@@ -3363,7 +3399,7 @@ function buildMessagesForRole(
   vision = false,
   chatId?: string
 ): AIMessage[] {
-  const parts: string[] = [buildSystemPrompt({ ...role, affinity: affinityTotal }, freezeMemory, chatId)];
+  const parts: string[] = [buildSystemPrompt({ ...role, affinity: affinityTotal }, freezeMemory, chatId, selfRole?.id || 'none')];
   // 观察者私密小窗：告知 AI 这是完全私密的一对一，可袒露内心推演
   if (privateObserver) {
     parts.push(
@@ -3426,7 +3462,7 @@ function buildGroupMessages(
   groupId?: string,
   vision = false
 ): AIMessage[] {
-  const parts: string[] = [buildSystemPrompt({ ...role, affinity: affinityTotal }, freezeMemory, groupId)];
+  const parts: string[] = [buildSystemPrompt({ ...role, affinity: affinityTotal }, freezeMemory, groupId, selfRole?.id || 'none')];
   if (worldBook && worldBook.trim()) {
     parts.push(`【世界书 / 共享世界观】\n${worldBook.trim()}`);
   }
@@ -4843,7 +4879,7 @@ async function archiveMatch(groupId: string): Promise<string | null> {
   const dir = path.join(dm.dataDirectory, 'matches');
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `match_${groupId}_${Date.now()}.json`);
-  fs.writeFileSync(file, JSON.stringify(archive, null, 2), 'utf-8');
+  writeText(file, JSON.stringify(archive, null, 2));
   return file;
 }
 
@@ -5437,7 +5473,7 @@ async function runVideoGenJob(chatType: string, chatId: string, prompt: string, 
         const buf = Buffer.from(await resp.arrayBuffer());
         const name = `gen_${Date.now()}_${Math.floor(Math.random() * 1e6)}.mp4`;
         const dest = path.join(dm.imagesDir, name);
-        fs.writeFileSync(dest, buf);
+        writeBinary(dest, buf);
         videoPath = dest;
       } catch (e) {
         console.error('下载生视频失败', e);
@@ -5511,7 +5547,7 @@ async function runMomentVideoJob(roleId: string, momentId: number, prompt: strin
         const buf = Buffer.from(await resp.arrayBuffer());
         const name = `moment_${Date.now()}_${Math.floor(Math.random() * 1e6)}.mp4`;
         const dest = path.join(dm.imagesDir, name);
-        fs.writeFileSync(dest, buf);
+        writeBinary(dest, buf);
         videoPath = dest;
       } catch (e) {
         console.error('下载朋友圈视频失败', e);
@@ -5623,6 +5659,141 @@ function sendStreamDone(streamId: string, message: ChatMessage, silent = false):
     }
   } catch {
     /* 未读统计/通知卡片失败时静默，不影响消息下发 */
+  }
+}
+
+// ===== v3.0.18 日记 AI：留言 / 总结（复用既有模型队列，不新建 AI 管线）=====
+function broadcastDiaryChanged(payload: { diaryId: string; kind: 'comments' | 'summary' | 'entry' }): void {
+  broadcast('diary:changed', payload);
+}
+
+async function callDiaryAI(role: Role, system: string, userPrompt: string, label: string): Promise<string> {
+  const settings = dm.getSettings();
+  const cfg = resolveRoleModel(role, settings) || getDefaultModelConfig(settings);
+  if (!cfg) throw new Error('E_DIARY_NO_MODEL');
+  await enqueueAndWait(cfg.id, cfg.qps, label);
+  const res = await queryAI(cfg, [
+    { role: 'system', content: system },
+    { role: 'user', content: userPrompt },
+  ], 800);
+  if (res.error) throw new Error(res.error.message || 'E_DIARY_AI_ERROR');
+  return (res.content || '').trim();
+}
+
+/**
+ * 为可见角色生成留言。名单外角色恒 0 条；tone='skip' 视为合法不留言。
+ * 保存日记时以 fire-and-forget 调用（先落盘立即返回），手动按钮则 await 本函数。
+ */
+async function generateDiaryComments(diaryId: string, roleIds?: string[]): Promise<DiaryAiResult> {
+  const d = diaryStore.getDiary(diaryId);
+  if (!d) return makeDiaryAiResult([], [], 'ERROR');
+  if (!shouldGenerateComments(d)) return makeDiaryAiResult([], [], 'NO_VISIBLE_ROLE');
+  const roles = dm.listRoles();
+  const plan = planDiaryAiWork(
+    d,
+    roles.map((r) => ({ id: r.id, affinity: r.affinity, mood: r.mood })),
+    roleIds
+  );
+  const generated: string[] = [];
+  // tone='skip' 是合法「本次不留言」：不调用模型，但要回报给 UI 显示。
+  const skipped: string[] = roles
+    .filter((r) => canRoleAccessDiary(d, r.id) &&
+      (!roleIds || roleIds.length === 0 || roleIds.includes(r.id)) &&
+      classifyDiaryCommentTone(r.affinity, r.mood || '平静') === 'skip')
+    .map((r) => r.id);
+  if (plan.length === 0) return makeDiaryAiResult([], skipped, 'NO_VISIBLE_ROLE');
+  let reason: DiaryAiResult['reason'];
+  for (const item of plan) {
+    const role = dm.getRole(item.roleId);
+    if (!role) {
+      skipped.push(item.roleId);
+      continue;
+    }
+    try {
+      const system = `${buildSystemPrompt(role)}\n\n${item.suffix}`;
+      const prompt = `日记标题：${d.title || '（无标题）'}\n日期：${d.date}\n正文：${d.content}`;
+      const text = await callDiaryAI(role, system, prompt, '日记留言');
+      if (!text) {
+        skipped.push(role.id);
+        continue;
+      }
+      diaryStore.addComment(diaryId, {
+        id: `dc_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`,
+        roleId: role.id,
+        text,
+        tone: item.tone,
+        affinityAt: item.affinity,
+        moodAt: item.mood,
+        revoked: false,
+        created_at: new Date().toISOString(),
+      });
+      generated.push(role.id);
+    } catch (e) {
+      console.error('[diary] 生成留言失败', e);
+      skipped.push(role.id);
+      reason = String(e).includes('NO_MODEL') ? 'NO_MODEL' : 'ERROR';
+    }
+  }
+  broadcastDiaryChanged({ diaryId, kind: 'comments' });
+  return makeDiaryAiResult(generated, skipped, generated.length > 0 ? undefined : reason);
+}
+
+/** 总结只产出独立 diary_summaries 产物；游标 sourceUpdatedAt 决定后续是否可引用。 */
+async function summarizeDiary(diaryId: string, roleIds?: string[]): Promise<DiaryAiResult> {
+  const d = diaryStore.getDiary(diaryId);
+  if (!d) return makeDiaryAiResult([], [], 'ERROR');
+  if (d.allowAi !== true) return makeDiaryAiResult([], [], 'AI_DISABLED');
+  const targets = (roleIds && roleIds.length > 0 ? roleIds : d.visibleRoleIds)
+    .filter((id) => d.visibleRoleIds.includes(id));
+  if (targets.length === 0) return makeDiaryAiResult([], [], 'NO_VISIBLE_ROLE');
+  // 重新总结：旧摘要先软删，绝不自动复活已撤销内容。
+  diaryStore.revokeForRoles(diaryId, targets);
+  const generated: string[] = [];
+  const skipped: string[] = [];
+  let reason: DiaryAiResult['reason'];
+  for (const roleId of targets) {
+    const role = dm.getRole(roleId);
+    if (!role) {
+      skipped.push(roleId);
+      continue;
+    }
+    try {
+      const system = `${buildSystemPrompt(role)}\n\n请以该角色视角概括主人日记的要点，只输出摘要正文，每行一条，保持人设，不得提及任何角色世界之外的事物。`;
+      const prompt = `请总结以下日记，便于之后在对话中快速回答相关问题：\n标题：${d.title || '（无标题）'}\n日期：${d.date}\n正文：${d.content}`;
+      const text = await callDiaryAI(role, system, prompt, '日记总结');
+      if (!text) {
+        skipped.push(roleId);
+        continue;
+      }
+      diaryStore.addSummary({
+        id: `ds_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`,
+        diaryId,
+        roleId,
+        selfRoleId: d.selfRoleId,
+        visibleRoleIdsSnapshot: [...d.visibleRoleIds],
+        text,
+        sourceUpdatedAt: d.updated_at,
+        revoked: false,
+        created_at: new Date().toISOString(),
+      });
+      generated.push(roleId);
+    } catch (e) {
+      console.error('[diary] 总结失败', e);
+      skipped.push(roleId);
+      reason = String(e).includes('NO_MODEL') ? 'NO_MODEL' : 'ERROR';
+    }
+  }
+  broadcastDiaryChanged({ diaryId, kind: 'summary' });
+  return makeDiaryAiResult(generated, skipped, generated.length > 0 ? undefined : reason);
+}
+
+/** 保存后自动留言 / 自动总结：不阻塞 IPC 返回，失败仅记日志。 */
+function scheduleDiaryAi(d: DiaryEntry): void {
+  if (shouldGenerateComments(d)) {
+    void generateDiaryComments(d.id).catch((e) => console.error('[diary] 自动留言失败', e));
+  }
+  if (shouldSummarize(d, true, dm.getSettings().diaryAutoSummarize === true)) {
+    void summarizeDiary(d.id).catch((e) => console.error('[diary] 自动总结失败', e));
   }
 }
 
@@ -6549,7 +6720,7 @@ function registerIPC(): void {
   const importCharacterCardFrom = async (p: string) => {
     const fileName = path.basename(p);
     try {
-      const buf = fs.readFileSync(p);
+      const buf = readBinary(p) || Buffer.alloc(0);
       const isPng = buf.subarray(0, 8).equals(PNG_SIG);
       if (isPng) {
         const json = parseCharacterPng(buf);
@@ -6557,7 +6728,7 @@ function registerIPC(): void {
         // 以该 PNG 本身作为头像
         const avatarName = `avatar_${Date.now()}_${Math.floor(Math.random() * 1e6)}.png`;
         const avatarDest = path.join(dm.imagesDir, avatarName);
-        fs.copyFileSync(p, avatarDest);
+        writeBinary(avatarDest, buf);
         return { parsed: parseCharacterCard(json), avatarPath: avatarDest, fileName, isPng: true };
       }
       // 文本 / JSON 角色卡
@@ -6628,7 +6799,9 @@ function registerIPC(): void {
         '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
         '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
       };
-      const b64 = fs.readFileSync(p).toString('base64');
+      const mediaBuf = readBinary(p);
+      if (!mediaBuf) return null;
+      const b64 = mediaBuf.toString('base64');
       return `data:${mime[ext] || 'image/png'};base64,${b64}`;
     } catch {
       return null;
@@ -6641,7 +6814,7 @@ function registerIPC(): void {
       const ext = match[1] === 'image/jpeg' ? '.jpg' : match[1] === 'image/png' ? '.png' : '.png';
       const name = `avatar_${Date.now()}_${Math.floor(Math.random() * 1e6)}${ext}`;
       const dest = path.join(dm.imagesDir, name);
-      fs.writeFileSync(dest, Buffer.from(match[2], 'base64'));
+      writeBinary(dest, Buffer.from(match[2], 'base64'));
       return dest;
     } catch (e) {
       console.error('保存图片失败', e);
@@ -6671,7 +6844,7 @@ function registerIPC(): void {
         const buf = Buffer.from(await resp.arrayBuffer());
         const name = `gen_${Date.now()}_${Math.floor(Math.random() * 1e6)}.png`;
         const dest = path.join(dm.imagesDir, name);
-        fs.writeFileSync(dest, buf);
+        writeBinary(dest, buf);
         imagePath = dest;
       } catch (e) {
         console.error('下载生图失败', e);
@@ -6744,7 +6917,7 @@ function registerIPC(): void {
           const buf = Buffer.from(await resp.arrayBuffer());
           const name = `gen_${Date.now()}_${Math.floor(Math.random() * 1e6)}.png`;
           const dest = path.join(dm.imagesDir, name);
-          fs.writeFileSync(dest, buf);
+          writeBinary(dest, buf);
           imagePathOut = dest;
         } catch (e) {
           console.error('下载生图失败', e);
@@ -6779,13 +6952,13 @@ function registerIPC(): void {
   // ===== 数据备份与还原 =====
   // v2.3.33：备份文件名改用【本地时间】命名（此前 toISOString 为 UTC 时间，比本地时钟慢 8 小时，
   // 用户感知为「名称滞后/是上一次备份的名称」）；并加毫秒 + 随机后缀，杜绝同名覆盖。
-  // v2.3.48：文件名加入软件版本号（NianyuBackup_v2.3.48_...zip），一眼识别备份创建版本。
+  // v2.3.48：文件名加入软件版本号；v3.0.18：后缀统一 .ny（磁盘小写，UI 文案写 .NY）。
   const backupFileName = (): string => {
     const d = new Date();
     const p = (n: number) => String(n).padStart(2, '0');
     const ms = String(d.getMilliseconds()).padStart(3, '0');
     const rand = Math.random().toString(36).slice(2, 6);
-    return `NianyuBackup_v${app.getVersion()}_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}_${ms}${rand}.zip`;
+    return `NianyuBackup_v${app.getVersion()}_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}_${ms}${rand}${BACKUP_EXTENSION}`;
   };
   // 防覆盖：目标已存在时自动追加 _1/_2 序号（v2.3.33），绝不静默覆盖旧备份
   const uniquifyBackupDest = (dest: string): string => {
@@ -6843,6 +7016,66 @@ function registerIPC(): void {
       return null;
     }
   });
+
+  // v3.0.18：旧明文 zip → .ny 转换器（只读原包，写同目录 _converted.ny；不解密内部媒体）。
+  ipcMain.handle('backup:convertLegacy', (_e, zipPath: string) =>
+    convertLegacyBackup(String(zipPath || ''))
+  );
+
+  // ===== v3.0.18 日记与加密（全部追加；既有 cursor / backup 通道逐字不动）=====
+  // list/get 附带该篇的摘要产物（只给 UI 展示；门控注入仍只在 buildSystemPrompt 内发生）。
+  ipcMain.handle('diary:list', (_e, selfRoleId?: string) => {
+    const summaries = diaryStore.snapshot().summaries;
+    return diaryStore.listDiaries(selfRoleId).map((d) => ({
+      ...d,
+      diary_summaries: summaries.filter((s) => s.diaryId === d.id),
+    }));
+  });
+  ipcMain.handle('diary:get', (_e, id: string) => {
+    const d = diaryStore.getDiary(String(id || ''));
+    if (!d) return undefined;
+    return { ...d, diary_summaries: diaryStore.snapshot().summaries.filter((s) => s.diaryId === d.id) };
+  });
+  ipcMain.handle('diary:create', (_e, p: DiaryCreateParams) => {
+    const settings = dm.getSettings();
+    const current = settings.selfRoles?.find((r) => r.id === settings.currentSelfRoleId);
+    const entry = diaryStore.createDiary({
+      selfRoleId: p.selfRoleId || current?.id || 'none',
+      date: p.date || new Date().toISOString().slice(0, 10),
+      title: p.title || '',
+      content: p.content || '',
+    });
+    broadcastDiaryChanged({ diaryId: entry.id, kind: 'entry' });
+    return entry;
+  });
+  ipcMain.handle('diary:update', (_e, id: string, patch: DiaryPatch) => {
+    const entry = diaryStore.updateDiary(String(id || ''), patch || {});
+    if (!entry) throw new Error('日记不存在');
+    broadcastDiaryChanged({ diaryId: entry.id, kind: 'entry' });
+    // 保存先返回、AI 后台执行：allowAi=false 时 scheduleDiaryAi 不触发任何网络请求。
+    // 仅删除留言产物（aiComments-only patch）不是正文编辑，不重复触发整批留言生成。
+    const onlyCommentPatch = Object.keys(patch || {}).every((k) => k === 'aiComments');
+    if (!onlyCommentPatch) scheduleDiaryAi(entry);
+    return entry;
+  });
+  ipcMain.handle('diary:delete', (_e, id: string) => {
+    const ok = diaryStore.deleteDiary(String(id || ''));
+    if (ok) broadcastDiaryChanged({ diaryId: String(id || ''), kind: 'entry' });
+    return ok;
+  });
+  ipcMain.handle('diary:regenerateComments', (_e, id: string, roleIds?: string[]) =>
+    generateDiaryComments(String(id || ''), roleIds)
+  );
+  ipcMain.handle('diary:summarize', (_e, id: string, roleIds?: string[]) =>
+    summarizeDiary(String(id || ''), roleIds)
+  );
+  ipcMain.handle('diary:listOrphans', () =>
+    diaryStore.listOrphans((dm.getSettings().selfRoles || []).map((r) => r.id))
+  );
+  ipcMain.handle('diary:reassignOrphans', (_e, from: string, to: string) =>
+    diaryStore.reassignOrphans(String(from || ''), String(to || 'none'))
+  );
+  ipcMain.handle('encryption:status', () => dm.getEncryptionStatus());
 
   // ---------- 应用数据保存路径（实时数据，非备份）----------
   ipcMain.handle('data:getPath', () => {
@@ -7531,7 +7764,7 @@ function registerIPC(): void {
           out.push({ name: fileName, ok: false, error: 'unsupported' });
           continue;
         }
-        const buf = fs.readFileSync(p);
+        const buf = readBinary(p) || Buffer.alloc(0);
         if (buf.subarray(0, 8).equals(PNG_SIG)) {
           const json = parseCharacterPng(buf);
           if (!json) {
@@ -7541,7 +7774,7 @@ function registerIPC(): void {
           // 以该 PNG 本身作为头像，直接建卡（快速导入不做编辑预填）
           const avatarName = `avatar_${Date.now()}_${Math.floor(Math.random() * 1e6)}.png`;
           const avatarDest = path.join(dm.imagesDir, avatarName);
-          fs.copyFileSync(p, avatarDest);
+          writeBinary(avatarDest, buf);
           const parsed = parseCharacterCard(json);
           const role = buildRoleFromParsed(parsed, fileName.replace(/\.[^.]+$/, ''));
           role.avatar_path = avatarDest;
@@ -7592,7 +7825,7 @@ function registerIPC(): void {
           items.push({ ...base, kind: 'plugin', error: { code: 'unsupported' } });
           continue;
         }
-        const buf = fs.readFileSync(p);
+        const buf = readBinary(p) || Buffer.alloc(0);
         if (buf.subarray(0, 8).equals(PNG_SIG)) {
           // PNG 角色卡：解析 tEXt/chara。**不复制头像文件**，直接把原路径给渲染层显示。
           const json = parseCharacterPng(buf);
@@ -7971,9 +8204,30 @@ app.whenReady().then(() => {
   setUpdateBroadcaster(broadcast);
   startAutoCheck();
   Menu.setApplicationMenu(buildMenu((MENU_LANGS as string[]).includes(settings.lang) ? settings.lang as Lang : 'zh'));
-  protocol.registerFileProtocol('nianyuimg', (request, callback) => {
-    const url = request.url.replace('nianyuimg://', '');
-    callback(decodeURIComponent(url));
+  // v3.0.18：媒体在磁盘上是密文，必须以 buffer 协议解密返回；**绝不落明文临时文件**。
+  protocol.registerBufferProtocol('nianyuimg', (request, callback) => {
+    try {
+      const decoded = decodeURIComponent(request.url.replace(/^nianyuimg:\/*/, ''));
+      const abs = path.resolve(decoded);
+      const buf = readBinary(abs);
+      if (!buf) {
+        callback({ statusCode: 404, data: Buffer.alloc(0), mimeType: 'text/plain' });
+        return;
+      }
+      const ext = path.extname(abs).toLowerCase();
+      const mime =
+        ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
+          : ext === '.webp' ? 'image/webp'
+            : ext === '.gif' ? 'image/gif'
+              : ext === '.bmp' ? 'image/bmp'
+                : ext === '.mp4' ? 'video/mp4'
+                  : ext === '.webm' ? 'video/webm'
+                    : ext === '.mov' ? 'video/quicktime'
+                      : 'image/png';
+      callback({ statusCode: 200, data: buf, mimeType: mime });
+    } catch {
+      callback({ statusCode: 500, data: Buffer.alloc(0), mimeType: 'text/plain' });
+    }
   });
   // 自定义音效协议：nysound://<filename> -> userData/custom-sounds/<filename>
   const customSoundsDir = path.join(app.getPath('userData'), 'custom-sounds');

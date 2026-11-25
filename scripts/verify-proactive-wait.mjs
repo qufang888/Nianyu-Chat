@@ -37,7 +37,16 @@ const req = createRequire(join(workDir, 'harness.cjs'));
 
 // ---------------------------------------------------------------- 1) 打包真实 proactive.ts
 const bundle = await build({
-  entryPoints: [join(ROOT, 'electron/proactive.ts')],
+  // v3.0.18：proactive.ts 落盘改走真实 secureStore；同一 bundle 额外导出 initSecureStore/readText，
+  // 让脚本在临时目录注入密钥并按真实加密链路读回（不 stub 掉加密，断言强度不降）。
+  stdin: {
+    contents: [
+      `export * from ${JSON.stringify(join(ROOT, 'electron/proactive.ts'))};`,
+      `export { initSecureStore, readText as secureReadText } from ${JSON.stringify(join(ROOT, 'electron/secureStore.ts'))};`,
+    ].join('\n'),
+    loader: 'ts',
+    resolveDir: ROOT,
+  },
   bundle: true,
   format: 'cjs',
   platform: 'node',
@@ -65,15 +74,19 @@ Module._load = function (request, ...rest) {
 };
 
 /** 加载一份全新的引擎模块实例（模块级 store 为空 → initProactiveEngine 会 loadStore 读 seed 文件） */
+let secureApi = null;
 function loadEngine() {
   delete Module._cache[outFile];
-  return req(outFile);
+  const mod = req(outFile);
+  mod.initSecureStore(join(workDir, 'nianyu-master.key'));
+  secureApi = mod;
+  return mod;
 }
 function seedStore(obj) {
   writeFileSync(STORE_PATH, JSON.stringify(obj, null, 2), 'utf-8');
 }
 function readStore() {
-  return JSON.parse(readFileSync(STORE_PATH, 'utf-8'));
+  return JSON.parse((secureApi || req(outFile)).secureReadText(STORE_PATH));
 }
 /** 等待 saveStore 的 500ms 防抖落盘 */
 const settle = () => new Promise((r) => setTimeout(r, 700));

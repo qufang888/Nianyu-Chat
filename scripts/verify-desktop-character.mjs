@@ -1513,8 +1513,11 @@ check('v3.0.6 zip 文件名兼容：UTF-8 flag + GBK/CP932 多编码判别',
   /iconv\.decode\(raw, 'cp932'\)/.test(assetsTs) &&
   /\[\\uff66-\\uff9f\]/.test(assetsTs) &&
   /\[\\u3040-\\u30ff\]/.test(assetsTs));
+// v3.0.18：角色素材落盘统一走 secureStore.writeBinary（逐条目按解码后文件名 target 写、
+// 仍不使用 extractAllTo），语义与裸 fs.writeFileSync 完全一致，只是多一层 NYENC001 信封。
+// 两种写法都视为满足原断言，但「逐条目 + 不 extractAllTo」两条约束原样保留，不放宽。
 check('v3.0.6 逐条目按解码后文件名写盘（不用默认 extractAllTo）',
-  /fs\.writeFileSync\(target, e\.getData\(\)\)/.test(assetsTs) &&
+  /(?:fs\.writeFileSync|writeBinary)\(target, e\.getData\(\)\)/.test(assetsTs) &&
   !/zip\.extractAllTo\(/.test(assetsTs));
 check('v3.0.6 路径穿越按段判断（不误伤合法 .. 文件名）',
   /name\.split\('\/'\)\.some\(\(seg\) => seg === '\.\.'\)/.test(assetsTs));

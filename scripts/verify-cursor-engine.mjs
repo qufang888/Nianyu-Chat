@@ -263,7 +263,8 @@ ok(typeof mig.migrateCursorHotspot === 'function', '迁移函数可执行（elec
 
 const dbSrc = read('electron/db.ts');
 ok(/migrateCursorHotspot\(merged\)/.test(dbSrc), '迁移挂在既有 settings 读盘调用点');
-ok(/migrateCursorHotspot[\s\S]{0,600}?writeFileSync\(this\.settingsPath/.test(dbSrc),
+// v3.0.18：settings 落盘统一走 secureStore.writeText（透明加密），断言保留「迁移后立即写盘」语义。
+ok(/migrateCursorHotspot[\s\S]{0,600}?(?:writeFileSync|writeText)\(this\.settingsPath/.test(dbSrc),
   '迁移结果会落盘（否则下次启动会再换算一次）');
 ok(/from '\.\/cursorHotspotMigration'/.test(dbSrc), 'db.ts 从独立迁移模块导入（纯逻辑可被行为级校验）');
 

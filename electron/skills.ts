@@ -18,6 +18,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { Skill, SkillScope, SkillImportResult } from '../src/types';
 import { BUILTIN_SKILL_SEEDS, type BuiltinSkillSeed } from './builtinSkills';
+// v3.0.18：技能正文属结构化文本资料，落盘统一走加密读写（userData/skills.json）。
+import { readText, writeText } from './secureStore';
 
 // ===== 硬编码常量（同步登记 硬编码清单.md）=====
 export const SKILL_BODY_MAX = 20_000; // 技能正文最大字符数，超出截断并在 UI 标注
@@ -78,7 +80,7 @@ export function loadSkills(): void {
   try {
     const p = storeFile();
     if (fs.existsSync(p)) {
-      const raw = JSON.parse(fs.readFileSync(p, 'utf-8')) as Partial<SkillStore>;
+      const raw = JSON.parse(readText(p)) as Partial<SkillStore>;
       store = {
         version: typeof raw.version === 'number' ? raw.version : STORE_VERSION,
         skills: Array.isArray(raw.skills) ? raw.skills.filter(isValidSkill) : [],
@@ -124,7 +126,7 @@ export function flushSkills(): void {
     saveTimer = null;
   }
   try {
-    fs.writeFileSync(storeFile(), JSON.stringify(store, null, 2), 'utf-8');
+    writeText(storeFile(), JSON.stringify(store, null, 2));
   } catch {
     /* 落盘失败不打断聊天链路 */
   }
@@ -134,7 +136,7 @@ export function flushSkills(): void {
 function readStoreFileText(): string {
   try {
     const p = storeFile();
-    return fs.existsSync(p) ? fs.readFileSync(p, 'utf-8') : '';
+    return fs.existsSync(p) ? readText(p) : '';
   } catch {
     return '';
   }

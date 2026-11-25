@@ -1,7 +1,7 @@
 import React from 'react';
 import { useI18n } from '../i18n/I18nContext';
 
-type View = 'chats' | 'contacts' | 'compare' | 'settings' | 'stats' | 'library' | 'moments' | 'characters';
+type View = 'chats' | 'contacts' | 'compare' | 'settings' | 'stats' | 'library' | 'moments' | 'characters' | 'diary';
 
 const items: { key: View; icon: string; labelKey: string }[] = [
   { key: 'chats', icon: '💬', labelKey: 'nav.chats' },
@@ -12,6 +12,8 @@ const items: { key: View; icon: string; labelKey: string }[] = [
   { key: 'compare', icon: '⚔️', labelKey: 'nav.compare' },
   { key: 'stats', icon: '📊', labelKey: 'nav.stats' },
   { key: 'library', icon: '📚', labelKey: 'library.title' },
+  // v3.0.18：分册日记入口（追加；cursor 相关代码零改动）
+  { key: 'diary', icon: '📔', labelKey: 'nav.diary' },
   { key: 'settings', icon: '⚙️', labelKey: 'nav.settings' },
 ];
 

@@ -676,14 +676,15 @@ export function registerDialogIpc(): void {
 
   ipcMain.handle('backup:pickTarget', async (e) => {
     const s = backupSettingsProvider ? backupSettingsProvider() : null;
-    const fileName = backupNameProvider ? backupNameProvider() : 'nianyu-backup.zip';
+    const fileName = backupNameProvider ? backupNameProvider() : 'nianyu-backup.ny';
     const defaultPath = s && s.backupDir && fs.existsSync(s.backupDir) ? path.join(s.backupDir, fileName) : fileName;
     const picked = await requestFilePick(e.sender, {
       kind: 'save',
       title: '选择备份保存位置',
       defaultName: path.basename(defaultPath),
       startDir: path.dirname(path.resolve(defaultPath)),
-      filters: [{ name: 'Zip', extensions: ['zip'] }],
+      // v3.0.18：保存默认 .NY；同时允许旧后缀以便用户覆盖同名旧文件时会走防覆盖改名。
+      filters: [{ name: '念语备份 (.NY)', extensions: ['ny', 'zip'] }],
       unique: true,
     });
     if (!picked || !picked[0]) return null;
@@ -705,8 +706,9 @@ export function registerDialogIpc(): void {
     const picked = await requestFilePick(e.sender, {
       kind: 'open',
       multiple: false,
-      title: '选择备份文件',
-      filters: [{ name: 'Zip', extensions: ['zip'] }],
+      title: '选择备份文件 / 待转换的旧 ZIP',
+      // v3.0.18：还原与转换共用的选择器必须同时列出 .ny 与旧 .zip。
+      filters: [{ name: '念语备份 (.NY) / 旧版 ZIP', extensions: ['ny', 'zip'] }],
     });
     if (!picked || !picked[0]) return null;
     rememberDir(e.sender.id, picked[0]);

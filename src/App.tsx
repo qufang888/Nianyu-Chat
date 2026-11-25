@@ -23,6 +23,8 @@ import {
 } from './components/QuickImportPreviewModal';
 import { ModelCompare } from './components/ModelCompare';
 import { MomentsView } from './components/MomentsView';
+// v3.0.18：分册日记视图（追加，不影响 cursor 门控订阅与 onMainCursorWindow 链路）。
+import { DiaryView } from './components/DiaryView';
 // V3：桌面角色（桌宠角色）板块——主界面内的角色管理面板。
 // 用 React.lazy 按需加载：该面板会带出 ModelView / 角色舞台（内含 WebGL 相关代码，约 1MB），
 // 静态引入会让每次冷启动都白白预加载一大块「可能根本不用」的代码。
@@ -39,7 +41,7 @@ import { TutorialOverlay } from './components/TutorialOverlay';
 import { isGroupEnabled } from './utils/animControl';
 import type { Role, QuickImportResult, QuickImportPreviewItem } from './types';
 
-type View = 'chats' | 'contacts' | 'compare' | 'settings' | 'stats' | 'library' | 'moments' | 'characters';
+type View = 'chats' | 'contacts' | 'compare' | 'settings' | 'stats' | 'library' | 'moments' | 'characters' | 'diary';
 interface Selected {
   type: string;
   id: string;
@@ -498,6 +500,7 @@ export default function App() {
   if (view === 'compare') return t('nav.compare');
   if (view === 'settings') return t('nav.settings');
   if (view === 'moments') return t('nav.moments');
+  if (view === 'diary') return t('nav.diary');
   return t('app.name');
   })();
 
@@ -610,6 +613,7 @@ export default function App() {
         </React.Suspense>
       )}
       {view === 'moments' && <MomentsView />}
+      {view === 'diary' && <DiaryView />}
       {view === 'library' && (
         <Library
           key={`lib-${importTick}`}

@@ -18,6 +18,7 @@ import {
   type SelfRole,
   type WorldBook,
   type ErrorLogEntry,
+  type EncryptionStatus,
   type Plugin,
   type Skill,
   type SkillScope,
@@ -160,6 +161,8 @@ const ADVANCED_ANCHORS: Record<string, string> = {
   // 聊天
   'sec-emoevent': 'adv-chat',
   'sec-inactive-chat': 'adv-chat',
+  // v3.0.18：日记与隐私（无条件挂载在 adv-chat 内，登记后搜索命中可先展开）
+  'sec-diary-privacy': 'adv-chat',
   // （主动互动 / 记忆与社交 的折叠区内为动态索引项，统一由 goToSetting 的 DOM 就近查找兜底）
   // 外观与动效
   'sec-anim-speed': 'adv-appearance',
@@ -273,6 +276,8 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-imagegen', key: 'settings.imageGen', kw: ['生图配置', '图像配置', '绘图配置', 'image config', 'image generation'] },
   { id: 'sec-videogen', key: 'settings.videoGen', kw: ['生视频配置', '视频配置', 'video config', 'video generation'] },
   { id: 'sec-emoevent', key: 'settings.emoEventAdvanced', kw: ['情绪', '事件', 'emotion', 'event', '高级'] },
+  // v3.0.18：日记隐私与加密状态（中英文关键词，搜索候选最多 5 条由共享模糊搜索保证）
+  { id: 'sec-diary-privacy', key: 'settings.diaryPrivacyTitle', kw: ['日记', '隐私', '加密', '自动总结', '密钥', 'diary', 'privacy', 'encrypt', 'encryption', 'auto summarize', 'key'] },
   { id: 'sec-proactive-engine', key: 'settings.proactiveEngine', kw: ['主动消息', '机制', '引擎', '触发方式', 'proactive', 'engine', '机制选择'] },
   { id: 'sec-inputappearance', key: 'settings.inputAppearance', kw: ['输入框', 'input', '输入栏', '外观'] },
   { id: 'sec-cursor', key: 'settings.cursor', kw: ['光标', 'cursor', '鼠标指针', '自定义光标', '自定义图片', '上传', 'upload', '图片', '粒子', '拖尾', '特效', '点击位置', '热点', 'hotspot'] },
@@ -301,7 +306,7 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-datapath', key: 'settings.dataPath', kw: ['数据', '路径', 'data', 'path', '存储'] },
   { id: 'sec-closebehavior', key: 'settings.closeBehavior', kw: ['关闭', '退出', 'close', '退出行为'] },
   { id: 'sec-errorlog', key: 'settings.errorLog', kw: ['错误', '日志', 'error', 'log', '报错'] },
-  { id: 'sec-backup', key: 'settings.backup', kw: ['备份', 'backup', '恢复'] },
+  { id: 'sec-backup', key: 'settings.backup', kw: ['备份', 'backup', '恢复', '转换', 'converter', 'zip', 'ny', '格式转换'] },
   { id: 'sec-reset', key: 'settings.resetSettings', kw: ['重置', 'reset', '恢复默认', '清空'] },
 ];
 
@@ -409,6 +414,15 @@ export const Settings: React.FC<{
   const [draft, setDraft] = useState<AppSettings | null>(settings);
   const [detectingAll, setDetectingAll] = useState(false);
   const [status, setStatus] = useState('');
+  // v3.0.18：加密状态只读提示（不暴露密钥内容）
+  const [encStatus, setEncStatus] = useState<EncryptionStatus | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api.encryptionStatus()
+      .then((s) => { if (alive) setEncStatus(s); })
+      .catch(() => { if (alive) setEncStatus(null); });
+    return () => { alive = false; };
+  }, []);
 
   // 识图模型（v2.3.51）：ComboBox 受控输入的临时查询文本；选中/清空后回到「按 ID 解析名称」显示
   const [visionQuery, setVisionQuery] = useState('');
@@ -1563,6 +1577,27 @@ export const Settings: React.FC<{
     await reloadSettings();
     setBusy(false);
     setStatus(t('settings.backupDone', { dest: actual }));
+  };
+
+  // v3.0.18：旧明文 ZIP → .NY（只读原包，同目录写 _converted.ny）
+  const convertLegacy = async () => {
+    setBusy(true);
+    setStatus(t('settings.backupConvertDesc'));
+    const zip = await api.pickRestoreFile();
+    if (!zip) {
+      setBusy(false);
+      setStatus('');
+      return;
+    }
+    try {
+      const dest = await api.convertLegacyBackup(zip);
+      setStatus(t('settings.backupConvertDone', { path: dest }));
+    } catch (e) {
+      showToast(String(e), { error: true });
+      setStatus('');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const restore = async () => {
@@ -3046,6 +3081,29 @@ export const Settings: React.FC<{
             <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 6, lineHeight: 1.6 }}>
               {t('settings.inactiveChatHint')}
             </div>
+          </div>
+
+          {/* ===== v3.0.18 日记与隐私（无条件挂载，折叠仅视觉隐藏）===== */}
+          <div id="sec-diary-privacy" className="section-title" style={{ marginTop: 16 }}>
+            {t('settings.diaryPrivacyTitle')}
+          </div>
+          <label
+            style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, cursor: 'pointer' }}
+          >
+            <input
+              type="checkbox"
+              checked={draft?.diaryAutoSummarize === true}
+              onChange={(e) => {
+                patch({ diaryAutoSummarize: e.target.checked });
+                api.saveSettings({ diaryAutoSummarize: e.target.checked });
+              }}
+            />
+            <span>{t('settings.diaryAutoSummarize')}<Hint text={t('settings.diaryAutoSummarizeDesc')} /></span>
+          </label>
+          <div style={{ marginTop: 10, fontSize: 12.5, lineHeight: 1.7, color: 'var(--color-text)' }}>
+            <div>{t('settings.diaryStatus')}：{encStatus?.status ?? 'unknown'}</div>
+            <div>{t('settings.diarySecurity')}</div>
+            <div>{t('settings.diaryKeyHint')}</div>
           </div>
 
           </AdvancedSection>
@@ -5431,9 +5489,13 @@ export const Settings: React.FC<{
           <button className="btn-ghost" onClick={restore} disabled={busy} style={{ color: 'var(--color-danger, #e06c75)' }}>
             {t('settings.restoreBtn')}
           </button>
+          <button className="btn-ghost" onClick={() => void convertLegacy()} disabled={busy} title={t('settings.backupConvertDesc')}>
+            {t('settings.backupConvertBtn')}
+          </button>
         </div>
         <div style={{ marginTop: 8, fontSize: 12, color: 'var(--color-text-secondary)' }}>
           {t('settings.backupDesc')}
+          {' '}{t('settings.backupFormatNy')}
           {draft.lastBackupTime && (
             <>
               {' '}

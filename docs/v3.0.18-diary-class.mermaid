@@ -1,0 +1,155 @@
+classDiagram
+    class SecureStore {
+        +string MAGIC
+        +string keyPath
+        +loadOrCreateKey(keyPath) Buffer
+        +isEncrypted(buf Buffer) boolean
+        +encryptBuffer(buf Buffer, key Buffer) Buffer
+        +decryptBuffer(buf Buffer, key Buffer) Buffer
+        +readText(file string) string
+        +writeText(file string, text string) void
+        +readBinary(file string) Buffer
+        +writeBinary(file string, buf Buffer) void
+        +migratePlaintextFiles(files string[]) MigrationResult
+        +isNianyuBackup(buf Buffer) boolean
+        +buildNianyuBackup(plainZip Buffer) Buffer
+        +openNianyuBackup(buf Buffer) Buffer
+        +getEncryptionStatus() EncryptionStatus
+    }
+    class DiaryStore {
+        +string dataDir
+        +DiaryEntry[] diaries
+        +DiarySummary[] summaries
+        +init(dataDir string) void
+        +listDiaries(selfRoleId string) DiaryEntry[]
+        +getDiary(id string) DiaryEntry
+        +createDiary(p DiaryCreateParams) DiaryEntry
+        +updateDiary(id string, patch DiaryPatch) DiaryEntry
+        +deleteDiary(id string) boolean
+        +addComment(diaryId string, c DiaryComment) void
+        +addSummary(s DiarySummary) void
+        +revokeForRoles(diaryId string, roleIds string[]) void
+        +listOrphans() DiaryEntry[]
+        +reassignOrphans(fromId string, toId string) number
+        +save() void
+    }
+    class DiaryEntry {
+        +string id
+        +string selfRoleId
+        +string date
+        +string title
+        +string content
+        +boolean allowAi
+        +string[] visibleRoleIds
+        +DiaryComment[] aiComments
+        +string created_at
+        +string updated_at
+    }
+    class DiaryComment {
+        +string id
+        +string roleId
+        +string text
+        +DiaryTone tone
+        +number affinityAt
+        +string moodAt
+        +boolean revoked
+        +string created_at
+    }
+    class DiarySummary {
+        +string id
+        +string diaryId
+        +string roleId
+        +string selfRoleId
+        +string[] visibleRoleIdsSnapshot
+        +string text
+        +string sourceUpdatedAt
+        +boolean revoked
+        +string created_at
+    }
+    class DiaryGate {
+        +canRoleAccessDiary(diary DiaryEntry, roleId string) boolean
+        +collectArtifactsForRole(input GateInput) DiaryArtifact[]
+        +shouldGenerateComments(diary DiaryEntry) boolean
+        +shouldSummarize(diary DiaryEntry, auto boolean) boolean
+        +applyRevoke(diaries DiaryEntry[], summaries DiarySummary[], roleIds string[], all boolean) void
+        +buildDiaryContextBlock(roleId string, selfRoleId string) string
+    }
+    class DiaryTone {
+        +classifyDiaryCommentTone(affinity number, mood string) DiaryTone
+        +buildDiaryCommentSuffix(tone DiaryTone) string
+    }
+    class DataManager {
+        -Store store
+        -AppSettings settings
+        +loadStore() Store
+        +saveStore() void
+        +loadSettings() AppSettings
+        +saveSettings(patch Partial) AppSettings
+        +flushCompanionSync() void
+        +listRoles() Role[]
+        +listMemories(roleId string, chatId string) MemoryEntry[]
+    }
+    class BackupService {
+        +createBackup(dataDir string, dest string, ver string) void
+        +restoreBackup(backupPath string, dataDir string) void
+        +peekBackupVersion(backupPath string) string
+        +convertLegacyBackup(zipPath string) string
+        +buildNianyuBackup(plainZip Buffer) Buffer
+        +openNianyuBackup(buf Buffer) Buffer
+    }
+    class MainIpcHandlers {
+        +registerDiaryHandlers() void
+        +generateDiaryComments(diaryId string, roleIds string[]) DiaryAiResult
+        +summarizeDiary(diaryId string, roleIds string[]) DiaryAiResult
+        +broadcastDiaryChanged(payload any) void
+    }
+    class PromptBuilders {
+        +buildSystemPrompt(role Role, freezeMemory boolean, chatId string, diarySelfRoleId string) string
+        +buildMessagesForRole(role Role, roleArgs any[]) AIMessage[]
+        +buildGroupMessages(role Role, groupArgs any[]) AIMessage[]
+    }
+    class PreloadBridge {
+        +diaryList(selfRoleId string) Promise~DiaryEntry[]~
+        +diaryCreate(p DiaryCreateParams) Promise~DiaryEntry~
+        +diaryUpdate(id string, patch DiaryPatch) Promise~DiaryEntry~
+        +diaryDelete(id string) Promise~boolean~
+        +diaryRegenerateComments(id string, roleIds string[]) Promise~DiaryAiResult~
+        +diarySummarize(id string) Promise~DiaryAiResult~
+        +diaryListOrphans() Promise~DiaryEntry[]~
+        +diaryReassignOrphans(from string, to string) Promise~number~
+        +encryptionStatus() Promise~EncryptionStatus~
+        +onDiaryChanged(cb Function) Function
+    }
+    class DiaryView {
+        +books DiaryBook[]
+        +currentBook string
+        +entries DiaryEntry[]
+        +load() void
+        +onCreate() void
+        +onToggleAllowAi(id string) void
+        +onToggleRole(id string, roleId string) void
+        +onRegenerateComments(id string) void
+        +onSummarize(id string) void
+    }
+    class SettingsView {
+        +SETTING_SEARCH_INDEX SearchItem[]
+        +ADVANCED_ANCHORS Map
+        +sec_diary_privacy JSX
+    }
+
+    DiaryStore "1" *-- "0..*" DiaryEntry
+    DiaryStore "1" *-- "0..*" DiarySummary
+    DiaryEntry "1" *-- "0..*" DiaryComment
+    DiaryGate ..> DiaryStore : reads artifacts
+    DiaryGate ..> DiaryEntry : gates by allowAi + visibleRoleIds
+    DiaryGate ..> DiarySummary : injects only artifacts
+    DiaryTone ..> MainIpcHandlers : tone suffix
+    SecureStore <.. DataManager : readText/writeText
+    SecureStore <.. BackupService : encrypt/decrypt zip
+    SecureStore <.. DiaryStore : diary.json IO
+    DataManager <.. MainIpcHandlers
+    DiaryStore <.. MainIpcHandlers
+    DiaryGate <.. PromptBuilders : per-role block
+    MainIpcHandlers <.. PreloadBridge : ipcRenderer.invoke
+    PreloadBridge <.. DiaryView : window.api
+    PreloadBridge <.. SettingsView : encryption status

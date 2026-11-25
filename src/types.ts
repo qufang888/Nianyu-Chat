@@ -699,6 +699,72 @@ export interface CharacterRuntimeSettings {
   activeId: string;
 }
 
+// ===== v3.0.18 日记与加密 =====
+export type DiaryTone = 'warm' | 'neutral' | 'snarky' | 'skip';
+export type EncryptionStatusKind = 'encrypted' | 'migrating' | 'failed' | 'unknown';
+
+export interface EncryptionStatus {
+  status: EncryptionStatusKind;
+  fileCount: number;        // 已加密文件数
+  plainFiles: string[];     // 仍为明文的文件名（不含路径，不暴露密钥）
+  error?: string;           // 仅失败时，主进程文案
+}
+
+export interface DiaryComment {
+  id: string;
+  roleId: string;                 // 归属的 AI 角色
+  text: string;
+  tone: DiaryTone;
+  affinityAt: number;             // 生成时好感度快照
+  moodAt: string;                 // 生成时心情快照
+  revoked: boolean;               // 软删：撤销可见 / 正文变更
+  created_at: string;
+}
+
+export interface DiarySummary {
+  id: string;
+  diaryId: string;
+  roleId: string;                 // 产物按角色归属
+  selfRoleId: string;             // 身份册约束；'none' = 未指定册
+  visibleRoleIdsSnapshot: string[];
+  text: string;
+  sourceUpdatedAt: string;        // 生成时 diary.updated_at；不一致即视为陈旧
+  revoked: boolean;
+  created_at: string;
+}
+
+export interface DiaryEntry {
+  id: string;
+  selfRoleId: string;             // 'none' = 未指定身份兜底册
+  date: string;                   // YYYY-MM-DD
+  title?: string;
+  content: string;
+  allowAi: boolean;               // 默认 false；关闭时无论 visibleRoleIds 一律隔离
+  visibleRoleIds: string[];       // 默认 []；首次开启 allowAi 不自动填
+  aiComments: DiaryComment[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DiaryStoreShape {
+  version: 1;
+  seq: number;
+  diaries: DiaryEntry[];
+  diary_summaries: DiarySummary[]; // 独立集合，绝不复用 MemoryEntry
+}
+
+export interface DiaryAiResult {
+  ok: boolean;
+  generatedRoleIds: string[];
+  skippedRoleIds: string[];       // tone='skip' 或名单为空
+  reason?: 'AI_DISABLED' | 'NO_VISIBLE_ROLE' | 'NO_MODEL' | 'ERROR';
+}
+
+export interface DiaryBook {
+  id: string;
+  name: string;
+}
+
 export interface AppSettings {
   apiKeys: ApiKeys;
   defaultModel: string;
@@ -736,6 +802,7 @@ export interface AppSettings {
   chatBackgrounds: Record<string, string>; // key: "single:roleId" or "group:groupId"
   chatSoundPaths: Record<string, string>; // 每个聊天的自定义通知铃声路径，key 同上。空 = 使用全局通知音
   backupDir: string; // 自定义备份目录（空 = 每次手动选择）
+  diaryAutoSummarize?: boolean; // v3.0.18：AI 自动总结日记（默认关，仅总结 allowAi=true 的日记）
   uiRadius: number; // 整体 UI 圆角(px)
   bubbleRadius: number; // 聊天气泡圆角(px)
   bubbleOpacity: number; // 聊天气泡透明度（50~100，100=完全不透明）
@@ -1213,6 +1280,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   chatBackgrounds: {},
   chatSoundPaths: {},
   backupDir: '',
+  diaryAutoSummarize: false, // v3.0.18：默认关闭自动总结
   uiRadius: 10,
   bubbleRadius: 10,
   bubbleOpacity: 100,

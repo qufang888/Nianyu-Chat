@@ -177,12 +177,14 @@ console.log('\n【断言 4】渲染层无 <dialog> 标签 / window.print');
 //         这是本任务最关键的回归防线 —— 少一处就意味着某个删除操作
 //         不再弹确认框（属于功能性回归，比样式问题严重得多）。
 // ────────────────────────────────────────────────────────────────────────────
-console.log('\n【断言 5】16 处 showConfirm 调用点全部保留（零改动迁移）');
+console.log('\n【断言 5】16 处既有 + 1 处 v3.0.18 日记新增调用点全部保留');
 {
   // 基线 = 16：这是改造**前**的真实调用点数（任务书里写的是 17，实际逐个数是 16 ——
   // 任务书自己的枚举相加也只有 16，属于笔误；此处按真实值断言，并在下方单独校验
   // 「这 7 个文件本次改造一行都没动」，那才是"零改动"最强的证据）。
-  const EXPECTED_MIN = 16;
+  // v3.0.18：DiaryView 删除日记新增 1 处自绘确认框调用（不是替换既有调用点），
+  // 故最低计数 16 → 17；既有 16 处与 7 个原文件仍单独做零改动断言。
+  const EXPECTED_MIN = 17;
   // 只统计**调用点**（api.showConfirm! / api.showConfirm(），排除类型声明与实现
   const callRe = /api\.showConfirm!?\s*\(/g;
   let calls = 0;
@@ -201,9 +203,12 @@ console.log('\n【断言 5】16 处 showConfirm 调用点全部保留（零改�
     calls >= EXPECTED_MIN,
     `实际 ${calls} 处（${perFile.join(', ')}）`
   );
-  // 调用点分布在 7 个文件里（任务书枚举的 10 个位置里，ChatWindow/MiniChat/Settings
-  // 各有多处，故文件数少于位置数）
-  check('调用点分布在预期的 7 个文件里', perFile.length === 7, `实际 ${perFile.length} 个文件：${perFile.join(', ')}`);
+  // 调用点分布在 8 个文件里（原 7 个 + v3.0.18 DiaryView 新增 1 个）
+  check('调用点分布在预期的 8 个文件里', perFile.length === 8, `实际 ${perFile.length} 个文件：${perFile.join(', ')}`);
+  const diarySrc = read(path.join(SRC, 'components', 'DiaryView.tsx'));
+  check('DiaryView 删除日记走自绘确认框（无 window.confirm）',
+    /api\.showConfirm!\s*\(\s*t\('diary\.confirmDelete'\)\s*\)/.test(diarySrc) &&
+    !/window\s*\.\s*confirm\s*\(/.test(diarySrc));
 
   // 最强证据：这 7 个文件在本次改造中**必须零改动**。
   // 若哪天有人为了"顺手统一"去改这些调用点（例如加个 danger 参数），

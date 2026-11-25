@@ -217,7 +217,8 @@ if (existsSync(dbPath)) {
   ok(/migrateCursorHotspot/.test(db), 'db.ts 引用 hotspot 迁移函数 migrateCursorHotspot');
   ok(/migrateCursorHotspot\(merged\)/.test(db), '迁移已挂到 settings 读盘路径');
   ok(/from '\.\/cursorHotspotMigration'/.test(db), 'db.ts 从独立迁移模块导入');
-  ok(/writeFileSync\(this\.settingsPath/.test(db), '迁移结果落盘（否则下次启动会重复换算）');
+  // v3.0.18：落盘入口换成 secureStore.writeText（透明加密），语义不变。
+  ok(/(?:writeFileSync|writeText)\(this\.settingsPath/.test(db), '迁移结果落盘（否则下次启动会重复换算）');
 }
 const settings = readFileSync(join(root, 'src/components/Settings.tsx'), 'utf8');
 ok(!/hotspotX \?\? 0\.44/.test(settings), 'Settings.tsx 不再使用旧默认 0.44');
