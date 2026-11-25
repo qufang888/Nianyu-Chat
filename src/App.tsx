@@ -33,6 +33,7 @@ const CharacterCollection = React.lazy(() =>
 );
 import { useToast, ToastView } from './components/Toast';
 import DynamicCursor from './cursor/DynamicCursor';
+import { NATIVE_HIDDEN_CLASS } from './cursor/types';
 import VideoBubble from './components/VideoBubble';
 import ErrorBubble from './components/ErrorBubble';
 import QueueDock from './components/QueueDock';
@@ -52,6 +53,12 @@ interface Selected {
 export default function App() {
   const { t } = useI18n();
   const { settings, reloadSettings } = useTheme();
+  // v3.0.21：覆盖门控回调挂载时捕获了旧 settings，用 ref 始终保持最新动态光标开关值。
+  const cursorEnabledRef = useRef(!!settings?.customCursor?.enabled);
+  cursorEnabledRef.current = !!settings?.customCursor?.enabled;
+  useEffect(() => {
+    if (!cursorEnabledRef.current) document.body.classList.remove(NATIVE_HIDDEN_CLASS);
+  }, [settings?.customCursor?.enabled]);
   const { toast, showToast } = useToast();
   const [view, setView] = useState<View>('chats');
   // Bug 1：角色窗右键「打开角色舞台」带来的舞台请求（带 nonce 保证同一角色可重复打开）。
@@ -287,8 +294,13 @@ export default function App() {
       if (covered) {
         document.body.classList.add('cursor-gate-off');
         document.dispatchEvent(new MouseEvent('mouseout'));
+        // v3.0.21：合成 mouseout 会让引擎摘掉 cursor-hidden → 底层原生光标被放出，
+        // 与悬浮球动态光标双现。覆盖期间用独立压制层常驻隐藏原生光标。
+        if (cursorEnabledRef.current) document.body.classList.add(NATIVE_HIDDEN_CLASS);
       } else {
         document.body.classList.remove('cursor-gate-off');
+        // 离开覆盖区即恢复原生光标（引擎会在后续 mousemove 中重新接管并隐藏）。
+        document.body.classList.remove(NATIVE_HIDDEN_CLASS);
       }
     });
     return off;

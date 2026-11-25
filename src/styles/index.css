@@ -2380,6 +2380,13 @@ body.cursor-hidden * {
   cursor: none !important;
 }
 
+/* v3.0.21：独立原生光标压制层。与 .cursor-hidden 分离——引擎摘掉自身类时（合成 mouseout /
+   空闲隐藏），只要动态光标仍开启且本窗被悬浮球覆盖，就不能露出底层原生光标。 */
+body.cursor-native-hidden,
+body.cursor-native-hidden * {
+  cursor: none !important;
+}
+
 /* ===== SelectMenu 自定义下拉（取代原生 <select>，使动态光标在弹层也生效） ===== */
 .select-menu-trigger {
   font-family: inherit;

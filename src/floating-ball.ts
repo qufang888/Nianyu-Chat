@@ -15,6 +15,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { ThemeProvider } from './theme/ThemeContext';
 import DynamicCursor from './cursor/DynamicCursor';
+import { NATIVE_HIDDEN_CLASS } from './cursor/types';
 import { applyAnimControl, animMs, readAnimSpeed } from './utils/animControl';
 import { translate, type Lang } from './i18n/translations';
 import { installGlobalSoundListeners } from './utils/sound';
@@ -41,7 +42,13 @@ function setupCursorEnabled(): void {
   const pull = (): void => {
     if (api?.getSettings) {
       api.getSettings()
-        .then((s: any) => { dynCursorEnabled = !!s?.customCursor?.enabled; })
+        .then((s: any) => {
+          dynCursorEnabled = !!s?.customCursor?.enabled;
+          // v3.0.21：球/面板窗的原生光标由独立压制层常驻隐藏。引擎的 cursor-hidden 会因
+          // 合成 mouseout / 空闲隐藏被摘掉，导致 hover/拖拽时原生光标与动态光标双现。
+          // 菜单窗不挂 DynamicCursor，setupCursorEnabled 也不会在 menu 分支调用。
+          document.body.classList.toggle(NATIVE_HIDDEN_CLASS, dynCursorEnabled);
+        })
         .catch(() => {});
     }
   };
@@ -100,6 +107,8 @@ function baseCSS(): string {
     -webkit-user-select:none;user-select:none;}
   /* 动态光标启用时隐藏原生光标（主窗口由 index.css 提供，悬浮球两窗各自自带此规则） */
   body.cursor-hidden, body.cursor-hidden *{cursor:none !important;}
+  /* v3.0.21：独立压制层——不随 DynamicCursor 引擎的合成 mouseout / 空闲隐藏而解除 */
+  body.cursor-native-hidden, body.cursor-native-hidden *{cursor:none !important;}
   #root{width:100%;height:100%;position:relative;}
 
   .fb-ball{position:absolute;left:${BALL_L}px;top:${BALL_T}px;width:${BALL}px;height:${BALL}px;

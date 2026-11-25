@@ -21,6 +21,7 @@ import { useRetract } from '../hooks/useRetract';
 import { useMenuRelocate } from '../hooks/useMenuRelocate';
 import { CustomTitleBar } from './CustomTitleBar';
 import DynamicCursor from '../cursor/DynamicCursor';
+import { NATIVE_HIDDEN_CLASS } from '../cursor/types';
 import ErrorBubble from './ErrorBubble';
 import { AvatarImg } from './ChatList';
 import { playSoundSync } from '../utils/sound';
@@ -81,6 +82,12 @@ import { computeInterruptedAnchorId } from './ChatWindow';
 export const MiniChat: React.FC = () => {
   const { t } = useI18n();
   const { settings, reloadSettings } = useTheme();
+  // v3.0.21：覆盖门控回调挂载时捕获了旧 settings，用 ref 始终保持最新动态光标开关值。
+  const cursorEnabledRef = useRef(!!settings?.customCursor?.enabled);
+  cursorEnabledRef.current = !!settings?.customCursor?.enabled;
+  useEffect(() => {
+    if (!cursorEnabledRef.current) document.body.classList.remove(NATIVE_HIDDEN_CLASS);
+  }, [settings?.customCursor?.enabled]);
   const [chats, setChats] = useState<ChatListItem[]>([]);
   const [current, setCurrent] = useState<ChatListItem | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -449,8 +456,11 @@ export const MiniChat: React.FC = () => {
       if (covered) {
         document.body.classList.add('cursor-gate-off');
         document.dispatchEvent(new MouseEvent('mouseout'));
+        // v3.0.21：同主窗——覆盖期间独立压制原生光标，避免与悬浮球动态光标双现。
+        if (cursorEnabledRef.current) document.body.classList.add(NATIVE_HIDDEN_CLASS);
       } else {
         document.body.classList.remove('cursor-gate-off');
+        document.body.classList.remove(NATIVE_HIDDEN_CLASS);
       }
     });
     return off;

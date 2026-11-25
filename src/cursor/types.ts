@@ -146,6 +146,14 @@ export const OFFSCREEN = -9000;
 
 /** body 类：隐藏系统原生光标（与 styles/index.css 的 `.cursor-hidden` 规则对应） */
 export const HIDDEN_CLASS = 'cursor-hidden';
+/**
+ * body 类：独立原生光标压制层（v3.0.21 BugFix）。
+ * 与 HIDDEN_CLASS 分离的原因：HIDDEN_CLASS 由 DynamicCursor 引擎持有，合成 mouseout /
+ * 空闲隐藏都会摘掉它；而主窗/小窗被悬浮球覆盖时，引擎虽需隐藏字形，原生光标却必须继续隐藏
+ * （否则底层窗口原生光标与悬浮球动态光标双现）。本类只由「动态光标总开关 + 覆盖关系」驱动，
+ * 引擎状态变化不会影响它，从而保证「开启动态光标后整机不出现原生光标」。
+ */
+export const NATIVE_HIDDEN_CLASS = 'cursor-native-hidden';
 /** body 类：单光标仲裁门控（主进程 covered 时由 App/MiniChat/floating-ball 添加） */
 export const GATE_CLASS = 'cursor-gate-off';
 
