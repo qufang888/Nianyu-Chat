@@ -45,6 +45,7 @@ const IPC_EXEMPT = {
   'chats:rateInfo': '只读 cfg?.qps 供前端「X 秒后自动发送」预排队 UI，不发请求体',
   'chats:activeModel': '只返回「该聊天当前用哪个模型 id」给前端展示，不发请求体',
   'models:detect': '能力探测探针，故意用最小固定参数（max_tokens 4 等），套用户采样参数会污染探测结果',
+  'chats:visionCapable': '只读默认模型的 supportsImages 供前端判断是否允许发图，不构造请求体、不调用模型',
 };
 
 for (const rel of TARGETS) {

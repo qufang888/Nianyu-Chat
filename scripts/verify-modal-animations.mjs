@@ -563,11 +563,20 @@ for (const [id, name, label] of LINEAR_EXPECT) {
   check('.splash 过渡缓动 linear', String(s.transTiming).split(',')[0].trim() === 'linear', s.transTiming);
   check('.splash 过渡时长 0.5s', String(s.transDur).split(',')[0].trim() === '0.5s', s.transDur);
   const sp = probe.on['el-storiesPanel'];
-  check('.stories-panel 过渡时长 0.2s', String(sp.transDur).split(',')[0].trim() === '0.2s', sp.transDur);
-  check('.stories-panel 过渡缓动 linear', String(sp.transTiming).split(',')[0].trim() === 'linear', sp.transTiming);
-  // 去 scale 的关键一条：基态不得再含 scale(0.97)
-  check('.stories-panel 收起态 transform 不含 scale（已去 scale 0.97）', !hasScale(sp.transform), sp.transform);
-  check('.stories-panel 收起态仍保留横向位移 translateX(-10px)', /matrix\(1,\s*0,\s*0,\s*1,\s*-10(\.\d+)?,\s*0\)/.test(sp.transform), sp.transform);
+  // v3.0.1-beta.11 设计：面板改为「从图标弹出」，时长 0.24s + cubic-bezier 缓动，
+  // 收起态保留轻微缩放 scale(0.92) 与横向微移 translateX(-6px)（不再是旧的去 scale / -10px）。
+  check('.stories-panel 过渡时长 0.24s', String(sp.transDur).split(',')[0].trim() === '0.24s', sp.transDur);
+  // 不能按逗号 split 取首项：cubic-bezier(...) 自身含逗号，须整体取出第一条缓动函数再精确比对。
+  const spTimingFirst = /^cubic-bezier\([^)]+\)/.exec(String(sp.transTiming));
+  check('.stories-panel 过渡缓动 cubic-bezier(0.22, 0.61, 0.36, 1)',
+    !!spTimingFirst && spTimingFirst[0] === 'cubic-bezier(0.22, 0.61, 0.36, 1)', sp.transTiming);
+  const spM = /^matrix\(\s*([\d.]+),\s*([\d.]+),\s*([\d.]+),\s*([\d.]+),/.exec(sp.transform);
+  check('.stories-panel 收起态保留 scale(0.92)',
+    hasScale(sp.transform) && !!spM &&
+      Math.abs(parseFloat(spM[1]) - 0.92) < 1e-6 &&
+      Math.abs(parseFloat(spM[4]) - 0.92) < 1e-6,
+    sp.transform);
+  check('.stories-panel 收起态保留横向位移 translateX(-6px)', /matrix\(0\.92,\s*0,\s*0,\s*0\.92,\s*-6(\.\d+)?,\s*0\)/.test(sp.transform), sp.transform);
 }
 // 时长合理性（避免 1s 这类偏长值）
 check('.node-banner-card 时长 0.2s（原 1s 偏长）', durIs(probe.on['el-nodeBannerCard'], 0.2), probe.on['el-nodeBannerCard'].dur);
