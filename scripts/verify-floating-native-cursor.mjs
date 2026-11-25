@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * verify-floating-native-cursor.mjs — v3.0.21 悬浮球双光标回归闸门
+ * verify-floating-native-cursor.mjs — 悬浮球双光标回归闸门（v3.0.21 压制层 / v3.0.22 拖球门控）
  *
  * 防的回归：主窗/小窗被悬浮球（球/面板/菜单）覆盖时，覆盖门控会派发合成 mouseout，
  * DynamicCursor 引擎据此摘掉 `cursor-hidden` 露出原生光标；而悬浮球自己的动态光标仍在显示
@@ -38,7 +38,7 @@ const app = read('src/App.tsx');
 const mini = read('src/components/MiniChat.tsx');
 
 console.log('='.repeat(64));
-console.log('v3.0.21 悬浮球原生光标压制层断言');
+console.log('悬浮球原生光标压制层断言（v3.0.21 + 拖球门控 v3.0.22）');
 console.log('='.repeat(64));
 
 // A. 常量单一真源
@@ -77,16 +77,25 @@ check(
   /if \(role !== 'menu'\) mountCursor\(\);/.test(floating)
 );
 
-// D. 主窗/小窗覆盖门控：covered=true 加压制层，false 移除
+// D. 主窗/小窗覆盖门控（v3.0.22 收口为唯一函数：covered || dragging 且动态光标开启）
+const unifiedGate = /function syncNativeCursorHidden\(\): void \{\s*if \(cursorEnabledRef\.current && \(coveredRef\.current \|\| ballDraggingRef\.current\)\) \{[\s\S]{0,300}?classList\.add\(NATIVE_HIDDEN_CLASS\)[\s\S]{0,200}?classList\.remove\(NATIVE_HIDDEN_CLASS\)/;
 for (const [name, src] of [['App.tsx', app], ['MiniChat.tsx', mini]]) {
   check(`${name} 引入 NATIVE_HIDDEN_CLASS`, /NATIVE_HIDDEN_CLASS/.test(src));
   check(
-    `${name} covered=true 时按动态光标开关加压制层`,
-    /if \(covered\) \{[\s\S]{0,500}?if \(cursorEnabledRef\.current\) document\.body\.classList\.add\(NATIVE_HIDDEN_CLASS\)/.test(src)
+    `${name} 唯一门控函数用 covered || dragging 且受动态光标开关约束`,
+    unifiedGate.test(src)
   );
   check(
-    `${name} covered=false 时移除压制层`,
-    /document\.body\.classList\.remove\('cursor-gate-off'\);[\s\S]{0,200}?document\.body\.classList\.remove\(NATIVE_HIDDEN_CLASS\)/.test(src)
+    `${name} 持有 coveredRef / ballDraggingRef 两个门`,
+    /const coveredRef = useRef\(false\);/.test(src) && /const ballDraggingRef = useRef\(false\);/.test(src)
+  );
+  check(
+    `${name} covered 回调更新 ref 后走统一函数`,
+    /coveredRef\.current = covered;[\s\S]{0,400}?syncNativeCursorHidden\(\)/.test(src)
+  );
+  check(
+    `${name} 订阅 onBallDragging 更新 ref 后走统一函数`,
+    /api\.onBallDragging\(\(dragging: boolean\) => \{[\s\S]{0,200}?ballDraggingRef\.current = dragging;[\s\S]{0,200}?syncNativeCursorHidden\(\)/.test(src)
   );
   check(
     `${name} 仍派发合成 mouseout（引擎字形仍需立即隐藏）`,
@@ -97,8 +106,8 @@ for (const [name, src] of [['App.tsx', app], ['MiniChat.tsx', mini]]) {
     /cursorEnabledRef\.current = !!settings\?\.customCursor\?\.enabled/.test(src)
   );
   check(
-    `${name} 关闭动态光标时移除压制层（防原生光标永久隐藏）`,
-    /if \(!cursorEnabledRef\.current\) document\.body\.classList\.remove\(NATIVE_HIDDEN_CLASS\)/.test(src)
+    `${name} 关闭动态光标时经统一函数移除压制层（防原生光标永久隐藏）`,
+    /useEffect\(\(\) => \{\s*syncNativeCursorHidden\(\);/.test(src)
   );
 }
 

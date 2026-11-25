@@ -1120,6 +1120,12 @@ export function registerBallIPC(): void {
     // v2.3.116：拖球期间球窗独占光标 —— 通知面板窗压制自身动态光标，杜绝「快速往面板
     // 方向拖球时面板多亮一个动态光标 / 整机两个光标」。
     if (panelWindow && !panelWindow.isDestroyed()) panelWindow.webContents.send('ball:dragging', true);
+    // v3.0.22：拖球期间主窗/小窗也必须常驻压制原生光标。
+    // 旧实现只由 main/mini:cursor-window 的 covered 电平驱动；球窗每 16ms 被 safeSetPosition
+    // 移动，200ms 轮询算出的覆盖关系反复跳变 → covered true/false 交替 → 压制层一加一删 →
+    // 原生光标与悬浮球动态光标同时出现且一闪一闪。复用既有 ball:dragging 通道，整段拖拽拉高。
+    if (mainWinRef && !mainWinRef.isDestroyed()) mainWinRef.webContents.send('ball:dragging', true);
+    if (miniWinRef && !miniWinRef.isDestroyed()) miniWinRef.webContents.send('ball:dragging', true);
     // v3.0.15+：非法 gx/gy 回落为球心抓取偏移(0)，**不提前 return** ——
     // 保持上方 setIgnoreMouseEvents(false)、ball:dragging 推送与下方 dragTimer 初始化完整，
     // 避免留下半开的拖拽状态比崩溃更难排查。
@@ -1231,6 +1237,10 @@ export function registerBallIPC(): void {
     }
     // v2.3.116：拖拽结束 → 通知面板窗恢复自身动态光标判定（按当前是否悬停面板）。
     if (panelWindow && !panelWindow.isDestroyed()) panelWindow.webContents.send('ball:dragging', false);
+    // v3.0.22：主窗/小窗同步拉低拖拽门（与 drag-start 成对），之后压制层只跟随真实 covered。
+    // 正常 drag-end、mouseup 丢失自愈都走本函数，三条退出路径不会漏发 false。
+    if (mainWinRef && !mainWinRef.isDestroyed()) mainWinRef.webContents.send('ball:dragging', false);
+    if (miniWinRef && !miniWinRef.isDestroyed()) miniWinRef.webContents.send('ball:dragging', false);
     // 拖拽结束时作废未完成的换向：面板收回动画可能已开始，重播弹出动画保持面板可见
     // （与旧行为一致：拖拽结束后面板保持展开，交由 hover 离开后防抖收起）
     if (reflipTimer) {

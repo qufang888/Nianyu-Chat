@@ -61,8 +61,14 @@ import {
   shouldGenerateComments,
   shouldSummarize,
   type DiaryCreateParams,
+  type DiaryMigrationResult,
   type DiaryPatch,
 } from './diary';
+// v3.0.22：错误码与内部哨兵单一真源（纯模块，不引入浏览器 API）。
+import {
+  DIARY_ERROR_NO_SELF_ROLE,
+  DIARY_LEGACY_SENTINEL,
+} from '../src/utils/diaryIdentity';
 import { classifyDiaryCommentTone } from './diaryTone';
 // v3.0.1-beta.9：所有置顶窗口的 level 统一由 windowLevels 定义（悬浮球 > 桌宠 > 小窗）。
 import { applyAlwaysOnTop, MINI_WINDOW_LEVEL } from './windowLevels';
@@ -273,6 +279,12 @@ const dm = getDataManager();
 // v3.0.18：日记独立集合（diary.json）由 secureStore 透明加解密，主进程持有唯一实例。
 const diaryStore = getDiaryStore();
 diaryStore.init(dm.dataDirectory);
+// v3.0.22 触发①：启动即做一次幂等兼容迁移；失败只记日志，绝不阻塞启动（②③ 还会兜底）。
+try {
+  migrateDiarySelfRoles(false);
+} catch (e) {
+  console.error('[diary] 启动兼容迁移失败（不阻塞启动）', e);
+}
 
 // ===== 单实例锁：保证念语全局只有一个客户端在运行 =====
 // 已有一个实例时，重复点击启动文件/快捷方式只会把已有窗口聚焦到前台，而不是再开一个新进程。
@@ -5667,6 +5679,37 @@ function broadcastDiaryChanged(payload: { diaryId: string; kind: 'comments' | 's
   broadcast('diary:changed', payload);
 }
 
+// ===== v3.0.22 日记归属兼容迁移（三个触发点共用一个入口）=====
+/** 有效自我身份 id 列表；内部哨兵不是身份，不参与判定。 */
+function diaryValidIds(): string[] {
+  return (dm.getSettings().selfRoles || [])
+    .map((r) => r.id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0 && id !== DIARY_LEGACY_SENTINEL);
+}
+
+/** 执行幂等迁移；broadcast=true 时仅在真有变更时下发 diary:changed。 */
+function migrateDiarySelfRoles(broadcastChange: boolean): DiaryMigrationResult {
+  const result = diaryStore.migrateLegacySelfRoles(
+    diaryValidIds(),
+    String(dm.getSettings().currentSelfRoleId || '')
+  );
+  if (broadcastChange && (result.migratedDiaries > 0 || result.migratedSummaries > 0)) {
+    broadcastDiaryChanged({ diaryId: '', kind: 'entry' });
+  }
+  return result;
+}
+
+/** 新建日记的硬门控：缺失 / 哨兵 / 无效 id 一律拒绝，不回退 current 也不回退哨兵。 */
+function assertDiaryCreateSelfRole(requested: string | undefined): string {
+  const id = String(requested || '');
+  if (!id || id === DIARY_LEGACY_SENTINEL || !diaryValidIds().includes(id)) {
+    const e = new Error(`${DIARY_ERROR_NO_SELF_ROLE}: 请先创建一个身份，再写日记`) as Error & { code?: string };
+    e.code = DIARY_ERROR_NO_SELF_ROLE;
+    throw e;
+  }
+  return id;
+}
+
 async function callDiaryAI(role: Role, system: string, userPrompt: string, label: string): Promise<string> {
   const settings = dm.getSettings();
   const cfg = resolveRoleModel(role, settings) || getDefaultModelConfig(settings);
@@ -6429,6 +6472,15 @@ function registerIPC(): void {
   ipcMain.handle('settings:get', () => dm.getSettings());
   ipcMain.handle('settings:save', (_e, patch) => {
     const next = dm.saveSettings(patch);
+    // v3.0.22 触发②：身份列表/当前身份变更后，旧归属日记自动归入新当前身份。
+    // 迁移失败不得吞掉已成功的设置保存结果，记日志后继续广播。
+    if (patch && (patch.selfRoles !== undefined || patch.currentSelfRoleId !== undefined)) {
+      try {
+        migrateDiarySelfRoles(true);
+      } catch (e) {
+        console.error('[diary] 设置变更兼容迁移失败（设置已保存）', e);
+      }
+    }
     // 快捷键 / 置顶等小窗设置即时生效
     if (patch && (patch.miniWindow || patch.lang)) {
       applyMiniSettings();
@@ -7071,11 +7123,11 @@ function registerIPC(): void {
     if (!d) return undefined;
     return { ...d, diary_summaries: diaryStore.snapshot().summaries.filter((s) => s.diaryId === d.id) };
   });
+  // v3.0.22：渲染层之外第二道门——无效归属一律抛 E_DIARY_NO_SELF_ROLE，不再回退任何身份。
   ipcMain.handle('diary:create', (_e, p: DiaryCreateParams) => {
-    const settings = dm.getSettings();
-    const current = settings.selfRoles?.find((r) => r.id === settings.currentSelfRoleId);
+    const selfRoleId = assertDiaryCreateSelfRole(p?.selfRoleId);
     const entry = diaryStore.createDiary({
-      selfRoleId: p.selfRoleId || current?.id || 'none',
+      selfRoleId,
       date: p.date || new Date().toISOString().slice(0, 10),
       title: p.title || '',
       content: p.content || '',
@@ -7083,6 +7135,8 @@ function registerIPC(): void {
     broadcastDiaryChanged({ diaryId: entry.id, kind: 'entry' });
     return entry;
   });
+  // v3.0.22 触发③：首次进入日记页由渲染层调用；幂等，有变更才广播。
+  ipcMain.handle('diary:ensureMigrated', () => migrateDiarySelfRoles(true));
   ipcMain.handle('diary:update', (_e, id: string, patch: DiaryPatch) => {
     const entry = diaryStore.updateDiary(String(id || ''), patch || {});
     if (!entry) throw new Error('日记不存在');

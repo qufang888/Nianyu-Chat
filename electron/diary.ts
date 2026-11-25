@@ -42,6 +42,13 @@ export interface DiaryCreateParams {
   content: string;
 }
 
+/** v3.0.22 内部兼容迁移结果：只统计归属改写，不产生任何新产物或时间戳。 */
+export interface DiaryMigrationResult {
+  migratedDiaries: number;
+  migratedSummaries: number;
+  targetSelfRoleId: string | null;
+}
+
 export interface DiaryPatch {
   date?: string;
   title?: string;
@@ -181,6 +188,47 @@ function nextTimestamp(prev?: string): string {
   const last = prev ? Date.parse(prev) : 0;
   const ms = Number.isFinite(last) ? Math.max(Date.now(), last + 1) : Date.now();
   return new Date(ms).toISOString();
+}
+
+/**
+ * v3.0.22 内部兼容迁移：把 selfRoleId 不在有效身份列表里的日记（历史哨兵值与身份已删除的孤儿）
+ * 归到 target。只改日记与摘要的 selfRoleId 两个字段：正文、时间戳、可见名单、留言、摘要文本
+ * 与游标全部保持不变；不调用 applyRevoke / nextTimestamp。
+ * 摘要同步改写 selfRoleId，sourceUpdatedAt 因 diary.updated_at 未动而继续匹配，
+ * collectArtifactsForRole 的产物集合因此保持原样。
+ */
+export function migrateLegacyDiaries(
+  diaries: DiaryEntry[],
+  summaries: DiarySummary[],
+  validSelfRoleIds: string[],
+  preferredSelfRoleId?: string | null
+): DiaryMigrationResult {
+  const valid = (Array.isArray(validSelfRoleIds) ? validSelfRoleIds : [])
+    .filter((x): x is string => typeof x === 'string' && x.length > 0 && x !== NO_SELF_ROLE);
+  const preferred = String(preferredSelfRoleId || '');
+  const target = valid.includes(preferred) ? preferred : (valid[0] || null);
+  const result: DiaryMigrationResult = {
+    migratedDiaries: 0,
+    migratedSummaries: 0,
+    targetSelfRoleId: target,
+  };
+  if (!target) return result; // 没有任何身份：数据原样保留，等首个身份创建后再迁移
+
+  const moved = new Set<string>();
+  for (const d of diaries || []) {
+    if (!d || valid.includes(d.selfRoleId)) continue; // 幂等：迁移后不再命中
+    d.selfRoleId = target; // 唯一写入点
+    moved.add(d.id);
+    result.migratedDiaries += 1;
+  }
+  if (moved.size === 0) return result;
+
+  for (const s of summaries || []) {
+    if (!s || !moved.has(s.diaryId) || s.selfRoleId === target) continue;
+    s.selfRoleId = target; // 唯一写入点；revoked / text / sourceUpdatedAt / 快照原样
+    result.migratedSummaries += 1;
+  }
+  return result;
 }
 
 export class DiaryStore {
@@ -342,6 +390,21 @@ export class DiaryStore {
     }
     if (n > 0) this.save();
     return n;
+  }
+
+  /** v3.0.22：专用兼容迁移——仅在真有归属改写时落盘，沿用 save() 的原子写口径。 */
+  migrateLegacySelfRoles(
+    validSelfRoleIds: string[],
+    preferredSelfRoleId?: string | null
+  ): DiaryMigrationResult {
+    const r = migrateLegacyDiaries(
+      this.diaries,
+      this.summaries,
+      validSelfRoleIds,
+      preferredSelfRoleId
+    );
+    if (r.migratedDiaries > 0 || r.migratedSummaries > 0) this.save();
+    return r;
   }
 }
 

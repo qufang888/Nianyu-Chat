@@ -93,5 +93,33 @@ ok('ADVANCED_ANCHORS 已登记', /'sec-diary-privacy': 'adv-chat'/.test(setSrc))
 ok('SETTING_SEARCH_INDEX 已登记（中英关键词）',
   /\{ id: 'sec-diary-privacy'[\s\S]{0,240}日记[\s\S]{0,120}diary/.test(setSrc));
 
+section('E. v3.0.22 当前身份字面量与旧键零残留');
+const OLD_KEYS = [
+  'diary.bookNone', 'diary.books', 'diary.orphanHint',
+  'diary.reassignOrphans', 'diary.orphans', 'diary.searchPlaceholder',
+];
+for (let i = 0; i < dicts.length; i++) {
+  const left = OLD_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(dicts[i], k));
+  ok(names[i] + ' 旧归属/孤儿键已真删', left.length === 0, left.join(','));
+}
+ok('translations.zh diary.currentIdentity 逐字为中文全角括号',
+  dicts[0]['diary.currentIdentity'] === '当前身份（{name}）', dicts[0]['diary.currentIdentity']);
+for (let i = 1; i < dicts.length; i++) {
+  ok(names[i] + ' diary.currentIdentity 逐字为英文括号',
+    dicts[i]['diary.currentIdentity'] === 'Current Identity ({name})', dicts[i]['diary.currentIdentity']);
+}
+ok('diary.currentIdentity 的 {name} 占位符 10 处一致',
+  dicts.every((d) => placeholders(d['diary.currentIdentity']) === 'name'));
+for (const k of [
+  'diary.noIdentity', 'diary.noIdentityHint', 'diary.goCreateIdentity', 'diary.identityHint',
+  'diary.migratedHint', 'diary.errInvalidIdentity', 'diary.searchPlaceholderCurrent',
+]) {
+  ok('新增键 ' + k + ' 10 处非空', dicts.every((d) => typeof d[k] === 'string' && d[k].trim() !== ''));
+}
+const rawI18n = src + ['de', 'es', 'fr', 'ja', 'ko', 'pt', 'ru', 'zh-Hant']
+  .map((l) => fs.readFileSync(path.join(LOCALES, l + '.json'), 'utf8')).join('\n');
+ok('10 处字典源码中旧键字面量零命中',
+  OLD_KEYS.every((k) => !rawI18n.includes(`'${k}'`) && !rawI18n.includes(`"${k}"`)));
+
 console.log(`\n${fail === 0 ? '✅' : '❌'} 日记 i18n 10 处闸门：${pass} 通过 / ${fail} 失败`);
 process.exit(fail === 0 ? 0 : 1);

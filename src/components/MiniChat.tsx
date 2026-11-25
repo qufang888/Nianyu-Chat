@@ -85,8 +85,19 @@ export const MiniChat: React.FC = () => {
   // v3.0.21：覆盖门控回调挂载时捕获了旧 settings，用 ref 始终保持最新动态光标开关值。
   const cursorEnabledRef = useRef(!!settings?.customCursor?.enabled);
   cursorEnabledRef.current = !!settings?.customCursor?.enabled;
+  // v3.0.22：与 App.tsx 同款门控——拖球导致 covered 电平跳变时，用 dragging 门保持压制层常驻。
+  const coveredRef = useRef(false);
+  const ballDraggingRef = useRef(false);
+  function syncNativeCursorHidden(): void {
+    if (cursorEnabledRef.current && (coveredRef.current || ballDraggingRef.current)) {
+      document.body.classList.add(NATIVE_HIDDEN_CLASS);
+    } else {
+      document.body.classList.remove(NATIVE_HIDDEN_CLASS);
+    }
+  }
   useEffect(() => {
-    if (!cursorEnabledRef.current) document.body.classList.remove(NATIVE_HIDDEN_CLASS);
+    syncNativeCursorHidden();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.customCursor?.enabled]);
   const [chats, setChats] = useState<ChatListItem[]>([]);
   const [current, setCurrent] = useState<ChatListItem | null>(null);
@@ -451,19 +462,30 @@ export const MiniChat: React.FC = () => {
   // 派发合成 mouseout（立即淡出、恢复原生光标），避免双光标 / 光标被困小球窗；covered=false
   // 时移除门控，鼠标再动即恢复显示。仅控制门控类，绝不触碰 DynamicCursor 自身的 cursor-hidden。
   useEffect(() => {
-    if (!api?.onMiniCursorWindow) return;
-    const off = api.onMiniCursorWindow((covered: boolean) => {
-      if (covered) {
-        document.body.classList.add('cursor-gate-off');
-        document.dispatchEvent(new MouseEvent('mouseout'));
-        // v3.0.21：同主窗——覆盖期间独立压制原生光标，避免与悬浮球动态光标双现。
-        if (cursorEnabledRef.current) document.body.classList.add(NATIVE_HIDDEN_CLASS);
-      } else {
-        document.body.classList.remove('cursor-gate-off');
-        document.body.classList.remove(NATIVE_HIDDEN_CLASS);
-      }
-    });
-    return off;
+    if (!api?.onMiniCursorWindow && !api?.onBallDragging) return;
+    const offCovered = api?.onMiniCursorWindow
+      ? api.onMiniCursorWindow((covered: boolean) => {
+          coveredRef.current = covered;
+          if (covered) {
+            document.body.classList.add('cursor-gate-off');
+            document.dispatchEvent(new MouseEvent('mouseout'));
+          } else {
+            document.body.classList.remove('cursor-gate-off');
+          }
+          syncNativeCursorHidden();
+        })
+      : () => {};
+    // v3.0.22：复用 ball:dragging 通道，整段拖拽常驻压制原生光标，避免 covered 电平跳变闪烁。
+    const offDragging = api?.onBallDragging
+      ? api.onBallDragging((dragging: boolean) => {
+          ballDraggingRef.current = dragging;
+          syncNativeCursorHidden();
+        })
+      : () => {};
+    return () => {
+      offCovered();
+      offDragging();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {

@@ -420,6 +420,9 @@ function mountBall(): void {
     setInteractive(true);
     dragging = true;
     ball.classList.add('dragging');
+    // v3.0.22：设置异步未就绪时按本窗镜像兜底，拖拽一开始就把原生光标压住
+    // （dynCursorEnabled=false 时 toggle(false) 明确摘除，绝不残留）。
+    document.body.classList.toggle(NATIVE_HIDDEN_CLASS, dynCursorEnabled);
     // 球窗恒 68x68：抓取偏移 gx/gy ∈ [4,64] 直接上报，主进程无方向换算
     if (api?.ballDragStart) api.ballDragStart(e.clientX, e.clientY);
     window.addEventListener('mouseup', onUp);
@@ -429,6 +432,8 @@ function mountBall(): void {
     if (!dragging) return;
     dragging = false;
     ball.classList.remove('dragging');
+    // v3.0.22：正常 mouseup 收尾同样按动态光标开关同步压制层，关时绝不残留。
+    document.body.classList.toggle(NATIVE_HIDDEN_CLASS, dynCursorEnabled);
     window.removeEventListener('mouseup', onUp);
     const finish = (wasDrag: boolean) => {
       if (!wasDrag) {
@@ -455,6 +460,8 @@ function mountBall(): void {
       if (!dragging) return;
       dragging = false;
       ball.classList.remove('dragging');
+      // v3.0.22：mouseup 丢失自愈收尾也不能漏摘/漏压，按动态光标开关同步压制层。
+      document.body.classList.toggle(NATIVE_HIDDEN_CLASS, dynCursorEnabled);
       window.removeEventListener('mouseup', onUp);
       setInteractive(false);
     });

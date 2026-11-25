@@ -56,8 +56,20 @@ export default function App() {
   // v3.0.21：覆盖门控回调挂载时捕获了旧 settings，用 ref 始终保持最新动态光标开关值。
   const cursorEnabledRef = useRef(!!settings?.customCursor?.enabled);
   cursorEnabledRef.current = !!settings?.customCursor?.enabled;
+  // v3.0.22：拖球期间窗口每 16ms 被移动，主进程 200ms 轮询算出的 covered 电平会反复跳变；
+  // 两个 ref + 唯一门控函数收口原生光标压制：covered 或 dragging 任一为真且动态光标开启即常驻压制。
+  const coveredRef = useRef(false);
+  const ballDraggingRef = useRef(false);
+  function syncNativeCursorHidden(): void {
+    if (cursorEnabledRef.current && (coveredRef.current || ballDraggingRef.current)) {
+      document.body.classList.add(NATIVE_HIDDEN_CLASS);
+    } else {
+      document.body.classList.remove(NATIVE_HIDDEN_CLASS);
+    }
+  }
   useEffect(() => {
-    if (!cursorEnabledRef.current) document.body.classList.remove(NATIVE_HIDDEN_CLASS);
+    syncNativeCursorHidden();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.customCursor?.enabled]);
   const { toast, showToast } = useToast();
   const [view, setView] = useState<View>('chats');
@@ -81,6 +93,8 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // 设置页导航重置信号：再次点击左侧「设置」图标时从二级页退回设置主界面
   const [settingsNavTick, setSettingsNavTick] = useState(0);
+  // v3.0.22：日记空状态跳到设置身份分区并高亮（自增 tick，避免重复点击被 React 去重）。
+  const [settingsFocusTick, setSettingsFocusTick] = useState(0);
 
   // ===== 快速导入（v2.3.51）：文件拖入窗口任意位置 → 识别角色卡/世界书/规则/插件并直接导入 =====
   // v2.3.97：改为「先预检 → 弹确认 → 再导入」。松手不再直接落库，误拖可以反悔。
@@ -289,21 +303,31 @@ export default function App() {
   // 仅控制门控类，绝不触碰 DynamicCursor 自身的 cursor-hidden / 渲染状态，故与鼠标自然移出
   // （onMouseOut→hideCursorImmediate）路径互不干扰、可叠加。
   useEffect(() => {
-    if (!api?.onMainCursorWindow) return;
-    const off = api.onMainCursorWindow((covered: boolean) => {
-      if (covered) {
-        document.body.classList.add('cursor-gate-off');
-        document.dispatchEvent(new MouseEvent('mouseout'));
-        // v3.0.21：合成 mouseout 会让引擎摘掉 cursor-hidden → 底层原生光标被放出，
-        // 与悬浮球动态光标双现。覆盖期间用独立压制层常驻隐藏原生光标。
-        if (cursorEnabledRef.current) document.body.classList.add(NATIVE_HIDDEN_CLASS);
-      } else {
-        document.body.classList.remove('cursor-gate-off');
-        // 离开覆盖区即恢复原生光标（引擎会在后续 mousemove 中重新接管并隐藏）。
-        document.body.classList.remove(NATIVE_HIDDEN_CLASS);
-      }
-    });
-    return off;
+    if (!api?.onMainCursorWindow && !api?.onBallDragging) return;
+    const offCovered = api?.onMainCursorWindow
+      ? api.onMainCursorWindow((covered: boolean) => {
+          coveredRef.current = covered;
+          if (covered) {
+            document.body.classList.add('cursor-gate-off');
+            // 合成 mouseout 仍保留：引擎字形需要立即隐藏（压制层只管原生光标）。
+            document.dispatchEvent(new MouseEvent('mouseout'));
+          } else {
+            document.body.classList.remove('cursor-gate-off');
+          }
+          syncNativeCursorHidden();
+        })
+      : () => {};
+    // v3.0.22：拖拽期间覆盖电平会随窗口移动反复跳变，拖拽门让压制层整段拉高不闪烁。
+    const offDragging = api?.onBallDragging
+      ? api.onBallDragging((dragging: boolean) => {
+          ballDraggingRef.current = dragging;
+          syncNativeCursorHidden();
+        })
+      : () => {};
+    return () => {
+      offCovered();
+      offDragging();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -558,7 +582,11 @@ export default function App() {
         <Sidebar
           view={view}
           onChange={(v) => {
-            if (v === 'settings') setSettingsNavTick((t) => t + 1);
+            if (v === 'settings') {
+              // 侧栏正常进入设置：先清掉日记跳转信号，再退回设置主界面。
+              setSettingsFocusTick(0);
+              setSettingsNavTick((t) => t + 1);
+            }
             setView(v);
           }}
           extra={
@@ -616,6 +644,7 @@ export default function App() {
           onAbout={() => setAboutOpen(true)}
           onGoToContacts={() => setView('contacts')}
           navResetTick={settingsNavTick}
+          focusSelfRoleTick={settingsFocusTick}
         />
       )}
       {view === 'stats' && <StatsView />}
@@ -625,7 +654,14 @@ export default function App() {
         </React.Suspense>
       )}
       {view === 'moments' && <MomentsView />}
-      {view === 'diary' && <DiaryView />}
+      {view === 'diary' && (
+        <DiaryView
+          onGoToIdentitySettings={() => {
+            setView('settings');
+            setSettingsFocusTick((n) => n + 1);
+          }}
+        />
+      )}
       {view === 'library' && (
         <Library
           key={`lib-${importTick}`}

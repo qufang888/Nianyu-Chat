@@ -70,14 +70,16 @@ textarea::placeholder {
   opacity: 0.85;
 }
 
-/* 聊天输入框：背景/文字色可被设置中的「输入框外观」覆盖（--input-bg/--input-fg），
-   默认浅灰底 + 深字，保证任意主题下清晰可读；仅作用于聊天输入，不影响其它表单控件 */
-.chat-input {
+/* 输入框外观统一真源（v3.0.22）：聊天输入框与日记输入控件共用同一声明块，
+   背景/文字色随设置中的「输入框外观」（--input-bg/--input-fg）同步变化，零新增色值。 */
+.chat-input,
+.diary-input {
   background: var(--input-bg, #f2f3f5) !important;
   color: var(--input-fg, #1f2329) !important;
   caret-color: var(--input-fg, #1f2329);
 }
-.chat-input::placeholder {
+.chat-input::placeholder,
+.diary-input::placeholder {
   color: var(--color-text-secondary);
   opacity: 0.7;
 }
@@ -7489,22 +7491,17 @@ html[data-anim-off~='panel'] .msg-action-divider {
   color: var(--color-text);
   animation: diaryPanelIn calc(0.28s * var(--anim-speed, 1)) ease-out;
 }
-.diary-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.diary-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .diary-heading { margin: 0; font-size: 18px; color: var(--color-text); }
-.diary-layout { display: flex; gap: 16px; flex: 1; min-height: 0; margin-top: 14px; }
-.diary-books {
-  flex: 0 0 150px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  overflow-y: auto;
-  border-right: 1px solid var(--color-border);
-  padding-right: 8px;
+.diary-toolbar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.diary-identity { font-size: 13px; color: var(--color-text-secondary); }
+.diary-layout { display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; margin-top: 14px; }
+.diary-main {
+  flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding-right: 4px;
+  display: flex; flex-direction: column; gap: 10px;
 }
-.diary-main { flex: 1; min-width: 0; overflow-y: auto; padding-right: 4px; }
 .diary-section-title { font-size: 13px; font-weight: 600; color: var(--color-text); margin: 10px 0 6px; }
-.diary-book, .diary-actions button, .diary-bulk button, .diary-card-actions button,
-.diary-suggest button, .diary-orphan-row button {
+.diary-actions button, .diary-bulk button, .diary-card-actions button, .diary-suggest button {
   color: var(--color-text);
   background: transparent;
   border: 1px solid var(--color-border);
@@ -7514,14 +7511,25 @@ html[data-anim-off~='panel'] .msg-action-divider {
   font: inherit;
   font-size: 13px;
 }
-.diary-book.active { background: var(--color-primary); color: var(--color-text); }
-.diary-primary { color: var(--color-text); background: var(--color-primary); border: 1px solid var(--color-border); border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit; font-size: 13px; }
+/* 强调按钮：主题面板底 + 主色描边。正文前景用 --color-text，14 主题下与 --color-panel
+   的组合已经 QA 量化达 AA；容器内的三条复合选择器用于压过 .diary-actions button 等 (0,1,1) 规则。 */
+.diary-primary,
+.diary-actions button.diary-primary,
+.diary-bulk button.diary-primary,
+.diary-card-actions button.diary-primary {
+  color: var(--color-text);
+  background: var(--color-panel);
+  border: 1px solid var(--color-primary);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
 .diary-search { position: relative; }
-.diary-search input, .diary-field input, .diary-field textarea, .diary-orphan-row select {
+.diary-search input, .diary-field input, .diary-field textarea {
   box-sizing: border-box;
   width: 100%;
-  color: var(--color-text);
-  background: var(--color-input-bg);
   border: 1px solid var(--color-border);
   border-radius: 6px;
   padding: 7px 9px;
@@ -7546,16 +7554,27 @@ html[data-anim-off~='panel'] .msg-action-divider {
 .diary-suggest mark { color: var(--color-select-text); background: var(--color-select-bg); }
 .diary-hint { font-size: 12.5px; line-height: 1.6; color: var(--color-text); opacity: 0.82; margin: 6px 0; }
 .diary-editor {
+  flex: 1 1 auto;
+  min-height: 460px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  margin: 10px 0;
+  gap: 10px;
+  padding: 14px;
+  margin: 0;
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: 10px;
   color: var(--color-text);
+  background: var(--color-panel);
 }
+.diary-editor-head { font-size: 14px; font-weight: 600; color: var(--color-text); }
+.diary-field-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.diary-field-row .diary-field { flex: 1 1 180px; }
 .diary-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--color-text); }
+.diary-field--content { flex: 1 1 auto; min-height: 320px; display: flex; flex-direction: column; }
+.diary-content-input {
+  flex: 1 1 auto; min-height: 320px; resize: vertical;
+  line-height: 1.7; border-radius: 8px;
+}
 .diary-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--color-text); cursor: pointer; }
 .diary-role-pick { display: flex; flex-direction: column; gap: 5px; border: 1px solid var(--color-border); border-radius: 6px; color: var(--color-text); }
 .diary-role-pick[disabled] { opacity: 0.45; }
@@ -7563,6 +7582,14 @@ html[data-anim-off~='panel'] .msg-action-divider {
 .diary-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .diary-entries { display: flex; flex-direction: column; gap: 10px; }
 .diary-empty { padding: 24px; text-align: center; color: var(--color-text); }
+.diary-empty-state {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 12px; text-align: center;
+  border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-panel);
+}
+.diary-empty-icon { font-size: 34px; line-height: 1; }
+.diary-empty-title { font-size: 16px; font-weight: 600; color: var(--color-text); }
+.diary-empty-state .diary-hint { max-width: 420px; }
 .diary-card {
   padding: 12px;
   border: 1px solid var(--color-border);
@@ -7593,9 +7620,6 @@ html[data-anim-off~='panel'] .msg-action-divider {
 }
 .diary-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--color-text); opacity: 0.82; }
 .diary-text { font-size: 13px; line-height: 1.6; color: var(--color-text); word-break: break-word; }
-.diary-orphans { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--color-border); }
-.diary-orphan-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 13px; color: var(--color-text); }
-.diary-orphan-row select { width: auto; }
 
 /* ===== v3.0.19 可携带备份：一次性口令弹窗 + 拖入 overlay =====
    容器样式复用 .modal-mask / .modal 三件套，动画沿用 theme 组（不新建关键帧、不新增分组）。

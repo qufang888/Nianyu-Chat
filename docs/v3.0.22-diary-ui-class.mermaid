@@ -1,0 +1,149 @@
+classDiagram
+    direction LR
+
+    class DiaryIdentity {
+        +string id
+        +string name
+    }
+
+    class DiaryIdentityUtil {
+        <<module src/utils/diaryIdentity.ts>>
+        +resolveDiaryIdentity(settings) DiaryIdentity
+        +resolveDiaryTargetSelfRole(validIds, preferred) string
+        +isValidDiarySelfRole(validIds, id) boolean
+        +DIARY_ERROR_NO_SELF_ROLE string
+        +DIARY_LEGACY_SENTINEL string
+    }
+
+    class DiaryMigrationResult {
+        +number migratedDiaries
+        +number migratedSummaries
+        +string targetSelfRoleId
+    }
+
+    class DiaryMigration {
+        <<module electron/diary.ts>>
+        +migrateLegacyDiaries(diaries, summaries, validIds, preferred) DiaryMigrationResult
+        +NO_SELF_ROLE string
+        +canRoleAccessDiary(entry, roleId) boolean
+        +collectArtifactsForRole(input) DiaryArtifact
+        +applyRevoke(diaries, summaries, roleIds, all) void
+    }
+
+    class DiaryStore {
+        +string dataDir
+        +DiaryEntry[] diaries
+        +DiarySummary[] summaries
+        +init(dataDir) void
+        +save() void
+        +listDiaries(selfRoleId) DiaryEntry
+        +createDiary(params) DiaryEntry
+        +updateDiary(id, patch) DiaryEntry
+        +migrateLegacySelfRoles(validIds, preferred) DiaryMigrationResult
+        +listOrphans(validIds) DiaryEntry
+        +reassignOrphans(from, to) number
+    }
+
+    class DiaryEntry {
+        +string id
+        +string selfRoleId
+        +string date
+        +string title
+        +string content
+        +boolean allowAi
+        +string[] visibleRoleIds
+        +DiaryComment[] aiComments
+        +string created_at
+        +string updated_at
+    }
+
+    class DiarySummary {
+        +string id
+        +string diaryId
+        +string roleId
+        +string selfRoleId
+        +string sourceUpdatedAt
+        +string[] visibleRoleIdsSnapshot
+        +string text
+        +boolean revoked
+    }
+
+    class SelfRole {
+        +string id
+        +string name
+    }
+
+    class AppSettings {
+        +SelfRole[] selfRoles
+        +string currentSelfRoleId
+        +Record chatSelfRoles
+        +string lang
+    }
+
+    class DiaryIpcBridge {
+        <<preload.ts + src/ipc.ts>>
+        +diaryEnsureMigrated() DiaryMigrationResult
+        +diaryList(selfRoleId) DiaryEntry
+        +diaryCreate(params) DiaryEntry
+        +diaryReassignOrphans(from, to) number
+    }
+
+    class MainDiaryIpc {
+        <<electron/main.ts>>
+        +migrateOnStartup() void
+        +migrateOnSettingsChange(patch) void
+        +handleEnsureMigrated() DiaryMigrationResult
+        +handleDiaryCreate(params) DiaryEntry
+        +assertDiaryCreateSelfRole(requested) string
+    }
+
+    class App {
+        <<React src/App.tsx>>
+        +View view
+        +number settingsFocusTick
+        +onGoToIdentitySettings() void
+    }
+
+    class DiaryView {
+        <<React src/components/DiaryView.tsx>>
+        -DiaryIdentity identity
+        -DiaryEntry[] entries
+        -EditorState editor
+        +loadEntries(id) void
+        +save() void
+        +goToIdentitySettings() void
+    }
+
+    class Settings {
+        <<React src/components/Settings.tsx>>
+        -string sub
+        +number focusSelfRoleTick
+        +goToSetting(id, sub) void
+    }
+
+    class SelfRoleSettings {
+        <<React src/components/SelfRoleSettings.tsx>>
+        +onPersist(patch) void
+    }
+
+    DiaryIdentityUtil ..> DiaryIdentity : creates
+    DiaryIdentityUtil ..> AppSettings : reads only
+    DiaryIdentityUtil ..> SelfRole : reads id and name
+    DiaryMigration ..> DiaryMigrationResult : returns
+    DiaryMigration ..> DiaryEntry : rewrites selfRoleId only
+    DiaryMigration ..> DiarySummary : rewrites selfRoleId only
+    DiaryStore *-- DiaryEntry : owns
+    DiaryStore *-- DiarySummary : owns
+    DiaryStore ..> DiaryMigration : delegates migration
+    MainDiaryIpc --> DiaryStore : uses
+    MainDiaryIpc --> DiaryIdentityUtil : validates and resolves target
+    DiaryIpcBridge ..> MainDiaryIpc : IPC invoke
+    DiaryView --> DiaryIpcBridge : calls
+    DiaryView --> DiaryIdentityUtil : resolveDiaryIdentity
+    DiaryView --> App : onGoToIdentitySettings
+    App --> Settings : focusSelfRoleTick
+    App --> DiaryView : renders
+    Settings *-- SelfRoleSettings : sub equals self
+    Settings --> DiaryIpcBridge : saveSettings
+    AppSettings o-- SelfRole : selfRoles
+    DiaryEntry o-- DiarySummary : diaryId and sourceUpdatedAt gate

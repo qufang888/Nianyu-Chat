@@ -1,12 +1,17 @@
 /**
- * 念语 v3.0.18 分册日记视图。
- * 所有可见文案走 i18n（本文件无裸中文）；正文使用 --color-text，适配 14 套主题。
- * 日记正文永远不在此处拼 prompt —— AI 注入只在主进程按产物门控完成。
+ * 念语 v3.0.22 日记视图（单一当前身份 · 无分册/无切换器 · 内联大输入框）。
+ * 所有可见文案走 i18n（本文件无裸中文）；正文使用主题变量，适配 14 套主题。
+ * 身份只读跟随设置；无身份时引导去设置创建。正文永远不在此处拼 prompt。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useI18n } from '../i18n/I18nContext';
 import { api } from '../ipc';
-import type { DiaryBook, DiaryEntry, Role, SelfRole } from '../types';
+import type { DiaryEntry, Role } from '../types';
+import {
+  DIARY_ERROR_NO_SELF_ROLE,
+  resolveDiaryIdentity,
+  type DiaryIdentity,
+} from '../utils/diaryIdentity';
 import { MAX_SUGGESTIONS, highlightParts, suggest } from '../utils/fuzzySearch';
 import { flashElement } from '../utils/flash';
 
@@ -20,10 +25,10 @@ interface EditorState {
   visibleRoleIds: string[];
 }
 
-function emptyEditor(bookId: string): EditorState {
+function emptyEditor(selfRoleId: string): EditorState {
   return {
     id: null,
-    selfRoleId: bookId,
+    selfRoleId,
     date: new Date().toISOString().slice(0, 10),
     title: '',
     content: '',
@@ -32,58 +37,78 @@ function emptyEditor(bookId: string): EditorState {
   };
 }
 
-export const DiaryView: React.FC = () => {
+export const DiaryView: React.FC<{
+  /** 无身份空状态入口：由 App 切到设置页身份分区并触发高亮。 */
+  onGoToIdentitySettings?: () => void;
+}> = ({ onGoToIdentitySettings }) => {
   const { t } = useI18n();
-  const [books, setBooks] = useState<DiaryBook[]>([]);
+  const [identity, setIdentity] = useState<DiaryIdentity | null>(null);
+  const identityRef = useRef<DiaryIdentity | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
-  const [currentBook, setCurrentBook] = useState<string>('none');
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
-  const [orphans, setOrphans] = useState<DiaryEntry[]>([]);
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [notice, setNotice] = useState<string>('');
   const [query, setQuery] = useState<string>('');
-  const [reassignTarget, setReassignTarget] = useState<string>('none');
   const listRef = useRef<HTMLDivElement | null>(null);
 
-  const loadEntries = useCallback(async (bookId: string) => {
+  const loadEntries = useCallback(async (selfRoleId: string): Promise<void> => {
     try {
-      const [list, orphanList] = await Promise.all([api.diaryList(bookId), api.diaryListOrphans()]);
+      const list = await api.diaryList(selfRoleId);
       setEntries(list || []);
-      setOrphans(orphanList || []);
     } catch (e) {
       setNotice(String(e));
     }
   }, []);
 
+  /** 主进程抛带 code 的 Error；只在无效身份时映射为 i18n，其余沿用原字符串。 */
+  const errorText = (e: unknown): string => {
+    const code = (e as { code?: string } | null)?.code;
+    return code === DIARY_ERROR_NO_SELF_ROLE ? t('diary.errInvalidIdentity') : String(e);
+  };
+
+  // 首次进入日记页：先做幂等兼容迁移，再解析当前身份并加载该身份的日记。
   useEffect(() => {
     let alive = true;
-    Promise.all([api.getSettings(), api.getRoles()])
-      .then(([settings, roleList]) => {
+    const resolveSettings = async (): Promise<void> => {
+      const settings = await api.getSettings();
+      if (!alive) return;
+      const next = resolveDiaryIdentity(settings);
+      identityRef.current = next;
+      setIdentity(next);
+      setEditor(null);
+      setQuery('');
+      if (next) await loadEntries(next.id);
+      else setEntries([]);
+    };
+    (async () => {
+      try {
+        const migrated = await api.diaryEnsureMigrated();
         if (!alive) return;
-        const selfRoles: SelfRole[] = settings.selfRoles || [];
-        const all: DiaryBook[] = [
-          ...selfRoles.map((r) => ({ id: r.id, name: r.name })),
-          { id: 'none', name: t('diary.bookNone') },
-        ];
-        setBooks(all);
+        if (migrated && migrated.migratedDiaries > 0) setNotice(t('diary.migratedHint'));
+        const roleList = await api.getRoles();
+        if (!alive) return;
         setRoles(roleList || []);
-        const book = selfRoles.some((r) => r.id === settings.currentSelfRoleId)
-          ? (settings.currentSelfRoleId as string)
-          : 'none';
-        setCurrentBook(book);
-        void loadEntries(book);
-      })
-      .catch((e) => setNotice(String(e)));
-    const off = api.onDiaryChanged(() => { void loadEntries(currentBook); });
-    return () => { alive = false; off(); };
-  }, [loadEntries, currentBook, t]);
+        await resolveSettings();
+      } catch (e) {
+        if (alive) setNotice(String(e));
+      }
+    })();
 
-  const switchBook = (id: string): void => {
-    setCurrentBook(id);
-    setEditor(null);
-    setQuery('');
-    void loadEntries(id);
-  };
+    // 设置里切换当前身份后回日记页即跟随；列表与编辑器绑定新身份，不回写设置。
+    const offSettings = api.onSettingsChanged(() => { void resolveSettings(); });
+    const offDiary = api.onDiaryChanged(() => {
+      const id = identityRef.current?.id;
+      if (id) void loadEntries(id);
+    });
+    return () => {
+      alive = false;
+      offSettings();
+      offDiary();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadEntries, t]);
+
+  const currentId = identity?.id || '';
 
   const save = async (): Promise<void> => {
     if (!editor) return;
@@ -118,16 +143,16 @@ export const DiaryView: React.FC = () => {
         setNotice(t('diary.allowAiHintFirst'));
       }
     } catch (e) {
-      setNotice(String(e));
+      setNotice(errorText(e));
     }
   };
 
   const remove = async (entry: DiaryEntry): Promise<void> => {
-    // 项目铁律：禁止原生弹窗，统一走自绘确认框（Settings.tsx 既有写法）。
+    // 项目铁律：禁止原生弹窗，统一走自绘确认框。
     if (!(await api.showConfirm!(t('diary.confirmDelete')))) return;
     try {
       await api.diaryDelete(entry.id);
-      await loadEntries(currentBook);
+      await loadEntries(currentId);
     } catch (e) {
       setNotice(String(e));
     }
@@ -152,7 +177,7 @@ export const DiaryView: React.FC = () => {
           ? t('diary.aiDone').replace('{roles}', res.generatedRoleIds.join(', '))
           : t(res.reason ? `diary.reason.${res.reason}` : 'diary.aiSkipped').replace('{roles}', res.skippedRoleIds.join(', '))
       );
-      await loadEntries(currentBook);
+      await loadEntries(currentId);
     } catch (e) {
       setNotice(String(e));
     }
@@ -166,7 +191,7 @@ export const DiaryView: React.FC = () => {
           ? t('diary.aiDone').replace('{roles}', res.generatedRoleIds.join(', '))
           : t(res.reason ? `diary.reason.${res.reason}` : 'diary.aiSkipped').replace('{roles}', res.skippedRoleIds.join(', '))
       );
-      await loadEntries(currentBook);
+      await loadEntries(currentId);
     } catch (e) {
       setNotice(String(e));
     }
@@ -177,7 +202,7 @@ export const DiaryView: React.FC = () => {
       await api.diaryUpdate(entry.id, {
         aiComments: entry.aiComments.filter((c) => c.id !== commentId),
       });
-      await loadEntries(currentBook);
+      await loadEntries(currentId);
     } catch (e) {
       setNotice(String(e));
     }
@@ -202,193 +227,197 @@ export const DiaryView: React.FC = () => {
     }, 30);
   };
 
+  const identityLabel = identity ? t('diary.currentIdentity', { name: identity.name }) : '';
+
   return (
     <div className="diary-panel">
       <div className="diary-toolbar">
         <h2 className="diary-heading">{t('diary.title')}</h2>
-        <button
-          type="button"
-          className="diary-primary"
-          onClick={() => setEditor(emptyEditor(currentBook))}
-        >
-          + {t('diary.newEntry')}
-        </button>
+        <div className="diary-toolbar-right">
+          {identityLabel && <span className="diary-identity">{identityLabel}</span>}
+          {identity && (
+            <button
+              type="button"
+              className="diary-primary"
+              onClick={() => setEditor(emptyEditor(identity.id))}
+            >
+              + {t('diary.newEntry')}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="diary-layout">
-        <aside className="diary-books">
-          <div className="diary-section-title">{t('diary.books')}</div>
-          {books.map((b) => (
-            <button
-              type="button"
-              key={b.id}
-              className={`diary-book ${currentBook === b.id ? 'active' : ''}`}
-              onClick={() => switchBook(b.id)}
-            >
-              {b.name}
-            </button>
-          ))}
-        </aside>
-
         <div className="diary-main">
-          <div className="diary-search">
-            <input
-              value={query}
-              placeholder={t('diary.searchPlaceholder')}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            {query.trim() && suggestions.length > 0 && (
-              <div className="diary-suggest">
-                {suggestions.map((s) => (
-                  <button type="button" key={s.id} onClick={() => jumpTo(s)}>
-                    {highlightParts(`${s.date} ${s.title || ''}`, query).map((p, i) =>
-                      p.hit ? <mark key={i}>{p.text}</mark> : <React.Fragment key={i}>{p.text}</React.Fragment>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
           {notice && <div className="diary-hint">{notice}</div>}
 
-          {editor && (
-            <div className="diary-editor">
-              <div className="diary-field">
-                <label>{t('diary.date')}</label>
-                <input type="date" value={editor.date} onChange={(e) => setEditor({ ...editor, date: e.target.value })} />
-              </div>
-              <div className="diary-field">
-                <label>{t('diary.titleField')}</label>
-                <input value={editor.title} onChange={(e) => setEditor({ ...editor, title: e.target.value })} />
-              </div>
-              <div className="diary-field">
-                <label>{t('diary.content')}</label>
-                <textarea
-                  rows={10}
-                  value={editor.content}
-                  onChange={(e) => setEditor({ ...editor, content: e.target.value })}
-                />
-              </div>
-              <label className="diary-check">
+          {!identity ? (
+            <div className="diary-empty-state">
+              <div className="diary-empty-icon" aria-hidden="true">📔</div>
+              <div className="diary-empty-title">{t('diary.noIdentity')}</div>
+              <div className="diary-hint">{t('diary.noIdentityHint')}</div>
+              <button type="button" className="diary-primary" onClick={() => onGoToIdentitySettings?.()}>
+                {t('diary.goCreateIdentity')}
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="diary-search">
                 <input
-                  type="checkbox"
-                  checked={editor.allowAi}
-                  onChange={(e) => setEditor({
-                    ...editor,
-                    allowAi: e.target.checked,
-                    visibleRoleIds: e.target.checked ? editor.visibleRoleIds : [],
-                  })}
+                  className="diary-input"
+                  value={query}
+                  placeholder={t('diary.searchPlaceholderCurrent')}
+                  onChange={(e) => setQuery(e.target.value)}
                 />
-                <span>{t('diary.allowAi')}</span>
-              </label>
-              <div className="diary-hint">{t('diary.allowAiHint')}</div>
-              <fieldset className="diary-role-pick" disabled={!editor.allowAi}>
-                <legend>{t('diary.visibleRoles')}</legend>
-                {!editor.allowAi && <div className="diary-hint">{t('diary.visibleRolesHint')}</div>}
-                {editor.allowAi && (
-                  <>
-                    <div className="diary-bulk">
-                      <button type="button" onClick={() => setEditor({ ...editor, visibleRoleIds: roles.map((r) => r.id) })}>
-                        {t('diary.selectAll')}
+                {query.trim() && suggestions.length > 0 && (
+                  <div className="diary-suggest">
+                    {suggestions.map((s) => (
+                      <button type="button" key={s.id} onClick={() => jumpTo(s)}>
+                        {highlightParts(`${s.date} ${s.title || ''}`, query).map((p, i) =>
+                          p.hit ? <mark key={i}>{p.text}</mark> : <React.Fragment key={i}>{p.text}</React.Fragment>
+                        )}
                       </button>
-                      <button type="button" onClick={() => setEditor({ ...editor, visibleRoleIds: [] })}>
-                        {t('diary.clearAll')}
-                      </button>
-                    </div>
-                    {roles.length === 0 && <div className="diary-hint">{t('diary.noRoles')}</div>}
-                    {roles.map((r) => (
-                      <label key={r.id} className="diary-check">
-                        <input
-                          type="checkbox"
-                          checked={editor.visibleRoleIds.includes(r.id)}
-                          onChange={() => toggleRole(r.id)}
-                        />
-                        <span>{r.name}</span>
-                      </label>
                     ))}
-                  </>
+                  </div>
                 )}
-              </fieldset>
-              <div className="diary-actions">
-                <button type="button" className="diary-primary" onClick={() => void save()}>{t('diary.save')}</button>
-                <button type="button" onClick={() => setEditor(null)}>{t('diary.cancel')}</button>
               </div>
-            </div>
-          )}
+              <div className="diary-hint">{t('diary.identityHint')}</div>
 
-          <div className="diary-entries" ref={listRef}>
-            {entries.length === 0 && <div className="diary-empty">{t('diary.noEntries')}</div>}
-            {entries.map((entry) => (
-              <article className="diary-card" key={entry.id} data-diary-id={entry.id}>
-                <div className="diary-card-head">
-                  <div>
-                    <div className="diary-date">{entry.date}</div>
-                    <h3>{entry.title || entry.date}</h3>
-                  </div>
-                  <div className="diary-card-actions">
-                    {!entry.allowAi && <span className="diary-badge">🔒 {t('diary.localOnly')}</span>}
-                    <button type="button" onClick={() => setEditor({
-                      id: entry.id,
-                      selfRoleId: entry.selfRoleId,
-                      date: entry.date,
-                      title: entry.title || '',
-                      content: entry.content,
-                      allowAi: entry.allowAi,
-                      visibleRoleIds: [...entry.visibleRoleIds],
-                    })}>{t('diary.edit')}</button>
-                    <button type="button" onClick={() => void remove(entry)}>{t('diary.delete')}</button>
-                  </div>
-                </div>
-                <div className="diary-content">{entry.content}</div>
-                {entry.allowAi && (
-                  <>
-                    <div className="diary-actions">
-                      <button type="button" onClick={() => void regenerate(entry)}>{t('diary.regenerateComments')}</button>
-                      <button type="button" onClick={() => void summarize(entry)}>{t('diary.summarize')}</button>
+              {editor && (
+                <div className="diary-editor">
+                  <div className="diary-editor-head">{t('diary.currentIdentity', { name: identity.name })}</div>
+                  <div className="diary-field-row">
+                    <div className="diary-field">
+                      <label>{t('diary.date')}</label>
+                      <input
+                        className="diary-input"
+                        type="date"
+                        value={editor.date}
+                        onChange={(e) => setEditor({ ...editor, date: e.target.value })}
+                      />
                     </div>
-                    <div className="diary-section-title">{t('diary.comments')}</div>
-                    {entry.aiComments.filter((c) => !c.revoked).length === 0 && (
-                      <div className="diary-hint">{t('diary.noComments')}</div>
-                    )}
-                    {entry.aiComments.filter((c) => !c.revoked).map((c) => (
-                      <div className="diary-comment" key={c.id}>
-                        <div className="diary-meta">
-                          <span>{roles.find((r) => r.id === c.roleId)?.name || c.roleId}</span>
-                          <span>{t(`diary.tone.${c.tone}`)}</span>
-                          <span>{t('diary.commentMeta').replace('{mood}', c.moodAt).replace('{affinity}', String(c.affinityAt))}</span>
+                    <div className="diary-field">
+                      <label>{t('diary.titleField')}</label>
+                      <input
+                        className="diary-input"
+                        value={editor.title}
+                        onChange={(e) => setEditor({ ...editor, title: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  <div className="diary-field diary-field--content">
+                    <label>{t('diary.content')}</label>
+                    <textarea
+                      className="diary-input diary-content-input"
+                      value={editor.content}
+                      onChange={(e) => setEditor({ ...editor, content: e.target.value })}
+                    />
+                  </div>
+                  <label className="diary-check">
+                    <input
+                      type="checkbox"
+                      checked={editor.allowAi}
+                      onChange={(e) => setEditor({
+                        ...editor,
+                        allowAi: e.target.checked,
+                        visibleRoleIds: e.target.checked ? editor.visibleRoleIds : [],
+                      })}
+                    />
+                    <span>{t('diary.allowAi')}</span>
+                  </label>
+                  <div className="diary-hint">{t('diary.allowAiHint')}</div>
+                  <fieldset className="diary-role-pick" disabled={!editor.allowAi}>
+                    <legend>{t('diary.visibleRoles')}</legend>
+                    {!editor.allowAi && <div className="diary-hint">{t('diary.visibleRolesHint')}</div>}
+                    {editor.allowAi && (
+                      <>
+                        <div className="diary-bulk">
+                          <button type="button" onClick={() => setEditor({ ...editor, visibleRoleIds: roles.map((r) => r.id) })}>
+                            {t('diary.selectAll')}
+                          </button>
+                          <button type="button" onClick={() => setEditor({ ...editor, visibleRoleIds: [] })}>
+                            {t('diary.clearAll')}
+                          </button>
                         </div>
-                        <div className="diary-text">{c.text}</div>
-                        <button type="button" onClick={() => void deleteComment(entry, c.id)}>{t('diary.deleteComment')}</button>
-                      </div>
-                    ))}
-                    <div className="diary-section-title">{t('diary.summaries')}</div>
-                    {entry.visibleRoleIds.length === 0 && <div className="diary-hint">{t('diary.noVisible')}</div>}
-                    {entry.visibleRoleIds.map((rid) => (
-                      <DiarySummaryLine key={rid} diary={entry} roleId={rid} roles={roles} />
-                    ))}
-                  </>
-                )}
-              </article>
-            ))}
-          </div>
-
-          {orphans.length > 0 && (
-            <div className="diary-orphans">
-              <div className="diary-section-title">{t('diary.orphans')}</div>
-              <div className="diary-hint">{t('diary.orphanHint')}</div>
-              {orphans.map((o) => (
-                <div className="diary-orphan-row" key={o.id}>
-                  <span>{o.title || o.date}</span>
-                  <select value={reassignTarget} onChange={(e) => setReassignTarget(e.target.value)}>
-                    {books.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                  </select>
-                  <button type="button" onClick={() => {
-                    void api.diaryReassignOrphans(o.selfRoleId, reassignTarget).then(() => loadEntries(currentBook));
-                  }}>{t('diary.reassignOrphans')}</button>
+                        {roles.length === 0 && <div className="diary-hint">{t('diary.noRoles')}</div>}
+                        {roles.map((r) => (
+                          <label key={r.id} className="diary-check">
+                            <input
+                              type="checkbox"
+                              checked={editor.visibleRoleIds.includes(r.id)}
+                              onChange={() => toggleRole(r.id)}
+                            />
+                            <span>{r.name}</span>
+                          </label>
+                        ))}
+                      </>
+                    )}
+                  </fieldset>
+                  <div className="diary-actions">
+                    <button type="button" className="diary-primary" onClick={() => void save()}>{t('diary.save')}</button>
+                    <button type="button" onClick={() => setEditor(null)}>{t('diary.cancel')}</button>
+                  </div>
                 </div>
-              ))}
-            </div>
+              )}
+
+              {!editor && (
+                <div className="diary-entries" ref={listRef}>
+                  {entries.length === 0 && <div className="diary-empty">{t('diary.noEntries')}</div>}
+                  {entries.map((entry) => (
+                    <article className="diary-card" key={entry.id} data-diary-id={entry.id}>
+                      <div className="diary-card-head">
+                        <div>
+                          <div className="diary-date">{entry.date}</div>
+                          <h3>{entry.title || entry.date}</h3>
+                        </div>
+                        <div className="diary-card-actions">
+                          {!entry.allowAi && <span className="diary-badge">🔒 {t('diary.localOnly')}</span>}
+                          <button type="button" onClick={() => setEditor({
+                            id: entry.id,
+                            selfRoleId: entry.selfRoleId,
+                            date: entry.date,
+                            title: entry.title || '',
+                            content: entry.content,
+                            allowAi: entry.allowAi,
+                            visibleRoleIds: [...entry.visibleRoleIds],
+                          })}>{t('diary.edit')}</button>
+                          <button type="button" onClick={() => void remove(entry)}>{t('diary.delete')}</button>
+                        </div>
+                      </div>
+                      <div className="diary-content">{entry.content}</div>
+                      {entry.allowAi && (
+                        <>
+                          <div className="diary-actions">
+                            <button type="button" onClick={() => void regenerate(entry)}>{t('diary.regenerateComments')}</button>
+                            <button type="button" onClick={() => void summarize(entry)}>{t('diary.summarize')}</button>
+                          </div>
+                          <div className="diary-section-title">{t('diary.comments')}</div>
+                          {entry.aiComments.filter((c) => !c.revoked).length === 0 && (
+                            <div className="diary-hint">{t('diary.noComments')}</div>
+                          )}
+                          {entry.aiComments.filter((c) => !c.revoked).map((c) => (
+                            <div className="diary-comment" key={c.id}>
+                              <div className="diary-meta">
+                                <span>{roles.find((r) => r.id === c.roleId)?.name || c.roleId}</span>
+                                <span>{t(`diary.tone.${c.tone}`)}</span>
+                                <span>{t('diary.commentMeta').replace('{mood}', c.moodAt).replace('{affinity}', String(c.affinityAt))}</span>
+                              </div>
+                              <div className="diary-text">{c.text}</div>
+                              <button type="button" onClick={() => void deleteComment(entry, c.id)}>{t('diary.deleteComment')}</button>
+                            </div>
+                          ))}
+                          <div className="diary-section-title">{t('diary.summaries')}</div>
+                          {entry.visibleRoleIds.length === 0 && <div className="diary-hint">{t('diary.noVisible')}</div>}
+                          {entry.visibleRoleIds.map((rid) => (
+                            <DiarySummaryLine key={rid} diary={entry} roleId={rid} roles={roles} />
+                          ))}
+                        </>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

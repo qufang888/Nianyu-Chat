@@ -725,7 +725,7 @@ export interface DiarySummary {
   id: string;
   diaryId: string;
   roleId: string;                 // 产物按角色归属
-  selfRoleId: string;             // 身份册约束；'none' = 未指定册
+  selfRoleId: string;             // 身份册约束；'none' 为内部兼容哨兵，仅用于历史数据迁移/门控
   visibleRoleIdsSnapshot: string[];
   text: string;
   sourceUpdatedAt: string;        // 生成时 diary.updated_at；不一致即视为陈旧
@@ -735,7 +735,7 @@ export interface DiarySummary {
 
 export interface DiaryEntry {
   id: string;
-  selfRoleId: string;             // 'none' = 未指定身份兜底册
+  selfRoleId: string;             // 'none' 为内部兼容哨兵，新建日记必须绑定有效身份 id
   date: string;                   // YYYY-MM-DD
   title?: string;
   content: string;
@@ -758,11 +758,6 @@ export interface DiaryAiResult {
   generatedRoleIds: string[];
   skippedRoleIds: string[];       // tone='skip' 或名单为空
   reason?: 'AI_DISABLED' | 'NO_VISIBLE_ROLE' | 'NO_MODEL' | 'ERROR';
-}
-
-export interface DiaryBook {
-  id: string;
-  name: string;
 }
 
 export interface AppSettings {

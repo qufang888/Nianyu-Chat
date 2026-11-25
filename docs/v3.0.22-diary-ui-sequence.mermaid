@@ -1,0 +1,83 @@
+sequenceDiagram
+    autonumber
+    participant M as 主进程 electron/main.ts
+    participant S as DiaryStore electron/diary.ts
+    participant U as diaryIdentity 纯函数
+    participant A as App.tsx
+    participant V as DiaryView.tsx
+    participant P as preload / src/ipc.ts
+    participant G as Settings.tsx
+    participant F as SelfRoleSettings.tsx
+
+    Note over M,S: ① 启动迁移：无广播、失败不阻塞启动
+    M->>S: init(dm.dataDirectory)
+    M->>U: resolveDiaryTargetSelfRole(validIds, currentSelfRoleId)
+    U-->>M: targetSelfRoleId 或 null
+    alt 有有效身份且存在 selfRoleId 不在 validIds 的日记
+        M->>S: migrateLegacySelfRoles(validIds, currentSelfRoleId)
+        S->>S: 仅改写 diary.selfRoleId 与对应 summary.selfRoleId
+        Note right of S: 不改 updated_at / created_at / 正文<br/>不调用 applyRevoke / nextTimestamp
+        S->>S: save() 写回 diary.json
+    else 无身份或无命中数据
+        M->>S: 空操作（无身份时数据保留但隐藏）
+    end
+
+    Note over A,V,P: ② 首次进入日记页
+    A->>V: view === diary 挂载
+    V->>P: diaryEnsureMigrated()
+    P->>M: invoke diary:ensureMigrated
+    M->>S: migrateLegacySelfRoles(...)（幂等第二次为 0）
+    M-->>V: DiaryMigrationResult
+    V->>P: getSettings() + getRoles()
+    P-->>V: settings + roles
+    V->>U: resolveDiaryIdentity(settings)
+    alt identity === null（没有任何自我身份）
+        U-->>V: null
+        V->>V: 空状态「请先创建一个身份，再写日记」+「去设置创建身份」
+        Note right of V: 隐藏写日记按钮与搜索框<br/>无分册列表 / 无身份切换器
+        V->>A: onGoToIdentitySettings()
+        A->>A: setView(settings) + settingsFocusTick+1
+        A->>G: focusSelfRoleTick = n+1
+        G->>G: setSub(self)
+        G->>G: #self-role-manage scrollIntoView + flashElement
+        Note right of G: 复用既有设置导航与闪动高亮，禁用原生弹窗
+        F->>G: onPersist(首个身份 + currentSelfRoleId)
+        G->>P: api.saveSettings(selfRoles patch)
+        P->>M: settings:save
+        M->>S: migrateOnSettingsChange(patch) 自动归入首个身份
+        M-->>A: broadcast settings:changed / diary:changed
+        A->>V: 返回日记页，重新解析身份与列表
+    else identity !== null
+        U-->>V: {id, name}
+        V->>V: 顶部只读渲染 t(diary.currentIdentity, {name})
+        V->>P: diaryList(identity.id)
+        P->>M: invoke diary:list
+        M-->>V: entries（含 diary_summaries）
+        V->>V: 列表 + 内联大编辑器（flex:1 / min-height:320px / --input-bg / --input-fg）
+    end
+
+    Note over V,P,M: ③ 写日记：渲染层与主线程双门
+    V->>P: diaryCreate({selfRoleId: identity.id, date, title, content})
+    P->>M: invoke diary:create
+    M->>U: isValidDiarySelfRole(validIds, requested)
+    alt 缺失 / 哨兵值 / 无效 id
+        U-->>M: false
+        M-->>V: throw E_DIARY_NO_SELF_ROLE（不回退任何身份）
+        V->>V: 显示 i18n 错误提示
+    else 有效
+        U-->>M: true
+        M->>S: createDiary({selfRoleId: requested, ...})
+        S-->>M: entry
+        M-->>V: broadcastDiaryChanged + return entry
+        V->>P: diaryList(identity.id) 刷新
+    end
+
+    Note over G,M,V: ④ 设置里切换身份后回日记页跟随
+    F->>G: onPersist({currentSelfRoleId: B})
+    G->>P: api.saveSettings(patch)
+    P->>M: settings:save
+    M-->>A: broadcast settings:changed
+    A->>V: 重新 resolveDiaryIdentity → {id: B}
+    V->>P: diaryList(B)
+    P-->>V: 仅 B 的日记；A 的日记不可见
+    Note right of M: 不回写 currentSelfRoleId 的无效值<br/>不触碰 chatSelfRoles 按会话覆盖<br/>resolveActiveSelfRole 保持原样

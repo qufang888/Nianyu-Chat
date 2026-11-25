@@ -555,6 +555,9 @@ export interface NianyuAPI {
   // v2.3.x：小窗专用单光标通道（与主窗 main:cursor-window 相互独立）。主进程向小窗推
   // mini:cursor-window，小窗据此隐藏自身动态光标，避免「小窗压在主窗上方时主窗与小窗双光标」。
   onMiniCursorWindow?: (cb: (covered: boolean) => void) => () => void;
+  // v3.0.22：拖球期间门控通道（复用 preload 既有 onBallDragging，不新增 IPC）。
+  // 主窗/小窗据此与 covered 取「或」：拖拽全程常驻压制原生光标，避免窗口移动导致 covered 电平跳变闪烁。
+  onBallDragging?: (cb: (dragging: boolean) => void) => () => void;
   // v2.3.126（P2-A）：面板「可交互态」通道 —— 主进程权威下发（level 推，带 3px 迟滞）。
   // true=系统光标落在面板**不透明命中区**内（面板窗 bounds 内缩 PANEL_PAD）→ 面板窗切可交互；
   // false=光标不在面板不透明区（含透明边距）→ 面板窗恢复点击穿透，鼠标事件落到下层窗口。
@@ -629,6 +632,12 @@ export interface NianyuAPI {
   openExternal: (url: string) => void;
 
   // ===== v3.0.18 日记与加密（同名同签名透传；cursor 段零改动）=====
+  /** v3.0.22：进入日记页时的幂等兼容迁移；返回计数与内存目标身份。 */
+  diaryEnsureMigrated: () => Promise<{
+    migratedDiaries: number;
+    migratedSummaries: number;
+    targetSelfRoleId: string | null;
+  }>;
   diaryList: (selfRoleId?: string) => Promise<DiaryEntry[]>;
   diaryGet: (id: string) => Promise<DiaryEntry | undefined>;
   diaryCreate: (p: { selfRoleId: string; date: string; title?: string; content: string }) => Promise<DiaryEntry>;
@@ -796,6 +805,7 @@ export const api: NianyuAPI = {
   offModelError: (cb) => raw.offModelError?.(cb),
 
   // ===== v3.0.18 日记与加密（渲染层包装器，同名同签名透传）=====
+  diaryEnsureMigrated: () => raw.diaryEnsureMigrated(),
   diaryList: (selfRoleId) => raw.diaryList(selfRoleId),
   diaryGet: (id) => raw.diaryGet(id),
   diaryCreate: (p) => raw.diaryCreate(p),

@@ -343,12 +343,15 @@ export const Settings: React.FC<{
   modelsOnly?: boolean;
   // 导航重置信号：再次点击左侧「设置」图标时从二级页退回设置主界面
   navResetTick?: number;
+  // v3.0.22：日记空状态跳转信号——进入身份管理二级页并高亮锚点。
+  focusSelfRoleTick?: number;
 }> = ({
   onRerunWizard,
   onAbout,
   onGoToContacts,
   modelsOnly,
   navResetTick,
+  focusSelfRoleTick,
 }) => {
   const [sub, setSub] = useState<'main' | 'font' | 'self' | 'models'>('main');
   // 点击左侧「设置」图标：无论当前在哪个二级页，都退回设置主界面
@@ -1094,6 +1097,20 @@ export const Settings: React.FC<{
     setShowSuggest(false);
     setSearchQ('');
   };
+
+  // v3.0.22：日记空状态「去设置创建身份」——切到身份管理二级页，等锚点挂载后滚动并闪动高亮。
+  // 不调用任何原生弹窗；tick 自增触发，重复点击也能重新高亮。
+  useEffect(() => {
+    if (!focusSelfRoleTick || focusSelfRoleTick <= 0 || modelsOnly) return;
+    setSub('self');
+    const timer = window.setTimeout(() => {
+      const el = document.getElementById('self-role-manage');
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      flashElement(el);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [focusSelfRoleTick, modelsOnly]);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -1827,11 +1844,13 @@ export const Settings: React.FC<{
         )}
         <div className="panel" style={{ overflowY: 'auto' }} ref={panelRef} onScroll={onPanelScroll}>
         {sub === 'self' ? (
-          <SelfRoleSettings
-            selfRoles={draft.selfRoles || []}
-            currentSelfRoleId={draft.currentSelfRoleId || ''}
-            onPersist={persistSelf}
-          />
+          <div id="self-role-manage">
+            <SelfRoleSettings
+              selfRoles={draft.selfRoles || []}
+              currentSelfRoleId={draft.currentSelfRoleId || ''}
+              onPersist={persistSelf}
+            />
+          </div>
         ) : sub === 'font' ? (
           <FontSettings draft={draft} patch={patch} />
         ) : (

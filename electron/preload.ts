@@ -676,6 +676,12 @@ export interface NianyuAPI {
   openExternal: (url: string) => void;
 
   // ===== v3.0.18 日记与加密（追加，不影响任何既有通道；cursor 段零改动）=====
+  /** v3.0.22：幂等兼容迁移结果（有变更才落盘/广播）。 */
+  diaryEnsureMigrated: () => Promise<{
+    migratedDiaries: number;
+    migratedSummaries: number;
+    targetSelfRoleId: string | null;
+  }>;
   diaryList: (selfRoleId?: string) => Promise<DiaryEntry[]>;
   diaryGet: (id: string) => Promise<DiaryEntry | undefined>;
   diaryCreate: (p: { selfRoleId: string; date: string; title?: string; content: string }) => Promise<DiaryEntry>;
@@ -1415,6 +1421,7 @@ const api: NianyuAPI = {
   openExternal: (url) => ipcRenderer.send('app:openExternal', url),
 
   // ===== v3.0.18 日记与加密（追加，独立段落；cursor 段零改动）=====
+  diaryEnsureMigrated: () => ipcRenderer.invoke('diary:ensureMigrated'),
   diaryList: (selfRoleId) => ipcRenderer.invoke('diary:list', selfRoleId),
   diaryGet: (id) => ipcRenderer.invoke('diary:get', id),
   diaryCreate: (p) => ipcRenderer.invoke('diary:create', p),
