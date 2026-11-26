@@ -14,7 +14,9 @@ import { execFileSync } from 'node:child_process';
 
 const ROOT = process.cwd();
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
-const BASELINE = '322908361a47f106f20bdd383bf663d9993e6261'; // 本次日记任务开工时的 HEAD（含拖球光标修复）
+// v3.0.23：含并行光标 BugFix（commit 2f8e734）的新开工基线。
+// 日记实现相对该基线对三冻结区零增量；光标修复自身的增量已计入基线。
+const BASELINE = '2f8e734c13c651975f611d19903d79ad50a62284';
 
 let pass = 0;
 let fail = 0;
@@ -44,10 +46,10 @@ ok('顶部当前身份只读展示（t 传 name）',
   /t\('diary\.currentIdentity',\s*\{\s*name:\s*identity\.name\s*\}\)/.test(view));
 ok('身份解析走只读纯函数', /resolveDiaryIdentity\(settings\)/.test(view));
 ok('进入日记页先调用 diaryEnsureMigrated', /await api\.diaryEnsureMigrated\(\)/.test(view));
-ok('列表/新建固定绑定当前身份',
-  /await loadEntries\(next\.id\)/.test(view) &&
+ok('列表/新建绑定解析出的有效身份（v3.0.23 起可为页内所选身份）',
+  /await loadEntries\((?:next\.id|eid)\)/.test(view) &&
   /api\.diaryList\(selfRoleId\)/.test(view) &&
-  /emptyEditor\(identity\.id\)/.test(view));
+  /emptyEditor\(effectiveRoleId\)/.test(view));
 ok('无身份空状态三件套齐全',
   /t\('diary\.noIdentity'\)/.test(view) && /t\('diary\.noIdentityHint'\)/.test(view) &&
   /t\('diary\.goCreateIdentity'\)/.test(view) && /onGoToIdentitySettings\?\.\(\)/.test(view));
@@ -55,9 +57,12 @@ ok('无身份时写日记按钮与搜索框均不渲染（条件分支）',
   /\{!identity \? \([\s\S]*?diary-empty-state[\s\S]*?\) : \([\s\S]*?diary-search/.test(view) &&
   /\{identity && \([\s\S]*?diary-primary/.test(view));
 for (const dead of ['diary-books', 'currentBook', 'switchBook', 'reassignOrphans', 'diaryListOrphans',
-  'diary.orphans', 'diary.bookNone', 'diary.orphanHint', '<select']) {
+  'diary.orphans', 'diary.bookNone', 'diary.orphanHint']) {
   ok(`DiaryView 无 ${dead}`, !view.includes(dead));
 }
+// v3.0.23：原「无 <select>」升级为「身份下拉结构正确」（强度只增不减）
+ok('v3.0.23 身份下拉：select + value=current + selfRoles.map',
+  /<select/.test(view) && /option value="current"/.test(view) && /selfRoles\.map\(/.test(view));
 ok('DiaryView 无用户可见旧占位词', !/未指定/.test(view) && !/这一册|本册/.test(view));
 ok('错误码映射为 i18n', /DIARY_ERROR_NO_SELF_ROLE/.test(view) && /t\('diary\.errInvalidIdentity'\)/.test(view));
 ok('迁移提示使用唯一对外文案', /t\('diary\.migratedHint'\)/.test(view));
@@ -106,9 +111,10 @@ ok('diary:ensureMigrated 三端齐备',
   /ipcMain\.handle\('diary:ensureMigrated'/.test(main) &&
   /diaryEnsureMigrated/.test(preload) && /diaryEnsureMigrated/.test(ipc));
 ok('types.ts 删除 DiaryBook', !/export interface DiaryBook/.test(read('src/types.ts')));
-ok('package.json 3.0.22 + 两个新脚本 + 拖球脚本保留',
-  /"version": "3\.0\.22"/.test(pkg) && /verify:diary-migrate-3022/.test(pkg) &&
-  /verify:diary-ui-3022/.test(pkg) && /verify:drag-cursor-gate/.test(pkg));
+ok('package.json 3.0.23 + 全部 v3022/v3023 脚本 + 拖球/双消失光标脚本保留',
+  /"version": "3\.0\.23"/.test(pkg) && /verify:diary-migrate-3022/.test(pkg) &&
+  /verify:diary-ui-3022/.test(pkg) && /verify:diary-ui-3023/.test(pkg) &&
+  /verify:drag-cursor-gate/.test(pkg) && /verify:cursor-never-blank/.test(pkg));
 
 section('E. 文档旧占位词清零 / 冻结区零 diff / 光标改动保留');
 for (const f of ['使用说明.md', 'README.md', '硬编码清单.md', '版本更新记录.md', 'src/components/GuideView.tsx']) {

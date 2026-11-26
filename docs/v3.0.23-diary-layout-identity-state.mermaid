@@ -1,0 +1,20 @@
+stateDiagram-v2
+    [*] --> Current: 进入日记页 / 组件重挂（默认，非持久化）
+    Current --> Current: 选「当前身份」同值（仅刷新列表，不清草稿）
+    Current --> Current: 设置变更（重新解析 currentIdentity，清草稿，刷新）
+    Current --> Specific: 选具体身份 R（specificRoleId=R，清草稿，列表切 R）
+    Specific --> Current: 选回「当前身份」（清草稿，跟随新设置身份）
+    Specific --> Specific: 选另一身份 S（清草稿，列表切 S）
+    Specific --> Specific: 设置变更且 R 仍存在（只刷新 selfRoles 与第一项标签，保持列表/草稿）
+    Specific --> Current: 设置变更且 R 已被删除（清草稿，回落跟随设置）
+    Current --> [*]: 离开日记页 / 重启（state 丢失）
+    Specific --> [*]: 离开日记页 / 重启（state 丢失）
+    note right of Specific
+      effectiveRoleId = specificRoleId
+      列表/新建/留言刷新均绑定它
+      onDiaryChanged 读 effectiveRoleIdRef
+    end note
+    note right of Current
+      effectiveRoleId = resolveDiaryIdentity(settings).id
+      无效 currentSelfRoleId 内存回落第一个身份，不回写设置
+    end note

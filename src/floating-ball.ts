@@ -16,6 +16,8 @@ import { createRoot } from 'react-dom/client';
 import { ThemeProvider } from './theme/ThemeContext';
 import DynamicCursor from './cursor/DynamicCursor';
 import { NATIVE_HIDDEN_CLASS } from './cursor/types';
+import { CURSOR_FORCE_HIDE_EVENT } from './cursor/types';
+import { applyCursorNeverBlankGuard, clearAllNativeSuppression } from './cursor/nativeCursorGuard';
 import { applyAnimControl, animMs, readAnimSpeed } from './utils/animControl';
 import { translate, type Lang } from './i18n/translations';
 import { installGlobalSoundListeners } from './utils/sound';
@@ -48,6 +50,9 @@ function setupCursorEnabled(): void {
           // 合成 mouseout / 空闲隐藏被摘掉，导致 hover/拖拽时原生光标与动态光标双现。
           // 菜单窗不挂 DynamicCursor，setupCursorEnabled 也不会在 menu 分支调用。
           document.body.classList.toggle(NATIVE_HIDDEN_CLASS, dynCursorEnabled);
+          // v3.0.23：关闭动态光标时把菜单弹出期间补回的 cursor-hidden 一并清掉，
+          // 否则该窗原生光标会被无人摘除的类永久隐藏。
+          if (!dynCursorEnabled) clearAllNativeSuppression(document);
         })
         .catch(() => {});
     }
@@ -250,6 +255,10 @@ function makeInteractive(ignoreFn: ((ignore: boolean) => void) | undefined) {
       // DynamicCursor 立即隐藏、恢复原生光标（与 onBallMenuOpen / suppressPanelCursor 同款处理）。
       document.body.classList.add('cursor-gate-off');
       document.dispatchEvent(new MouseEvent('mouseout'));
+      // v3.0.23：合成 mouseout 在引擎 inside=false 时会被忽略 → 无条件事件兜底，
+      // 保证 HIDDEN_CLASS 一定被摘，避免穿透态「原生压制层 + 无字形」双消失。
+      document.dispatchEvent(new Event(CURSOR_FORCE_HIDE_EVENT));
+      applyCursorNeverBlankGuard(document, false);
     }
   }
   return setInteractive;
@@ -408,6 +417,8 @@ function mountBall(): void {
       // v2.3.126：仅动态光标启用时才隐藏原生光标——菜单窗没有动态光标，原生光标本就该显示；
       // 关闭动态光标时更不能残留此类，否则原生光标永久消失且无人摘除（Bug A/C 根因）。
       if (dynCursorEnabled) document.body.classList.add('cursor-hidden');
+      // v3.0.23：mouseout 在引擎 inside=false 时会被忽略，无条件事件兜底
+      document.dispatchEvent(new Event(CURSOR_FORCE_HIDE_EVENT));
     });
   }
   // 失焦（点击球唤出主窗等）：恢复穿透与光标门控；面板收起由主进程 blur 链路统一处理
@@ -434,6 +445,7 @@ function mountBall(): void {
     ball.classList.remove('dragging');
     // v3.0.22：正常 mouseup 收尾同样按动态光标开关同步压制层，关时绝不残留。
     document.body.classList.toggle(NATIVE_HIDDEN_CLASS, dynCursorEnabled);
+    applyCursorNeverBlankGuard(document, false);
     window.removeEventListener('mouseup', onUp);
     const finish = (wasDrag: boolean) => {
       if (!wasDrag) {
@@ -462,6 +474,7 @@ function mountBall(): void {
       ball.classList.remove('dragging');
       // v3.0.22：mouseup 丢失自愈收尾也不能漏摘/漏压，按动态光标开关同步压制层。
       document.body.classList.toggle(NATIVE_HIDDEN_CLASS, dynCursorEnabled);
+      applyCursorNeverBlankGuard(document, false);
       window.removeEventListener('mouseup', onUp);
       setInteractive(false);
     });
@@ -509,6 +522,7 @@ function mountPanel(): void {
     // 立即门控 + 合成 mouseout → DynamicCursor 走隐藏链路（清特效层 / 恢复原生光标）
     document.body.classList.add('cursor-gate-off');
     document.dispatchEvent(new MouseEvent('mouseout'));
+    document.dispatchEvent(new Event(CURSOR_FORCE_HIDE_EVENT));
   };
   if (api && api.onBallDragging) {
     api.onBallDragging((d: boolean) => {

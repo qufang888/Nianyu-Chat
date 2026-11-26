@@ -114,8 +114,10 @@ const DynamicCursor: React.FC = () => {
     <>
       {/* 特效层（拖尾 + 粒子，rAF 驱动） */}
       <canvas ref={fxCanvasRef} style={{ ...layerStyle, zIndex: 2147483646 }} />
-      {/* 字形层（DOM，本体）—— 位置由引擎在指针事件里同步写入 transform */}
-      <div ref={glyphHostRef} style={{ ...layerStyle, zIndex: 2147483647 }} />
+      {/* 字形层（DOM，本体）—— 位置由引擎在指针事件里同步写入 transform。
+          v3.0.23：data-ny-cursor-glyph 是 nativeCursorGuard 查询「本窗是否有可绘制字形」的
+          单一 DOM 标记；引擎隐藏字形时 style.visibility='hidden'，守卫据此恢复原生光标。 */}
+      <div ref={glyphHostRef} data-ny-cursor-glyph="1" style={{ ...layerStyle, zIndex: 2147483647 }} />
     </>,
     document.body
   );

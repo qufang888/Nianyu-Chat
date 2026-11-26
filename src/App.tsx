@@ -33,7 +33,8 @@ const CharacterCollection = React.lazy(() =>
 );
 import { useToast, ToastView } from './components/Toast';
 import DynamicCursor from './cursor/DynamicCursor';
-import { NATIVE_HIDDEN_CLASS } from './cursor/types';
+import { CURSOR_FORCE_HIDE_EVENT, GATE_CLASS, NATIVE_HIDDEN_CLASS } from './cursor/types';
+import { applyCursorNeverBlankGuard, clearAllNativeSuppression } from './cursor/nativeCursorGuard';
 import VideoBubble from './components/VideoBubble';
 import ErrorBubble from './components/ErrorBubble';
 import QueueDock from './components/QueueDock';
@@ -69,8 +70,44 @@ export default function App() {
   }
   useEffect(() => {
     syncNativeCursorHidden();
+    // v3.0.23：开关关闭 → 两层压制无条件解除；开启 → 用 DOM 真值复核不变量
+    if (!settings?.customCursor?.enabled) {
+      document.body.classList.remove(GATE_CLASS);
+      clearAllNativeSuppression(document);
+    } else {
+      applyCursorNeverBlankGuard(document, coveredRef.current || ballDraggingRef.current);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.customCursor?.enabled]);
+
+  // v3.0.23：窗口隐藏 / 重新显示、失焦时的最后一道防线。
+  // 主进程在 show/focus 沿会重推权威 covered；本端先清掉陈旧压制，保证任何时序下
+  // 「gate-off + native-hidden + 引擎 hidden」三态不会同时成立。
+  useEffect(() => {
+    const releaseStaleSuppression = (): void => {
+      coveredRef.current = false;
+      ballDraggingRef.current = false;
+      document.body.classList.remove(GATE_CLASS);
+      syncNativeCursorHidden();
+      applyCursorNeverBlankGuard(document, false);
+    };
+    const onVisibility = (): void => {
+      if (document.hidden) releaseStaleSuppression();
+      else applyCursorNeverBlankGuard(document, coveredRef.current || ballDraggingRef.current);
+    };
+    const onBlur = (): void => {
+      applyCursorNeverBlankGuard(document, coveredRef.current || ballDraggingRef.current);
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', releaseStaleSuppression);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', releaseStaleSuppression);
+      window.removeEventListener('blur', onBlur);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const { toast, showToast } = useToast();
   const [view, setView] = useState<View>('chats');
   // Bug 1：角色窗右键「打开角色舞台」带来的舞台请求（带 nonce 保证同一角色可重复打开）。
@@ -307,14 +344,18 @@ export default function App() {
     const offCovered = api?.onMainCursorWindow
       ? api.onMainCursorWindow((covered: boolean) => {
           coveredRef.current = covered;
+          syncNativeCursorHidden();
           if (covered) {
             document.body.classList.add('cursor-gate-off');
             // 合成 mouseout 仍保留：引擎字形需要立即隐藏（压制层只管原生光标）。
             document.dispatchEvent(new MouseEvent('mouseout'));
+            // v3.0.23：mouseout 在引擎 inside=false 时会被忽略 → 无条件事件兜底，
+            // 否则 HIDDEN_CLASS 残留 + 两层压制同时生效 = 两个光标都消失。
+            document.dispatchEvent(new Event(CURSOR_FORCE_HIDE_EVENT));
           } else {
             document.body.classList.remove('cursor-gate-off');
           }
-          syncNativeCursorHidden();
+          applyCursorNeverBlankGuard(document, covered || ballDraggingRef.current);
         })
       : () => {};
     // v3.0.22：拖拽期间覆盖电平会随窗口移动反复跳变，拖拽门让压制层整段拉高不闪烁。
@@ -322,6 +363,12 @@ export default function App() {
       ? api.onBallDragging((dragging: boolean) => {
           ballDraggingRef.current = dragging;
           syncNativeCursorHidden();
+          // v3.0.23：拖拽期 gate 与压制层成对升降，强制结束也不留半开态。
+          if (dragging) {
+            document.body.classList.add(GATE_CLASS);
+            document.dispatchEvent(new Event(CURSOR_FORCE_HIDE_EVENT));
+          } else document.body.classList.remove(GATE_CLASS);
+          applyCursorNeverBlankGuard(document, dragging || coveredRef.current);
         })
       : () => {};
     return () => {

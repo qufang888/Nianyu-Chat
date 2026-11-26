@@ -1,0 +1,78 @@
+classDiagram
+    direction LR
+
+    class DiaryView {
+        <<React src/components/DiaryView.tsx>>
+        -DiaryIdentity identity
+        -DiaryIdentityRef identityRef
+        -PickerMode pickerMode
+        -string specificRoleId
+        -SelfRoleOption[] selfRoles
+        -PickerModeRef pickerModeRef
+        -stringRef specificRoleIdRef
+        -stringRef effectiveRoleIdRef
+        -DiaryEntry[] entries
+        -EditorState editor
+        +effectiveRoleId string
+        +identityLabel string
+        +effectiveLabel string
+        +handleIdentityChange(value) void
+        +resolveSettings() Promise
+        +loadEntries(roleId) Promise
+        +save() Promise
+    }
+    class PickerMode {
+        <<type>>
+        current
+        specific
+    }
+    class SelfRoleOption {
+        +string id
+        +string name
+    }
+    class DiaryIdentity {
+        +string id
+        +string name
+    }
+    class DiaryIdentityUtil {
+        <<module src/utils/diaryIdentity.ts 零改动>>
+        +resolveDiaryIdentity(settings) DiaryIdentity
+        +resolveDiaryTargetSelfRole(validIds, preferred) string
+        +isValidDiarySelfRole(validIds, id) boolean
+        +DIARY_ERROR_NO_SELF_ROLE string
+        +DIARY_LEGACY_SENTINEL string
+    }
+    class AppSettings {
+        +SelfRole[] selfRoles
+        +string currentSelfRoleId
+        +Record chatSelfRoles
+    }
+    class SelfRole {
+        +string id
+        +string name
+    }
+    class DiaryApi {
+        <<src/ipc.ts 零改动>>
+        +getSettings() AppSettings
+        +getRoles() Role
+        +diaryList(roleId) DiaryEntry
+        +diaryCreate(params) DiaryEntry
+        +onSettingsChanged(cb) Unsubscribe
+        +onDiaryChanged(cb) Unsubscribe
+    }
+    class DiaryCssTokens {
+        <<src/styles/index.css>>
+        +diaryPanel_background var(--color-bg)
+        +diaryPanel_flex 1 1 auto
+        +diaryPanel_minWidth 0
+        +select_background var(--color-select-bg)
+    }
+
+    DiaryView --> PickerMode : state
+    DiaryView *-- SelfRoleOption : selfRoles
+    DiaryView --> DiaryIdentity : identity = current setting role
+    DiaryView --> DiaryIdentityUtil : resolveDiaryIdentity (reuse)
+    DiaryIdentityUtil ..> AppSettings : reads only
+    AppSettings o-- SelfRole : selfRoles
+    DiaryView --> DiaryApi : binds effectiveRoleId
+    DiaryView --> DiaryCssTokens : renders into .diary-panel

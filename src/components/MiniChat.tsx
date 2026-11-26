@@ -21,7 +21,8 @@ import { useRetract } from '../hooks/useRetract';
 import { useMenuRelocate } from '../hooks/useMenuRelocate';
 import { CustomTitleBar } from './CustomTitleBar';
 import DynamicCursor from '../cursor/DynamicCursor';
-import { NATIVE_HIDDEN_CLASS } from '../cursor/types';
+import { CURSOR_FORCE_HIDE_EVENT, GATE_CLASS, NATIVE_HIDDEN_CLASS } from '../cursor/types';
+import { applyCursorNeverBlankGuard, clearAllNativeSuppression } from '../cursor/nativeCursorGuard';
 import ErrorBubble from './ErrorBubble';
 import { AvatarImg } from './ChatList';
 import { playSoundSync } from '../utils/sound';
@@ -97,8 +98,42 @@ export const MiniChat: React.FC = () => {
   }
   useEffect(() => {
     syncNativeCursorHidden();
+    // v3.0.23：开关关闭 → 两层压制无条件解除；开启 → 用 DOM 真值复核不变量
+    if (!settings?.customCursor?.enabled) {
+      document.body.classList.remove(GATE_CLASS);
+      clearAllNativeSuppression(document);
+    } else {
+      applyCursorNeverBlankGuard(document, coveredRef.current || ballDraggingRef.current);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.customCursor?.enabled]);
+
+  // v3.0.23：小窗隐藏 / 重新显示、失焦时的最后一道防线（与主窗同款）
+  useEffect(() => {
+    const releaseStaleSuppression = (): void => {
+      coveredRef.current = false;
+      ballDraggingRef.current = false;
+      document.body.classList.remove(GATE_CLASS);
+      syncNativeCursorHidden();
+      applyCursorNeverBlankGuard(document, false);
+    };
+    const onVisibility = (): void => {
+      if (document.hidden) releaseStaleSuppression();
+      else applyCursorNeverBlankGuard(document, coveredRef.current || ballDraggingRef.current);
+    };
+    const onBlur = (): void => {
+      applyCursorNeverBlankGuard(document, coveredRef.current || ballDraggingRef.current);
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', releaseStaleSuppression);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', releaseStaleSuppression);
+      window.removeEventListener('blur', onBlur);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [chats, setChats] = useState<ChatListItem[]>([]);
   const [current, setCurrent] = useState<ChatListItem | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -466,13 +501,16 @@ export const MiniChat: React.FC = () => {
     const offCovered = api?.onMiniCursorWindow
       ? api.onMiniCursorWindow((covered: boolean) => {
           coveredRef.current = covered;
+          syncNativeCursorHidden();
           if (covered) {
             document.body.classList.add('cursor-gate-off');
             document.dispatchEvent(new MouseEvent('mouseout'));
+            // v3.0.23：mouseout 在引擎 inside=false 时会被忽略，必须无条件兜底隐藏字形
+            document.dispatchEvent(new Event(CURSOR_FORCE_HIDE_EVENT));
           } else {
             document.body.classList.remove('cursor-gate-off');
           }
-          syncNativeCursorHidden();
+          applyCursorNeverBlankGuard(document, covered || ballDraggingRef.current);
         })
       : () => {};
     // v3.0.22：复用 ball:dragging 通道，整段拖拽常驻压制原生光标，避免 covered 电平跳变闪烁。
@@ -480,6 +518,12 @@ export const MiniChat: React.FC = () => {
       ? api.onBallDragging((dragging: boolean) => {
           ballDraggingRef.current = dragging;
           syncNativeCursorHidden();
+          // v3.0.23：拖拽期 gate 与压制层成对升降，强制结束也不留半开态
+          if (dragging) {
+            document.body.classList.add(GATE_CLASS);
+            document.dispatchEvent(new Event(CURSOR_FORCE_HIDE_EVENT));
+          } else document.body.classList.remove(GATE_CLASS);
+          applyCursorNeverBlankGuard(document, dragging || coveredRef.current);
         })
       : () => {};
     return () => {

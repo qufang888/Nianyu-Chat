@@ -1,0 +1,18 @@
+flowchart TD
+    A["窗口尺寸变化 / 最大化 / 还原"] --> B[".app-shell row flex:1"]
+    B --> C[".diary-panel flex:1 1 auto; min-width:0"]
+    C --> D["宽度 = app-shell 宽 - sidebar - padding<br/>（不再固定内容宽/左侧窄块）"]
+    C --> E["height:100% + min-height:0<br/>确定容器高度"]
+    D --> F[".diary-layout flex:1 (column)"]
+    E --> F
+    F --> G[".diary-main flex:1; overflow-y:auto"]
+    G --> H{编辑态?}
+    H -- 是 --> I["隐藏 .diary-entries，单主轴"]
+    I --> J[".diary-editor flex:1 1 auto; min-height:460<br/>stretch 铺满宽度"]
+    J --> K[".diary-field--content flex:1; min-height:320"]
+    K --> L[".diary-content-input flex:1; min-height:320; width:100%<br/>宽度≈主区 100%，高度≥max(40%,320px)"]
+    H -- 否 --> M[".diary-entries 列表铺满宽度<br/>搜索框/卡片 stretch"]
+    G --> N{"内容超出容器高度?"}
+    N -- 是 --> O[".diary-main overflow-y:auto 接管滚动<br/>小窗口仍可用"]
+    N -- 否 --> P["正常铺满"]
+    C --> Q["background: var(--color-bg)<br/>14 主题 alpha=1；glass 开/关均不露桌面"]

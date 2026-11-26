@@ -498,13 +498,20 @@ section('10. 运行时冒烟（用最小 DOM 桩**真的执行**一遍引擎）'
     removeEventListener: (t) => winListeners.delete(t),
     setTimeout: (f, t) => setTimeout(f, t),
     clearTimeout: (id) => clearTimeout(id),
+    // v3.0.23：引擎挂载 1s 最后一道防线巡检（低频，不参与渲染循环）
+    setInterval: (f, t) => setInterval(f, t),
+    clearInterval: (id) => clearInterval(id),
     requestAnimationFrame: g.requestAnimationFrame,
     cancelAnimationFrame: g.cancelAnimationFrame,
     dispatchEvent: () => true,
   };
 
   try {
-    const engineApi = loadTs('src/cursor/cursorEngine.ts', { './types': typesApi, './cursorImage': imageApi });
+    // v3.0.23：引擎新增最后一道防线依赖 nativeCursorGuard，直接加载真实模块（不桩掉）
+    const guardApi = loadTs('src/cursor/nativeCursorGuard.ts', { './types': typesApi });
+    const engineApi = loadTs('src/cursor/cursorEngine.ts', {
+      './types': typesApi, './cursorImage': imageApi, './nativeCursorGuard': guardApi,
+    });
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
     const baseCfg = {

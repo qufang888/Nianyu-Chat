@@ -390,20 +390,49 @@ function pushCoveredNow(): void {
     { main: lastMainCovered, mini: lastMiniWindowCovered },
     { main: next.main, mini: next.mini }
   );
+  if (diff.main !== undefined) lastMainCovered = diff.main;
   if (diff.main !== undefined) {
-    lastMainCovered = diff.main;
     const mainWin = mainWinRef;
     if (mainWin && !mainWin.isDestroyed() && mainWin.isVisible()) {
       mainWin.webContents.send('main:cursor-window', diff.main);
+    } else {
+      lastMainCovered = null; // 未送达 → 缓存作废，窗口再显示时必须重推
     }
   }
+  if (diff.mini !== undefined) lastMiniWindowCovered = diff.mini;
   if (diff.mini !== undefined) {
-    lastMiniWindowCovered = diff.mini;
     const miniWin = miniWinRef;
     if (miniWin && !miniWin.isDestroyed() && miniWin.isVisible()) {
       miniWin.webContents.send('mini:cursor-window', diff.mini);
+    } else {
+      lastMiniWindowCovered = null; // 同上
     }
   }
+  // v3.0.23（根因 1）：缓存只能记「已送达」的值。窗口隐藏/重建时不送达就把缓存作废，
+  // 否则 covered=true 在隐藏窗口上被记为已同步，重新显示后变化沿消失 → 渲染端
+  // 永远收不到 covered=false → gate-off + 原生压制层 + 引擎隐藏三态残留 = 双光标消失。
+}
+
+/**
+ * v3.0.23：窗口 show/restore/focus 时主动重推当前 covered 电平（不再只推变化沿）。
+ * 渲染进程会在窗口隐藏期间清掉陈旧压制；本函数保证权威状态在同一时刻回到渲染端。
+ */
+export function resyncCoveredOnWindowShow(kind: 'main' | 'mini'): void {
+  if (kind === 'main') lastMainCovered = null;
+  else lastMiniWindowCovered = null;
+  pushCoveredNow();
+}
+
+/** 给主窗/小窗引用挂上生命周期监听，确保每次显示都做一次权威重同步 */
+function attachCoveredResync(win: BrowserWindow | null, kind: 'main' | 'mini'): void {
+  if (!win || win.isDestroyed()) return;
+  const tagged = win as BrowserWindow & { __nyCoveredResyncBound?: boolean };
+  if (tagged.__nyCoveredResyncBound) return;
+  tagged.__nyCoveredResyncBound = true;
+  const handler = (): void => resyncCoveredOnWindowShow(kind);
+  win.on('show', handler);
+  win.on('restore', handler);
+  win.on('focus', handler);
 }
 
 /** 收集当前几何，交给单一真源算覆盖关系（hover 沿与轮询共用，杜绝谓词漂移） */
@@ -434,7 +463,9 @@ function computeCoveredStateNow(): { owner: CursorOwner; main: boolean; mini: bo
         ? insetRect(ballWin.getBounds() as CoverRect, BALL_PAD)
         : null,
     menuRect:
-      menuVisible && menuWindow && !menuWindow.isDestroyed() ? (menuWindow.getBounds() as CoverRect) : null,
+      menuVisible && menuWindow && !menuWindow.isDestroyed() && menuWindow.isVisible()
+        ? (menuWindow.getBounds() as CoverRect)
+        : null,
     // 面板用**不透明命中区**（inset PANEL_PAD）：owner 与 covered 同源，
     // 透明边距不算「面板区域」→ 该区域光标归下层窗口，不会出现「一个光标都没有」的死区。
     panelRect: panelOpaqueRect(),
@@ -485,13 +516,18 @@ export function setBallPeerOnTopProbe(fn: (() => boolean) | null): void {
 function startCursorPoll(): void {
   if (cursorPollTimer) clearInterval(cursorPollTimer);
   cursorPollTimer = setInterval(() => {
-    if (!ballWindow || ballWindow.isDestroyed() || !ballWindow.isVisible()) return;
+    // v3.0.23（根因 3）：球窗隐藏（用户隐藏悬浮球 / 全屏）时不能再整体早退，否则
+    // covered=true 的缓存永远不会被 false 纠正，主窗/小窗gate-off + 两层压制残留 → 双消失。
+    // 球窗销毁才是真正的「功能关闭」，此时才整体停摆。
+    const ballAlive = !!ballWindow && !ballWindow.isDestroyed();
+    if (!ballAlive) return;
+    const ballVisible = !!ballWindow && ballWindow.isVisible();
     // v3.0.1-beta.9 P0（Windows）：level 不参与 z_order，点击桌宠会把它的焦点 / Z 序抬上来，
     // 这类动态情形无法枚举 → 在既有 200ms 光标轮询里以 1s 节流低频重申悬浮球三窗 Z 序。
     // 仅在「节流到期 且 桌宠窗存在且置顶」时执行（&& 短路，probe 每 1s 才被调一次）。
     // 本分支完全独立于下方 try 块的单光标仲裁逻辑，不改变 owner / covered / hover 判定。
     const now = Date.now();
-    if (now - lastZOrderReassertAt >= Z_ORDER_REASSERT_MS && ballPeerOnTopProbe?.()) {
+    if (ballVisible && now - lastZOrderReassertAt >= Z_ORDER_REASSERT_MS && ballPeerOnTopProbe?.()) {
       lastZOrderReassertAt = now;
       reassertFloatingBallOnTop('poll');
     }
@@ -500,7 +536,7 @@ function startCursorPoll(): void {
       // ⚠️ 仅用于 hover 电平 / 收起防抖；owner 与 covered 一律以 computeCoveredStateNow() 的
       // 不透明命中区为准（球 = 内缩 BALL_PAD 的球 DOM 范围）。此处用整窗矩形是**故意的**：
       // hover 语义要覆盖球的透明边距（防误收起），但**不可**当 owner 谓词用（会与共享模块漂移）。
-      const inBall = pointInRect(p.x, p.y, ballWindow.getBounds());
+      const inBall = ballVisible && pointInRect(p.x, p.y, ballWindow!.getBounds());
       // ⚠️ 仅用于 hover 电平 / 收起防抖 + 菜单互斥；owner 与 covered 一律以
       // computeCoveredStateNow() 的不透明命中区为准。菜单按整窗矩形近似（菜单窗不挂 DynamicCursor）。
       // 菜单窗相关判定（menuVisible 时有效）
@@ -508,6 +544,7 @@ function startCursorPoll(): void {
         menuVisible &&
         !!menuWindow &&
         !menuWindow.isDestroyed() &&
+        menuWindow.isVisible() &&
         pointInRect(p.x, p.y, menuWindow.getBounds());
       // v2.3.117：单光标所有权——光标所在最上层窗口独占动态光标（整机一个光标）。
       // 拖拽中球窗恒独占（同时保住 P0-1：不因贴边越界给球窗推 false）；否则 菜单 > 球 > 面板
@@ -567,7 +604,7 @@ function startCursorPoll(): void {
       // 仍留在球上）。level 推送保证光标一离开球窗（≤一个轮询周期）即被强制隐藏；球窗
       // setInteractive(false) 的 120ms 防抖会被下次 mouseenter 的 setInteractive(true) 清除，
       // 故不会误伤「移入球窗正常显示」。
-      if (ballWindow && !ballWindow.isDestroyed()) {
+      if (ballWindow && !ballWindow.isDestroyed() && ballVisible) {
         ballWindow.webContents.send('ball:cursor-window', owner === 'ball');
       }
       // 面板窗保持「edge」推送：面板 suppressPanelCursor 是即时隐藏、无防抖，level 推会在
@@ -641,6 +678,7 @@ export function setBallMainShow(fn: () => void): void {
 }
 export function setBallMainWindow(win: BrowserWindow | null): void {
   mainWinRef = win;
+  attachCoveredResync(win, 'main');
 }
 
 // 注入快捷小窗引用。小窗「关闭」只做 hide()、窗口并不销毁（见 main.ts 的 close 处理），
@@ -649,6 +687,7 @@ export function setBallMainWindow(win: BrowserWindow | null): void {
 // 无需靠清 key 解决。注入小窗引用正是为了让可见性守卫拿得到「小窗是否真的可见」。
 export function setBallMiniWindow(win: BrowserWindow | null): void {
   miniWinRef = win;
+  attachCoveredResync(win, 'mini');
 }
 
 // 渲染端切换当前聊天时回传，用于判断「主动消息」是否应计入未读。
@@ -1085,6 +1124,10 @@ export function hideFloatingBall(): void {
   menuVisible = false;
   menuHidePending = false;
   menuOffTicks = 0;
+  // v3.0.23：球窗隐藏 → 覆盖关系必为「无覆盖」，立即重推 false，杜绝陈旧 true 残留。
+  lastMainCovered = null;
+  lastMiniWindowCovered = null;
+  pushCoveredNow();
 }
 export function showFloatingBall(): void {
   const s = dm.getSettings();
@@ -1107,6 +1150,10 @@ export function showFloatingBall(): void {
   // 三窗此时全为隐藏态，该次调用会整体空转（恢复显示后失去显式兜底）。移到此处后，
   // 球窗与展开中的面板 isVisible()===true，moveTop() 生效；菜单仍隐藏 → 守卫跳过，不误显示。
   reassertFloatingBallOnTop('ball-show');
+  // v3.0.23：球窗恢复显示 → 重新按现算几何下发权威 covered（show/focus 监听也会再推一次，幂等）
+  lastMainCovered = null;
+  lastMiniWindowCovered = null;
+  pushCoveredNow();
 }
 
 // ===== 悬浮球相关 IPC =====
@@ -1241,6 +1288,11 @@ export function registerBallIPC(): void {
     // 正常 drag-end、mouseup 丢失自愈都走本函数，三条退出路径不会漏发 false。
     if (mainWinRef && !mainWinRef.isDestroyed()) mainWinRef.webContents.send('ball:dragging', false);
     if (miniWinRef && !miniWinRef.isDestroyed()) miniWinRef.webContents.send('ball:dragging', false);
+    // v3.0.23（根因 2）：拖拽期间 computeOwner 恒返回 'ball'，covered 缓存可能停在 true。
+    // dragTimer 已清空，必须立刻用现算几何重推；缓存作废保证隐藏窗口在重新显示时还会再推一次。
+    lastMainCovered = null;
+    lastMiniWindowCovered = null;
+    pushCoveredNow();
     // 拖拽结束时作废未完成的换向：面板收回动画可能已开始，重播弹出动画保持面板可见
     // （与旧行为一致：拖拽结束后面板保持展开，交由 hover 离开后防抖收起）
     if (reflipTimer) {

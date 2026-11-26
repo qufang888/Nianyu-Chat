@@ -156,6 +156,15 @@ export const HIDDEN_CLASS = 'cursor-hidden';
 export const NATIVE_HIDDEN_CLASS = 'cursor-native-hidden';
 /** body 类：单光标仲裁门控（主进程 covered 时由 App/MiniChat/floating-ball 添加） */
 export const GATE_CLASS = 'cursor-gate-off';
+/**
+ * v3.0.23：强制隐藏动态字形的窗口内事件。
+ * 合成 mouseout 在引擎 `inside=false`（窗口从未收到 mousemove / 刚重建）时会被忽略，
+ * 导致门控已开、原生已被独立压制层隐藏，而字形类 HIDDEN_CLASS 仍残留 —— 两个光标都没有。
+ * 仲裁层改用本事件：引擎无条件走 hideCursorImmediate()，必摘 HIDDEN_CLASS。
+ */
+export const CURSOR_FORCE_HIDE_EVENT = 'ny-cursor-force-hide';
+/** v3.0.23：最后一道防线的巡检周期（毫秒），保证陈旧压制最多 1 秒自愈 */
+export const NATIVE_GUARD_INTERVAL_MS = 1000;
 
 /** 设置页拖动热点时派发的窗口内事件（用于「拖动中实时生效、松手才落盘」） */
 export const HOTSPOT_PREVIEW_EVENT = 'ny-cursor-hotspot-preview';

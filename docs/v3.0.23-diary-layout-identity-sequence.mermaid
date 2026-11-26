@@ -1,0 +1,73 @@
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant V as DiaryView.tsx
+    participant API as src/ipc.ts
+    participant M as electron/main.ts
+    participant Util as diaryIdentity 纯函数
+
+    Note over V,M: ① 挂载：默认 current，复用 v3.0.22 迁移与解析
+    U->>V: 进入日记页
+    V->>API: diaryEnsureMigrated()
+    API->>M: diary:ensureMigrated（幂等）
+    M-->>V: DiaryMigrationResult
+    V->>API: getSettings() + getRoles()
+    API-->>V: settings + roles
+    V->>Util: resolveDiaryIdentity(settings)
+    Util-->>V: {id, name}（当前设置身份）
+    V->>V: setIdentity / setSelfRoles(settings.selfRoles)
+    V->>V: pickerModeRef=current，effectiveRoleIdRef=identity.id
+    V->>API: diaryList(effectiveRoleId)
+    API->>M: diary:list(roleId)
+    M-->>V: entries
+
+    Note over U,V: ② 选具体身份 R（Q2 清草稿）
+    U->>V: 下拉选 R
+    V->>V: handleIdentityChange(R)
+    V->>V: switched=true → setEditor(null)
+    V->>V: specificRoleId=R, mode=specific, effectiveRoleIdRef=R
+    V->>API: diaryList(R)
+    API-->>V: 仅 R 的日记（A 身份日记不可见）
+
+    Note over U,V: ③ 选回「当前身份」
+    U->>V: 下拉选 current
+    V->>V: mode=current, specificRoleId=null
+    V->>V: setEditor(null), effectiveRoleIdRef=identity.id
+    V->>API: diaryList(identity.id)
+    API-->>V: 当前设置身份的日记
+
+    Note over API,V: ④ 设置变更联动（§4.3 / Q2）
+    API->>V: onSettingsChanged(settings')
+    V->>Util: resolveDiaryIdentity(settings')
+    Util-->>V: next（新当前身份）
+    V->>V: setIdentity(next), setSelfRoles(settings'.selfRoles)
+    alt mode=current
+        V->>V: setEditor(null), effectiveRoleIdRef=next.id
+        V->>API: diaryList(next.id)
+    else mode=specific 且 R 仍存在
+        V->>V: 保持 specific / 不清草稿 / 不切列表
+        V->>V: 仅刷新下拉选项与第一项标签
+    else mode=specific 且 R 已删除
+        V->>V: 回落 current, setEditor(null), effectiveRoleIdRef=next.id
+        V->>API: diaryList(next.id)
+    end
+
+    Note over U,M: ⑤ 写日记（绑定 effective，主进程门控不变）
+    U->>V: ＋写日记 → 输入 → 保存
+    V->>V: emptyEditor(effectiveRoleId) → editor.selfRoleId
+    V->>API: diaryCreate({selfRoleId: editor.selfRoleId, ...})
+    API->>M: diary:create
+    M->>M: assertDiaryCreateSelfRole（严格校验，无回退）
+    alt 无效 id
+        M-->>V: throw E_DIARY_NO_SELF_ROLE
+        V->>V: t('diary.errInvalidIdentity')
+    else 有效
+        M-->>V: entry + broadcastDiaryChanged
+        V->>API: diaryList(effectiveRoleId)
+        API-->>V: 刷新列表
+    end
+
+    Note over API,V: ⑥ 留言/摘要变更：刷新当前所选身份
+    API->>V: onDiaryChanged()
+    V->>API: diaryList(effectiveRoleIdRef.current)
+    API-->>V: 列表刷新（不串身份）

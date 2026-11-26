@@ -7490,11 +7490,20 @@ html[data-anim-off~='panel'] .msg-action-divider {
   padding: 18px 22px;
   color: var(--color-text);
   animation: diaryPanelIn calc(0.28s * var(--anim-speed, 1)) ease-out;
+  /* v3.0.23 C1/C2：不透明承载面 + 占满 app-shell 主轴剩余空间（消除左侧窄块） */
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  background: var(--color-bg);
 }
 .diary-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .diary-heading { margin: 0; font-size: 18px; color: var(--color-text); }
 .diary-toolbar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .diary-identity { font-size: 13px; color: var(--color-text-secondary); }
+/* v3.0.23：身份下拉只做尺寸/间距，配色继承全局 select 令牌（零新增硬编码色值） */
+.diary-identity-picker { display: inline-flex; align-items: center; gap: 6px; }
+.diary-identity-label { font-size: 12.5px; color: var(--color-text-secondary); }
+.diary-identity-select { font-size: 13px; max-width: 220px; }
 .diary-layout { display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; margin-top: 14px; }
 .diary-main {
   flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding-right: 4px;

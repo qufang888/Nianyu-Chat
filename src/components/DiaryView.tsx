@@ -1,7 +1,8 @@
 /**
- * 念语 v3.0.22 日记视图（单一当前身份 · 无分册/无切换器 · 内联大输入框）。
+ * 念语 v3.0.23 日记视图（页内身份切换 · 无分册 · 内联大输入框）。
  * 所有可见文案走 i18n（本文件无裸中文）；正文使用主题变量，适配 14 套主题。
- * 身份只读跟随设置；无身份时引导去设置创建。正文永远不在此处拼 prompt。
+ * 身份默认跟随设置；可在页内临时切到任一自我身份（会话内有效，不写设置），
+ * 切换即清草稿，防止串册。无身份时引导去设置创建。正文永远不在此处拼 prompt。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useI18n } from '../i18n/I18nContext';
@@ -44,6 +45,14 @@ export const DiaryView: React.FC<{
   const { t } = useI18n();
   const [identity, setIdentity] = useState<DiaryIdentity | null>(null);
   const identityRef = useRef<DiaryIdentity | null>(null);
+  // v3.0.23：页内身份选择器（Q1 非持久化）——组件 state/refs，绝不写回 settings。
+  type PickerMode = 'current' | 'specific';
+  const [pickerMode, setPickerMode] = useState<PickerMode>('current');
+  const [specificRoleId, setSpecificRoleId] = useState<string | null>(null);
+  const [selfRoles, setSelfRoles] = useState<Array<{ id: string; name: string }>>([]);
+  const pickerModeRef = useRef<PickerMode>('current');
+  const specificRoleIdRef = useRef<string | null>(null);
+  const effectiveRoleIdRef = useRef<string>('');
   const [roles, setRoles] = useState<Role[]>([]);
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
   const [editor, setEditor] = useState<EditorState | null>(null);
@@ -72,12 +81,27 @@ export const DiaryView: React.FC<{
     const resolveSettings = async (): Promise<void> => {
       const settings = await api.getSettings();
       if (!alive) return;
+      // 只读解析：resolveDiaryIdentity 绝不回写设置；下拉数据源是自我身份而非全部角色卡。
       const next = resolveDiaryIdentity(settings);
+      const nextSelfRoles = (settings.selfRoles || []).map((r) => ({ id: r.id, name: r.name }));
       identityRef.current = next;
       setIdentity(next);
+      setSelfRoles(nextSelfRoles);
+      // specific 模式下所选身份仍存在 → 保持列表与草稿，只刷新第一项标签/选项。
+      if (pickerModeRef.current === 'specific') {
+        const sid = specificRoleIdRef.current;
+        if (sid && nextSelfRoles.some((r) => r.id === sid)) return;
+        pickerModeRef.current = 'current';
+        specificRoleIdRef.current = null;
+        setPickerMode('current');
+        setSpecificRoleId(null);
+      }
+      // current 跟随新设置身份 / specific 身份被删回落：按 Q2 清草稿。
       setEditor(null);
       setQuery('');
-      if (next) await loadEntries(next.id);
+      const eid = next?.id ?? '';
+      effectiveRoleIdRef.current = eid;
+      if (eid) await loadEntries(eid);
       else setEntries([]);
     };
     (async () => {
@@ -97,7 +121,8 @@ export const DiaryView: React.FC<{
     // 设置里切换当前身份后回日记页即跟随；列表与编辑器绑定新身份，不回写设置。
     const offSettings = api.onSettingsChanged(() => { void resolveSettings(); });
     const offDiary = api.onDiaryChanged(() => {
-      const id = identityRef.current?.id;
+      // v3.0.23：留言/摘要变更刷新的是当前所选身份（specific 模式下不是设置里的当前身份）。
+      const id = effectiveRoleIdRef.current;
       if (id) void loadEntries(id);
     });
     return () => {
@@ -108,7 +133,27 @@ export const DiaryView: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadEntries, t]);
 
-  const currentId = identity?.id || '';
+  // 派生有效身份：current 跟随设置解析结果；specific 只在本次会话内覆盖。
+  const effectiveRoleId =
+    pickerMode === 'current' ? (identity?.id ?? '') : (specificRoleId ?? identity?.id ?? '');
+
+  /** 页内切换身份：真正换人时清草稿（Q2），列表/新建/刷新全部绑定新 effective。 */
+  const handleIdentityChange = (value: string): void => {
+    const nextMode: PickerMode = value === 'current' ? 'current' : 'specific';
+    const nextSpecificId = value === 'current' ? null : value;
+    const nextEffective = value === 'current' ? (identity?.id ?? '') : value;
+    const switched = (effectiveRoleIdRef.current || '') !== nextEffective;
+    pickerModeRef.current = nextMode;
+    specificRoleIdRef.current = nextSpecificId;
+    setPickerMode(nextMode);
+    setSpecificRoleId(nextSpecificId);
+    if (switched) {
+      setEditor(null);
+      setQuery('');
+    }
+    effectiveRoleIdRef.current = nextEffective;
+    if (nextEffective) void loadEntries(nextEffective);
+  };
 
   const save = async (): Promise<void> => {
     if (!editor) return;
@@ -152,7 +197,7 @@ export const DiaryView: React.FC<{
     if (!(await api.showConfirm!(t('diary.confirmDelete')))) return;
     try {
       await api.diaryDelete(entry.id);
-      await loadEntries(currentId);
+      await loadEntries(effectiveRoleId);
     } catch (e) {
       setNotice(String(e));
     }
@@ -177,7 +222,7 @@ export const DiaryView: React.FC<{
           ? t('diary.aiDone').replace('{roles}', res.generatedRoleIds.join(', '))
           : t(res.reason ? `diary.reason.${res.reason}` : 'diary.aiSkipped').replace('{roles}', res.skippedRoleIds.join(', '))
       );
-      await loadEntries(currentId);
+      await loadEntries(effectiveRoleId);
     } catch (e) {
       setNotice(String(e));
     }
@@ -191,7 +236,7 @@ export const DiaryView: React.FC<{
           ? t('diary.aiDone').replace('{roles}', res.generatedRoleIds.join(', '))
           : t(res.reason ? `diary.reason.${res.reason}` : 'diary.aiSkipped').replace('{roles}', res.skippedRoleIds.join(', '))
       );
-      await loadEntries(currentId);
+      await loadEntries(effectiveRoleId);
     } catch (e) {
       setNotice(String(e));
     }
@@ -202,7 +247,7 @@ export const DiaryView: React.FC<{
       await api.diaryUpdate(entry.id, {
         aiComments: entry.aiComments.filter((c) => c.id !== commentId),
       });
-      await loadEntries(currentId);
+      await loadEntries(effectiveRoleId);
     } catch (e) {
       setNotice(String(e));
     }
@@ -228,18 +273,36 @@ export const DiaryView: React.FC<{
   };
 
   const identityLabel = identity ? t('diary.currentIdentity', { name: identity.name }) : '';
+  const effectiveLabel = pickerMode === 'current'
+    ? identityLabel
+    : (selfRoles.find((r) => r.id === effectiveRoleId)?.name || identityLabel);
 
   return (
     <div className="diary-panel">
       <div className="diary-toolbar">
         <h2 className="diary-heading">{t('diary.title')}</h2>
         <div className="diary-toolbar-right">
-          {identityLabel && <span className="diary-identity">{identityLabel}</span>}
+          {/* v3.0.23：原只读 span 收敛为下拉；第一项复用「当前身份（name）」文案，其后列出 settings.selfRoles。
+              current 是保留 value（自我身份 id 为 UUID），选项数 = selfRoles.length + 1。 */}
+          {identity && selfRoles.length > 0 && (
+            <label className="diary-identity-picker">
+              <span className="diary-identity-label">{t('diary.identityPickerLabel')}</span>
+              <select
+                className="diary-identity-select"
+                aria-label={t('diary.identityPickerLabel')}
+                value={pickerMode === 'current' ? 'current' : (specificRoleId ?? 'current')}
+                onChange={(e) => handleIdentityChange(e.target.value)}
+              >
+                <option value="current">{identityLabel}</option>
+                {selfRoles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </select>
+            </label>
+          )}
           {identity && (
             <button
               type="button"
               className="diary-primary"
-              onClick={() => setEditor(emptyEditor(identity.id))}
+              onClick={() => setEditor(emptyEditor(effectiveRoleId))}
             >
               + {t('diary.newEntry')}
             </button>
@@ -285,7 +348,7 @@ export const DiaryView: React.FC<{
 
               {editor && (
                 <div className="diary-editor">
-                  <div className="diary-editor-head">{t('diary.currentIdentity', { name: identity.name })}</div>
+                  <div className="diary-editor-head">{effectiveLabel}</div>
                   <div className="diary-field-row">
                     <div className="diary-field">
                       <label>{t('diary.date')}</label>

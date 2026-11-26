@@ -27,6 +27,7 @@ import {
   CursorFadeState,
   CursorHoverState,
   CursorParticle,
+  CURSOR_FORCE_HIDE_EVENT,
   DIRTY_MARGIN,
   EDGE_BAND_HYSTERESIS_PX,
   FPS_CHECK_INTERVAL,
@@ -38,6 +39,7 @@ import {
   HIDDEN_CLASS,
   HOTSPOT_PREVIEW_EVENT,
   IDLE_STOP_MS,
+  NATIVE_GUARD_INTERVAL_MS,
   INTERACTION_CHECK_THROTTLE_MS,
   MAX_PARTICLES,
   MAX_TRAIL_POINTS,
@@ -46,6 +48,7 @@ import {
   TRAIL_IDLE_MS,
 } from './types';
 import { clampNumber, clampRatio, computeCursorDrawSize, hotspotToOffset } from './cursorImage';
+import { clearAllNativeSuppression, restoreNativeIfNoGlyph } from './nativeCursorGuard';
 
 // ===== 对外类型 =====
 
@@ -153,6 +156,8 @@ export class CursorEngine {
   /** 当前是否由系统原生光标接管（指针在右/下边缘带内） */
   private edgeNative = false;
   private idleTimer = 0;
+  /** v3.0.23：最后一道防线巡检定时器（低频，1s 一次，不参与渲染循环） */
+  private nativeGuardTimer = 0;
   private resizeObserver: ResizeObserver | null = null;
   private dprMql: MediaQueryList | null = null;
   private listenersBound = false;
@@ -195,11 +200,16 @@ export class CursorEngine {
     this.bindListeners();
 
     // 动态光标启用时先隐藏系统原生光标（全局类方式，压制按钮等 cursor:pointer 覆盖）。
-    // 与主进程单光标仲裁链路协作：covered 时外部会加 cursor-gate-off 并派发合成 mouseout，
-    // 由 onMouseOut → hideCursorImmediate 一步到位摘掉本类。
-    document.body.classList.add(HIDDEN_CLASS);
+    // 与主进程单光标仲裁链路协作：covered 时外部会加 cursor-gate-off 并派发强制隐藏事件，
+    // 由 onForceHide → hideCursorImmediate 一步到位摘掉本类。
+    // v3.0.23：若挂载瞬间门控已经成立（窗口重建 / 先收到 covered=true），绝不能再加
+    // HIDDEN_CLASS —— 否则门控 + 独立压制层同时生效而引擎字形不画，两个光标一起消失。
+    if (!this.isGated()) document.body.classList.add(HIDDEN_CLASS);
     this.refreshGlyphVisibility();
     this.startLoop();
+    if (!this.nativeGuardTimer) {
+      this.nativeGuardTimer = window.setInterval(() => this.enforceNativeCursorFallback(), NATIVE_GUARD_INTERVAL_MS);
+    }
   }
 
   /** 卸载引擎：解绑事件、停循环、清画布、摘掉 body 类 */
@@ -225,7 +235,12 @@ export class CursorEngine {
     }
     this.clearFx();
     this.resetParticles();
-    document.body.classList.remove(HIDDEN_CLASS);
+    if (this.nativeGuardTimer) {
+      clearInterval(this.nativeGuardTimer);
+      this.nativeGuardTimer = 0;
+    }
+    // v3.0.23：引擎退场 = 本窗不再有动态字形 → 无条件解除两层原生压制（最后一道防线）。
+    clearAllNativeSuppression(document);
     document.body.style.cursor = '';
     this.glyphEl = null;
     this.glyphImg = null;
@@ -257,12 +272,14 @@ export class CursorEngine {
     if (prev.hoverScale !== this.cfg.hoverScale) {
       this.scaleTarget = this.hoverState === 'hover' ? this.cfg.hoverScale : 1;
     }
-    // 总开关被关闭 → 立即让位给原生光标
+    // 总开关被关闭 → 立即让位给原生光标：两层压制都必须摘（v3.0.23）
     if (!this.cfg.enabled) {
       this.hideCursorImmediate();
+      clearAllNativeSuppression(document);
     } else if (!prev.enabled) {
       this.hidden = false;
-      document.body.classList.add(HIDDEN_CLASS);
+      // v3.0.23：重新开启时若门控仍成立，不能抢回 HIDDEN_CLASS（否则三态残留）
+      if (!this.isGated()) document.body.classList.add(HIDDEN_CLASS);
       this.refreshGlyphVisibility();
     }
     // 热点变了 → 立即重新定位（拖动预览实时生效）
@@ -785,6 +802,7 @@ export class CursorEngine {
     document.body.classList.remove(HIDDEN_CLASS);
     this.refreshGlyphVisibility();
     this.stopLoop();
+    this.enforceNativeCursorFallback();
   }
 
   // ===== 显隐控制 =====
@@ -845,6 +863,7 @@ export class CursorEngine {
     document.body.classList.remove(HIDDEN_CLASS);
     this.refreshGlyphVisibility();
     this.stopLoop();
+    this.enforceNativeCursorFallback();
   }
 
   /** 淡出隐藏（仅用于窗口级切换：失焦 / 被覆盖） */
@@ -870,6 +889,7 @@ export class CursorEngine {
       this.clearFx();
       document.body.classList.remove(HIDDEN_CLASS);
       this.refreshGlyphVisibility();
+      this.enforceNativeCursorFallback();
     }, remaining);
   }
 
@@ -968,9 +988,47 @@ export class CursorEngine {
     return document.body.classList.contains(GATE_CLASS);
   }
 
+  /**
+   * v3.0.23：本窗当前是否真的有一枚在绘制的动态字形。
+   * 淡入/淡出过渡期间不算「无字形」——否则守卫会在过渡第一帧提前露出原生光标，
+   * 造成一帧双光标（用户感知为「光标乱跳」）。
+   */
+  private hasRenderableGlyph(): boolean {
+    return (
+      this.cfg.enabled &&
+      !this.hidden &&
+      !this.edgeNative &&
+      !this.imgFailed &&
+      !this.isGated() &&
+      this.fadeState === 'none' &&
+      this.opacity > 0.001 &&
+      this.pointerX > OFFSCREEN
+    );
+  }
+
+  /**
+   * 最后一道防线：无权威门控 + 无可绘制字形时，解除本窗全部原生压制。
+   * 覆盖所有「引擎 hidden=true 但 NATIVE_HIDDEN_CLASS 由外部持有而未摘」的时序：
+   * 窗口 hide/show、covered=false 丢失、拖拽强制结束、设置关闭、图片加载彻底失败。
+   */
+  private enforceNativeCursorFallback(): void {
+    if (!this.elements) return;
+    if (this.hasRenderableGlyph()) return;
+    restoreNativeIfNoGlyph(document, false);
+  }
+
+  /** 仲裁层强制隐藏：合成 mouseout 在 inside=false 时会被忽略，本事件不做任何条件判断 */
+  private onForceHide = (): void => {
+    this.hideCursorImmediate();
+    this.enforceNativeCursorFallback();
+  };
+
   private onMouseMove = (e: MouseEvent): void => {
     // 门控（悬浮球穿透区 / 被其它窗口覆盖）：忽略指针，不响应、不显示字形
-    if (this.isGated()) return;
+    if (this.isGated()) {
+      this.enforceNativeCursorFallback();
+      return;
+    }
     if (!this.cfg.enabled) return;
 
     // 位置**直接**取事件坐标：不做 lerp、不做缓动追赶 → 显示位置 == 点击位置
@@ -1032,6 +1090,8 @@ export class CursorEngine {
   private onFocus = (): void => {
     if (this.fadeState === 'out') this.fadeState = 'none';
     if (this.inside) this.ensureVisible(false);
+    // 窗口重新聚焦：主进程会在 show/focus 沿重推权威 covered；在此之前先自愈陈旧压制
+    this.enforceNativeCursorFallback();
   };
 
   private onBlur = (): void => {
@@ -1051,6 +1111,9 @@ export class CursorEngine {
     } else if (this.inside) {
       this.ensureVisible(false);
     }
+    // 可见性翻转的两侧都做一次不变量检查：隐藏前清掉可能残留的两层压制，
+    // 显示后若权威门控仍未到达，原生光标立即可用（不会两个光标都没有）。
+    this.enforceNativeCursorFallback();
   };
 
   private onPageHide = (): void => {
@@ -1110,6 +1173,7 @@ export class CursorEngine {
     window.addEventListener('resize', this.onResize, { passive: true });
     document.addEventListener('visibilitychange', this.onVisibilityChange);
     window.addEventListener('pagehide', this.onPageHide);
+    document.addEventListener(CURSOR_FORCE_HIDE_EVENT, this.onForceHide);
     window.addEventListener(HOTSPOT_PREVIEW_EVENT, this.onHotspotPreview);
 
     // ResizeObserver 兜底：窗口缩放因子变化不一定触发 resize，但 canvas 的 contentRect 会变
@@ -1138,6 +1202,7 @@ export class CursorEngine {
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     window.removeEventListener('pagehide', this.onPageHide);
+    document.removeEventListener(CURSOR_FORCE_HIDE_EVENT, this.onForceHide);
     window.removeEventListener(HOTSPOT_PREVIEW_EVENT, this.onHotspotPreview);
   }
 }

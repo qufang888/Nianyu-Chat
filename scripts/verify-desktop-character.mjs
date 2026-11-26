@@ -213,8 +213,12 @@ const zBallShowBody = extractFnBody(floatingBall, 'export function showFloatingB
 check("N1：ball-show 重申位于 showFloatingBall() 内 showInactive() 之后（守卫下仍生效）",
   /ballWindow\.showInactive\(\)/.test(zBallShowBody) &&
   zBallShowBody.indexOf("reassertFloatingBallOnTop('ball-show')") > zBallShowBody.indexOf('ballWindow.showInactive()'));
-check('N1：poll 重申前置门控球窗可见（守卫后该路径不会空转）',
-  /if \(!ballWindow \|\| ballWindow\.isDestroyed\(\) \|\| !ballWindow\.isVisible\(\)\) return;/.test(floatingBall));
+// v3.0.23：光标 BugFix 把「球窗不可见就整体早退」细化为「销毁才停摆、隐藏时仍同步 covered」；
+// Z 序重申仍前置球窗可见守卫（强度不降，且避免隐藏窗口空转）。
+check('N1：poll 销毁才停摆 + 球窗可见才重申 Z 序（隐藏时仍同步 covered）',
+  /if \(!ballAlive\) return;/.test(floatingBall) &&
+  /const ballVisible = !!ballWindow && ballWindow\.isVisible\(\)/.test(floatingBall) &&
+  /if \(ballVisible && now - lastZOrderReassertAt/.test(floatingBall));
 check('N1：注释写明 SWP_SHOWWINDOW / WS_VISIBLE / 状态机失同步来由（防后续误删守卫）',
   /SWP_SHOWWINDOW/.test(floatingBall) && /WS_VISIBLE/.test(floatingBall) &&
   /状态机/.test(floatingBall) && /请勿删除/.test(floatingBall));
@@ -360,8 +364,13 @@ for (const lang of ['de', 'es', 'fr', 'ja', 'ko', 'pt', 'ru', 'zh-Hant']) {
   );
   check('（可证伪）写回「由系统保证顺序」旧表述后平台注释断言失效', !zPlatformDocOk(brokenZ4));
   // v3.0.1-beta.9 QA Round 2 N1：删掉守卫 / 把 create 挪回隐藏期，A2 段断言必须同时失效
-  const brokenN1a = floatingBall.replace(' && ballWindow.isVisible()', '');
-  check('（可证伪）删掉球窗 isVisible() 守卫后 N1 守卫断言失效', !zVisGuardOk(brokenN1a));
+  // 精确变异 reassertFloatingBallOnTop 函数体内的球窗守卫（避免命中其它新增的 isVisible 守卫）
+  const brokenN1a = floatingBall.replace(
+    '!ballWindow.isDestroyed() && ballWindow.isVisible()) ballWindow.moveTop()',
+    '!ballWindow.isDestroyed()) ballWindow.moveTop()'
+  );
+  check('（可证伪）删掉球窗 isVisible() 守卫后 N1 守卫断言失效',
+    brokenN1a !== floatingBall && !zVisGuardOk(brokenN1a));
   const brokenN1b = floatingBall
     .replace("    reassertFloatingBallOnTop('create');\n    broadcastUnread();", '    broadcastUnread();')
     .replace('  startCursorPoll();', "  reassertFloatingBallOnTop('create');\n  startCursorPoll();");
