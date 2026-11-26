@@ -44,9 +44,9 @@ console.log('v3.0.23 日记增量闸门 — 背景 / 自适应 / 身份切换');
 console.log('='.repeat(64));
 
 section('A. 版本与脚本登记');
-ok('package.json 版本 3.0.23', /"version": "3\.0\.23"/.test(pkg));
+ok('package.json 版本 3.0.24', /"version": "3\.0\.24"/.test(pkg));
 for (const s of ['verify:cursor-never-blank', 'verify:drag-cursor-gate', 'verify:diary-ui-3022',
-  'verify:diary-migrate-3022', 'verify:diary-ui-3023']) {
+  'verify:diary-migrate-3022', 'verify:diary-ui-3023', 'verify:diary-comments-3024']) {
   ok(`既有/新增脚本 ${s} 均保留`, new RegExp(`"${s}"`).test(pkg));
 }
 

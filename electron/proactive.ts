@@ -64,6 +64,8 @@ const CALLBACK_PAT = /(开会|考试|上课|吃饭|下班|睡觉|起床|洗澡|�
 const CALLBACK_MAX_MIN = 8 * 60; // 承诺回访最大时长 8 小时（超出视为无效抽取）
 const CALLBACK_RETRY_MS = 15 * 60_000; // v2.3.92：定向回访发送失败后的重排等待（避免每 60s 心跳热循环重试）
 const STORE_FILE = 'proactive-nhpp.json';
+// v3.0.24：日记 NHPP 独立状态文件（与聊天 store 完全隔离，互不读写）。
+const DIARY_STORE_FILE = 'diary-nhpp.json';
 // ===== v2.3.92：回复间隔 EMA（频率自适应）=====
 const REPLY_GAP_EMA_ALPHA = 0.3; // EMA 平滑系数：gapEma ← gapEma + 0.3×(本次间隔 − gapEma)
 const REPLY_GAP_REF_MS = 10 * 60_000; // 参考间隔 10 分钟：等于该值 → 缩放 1.0（不扩缩）
@@ -107,6 +109,55 @@ function saveStore(): void {
   }, 500);
 }
 
+// ===== v3.0.24 日记 NHPP：独立 store / 独立依赖，绝不使用聊天 store =====
+let diaryStore: ProactiveStore = {
+  priors: {}, candidates: {}, pendingCallbacks: {}, feedback: [], dailyCount: {}, replyGapEma: {},
+};
+let diaryStorePath = '';
+let diaryDeps: DiaryProactiveDeps | null = null;
+let diarySaveTimer: NodeJS.Timeout | null = null;
+
+function diaryLoadStore(): void {
+  try {
+    diaryStorePath = path.join(app.getPath('userData'), DIARY_STORE_FILE);
+    if (fs.existsSync(diaryStorePath)) {
+      const raw = JSON.parse(readText(diaryStorePath)) as Partial<ProactiveStore>;
+      diaryStore = {
+        priors: raw.priors || {},
+        candidates: raw.candidates || {},
+        pendingCallbacks: raw.pendingCallbacks || {},
+        feedback: Array.isArray(raw.feedback) ? raw.feedback : [],
+        dailyCount: raw.dailyCount || {},
+        replyGapEma: raw.replyGapEma || {},
+      };
+    }
+  } catch {
+    /* 损坏则用默认空结构，不影响聊天引擎 */
+  }
+}
+
+function saveDiaryStore(): void {
+  if (diarySaveTimer) return;
+  diarySaveTimer = setTimeout(() => {
+    diarySaveTimer = null;
+    try {
+      writeText(diaryStorePath, JSON.stringify(diaryStore, null, 2));
+    } catch {
+      /* ignore */
+    }
+  }, 500);
+}
+
+/** 日记 NHPP 注入契约：不含 sendProactive，天然无法把 diary: key 送进聊天通道。 */
+export interface DiaryProactiveDeps {
+  getSettings(): AppSettings;
+  sendDiaryComment(diaryId: string, roleId: string): Promise<{ ok: boolean; error?: string }>;
+  isDiaryCommentLocked(diaryId: string, roleId: string): boolean;
+  getDiaryOverride?(diaryId: string, roleId: string): { dailyLimit?: number; freshnessMin?: number } | undefined;
+  getDiaryMessages?(chatType: string, chatId: string): ChatMessage[];
+  logError?(category: 'functional' | 'model' | 'other', message: string, detail?: string): void;
+}
+
 // ===== 依赖注入（避免与 main.ts 循环依赖）=====
 export interface ProactiveDeps {
   getSettings(): AppSettings;
@@ -131,14 +182,14 @@ function baselineAt(t: Date): number {
   const h = t.getHours() + t.getMinutes() / 60;
   return h >= 8 && h < 24 ? BASELINE_HIGH : BASELINE_NIGHT;
 }
-function priorScale(chatKey: string): number {
-  const p = store.priors[chatKey];
+function priorScale(chatKey: string, s: ProactiveStore = store): number {
+  const p = s.priors[chatKey];
   const alpha = p?.alpha ?? ALPHA0;
   const beta = p?.beta ?? BETA0;
   return Math.max(0.05, alpha / Math.max(0.1, beta)); // 下限保护，避免后验塌缩到 0
 }
-function recentProactiveCount(chatKey: string, now: number): number {
-  return store.feedback.filter(
+function recentProactiveCount(chatKey: string, now: number, s: ProactiveStore = store): number {
+  return s.feedback.filter(
     (f) => f.chatKey === chatKey && f.sentAt > now - FATIGUE_WINDOW_MS && f.reaction !== 'quick_reply'
   ).length;
 }
@@ -146,41 +197,41 @@ function recentProactiveCount(chatKey: string, now: number): number {
 // 语义：用户回得越快 → 越愿意被联系 → 提频；回得越慢/从不回 → 降频。
 // scale = clamp(0.5, 1.5, REF / emaGap)：emaGap 越小（秒回）比值越大 → 越接近 1.5 上限；
 // emaGap 越大（几小时才回/不回）比值越小 → 越接近 0.5 下限。无 EMA 样本时返回 1（不扩缩）。
-function replyGapScale(chatKey: string): number {
-  const ema = store.replyGapEma[chatKey];
+function replyGapScale(chatKey: string, s: ProactiveStore = store): number {
+  const ema = s.replyGapEma[chatKey];
   if (typeof ema !== 'number' || !Number.isFinite(ema) || ema <= 0) return 1;
   const gap = Math.min(ema, REPLY_GAP_MAX_MS);
   const raw = REPLY_GAP_REF_MS / gap;
   return Math.max(REPLY_GAP_SCALE_MIN, Math.min(REPLY_GAP_SCALE_MAX, raw));
 }
 // 记录一次「用户回复延迟」样本并更新 EMA（指数滑动平均）。gapMs<=0 的脏样本忽略。
-function pushReplyGapSample(chatKey: string, gapMs: number): void {
+function pushReplyGapSample(chatKey: string, gapMs: number, s: ProactiveStore = store): void {
   if (!Number.isFinite(gapMs) || gapMs <= 0) return;
-  const prev = store.replyGapEma[chatKey];
-  store.replyGapEma[chatKey] =
+  const prev = s.replyGapEma[chatKey];
+  s.replyGapEma[chatKey] =
     typeof prev === 'number' && Number.isFinite(prev) && prev > 0
       ? prev + REPLY_GAP_EMA_ALPHA * (gapMs - prev)
       : gapMs; // 首个样本直接作为初值
 }
 // λ(t) = baseline(时段) × 后验均值(个性化) × exp(-疲劳 × 近期已发数) × 回复间隔自适应
-function intensity(chatKey: string, t: Date, now: number): number {
+function intensity(chatKey: string, t: Date, now: number, s: ProactiveStore = store): number {
   const adaptive = (deps?.getSettings().proactiveAdaptiveEnabled ?? true) !== false;
-  const gapScale = adaptive ? replyGapScale(chatKey) : 1;
-  return baselineAt(t) * priorScale(chatKey) * Math.exp(-FATIGUE_DECAY * recentProactiveCount(chatKey, now)) * gapScale;
+  const gapScale = adaptive ? replyGapScale(chatKey, s) : 1;
+  return baselineAt(t) * priorScale(chatKey, s) * Math.exp(-FATIGUE_DECAY * recentProactiveCount(chatKey, now, s)) * gapScale;
 }
 
 // Lewis-Shedler thinning：从 λ(t) 采样下一个候选时刻；找不到（强度极低）返回 null
-function sampleCandidate(chatKey: string, now: number): number | null {
+function sampleCandidate(chatKey: string, now: number, s: ProactiveStore = store): number | null {
   const end = now + SAMPLE_WINDOW_MS;
   const hourMs = 3600_000;
   // λ_max：取窗口内最大基线（高时段）× 缩放 × 疲劳（疲劳随时间只会缓解，用当前值做上界是安全的）
-  const lambdaMax = intensity(chatKey, new Date(now), now);
+  const lambdaMax = intensity(chatKey, new Date(now), now, s);
   const expected = (lambdaMax * SAMPLE_WINDOW_MS) / hourMs;
   const nCand = poissonSample(Math.max(0.05, expected));
   const accepted: number[] = [];
   for (let i = 0; i < nCand; i++) {
     const t = now + Math.random() * SAMPLE_WINDOW_MS;
-    if (Math.random() < intensity(chatKey, new Date(t), now) / Math.max(1e-9, lambdaMax)) accepted.push(t);
+    if (Math.random() < intensity(chatKey, new Date(t), now, s) / Math.max(1e-9, lambdaMax)) accepted.push(t);
   }
   if (accepted.length === 0) {
     // 窗口内无接受点：候选顺延到窗口末端（下轮心跳/交互再重算）
@@ -318,12 +369,16 @@ function isGatedByAwaitingReply(chatKey: string): boolean {
     return false;
   }
 }
-function evaluateFeedback(now: number): void {
-  if (!deps) return;
-  for (const f of store.feedback) {
+function evaluateFeedback(
+  now: number,
+  s: ProactiveStore = store,
+  getMessages?: (chatType: string, chatId: string) => ChatMessage[]
+): void {
+  if (!deps && !getMessages) return;
+  for (const f of s.feedback) {
     if (f.reaction !== 'none' || now - f.sentAt < FEEDBACK_QUICK_MS) continue;
     const [chatType, chatId] = f.chatKey.split(':');
-    const msgs = deps.getMessages(chatType, chatId);
+    const msgs = getMessages ? getMessages(chatType, chatId) : deps!.getMessages(chatType, chatId);
     const after = msgs.filter((m) => m.sender_type === 'user' && new Date(m.timestamp).getTime() > f.sentAt);
     if (after.length > 0) {
       const negative = after.some((m) => NEGATIVE_PAT.test(m.content || ''));
@@ -331,21 +386,21 @@ function evaluateFeedback(now: number): void {
       f.reactedAt = new Date(after[0].timestamp).getTime();
       // v2.3.92：回复延迟样本（reactedAt 此前只记录不参与计算）→ EMA → 强度自适应缩放。
       // 语气维度仍由 NEGATIVE_PAT 判定，行为不变；这里只补「回得快/慢」这一维。
-      pushReplyGapSample(f.chatKey, f.reactedAt - f.sentAt);
+      pushReplyGapSample(f.chatKey, f.reactedAt - f.sentAt, s);
     } else {
       f.reaction = 'ignored';
       // 从不回：把间隔 EMA 往「很久」方向推一档（取窗口上限的一半作为等效慢速样本），
       // 使降频不只依赖 β 的负反馈，还有连续无回应的平滑信号。
-      pushReplyGapSample(f.chatKey, Math.min(now - f.sentAt, REPLY_GAP_MAX_MS));
+      pushReplyGapSample(f.chatKey, Math.min(now - f.sentAt, REPLY_GAP_MAX_MS), s);
     }
-    const p = store.priors[f.chatKey] || { alpha: ALPHA0, beta: BETA0, updatedAt: new Date().toISOString() };
+    const p = s.priors[f.chatKey] || { alpha: ALPHA0, beta: BETA0, updatedAt: new Date().toISOString() };
     if (f.reaction === 'quick_reply') p.alpha += FB_ALPHA_STEP;
     else if (f.reaction === 'ignored') p.beta += FB_BETA_IGNORED;
     else p.beta += FB_BETA_NEGATIVE;
     p.updatedAt = new Date().toISOString();
-    store.priors[f.chatKey] = p;
+    s.priors[f.chatKey] = p;
   }
-  if (store.feedback.length > FEEDBACK_KEEP) store.feedback = store.feedback.slice(-FEEDBACK_KEEP);
+  if (s.feedback.length > FEEDBACK_KEEP) s.feedback = s.feedback.slice(-FEEDBACK_KEEP);
 }
 
 // ===== 每日计数 =====
@@ -590,6 +645,150 @@ export function deriveAwaitingReplyKeys(): string[] {
     /* ignore */
   }
   return out;
+}
+
+// ===== v3.0.24 日记 NHPP 导出 API（独立 store，聊天心跳永不扫描）=====
+export const DIARY_NHPP_KEY_PREFIX = 'diary:';
+
+function diaryKey(diaryId: string, roleId: string): string {
+  return `${DIARY_NHPP_KEY_PREFIX}${diaryId}:${roleId}`;
+}
+
+function parseDiaryKey(key: string): { diaryId: string; roleId: string } | null {
+  if (!key.startsWith(DIARY_NHPP_KEY_PREFIX)) return null;
+  const rest = key.slice(DIARY_NHPP_KEY_PREFIX.length);
+  const sep = rest.lastIndexOf(':');
+  if (sep <= 0 || sep === rest.length - 1) return null;
+  return { diaryId: rest.slice(0, sep), roleId: rest.slice(sep + 1) };
+}
+
+export function initDiaryNhpps(d: DiaryProactiveDeps): void {
+  diaryDeps = d;
+  diaryLoadStore();
+}
+
+/** 保存日记 / 配置变更时重采样；旧 pending 标 superseded，不触碰聊天 store 一个字节。 */
+export function rescheduleDiaryComment(diaryId: string, roleId: string): void {
+  try {
+    if (!diaryDeps) return;
+    const s = diaryDeps.getSettings();
+    if (s.proactiveEngine !== 'nhpp') return;
+    const key = diaryKey(diaryId, roleId);
+    const now = Date.now();
+    const old = diaryStore.candidates[key];
+    if (old && old.status === 'pending') old.status = 'superseded';
+    const t = sampleCandidate(key, now, diaryStore) ?? now + SAMPLE_WINDOW_MS;
+    diaryStore.candidates[key] = { chatKey: key, candidateTime: t, status: 'pending', reason: 'resampled' };
+    saveDiaryStore();
+  } catch (e) {
+    try { diaryDeps?.logError?.('model', `日记 NHPP 重排异常：${(e as Error)?.message || String(e)}`); } catch { /* ignore */ }
+  }
+}
+
+/** 关闭 enabled / 角色不可见：清除该 (diary,role) 的日记候选。 */
+export function clearDiaryNhppsForRole(diaryId: string, roleId: string): void {
+  const key = diaryKey(diaryId, roleId);
+  const old = diaryStore.candidates[key];
+  if (!old) return;
+  if (old.status === 'pending') old.status = 'superseded';
+  saveDiaryStore();
+}
+
+function recordDiarySent(key: string, diaryId: string, roleId: string): void {
+  const msgs = diaryDeps?.getDiaryMessages?.(DIARY_NHPP_KEY_PREFIX, `${diaryId}:${roleId}`) || [];
+  const last = msgs[msgs.length - 1];
+  diaryStore.feedback.push({ chatKey: key, sentAt: Date.now(), messageId: last?.id ?? 0, reaction: 'none' });
+  const tk = todayKey(key, new Date());
+  diaryStore.dailyCount[tk] = (diaryStore.dailyCount[tk] || 0) + 1;
+  const t = sampleCandidate(key, Date.now(), diaryStore) ?? Date.now() + SAMPLE_WINDOW_MS;
+  diaryStore.candidates[key] = { chatKey: key, candidateTime: t, status: 'pending', reason: 'next' };
+  saveDiaryStore();
+}
+
+/**
+ * 日记 NHPP 心跳：与聊天 heartbeatProactive 完全独立，各自每轮最多一条。
+ * 沿用 proactiveDnd 顺延（裁定 #2）；静默 settings.silent 只由通知层拦截，这里绝不读取。
+ */
+export function heartbeatDiaryComments(): void {
+  try {
+    if (!diaryDeps) return;
+    const s = diaryDeps.getSettings();
+    if (s.proactiveEngine !== 'nhpp') return;
+    if (s.idleEnabled === false) return;
+    const now = Date.now();
+    evaluateFeedback(now, diaryStore, (ct, ci) => diaryDeps?.getDiaryMessages?.(ct, ci) || []);
+
+    for (const [key, cand] of Object.entries(diaryStore.candidates)) {
+      if (!key.startsWith(DIARY_NHPP_KEY_PREFIX)) continue;
+      if (cand.status !== 'pending' || cand.candidateTime > now) continue;
+      const parsed = parseDiaryKey(key);
+      if (!parsed) continue;
+      const { diaryId, roleId } = parsed;
+      // 额外硬门禁：顶层未撤销留言已存在 → 只跳过，不采样、不发送。
+      if (diaryDeps.isDiaryCommentLocked(diaryId, roleId)) {
+        cand.status = 'skipped';
+        cand.reason = 'locked';
+        saveDiaryStore();
+        continue;
+      }
+      // 勿扰窗口：与聊天 NHPP 同一 inDnd 语义，顺延到窗口结束后 60s。
+      const dnd = inDnd(s, new Date(now));
+      if (dnd.inWindow) {
+        cand.status = 'skipped';
+        cand.reason = 'dnd';
+        diaryStore.candidates[key] = {
+          chatKey: key,
+          candidateTime: (dnd.endsAt ?? now + 3600_000) + 60_000,
+          status: 'pending',
+          reason: 'after_dnd',
+        };
+        saveDiaryStore();
+        continue;
+      }
+      const override = diaryDeps.getDiaryOverride?.(diaryId, roleId);
+      const fresh = override?.freshnessMin ?? s.proactiveFreshnessMin ?? 10;
+      const msgs = diaryDeps.getDiaryMessages?.(DIARY_NHPP_KEY_PREFIX, `${diaryId}:${roleId}`) || [];
+      const last = msgs[msgs.length - 1];
+      if (last && now - new Date(last.timestamp).getTime() < fresh * 60_000) {
+        cand.status = 'skipped';
+        cand.reason = 'freshness';
+        const t = sampleCandidate(key, Date.now(), diaryStore) ?? Date.now() + SAMPLE_WINDOW_MS;
+        diaryStore.candidates[key] = { chatKey: key, candidateTime: t, status: 'pending', reason: 'rescheduled' };
+        saveDiaryStore();
+        continue;
+      }
+      const limit = override?.dailyLimit ?? s.proactiveDailyLimit ?? 5;
+      if ((diaryStore.dailyCount[todayKey(key, new Date(now))] || 0) >= limit) {
+        cand.status = 'skipped';
+        cand.reason = 'daily_limit';
+        saveDiaryStore();
+        continue;
+      }
+      cand.status = 'sent';
+      saveDiaryStore();
+      void Promise.resolve()
+        .then(() => diaryDeps!.sendDiaryComment(diaryId, roleId))
+        .then((r) => {
+          if (r.ok) recordDiarySent(key, diaryId, roleId);
+          else {
+            cand.status = 'skipped';
+            cand.reason = 'send_failed';
+            const t = sampleCandidate(key, Date.now(), diaryStore) ?? Date.now() + SAMPLE_WINDOW_MS;
+            diaryStore.candidates[key] = { chatKey: key, candidateTime: t, status: 'pending', reason: 'rescheduled' };
+            saveDiaryStore();
+          }
+        })
+        .catch((e) => {
+          try { diaryDeps?.logError?.('model', `日记 NHPP 发送异常：${(e as Error)?.message || String(e)}`); } catch { /* ignore */ }
+        });
+      return; // 每轮心跳最多发送一条
+    }
+    saveDiaryStore();
+  } catch (e) {
+    try {
+      diaryDeps?.logError?.('model', `日记 NHPP 心跳异常：${(e as Error)?.message || String(e)}`);
+    } catch { /* ignore */ }
+  }
 }
 
 // 供日志使用

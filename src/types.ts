@@ -699,6 +699,45 @@ export interface CharacterRuntimeSettings {
   activeId: string;
 }
 
+// ===== v3.0.24 日记 AI 留言排程（全部字段可选，旧存档零迁移）=====
+export type DiaryCommentMode = 'normal' | 'nhpp';
+export type NormalTrigger = 'window' | 'delay' | 'fixed';
+
+export interface DiaryCommentConfig {
+  enabled: boolean;                 // 默认 false；老用户无该字段 = 全人物未启用
+  mode: DiaryCommentMode;
+  normal: {
+    trigger: NormalTrigger;
+    window?: { start: string; end: string }; // 'HH:mm'，可跨午夜
+    delayMinutes?: number;          // 1..1440，相对日记保存时刻
+    fixedTime?: string;             // 'HH:mm'
+  };
+  nhppOverride?: { dailyLimit?: number; freshnessMin?: number }; // 缺省走全局 NHPP 参数
+}
+
+export interface DiaryCommentReply {
+  id: string;
+  author: 'user' | 'ai';
+  text: string;
+  roleId: string;                   // AI 回复的角色 id（user 回复为 ''）
+  created_at: string;               // ISO 8601 UTC
+  revoked?: boolean;                // v3.0.24：整串撤销时逐条软删（缺省 false）
+}
+
+export interface DiaryCommentTask {
+  id: string;                       // dct_<base36>_<seq>
+  diaryId: string;
+  roleId: string;
+  selfRoleId: string;               // 排程时的身份快照（发送前再校验一次）
+  kind: NormalTrigger | 'nhpp';
+  status: 'pending' | 'due' | 'sent' | 'skipped' | 'superseded' | 'cancelled';
+  dueAt: string;                    // ISO 8601 UTC（本地时段换算后存 UTC）
+  configFingerprint: string;        // 稳定序列化 {mode,normal,nhppOverride}
+  createdAt: string;
+  updatedAt?: string;
+  reason?: string;                  // dnd / daily_limit / locked / send_failed / config_changed …
+}
+
 // ===== v3.0.18 日记与加密 =====
 export type DiaryTone = 'warm' | 'neutral' | 'snarky' | 'skip';
 export type EncryptionStatusKind = 'encrypted' | 'migrating' | 'failed' | 'unknown';
@@ -719,6 +758,10 @@ export interface DiaryComment {
   moodAt: string;                 // 生成时心情快照
   revoked: boolean;               // 软删：撤销可见 / 正文变更
   created_at: string;
+  // ===== v3.0.24 可回复留言串（可选，旧存档零迁移）=====
+  replies?: DiaryCommentReply[];  // 用户回复 + AI 回复，按时间顺序
+  scheduleKind?: 'normal' | 'nhpp' | 'manual';
+  awaitingUserReply?: boolean;    // true=AI 已发话、等待用户新回复；false=生成中/待重试
 }
 
 export interface DiarySummary {
@@ -751,6 +794,7 @@ export interface DiaryStoreShape {
   seq: number;
   diaries: DiaryEntry[];
   diary_summaries: DiarySummary[]; // 独立集合，绝不复用 MemoryEntry
+  commentTasks?: DiaryCommentTask[]; // v3.0.24：普通排程任务（缺省 []）
 }
 
 export interface DiaryAiResult {
@@ -798,6 +842,8 @@ export interface AppSettings {
   chatSoundPaths: Record<string, string>; // 每个聊天的自定义通知铃声路径，key 同上。空 = 使用全局通知音
   backupDir: string; // 自定义备份目录（空 = 每次手动选择）
   diaryAutoSummarize?: boolean; // v3.0.18：AI 自动总结日记（默认关，仅总结 allowAi=true 的日记）
+  // v3.0.24：按角色（全局跨身份）配置自动留言排程；无字段 = 全部角色保持 v3.0.23 立即生成行为
+  diaryCommentSchedules?: Record<string, DiaryCommentConfig>;
   uiRadius: number; // 整体 UI 圆角(px)
   bubbleRadius: number; // 聊天气泡圆角(px)
   bubbleOpacity: number; // 聊天气泡透明度（50~100，100=完全不透明）
@@ -1276,6 +1322,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   chatSoundPaths: {},
   backupDir: '',
   diaryAutoSummarize: false, // v3.0.18：默认关闭自动总结
+  diaryCommentSchedules: {}, // v3.0.24：默认无人物启用自动留言排程
   uiRadius: 10,
   bubbleRadius: 10,
   bubbleOpacity: 100,

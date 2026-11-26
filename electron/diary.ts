@@ -13,6 +13,8 @@ import { buildDiaryCommentSuffix, classifyDiaryCommentTone } from './diaryTone';
 import type {
   DiaryAiResult,
   DiaryComment,
+  DiaryCommentReply,
+  DiaryCommentTask,
   DiaryEntry,
   DiaryStoreShape,
   DiarySummary,
@@ -21,6 +23,16 @@ import type {
 
 export const DIARY_FILE = 'diary.json';
 export const NO_SELF_ROLE = 'none';
+
+// v3.0.24 回复上下文硬编码常量（同步登记 硬编码清单.md）。
+export const DIARY_REPLY_CHAT_N_CAP = 16;
+export const DIARY_REPLY_KEYWORD_MAX = 4;
+export const DIARY_REPLY_CHAR_BUDGET = 6000;
+export const DIARY_REPLY_USER_MAX = 2000;
+export const DIARY_REPLY_THREAD_ITEM_MAX = 1200;
+export const DIARY_REPLY_TOP_MAX = 1200;
+export const DIARY_REPLY_ARTIFACT_MAX = 2000;
+export const DIARY_REPLY_SINGLE_CHAR_CAP = 800;
 
 export interface DiaryArtifact {
   kind: 'comment' | 'summary';
@@ -76,7 +88,7 @@ export function canRoleAccessDiary(d: DiaryEntry, roleId: string): boolean {
  * 只有「已产生且当前仍可见」的产物才进对话；绝不读取 / 输出 diary.content。
  * diaries 只用于校验 updated_at / selfRoleId / 当前可见名单。
  */
-export function collectArtifactsForRole(input: GateInput): DiaryArtifact[] {
+export function collectArtifactsForRole(input: GateInput, includeReplies = false): DiaryArtifact[] {
   const out: DiaryArtifact[] = [];
   if (!input || !input.roleId) return out;
   const diaries = Array.isArray(input.diaries) ? input.diaries : [];
@@ -87,6 +99,14 @@ export function collectArtifactsForRole(input: GateInput): DiaryArtifact[] {
     for (const c of d.aiComments || []) {
       if (c.roleId === input.roleId && !c.revoked && typeof c.text === 'string' && c.text.trim()) {
         out.push({ kind: 'comment', text: c.text, diaryId: d.id });
+        // v3.0.24：默认口径不变；回复服务显式开启时才把同一留言串的 AI 回复计为产物。
+        if (includeReplies) {
+          for (const r of c.replies || []) {
+            if (!r.revoked && r.author === 'ai' && typeof r.text === 'string' && r.text.trim()) {
+              out.push({ kind: 'comment', text: r.text, diaryId: d.id });
+            }
+          }
+        }
       }
     }
     for (const s of summaries) {
@@ -134,7 +154,11 @@ export function applyRevoke(
   const ids = new Set(roleIds || []);
   for (const d of diaries || []) {
     for (const c of d.aiComments || []) {
-      if (all || ids.has(c.roleId)) c.revoked = true;
+      if (all || ids.has(c.roleId)) {
+        c.revoked = true;
+        // v3.0.24：整串撤销——回复随顶层留言一并失效，渲染 / 注入均过滤。
+        for (const r of c.replies || []) r.revoked = true;
+      }
     }
   }
   for (const s of summaries || []) {
@@ -164,7 +188,7 @@ export function planDiaryAiWork(
 }
 
 function emptyShape(): DiaryStoreShape {
-  return { version: 1, seq: 0, diaries: [], diary_summaries: [] };
+  return { version: 1, seq: 0, diaries: [], diary_summaries: [], commentTasks: [] };
 }
 
 function normalizeShape(raw: unknown): DiaryStoreShape {
@@ -176,6 +200,8 @@ function normalizeShape(raw: unknown): DiaryStoreShape {
     diaries: Array.isArray(r.diaries) ? (r.diaries as DiaryEntry[]) : [],
     // 独立集合：绝不复用 MemoryEntry。
     diary_summaries: Array.isArray(r.diary_summaries) ? (r.diary_summaries as DiarySummary[]) : [],
+    // v3.0.24：旧档无该字段 → 空表，零迁移可读。
+    commentTasks: Array.isArray(r.commentTasks) ? (r.commentTasks as DiaryCommentTask[]) : [],
   };
 }
 
@@ -235,6 +261,7 @@ export class DiaryStore {
   dataDir = '';
   diaries: DiaryEntry[] = [];
   summaries: DiarySummary[] = [];
+  commentTasks: DiaryCommentTask[] = [];
   private shape: DiaryStoreShape = emptyShape();
   private filePath = '';
 
@@ -253,12 +280,15 @@ export class DiaryStore {
     }
     this.diaries = this.shape.diaries;
     this.summaries = this.shape.diary_summaries;
+    this.commentTasks = Array.isArray(this.shape.commentTasks) ? this.shape.commentTasks : [];
+    this.shape.commentTasks = this.commentTasks;
   }
 
   save(): void {
     if (!this.filePath) return;
     this.shape.diaries = this.diaries;
     this.shape.diary_summaries = this.summaries;
+    this.shape.commentTasks = this.commentTasks;
     writeText(this.filePath, JSON.stringify(this.shape, null, 2));
   }
 
@@ -359,6 +389,86 @@ export class DiaryStore {
     this.save();
   }
 
+  // ===== v3.0.24 留言排程任务 / 回复串（旧档零迁移，全部只做增量）=====
+  listTasks(): DiaryCommentTask[] {
+    return [...this.commentTasks];
+  }
+
+  upsertTask(task: DiaryCommentTask): void {
+    const idx = this.commentTasks.findIndex((t) => t.id === task.id);
+    if (idx >= 0) this.commentTasks[idx] = task;
+    else this.commentTasks.push(task);
+    this.save();
+  }
+
+  dropTasksForRole(
+    diaryId: string,
+    roleId: string,
+    statuses?: DiaryCommentTask['status'][]
+  ): void {
+    const wanted = statuses && statuses.length > 0 ? new Set(statuses) : null;
+    this.commentTasks = this.commentTasks.filter(
+      (t) => !(t.diaryId === diaryId && t.roleId === roleId && (!wanted || wanted.has(t.status)))
+    );
+    this.save();
+  }
+
+  dropTasksForDiary(diaryId: string): void {
+    this.commentTasks = this.commentTasks.filter((t) => t.diaryId !== diaryId);
+    this.save();
+  }
+
+  /** 顶层留言硬锁：每 (diaryId, roleId) 只允许一条未撤销留言；回复永不新增顶层留言。 */
+  commentLocked(diaryId: string, roleId: string): boolean {
+    const d = this.getDiary(diaryId);
+    if (!d) return false;
+    return (d.aiComments || []).some((c) => c.roleId === roleId && !c.revoked);
+  }
+
+  getComment(diaryId: string, commentId: string): DiaryComment | undefined {
+    const d = this.getDiary(diaryId);
+    if (!d) return undefined;
+    return (d.aiComments || []).find((c) => c.id === commentId);
+  }
+
+  addReply(commentId: string, reply: DiaryCommentReply): boolean {
+    for (const d of this.diaries) {
+      const c = (d.aiComments || []).find((x) => x.id === commentId);
+      if (!c) continue;
+      if (!Array.isArray(c.replies)) c.replies = [];
+      c.replies.push(reply);
+      this.save();
+      return true;
+    }
+    return false;
+  }
+
+  setAwaiting(commentId: string, value: boolean): boolean {
+    for (const d of this.diaries) {
+      const c = (d.aiComments || []).find((x) => x.id === commentId);
+      if (!c) continue;
+      c.awaitingUserReply = value;
+      this.save();
+      return true;
+    }
+    return false;
+  }
+
+  /** force 重生成：旧顶层留言与整串 replies 一并软撤，随后才可新建新留言。 */
+  revokeThreadForRole(diaryId: string, roleId: string): number {
+    const d = this.getDiary(diaryId);
+    if (!d) return 0;
+    let n = 0;
+    for (const c of d.aiComments || []) {
+      if (c.roleId !== roleId || c.revoked) continue;
+      c.revoked = true;
+      for (const r of c.replies || []) r.revoked = true;
+      n += 1;
+    }
+    if (n > 0) this.save();
+    return n;
+  }
+
   addSummary(s: DiarySummary): void {
     this.summaries.push(s);
     this.save();
@@ -418,6 +528,101 @@ export function getDiaryStore(): DiaryStore {
 /** 重置单例（仅供自检脚本构造隔离环境使用）。 */
 export function resetDiaryStore(): void {
   singleton = null;
+}
+
+/**
+ * v3.0.24 回复上下文（纯函数，不读 diary.content，不碰身份/群聊/revoked 数据）。
+ * P0 用户本次原文、P1 该留言串全部历史、P2 顶层留言、P3 门控产物块四项不可丢条目；
+ * P4 单聊最近 N 条与 P5 关键词补条在 6000 字符硬预算内从低优先级开始裁剪。
+ */
+export interface DiaryReplyContextInput {
+  roleId: string;
+  roleName: string;
+  userText: string;
+  thread: DiaryCommentReply[];
+  topText: string;
+  artifactBlock: string;
+  chatMessages: Array<{ content?: string; sender_type?: string; timestamp?: string }>;
+  historyCap: number;
+}
+
+function clip(text: string, max: number): string {
+  const s = String(text || '').trim();
+  return s.length <= max ? s : s.slice(0, max);
+}
+
+function replyKeywords(text: string): string[] {
+  const out = new Set<string>();
+  const s = String(text || '');
+  const ascii = s.match(/[A-Za-z0-9_]{2,}/g) || [];
+  for (const w of ascii) out.add(w.toLowerCase());
+  const cjk = s.match(/[\u4e00-\u9fff]+/g) || [];
+  for (const seg of cjk) {
+    for (let i = 0; i + 1 < seg.length; i++) out.add(seg.slice(i, i + 2));
+    if (seg.length === 1) out.add(seg);
+  }
+  return [...out];
+}
+
+export function buildDiaryReplyContext(input: DiaryReplyContextInput): string {
+  const roleName = String(input?.roleName || input?.roleId || '');
+  const userText = clip(input?.userText, DIARY_REPLY_USER_MAX);
+  const threadRaw = Array.isArray(input?.thread) ? input.thread.filter((r) => r && !r.revoked) : [];
+  const p0 = userText ? `【用户刚刚回复（请针对其内容作答）】\n${userText}` : '';
+  const p1Items = threadRaw.map((r) => {
+    const who = r.author === 'user' ? '我' : roleName;
+    return `- ${r.created_at || ''} ${who}：${clip(r.text, DIARY_REPLY_THREAD_ITEM_MAX)}`;
+  });
+  const p1 = p1Items.length > 0 ? `【这条留言的完整对话历史】\n${p1Items.join('\n')}` : '';
+  const p2 = clip(input?.topText, DIARY_REPLY_TOP_MAX)
+    ? `【这条留言的原文】\n${clip(input.topText, DIARY_REPLY_TOP_MAX)}`
+    : '';
+  const p3 = clip(input?.artifactBlock, DIARY_REPLY_ARTIFACT_MAX);
+
+  const all = Array.isArray(input?.chatMessages) ? input.chatMessages : [];
+  const usable = all.filter((m) => m && String(m.content || '').trim());
+  const cap = Math.max(0, Math.min(Number.isFinite(input.historyCap) ? input.historyCap : 16, DIARY_REPLY_CHAT_N_CAP));
+  const recent = usable.slice(-cap);
+  const recentSet = new Set(recent);
+  const p4Items = recent.map((m) => `- ${m.timestamp || ''} 我/角色：${clip(String(m.content), DIARY_REPLY_SINGLE_CHAR_CAP)}`);
+  const p4 = p4Items.length > 0 ? `【该角色单聊最近 ${recent.length} 条（仅作背景）】\n${p4Items.join('\n')}` : '';
+
+  const keys = replyKeywords(userText);
+  const p5Items: string[] = [];
+  for (let i = usable.length - recent.length - 1; i >= 0 && p5Items.length < DIARY_REPLY_KEYWORD_MAX; i--) {
+    const m = usable[i];
+    if (recentSet.has(m)) continue;
+    const content = String(m.content || '');
+    const lower = content.toLowerCase();
+    if (!keys.some((k) => lower.includes(k))) continue;
+    p5Items.push(`- ${m.timestamp || ''} 我/角色：${clip(content, DIARY_REPLY_SINGLE_CHAR_CAP)}`);
+  }
+  const p5 = p5Items.length > 0 ? `【关键词命中的更早单聊（最多 ${DIARY_REPLY_KEYWORD_MAX} 条）】\n${p5Items.join('\n')}` : '';
+
+  const join = (blocks: string[]): string => blocks.filter(Boolean).join('\n\n');
+  let out = join([p0, p1, p2, p3, p4, p5]);
+  if (out.length <= DIARY_REPLY_CHAR_BUDGET) return out;
+  // 先丢低优先级背景；P0/P1 条目本身永不删除，只逐条截短。
+  out = join([p0, p1, p2, p3, p4]);
+  if (out.length > DIARY_REPLY_CHAR_BUDGET) out = join([p0, p1, p2, p3]);
+  if (out.length > DIARY_REPLY_CHAR_BUDGET) {
+    const topShort = clip(input?.topText, 400);
+    const artShort = clip(input?.artifactBlock, 600);
+    out = join([
+      p0,
+      p1,
+      topShort ? `【这条留言的原文】\n${topShort}` : '',
+      artShort,
+    ]);
+  }
+  if (out.length > DIARY_REPLY_CHAR_BUDGET) {
+    const prefix = p0 ? p0.length + 2 : 0;
+    const n = Math.max(1, p1Items.length);
+    const per = Math.max(1, Math.floor((DIARY_REPLY_CHAR_BUDGET - prefix - 2 * (n - 1)) / n));
+    // 每条对话历史都保留一个条目（只截文本，不丢条目），满足 P1「永不丢弃条目」。
+    out = join([p0, ...p1Items.map((line) => (line.length <= per ? line : line.slice(0, per)))]);
+  }
+  return out.length <= DIARY_REPLY_CHAR_BUDGET ? out : out.slice(0, DIARY_REPLY_CHAR_BUDGET);
 }
 
 /**

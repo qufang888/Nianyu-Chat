@@ -1,0 +1,148 @@
+classDiagram
+  class AppSettings {
+    +diaryCommentSchedules: Record~string, DiaryCommentConfig~
+    +silent: boolean
+    +proactiveEngine: string
+    +proactiveDnd: ProactiveDnd
+    +proactiveDailyLimit: number
+    +proactiveFreshnessMin: number
+  }
+  class DiaryCommentConfig {
+    +enabled: boolean
+    +mode: DiaryCommentMode
+    +normal: NormalSchedule
+    +nhppOverride: NhppOverride
+  }
+  class NormalSchedule {
+    +trigger: NormalTrigger
+    +window: WindowRange
+    +delayMinutes: number
+    +fixedTime: string
+  }
+  class NhppOverride {
+    +dailyLimit: number
+    +freshnessMin: number
+  }
+  class WindowRange {
+    +start: string
+    +end: string
+  }
+  class DiaryCommentTask {
+    +id: string
+    +diaryId: string
+    +roleId: string
+    +selfRoleId: string
+    +kind: string
+    +status: string
+    +dueAt: string
+    +configFingerprint: string
+    +createdAt: string
+    +reason: string
+  }
+  class DiaryComment {
+    +id: string
+    +roleId: string
+    +text: string
+    +tone: DiaryTone
+    +revoked: boolean
+    +scheduleKind: string
+    +awaitingUserReply: boolean
+    +replies: DiaryCommentReply[]
+    +created_at: string
+  }
+  class DiaryCommentReply {
+    +id: string
+    +author: string
+    +text: string
+    +roleId: string
+    +created_at: string
+  }
+  class DiaryEntry {
+    +id: string
+    +selfRoleId: string
+    +date: string
+    +title: string
+    +content: string
+    +allowAi: boolean
+    +visibleRoleIds: string[]
+    +aiComments: DiaryComment[]
+  }
+  class DiaryStoreShape {
+    +version: number
+    +seq: number
+    +diaries: DiaryEntry[]
+    +diary_summaries: DiarySummary[]
+    +commentTasks: DiaryCommentTask[]
+  }
+  class DiaryStore {
+    +init(dataDir): void
+    +save(): void
+    +getDiary(id): DiaryEntry
+    +updateDiary(id, patch): DiaryEntry
+    +listTasks(): DiaryCommentTask[]
+    +upsertTask(task): void
+    +dropTasksForRole(diaryId, roleId, statuses): void
+    +commentLocked(diaryId, roleId): boolean
+    +addComment(diaryId, comment): void
+    +addReply(commentId, reply): void
+    +setAwaiting(commentId, value): void
+  }
+  class DiaryCommentScheduler {
+    +init(): void
+    +onDiarySaved(diary, roleIds): void
+    +onConfigChanged(configs): void
+    +heartbeat(now): void
+    -planNormal(diary, config): DiaryCommentTask
+    -fingerprint(config): string
+    -rescheduleNhpps(diaryId, roleId): void
+  }
+  class DiaryReplyService {
+    +addUserReply(diaryId, commentId, text): ReplyResult
+    +generateAiReply(diaryId, commentId): Promise~ReplyResult~
+    -buildContext(role, thread, userText): string[]
+    -validateGate(diaryId, commentId): boolean
+  }
+  class ProactiveEngine {
+    +initProactiveEngine(deps): void
+    +heartbeatProactive(): void
+    +rescheduleProactive(chatType, chatId): void
+    +initDiaryNhpps(deps): void
+    +heartbeatDiaryComments(): void
+    +rescheduleDiaryComment(diaryId, roleId): void
+    -sampleCandidate(ctx, key, now): number
+    -inDnd(settings, now): DndResult
+    -recordDiarySent(ctx, key): void
+  }
+  class NotifyService {
+    +showNotifyCard(item, force): void
+    +notifyDiaryEvent(kind, title, roleName, text): void
+  }
+  class DiaryView {
+    +renderVisibleRoles(): void
+    +renderThread(comment): void
+    +submitReply(text): void
+  }
+  class SettingsView {
+    +renderDiaryCommentSchedules(): void
+  }
+
+  AppSettings "1" o-- "0..*" DiaryCommentConfig : diaryCommentSchedules[roleId]
+  DiaryCommentConfig "1" *-- "1" NormalSchedule
+  DiaryCommentConfig "1" o-- "0..1" NhppOverride
+  NormalSchedule "1" o-- "0..1" WindowRange
+  DiaryStoreShape "1" *-- "0..*" DiaryCommentTask : commentTasks
+  DiaryStoreShape "1" *-- "0..*" DiaryEntry : diaries
+  DiaryEntry "1" *-- "0..*" DiaryComment : aiComments
+  DiaryComment "1" *-- "0..*" DiaryCommentReply : replies
+  DiaryComment "1" --> "0..1" DiaryCommentTask : scheduled by
+  DiaryCommentTask "1" --> "1" DiaryCommentConfig : fingerprint
+  DiaryStore ..> DiaryCommentTask : persists in diary.json
+  DiaryStore ..> DiaryEntry : persists
+  DiaryCommentScheduler --> DiaryStore : uses
+  DiaryCommentScheduler --> ProactiveEngine : diary NHPP APIs
+  DiaryReplyService --> DiaryStore : uses
+  DiaryReplyService --> ProactiveEngine : buildDiaryContextBlock gate
+  DiaryCommentScheduler --> NotifyService : notify new comment
+  DiaryReplyService --> NotifyService : notify AI reply
+  DiaryView ..> DiaryStore : IPC
+  SettingsView ..> AppSettings : IPC

@@ -111,10 +111,11 @@ ok('diary:ensureMigrated 三端齐备',
   /ipcMain\.handle\('diary:ensureMigrated'/.test(main) &&
   /diaryEnsureMigrated/.test(preload) && /diaryEnsureMigrated/.test(ipc));
 ok('types.ts 删除 DiaryBook', !/export interface DiaryBook/.test(read('src/types.ts')));
-ok('package.json 3.0.23 + 全部 v3022/v3023 脚本 + 拖球/双消失光标脚本保留',
-  /"version": "3\.0\.23"/.test(pkg) && /verify:diary-migrate-3022/.test(pkg) &&
+ok('package.json 3.0.24 + 全部 v3022/v3023/3024 脚本 + 拖球/双消失光标脚本保留',
+  /"version": "3\.0\.24"/.test(pkg) && /verify:diary-migrate-3022/.test(pkg) &&
   /verify:diary-ui-3022/.test(pkg) && /verify:diary-ui-3023/.test(pkg) &&
-  /verify:drag-cursor-gate/.test(pkg) && /verify:cursor-never-blank/.test(pkg));
+  /verify:drag-cursor-gate/.test(pkg) && /verify:cursor-never-blank/.test(pkg) &&
+  /verify:diary-comments-3024/.test(pkg));
 
 section('E. 文档旧占位词清零 / 冻结区零 diff / 光标改动保留');
 for (const f of ['使用说明.md', 'README.md', '硬编码清单.md', '版本更新记录.md', 'src/components/GuideView.tsx']) {

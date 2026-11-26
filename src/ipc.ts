@@ -28,6 +28,7 @@ import type {
   CharacterImportResult,
   DiaryEntry,
   DiaryAiResult,
+  DiaryCommentReply,
   EncryptionStatus,
   BackupPeekInfo,
   PortableCreateResult,
@@ -644,11 +645,18 @@ export interface NianyuAPI {
   diaryUpdate: (id: string, patch: Partial<DiaryEntry>) => Promise<DiaryEntry>;
   diaryDelete: (id: string) => Promise<boolean>;
   diaryRegenerateComments: (id: string, roleIds?: string[]) => Promise<DiaryAiResult>;
+  diaryCommentRegenerateOne: (id: string, roleId: string) => Promise<DiaryAiResult>;
+  diaryReplyAdd: (id: string, commentId: string, text: string) => Promise<{
+    ok: boolean;
+    reply?: DiaryCommentReply;
+    error?: string;
+  }>;
   diarySummarize: (id: string, roleIds?: string[]) => Promise<DiaryAiResult>;
   diaryListOrphans: () => Promise<DiaryEntry[]>;
   diaryReassignOrphans: (from: string, to: string) => Promise<number>;
   encryptionStatus: () => Promise<EncryptionStatus>;
   onDiaryChanged: (cb: (payload: { diaryId: string; kind: 'comments' | 'summary' | 'entry' }) => void) => () => void;
+  onDiaryOpen: (cb: (payload: { diaryId: string; commentId?: string }) => void) => () => void;
   convertLegacyBackup: (zipPath: string) => Promise<string>;
 }
 
@@ -812,11 +820,14 @@ export const api: NianyuAPI = {
   diaryUpdate: (id, patch) => raw.diaryUpdate(id, patch),
   diaryDelete: (id) => raw.diaryDelete(id),
   diaryRegenerateComments: (id, roleIds) => raw.diaryRegenerateComments(id, roleIds),
+  diaryCommentRegenerateOne: (id, roleId) => raw.diaryCommentRegenerateOne(id, roleId),
+  diaryReplyAdd: (id, commentId, text) => raw.diaryReplyAdd(id, commentId, text),
   diarySummarize: (id, roleIds) => raw.diarySummarize(id, roleIds),
   diaryListOrphans: () => raw.diaryListOrphans(),
   diaryReassignOrphans: (from, to) => raw.diaryReassignOrphans(from, to),
   encryptionStatus: () => raw.encryptionStatus(),
   onDiaryChanged: (cb) => raw.onDiaryChanged(cb),
+  onDiaryOpen: (cb) => raw.onDiaryOpen(cb),
   convertLegacyBackup: (zipPath) => raw.convertLegacyBackup(zipPath),
 
   // ===== v3.0.19 可携带备份（同名同签名透传，追加）=====

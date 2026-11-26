@@ -688,11 +688,18 @@ export interface NianyuAPI {
   diaryUpdate: (id: string, patch: Partial<DiaryEntry>) => Promise<DiaryEntry>;
   diaryDelete: (id: string) => Promise<boolean>;
   diaryRegenerateComments: (id: string, roleIds?: string[]) => Promise<DiaryAiResult>;
+  diaryCommentRegenerateOne: (id: string, roleId: string) => Promise<DiaryAiResult>;
+  diaryReplyAdd: (id: string, commentId: string, text: string) => Promise<{
+    ok: boolean;
+    reply?: import('../src/types').DiaryCommentReply;
+    error?: string;
+  }>;
   diarySummarize: (id: string, roleIds?: string[]) => Promise<DiaryAiResult>;
   diaryListOrphans: () => Promise<DiaryEntry[]>;
   diaryReassignOrphans: (from: string, to: string) => Promise<number>;
   encryptionStatus: () => Promise<EncryptionStatus>;
   onDiaryChanged: (cb: (payload: { diaryId: string; kind: 'comments' | 'summary' | 'entry' }) => void) => () => void;
+  onDiaryOpen: (cb: (payload: { diaryId: string; commentId?: string }) => void) => () => void;
   convertLegacyBackup: (zipPath: string) => Promise<string>;
 }
 
@@ -1428,6 +1435,8 @@ const api: NianyuAPI = {
   diaryUpdate: (id, patch) => ipcRenderer.invoke('diary:update', id, patch),
   diaryDelete: (id) => ipcRenderer.invoke('diary:delete', id),
   diaryRegenerateComments: (id, roleIds) => ipcRenderer.invoke('diary:regenerateComments', id, roleIds),
+  diaryCommentRegenerateOne: (id, roleId) => ipcRenderer.invoke('diary:commentRegenerateOne', id, roleId),
+  diaryReplyAdd: (id, commentId, text) => ipcRenderer.invoke('diary:replyAdd', id, commentId, text),
   diarySummarize: (id, roleIds) => ipcRenderer.invoke('diary:summarize', id, roleIds),
   diaryListOrphans: () => ipcRenderer.invoke('diary:listOrphans'),
   diaryReassignOrphans: (from, to) => ipcRenderer.invoke('diary:reassignOrphans', from, to),
@@ -1436,6 +1445,11 @@ const api: NianyuAPI = {
     const listener = (_e: any, payload: any) => cb(payload);
     ipcRenderer.on('diary:changed', listener);
     return () => ipcRenderer.removeListener('diary:changed', listener);
+  },
+  onDiaryOpen: (cb) => {
+    const listener = (_e: any, payload: any) => cb(payload);
+    ipcRenderer.on('diary:open', listener);
+    return () => ipcRenderer.removeListener('diary:open', listener);
   },
   convertLegacyBackup: (zipPath) => ipcRenderer.invoke('backup:convertLegacy', zipPath),
 };

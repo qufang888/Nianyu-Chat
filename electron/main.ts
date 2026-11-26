@@ -54,6 +54,7 @@ import { readBinary, writeBinary, writeText } from './secureStore';
 // v3.0.18：分册日记数据层 / 门控唯一真源 / 语气分类。
 import {
   buildDiaryContextBlock,
+  buildDiaryReplyContext,
   canRoleAccessDiary,
   getDiaryStore,
   makeDiaryAiResult,
@@ -107,7 +108,13 @@ import {
   heartbeatProactive,
   markQuickReply,
   deriveAwaitingReplyKeys,
+  initDiaryNhpps,
+  heartbeatDiaryComments,
+  rescheduleDiaryComment,
+  clearDiaryNhppsForRole,
 } from './proactive';
+// v3.0.24：日记留言排程器（普通三子模式 / 配置重排），不 import 本文件，靠 deps 注入。
+import { DIARY_HEARTBEAT_PHASE_MS, getDiaryCommentScheduler } from './diarySchedule';
 // v2.3.93：等待态状态机（用户回复 / 「我不回复」两条路径共用同一份清理逻辑）
 import { createAwaitingReplyTracker } from './awaitingReply';
 import type {
@@ -135,6 +142,7 @@ import type {
   QuickImportPluginPreview,
   DiaryAiResult,
   DiaryEntry,
+  DiaryCommentReply,
 } from '../src/types';
 import { normalizeRelation } from '../src/types';
 import { RELATION_TYPES, RELATION_LABELS } from '../src/types';
@@ -1100,7 +1108,10 @@ function openNotifyChat(chat: any): void {
     setTimeout(() => notifyWindow?.hide(), 200);
   }
   showMainWindow();
-  if (mainWindow && !mainWindow.isDestroyed()) {
+  // v3.0.24：日记通知卡片只置前主窗 + 广播 diary:open，绝不误当聊天会话打开。
+  if (chat && chat.chatType === 'diary') {
+    broadcast('diary:open', { diaryId: String(chat.diaryId || chat.chatId || ''), commentId: String(chat.commentId || '') });
+  } else if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('app:openChat', chat);
   }
   setTimeout(processNotifyQueue, 120);
@@ -2818,7 +2829,8 @@ function buildSystemPrompt(
   role: Role,
   freezeMemory = false,
   chatId?: string,
-  diarySelfRoleId?: string
+  diarySelfRoleId?: string,
+  diaryBlockOverride?: string
 ): string {
   const parts: string[] = [];
   parts.push(`你是数字人「${role.name}」。`);
@@ -2874,7 +2886,10 @@ function buildSystemPrompt(
   // v3.0.18：日记片段只按「当前角色 + 当前身份册」注入已产生且仍可见的留言/摘要产物。
   // 第 4 参未传（如留言生成请求本身）时不注入任何日记信息。
   if (diarySelfRoleId !== undefined && diarySelfRoleId !== null) {
-    const diaryBlock = buildDiaryContextBlock(role.id, diarySelfRoleId);
+    // v3.0.24：回复服务传入已裁剪的产物块，避免重复注入；其它调用点行为逐字不变。
+    const diaryBlock = diaryBlockOverride !== undefined
+      ? diaryBlockOverride
+      : buildDiaryContextBlock(role.id, diarySelfRoleId);
     if (diaryBlock) parts.push(diaryBlock);
   }
   return parts.join('\n');
@@ -5679,6 +5694,44 @@ function broadcastDiaryChanged(payload: { diaryId: string; kind: 'comments' | 's
   broadcast('diary:changed', payload);
 }
 
+// ===== v3.0.24 日记通知：只走 showNotifyCard 单一通道（首行 silent return 是唯一静默闸门）=====
+const DIARY_TITLE_TRUNC = 24;
+const DIARY_REPLY_SUMMARY_MAX = 120;
+
+function diaryRoleName(roleId: string): string {
+  return String(dm.getRole(roleId)?.name || roleId);
+}
+
+function notifyDiaryEvent(
+  kind: 'comment' | 'reply',
+  diary: DiaryEntry,
+  roleId: string,
+  text: string,
+  commentId = ''
+): void {
+  const lang = getAppLang();
+  const titleTrunc = String(diary.title || diary.date || '').slice(0, DIARY_TITLE_TRUNC);
+  const roleName = diaryRoleName(roleId);
+  const label = translate(
+    lang,
+    kind === 'comment' ? 'notify.diaryNewComment' : 'notify.diaryNewReply',
+    { title: titleTrunc, role: roleName }
+  );
+  const summary = String(text || '').replace(/\s+/g, ' ').slice(0, DIARY_REPLY_SUMMARY_MAX);
+  // 不传 force：与新消息同级——双窗可见时只下发提示音；静默由 showNotifyCard 首行统一拦截。
+  showNotifyCard({
+    label,
+    roleName,
+    content: `《${titleTrunc}》· ${roleName}：${summary}`,
+    chatType: 'diary',
+    chatId: diary.id,
+    name: diary.title || diary.date || '',
+    diaryId: diary.id,
+    commentId,
+    soundPath: null,
+  });
+}
+
 // ===== v3.0.22 日记归属兼容迁移（三个触发点共用一个入口）=====
 /** 有效自我身份 id 列表；内部哨兵不是身份，不参与判定。 */
 function diaryValidIds(): string[] {
@@ -5725,9 +5778,13 @@ async function callDiaryAI(role: Role, system: string, userPrompt: string, label
 
 /**
  * 为可见角色生成留言。名单外角色恒 0 条；tone='skip' 视为合法不留言。
- * 保存日记时以 fire-and-forget 调用（先落盘立即返回），手动按钮则 await 本函数。
+ * force=true 为用户显式手动重生成：旧顶层留言及整串 replies 先软撤，不受一人物一留言锁约束。
  */
-async function generateDiaryComments(diaryId: string, roleIds?: string[]): Promise<DiaryAiResult> {
+async function generateDiaryComments(
+  diaryId: string,
+  roleIds?: string[],
+  options: { force?: boolean; scheduleKind?: 'normal' | 'nhpp' | 'manual' } = {}
+): Promise<DiaryAiResult> {
   const d = diaryStore.getDiary(diaryId);
   if (!d) return makeDiaryAiResult([], [], 'ERROR');
   if (!shouldGenerateComments(d)) return makeDiaryAiResult([], [], 'NO_VISIBLE_ROLE');
@@ -5745,8 +5802,16 @@ async function generateDiaryComments(diaryId: string, roleIds?: string[]): Promi
       classifyDiaryCommentTone(r.affinity, r.mood || '平静') === 'skip')
     .map((r) => r.id);
   if (plan.length === 0) return makeDiaryAiResult([], skipped, 'NO_VISIBLE_ROLE');
+  if (options.force === true) {
+    for (const item of plan) diaryStore.revokeThreadForRole(diaryId, item.roleId);
+  }
   let reason: DiaryAiResult['reason'];
   for (const item of plan) {
+    // 自动/排程路径受一人物一留言硬锁；force 路径已先软撤旧串，可新建。
+    if (!options.force && diaryStore.commentLocked(diaryId, item.roleId)) {
+      skipped.push(item.roleId);
+      continue;
+    }
     const role = dm.getRole(item.roleId);
     if (!role) {
       skipped.push(item.roleId);
@@ -5760,8 +5825,9 @@ async function generateDiaryComments(diaryId: string, roleIds?: string[]): Promi
         skipped.push(role.id);
         continue;
       }
+      const commentId = `dc_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`;
       diaryStore.addComment(diaryId, {
-        id: `dc_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`,
+        id: commentId,
         roleId: role.id,
         text,
         tone: item.tone,
@@ -5769,8 +5835,17 @@ async function generateDiaryComments(diaryId: string, roleIds?: string[]): Promi
         moodAt: item.mood,
         revoked: false,
         created_at: new Date().toISOString(),
+        replies: [],
+        scheduleKind: options.scheduleKind || (options.force === true ? 'manual' : 'normal'),
+        awaitingUserReply: true,
       });
       generated.push(role.id);
+      // force 重生成后对应 pending 任务已作废；这里再兜底一次，避免随后排程重复生成。
+      if (options.force === true) {
+        diaryStore.dropTasksForRole(diaryId, role.id, ['pending', 'due']);
+        clearDiaryNhppsForRole(diaryId, role.id);
+      }
+      notifyDiaryEvent('comment', d, role.id, text, commentId);
     } catch (e) {
       console.error('[diary] 生成留言失败', e);
       skipped.push(role.id);
@@ -5830,11 +5905,111 @@ async function summarizeDiary(diaryId: string, roleIds?: string[]): Promise<Diar
   return makeDiaryAiResult(generated, skipped, generated.length > 0 ? undefined : reason);
 }
 
-/** 保存后自动留言 / 自动总结：不阻塞 IPC 返回，失败仅记日志。 */
-function scheduleDiaryAi(d: DiaryEntry): void {
-  if (shouldGenerateComments(d)) {
-    void generateDiaryComments(d.id).catch((e) => console.error('[diary] 自动留言失败', e));
+// ===== v3.0.24 留言回复：事件驱动，每轮 AI 回复只能由用户新回复触发 =====
+interface DiaryReplyResult {
+  ok: boolean;
+  reply?: DiaryCommentReply;
+  error?: string;
+}
+
+function newDiaryReplyId(prefix: 'du' | 'da'): string {
+  return `${prefix}_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`;
+}
+
+/**
+ * P0 用户本次回复原文 + P1 整串历史 + P2 顶层留言 + P3 门控产物 + P4/P5 单聊背景。
+ * 回复 prompt 绝不拼接 diary.content；P3 只经 buildDiaryContextBlock 注入并裁剪。
+ */
+async function generateDiaryReply(diaryId: string, commentId: string): Promise<DiaryReplyResult> {
+  const d = diaryStore.getDiary(diaryId);
+  if (!d) return { ok: false, error: '日记不存在' };
+  const c = diaryStore.getComment(diaryId, commentId);
+  if (!c || c.revoked) return { ok: false, error: '留言已被撤销' };
+  if (!canRoleAccessDiary(d, c.roleId) || !diaryValidIds().includes(d.selfRoleId)) {
+    return { ok: false, error: '该人物当前不可见或身份不匹配' };
   }
+  const role = dm.getRole(c.roleId);
+  if (!role) return { ok: false, error: '角色不存在' };
+  const thread = (c.replies || []).filter((r) => !r.revoked && typeof r.text === 'string' && r.text.trim());
+  const lastUser = [...thread].reverse().find((r) => r.author === 'user');
+  if (!lastUser) return { ok: false, error: '尚无用户新回复' };
+  const settings = dm.getSettings();
+  const cfg = resolveRoleModel(role, settings) || getDefaultModelConfig(settings);
+  const artifactBlock = buildDiaryContextBlock(role.id, d.selfRoleId).slice(0, 2000);
+  // system 内注入经门控的 P3；user 侧不再重复注入（去重）。
+  const system = `${buildSystemPrompt(role, undefined, undefined, d.selfRoleId, artifactBlock)}\n\n请以该角色口吻，针对用户刚刚的回复作答，1–3 句，记得聊天里说过的事。`;
+  const context = buildDiaryReplyContext({
+    roleId: role.id,
+    roleName: role.name,
+    userText: lastUser.text,
+    thread,
+    topText: c.text,
+    artifactBlock: '',
+    chatMessages: dm.getMessages('single', role.id) || [],
+    historyCap: effectiveHistoryCap(cfg, false),
+  });
+  const prompt = `${context}\n\n请记得聊天里说过的事，针对用户刚才的回复作答，以角色口吻，1–3 句。`;
+  try {
+    const text = await callDiaryAI(role, system, prompt, '日记留言回复');
+    if (!text) throw new Error('AI 返回为空');
+    const reply: DiaryCommentReply = {
+      id: newDiaryReplyId('da'),
+      author: 'ai',
+      text,
+      roleId: role.id,
+      created_at: new Date().toISOString(),
+    };
+    diaryStore.addReply(commentId, reply);
+    diaryStore.setAwaiting(commentId, true);
+    broadcastDiaryChanged({ diaryId, kind: 'comments' });
+    notifyDiaryEvent('reply', d, role.id, text, commentId);
+    return { ok: true, reply };
+  } catch (e) {
+    // 失败不吞：等待态复位允许重试；不通知、不自动连发。
+    diaryStore.setAwaiting(commentId, true);
+    dm.logError('model', `日记留言回复失败：${(e as Error)?.message || String(e)}`);
+    return { ok: false, error: (e as Error)?.message || '回复生成失败' };
+  }
+}
+
+/** 用户回复事件入口：先落 user reply，再立即驱动一轮 AI 回复（不进任何排程）。 */
+async function addDiaryUserReply(diaryId: string, commentId: string, rawText: string): Promise<DiaryReplyResult> {
+  const d = diaryStore.getDiary(diaryId);
+  if (!d) return { ok: false, error: '日记不存在' };
+  const c = diaryStore.getComment(diaryId, commentId);
+  if (!c || c.revoked) return { ok: false, error: '留言已被撤销' };
+  if (!canRoleAccessDiary(d, c.roleId) || !diaryValidIds().includes(d.selfRoleId)) {
+    return { ok: false, error: '该人物当前不可见或身份不匹配' };
+  }
+  const text = String(rawText || '').trim().slice(0, 2000);
+  if (!text) return { ok: false, error: '回复内容不能为空' };
+  const reply: DiaryCommentReply = {
+    id: newDiaryReplyId('du'),
+    author: 'user',
+    text,
+    roleId: '',
+    created_at: new Date().toISOString(),
+  };
+  diaryStore.addReply(commentId, reply);
+  diaryStore.setAwaiting(commentId, false); // 生成中：UI 禁用输入框；完成后重新置 true
+  broadcastDiaryChanged({ diaryId, kind: 'comments' });
+  return generateDiaryReply(diaryId, commentId);
+}
+
+/** 保存后自动留言 / 自动总结：有配置角色交给排程器，无配置角色保留 v3.0.23 立即生成。 */
+function scheduleDiaryAi(d: DiaryEntry): void {
+  const scheduler = getDiaryCommentScheduler();
+  let legacyRoles: string[] = [];
+  try {
+    legacyRoles = scheduler.onDiarySaved(d);
+  } catch (e) {
+    console.error('[diary] 排程失败，回退立即生成', e);
+    legacyRoles = (d.visibleRoleIds || []).slice();
+  }
+  if (shouldGenerateComments(d) && legacyRoles.length > 0) {
+    void generateDiaryComments(d.id, legacyRoles).catch((e) => console.error('[diary] 自动留言失败', e));
+  }
+  // 总结链路逐字保留，不受排程器影响。
   if (shouldSummarize(d, true, dm.getSettings().diaryAutoSummarize === true)) {
     void summarizeDiary(d.id).catch((e) => console.error('[diary] 自动总结失败', e));
   }
@@ -6479,6 +6654,14 @@ function registerIPC(): void {
         migrateDiarySelfRoles(true);
       } catch (e) {
         console.error('[diary] 设置变更兼容迁移失败（设置已保存）', e);
+      }
+    }
+    // v3.0.24 裁定 #4：按人物留言配置变更 → 作废 pending 并按新配置重排；enabled=false 直接作废。
+    if (patch && Object.prototype.hasOwnProperty.call(patch, 'diaryCommentSchedules')) {
+      try {
+        getDiaryCommentScheduler().onConfigChanged(next.diaryCommentSchedules);
+      } catch (e) {
+        console.error('[diary] 留言配置变更重排失败（设置已保存）', e);
       }
     }
     // 快捷键 / 置顶等小窗设置即时生效
@@ -7149,12 +7332,29 @@ function registerIPC(): void {
   });
   ipcMain.handle('diary:delete', (_e, id: string) => {
     const ok = diaryStore.deleteDiary(String(id || ''));
-    if (ok) broadcastDiaryChanged({ diaryId: String(id || ''), kind: 'entry' });
+    if (ok) {
+      try { getDiaryCommentScheduler().dropTasksForDiary(String(id || '')); } catch { /* ignore */ }
+      broadcastDiaryChanged({ diaryId: String(id || ''), kind: 'entry' });
+    }
     return ok;
   });
   ipcMain.handle('diary:regenerateComments', (_e, id: string, roleIds?: string[]) =>
-    generateDiaryComments(String(id || ''), roleIds)
+    // 批量「让 AI 重新留言」是用户显式意图，UI 已自绘二次确认；旧串软撤后强制重生成。
+    generateDiaryComments(String(id || ''), roleIds, { force: true, scheduleKind: 'manual' })
   );
+  ipcMain.handle('diary:replyAdd', (_e, id: string, commentId: string, text: string) =>
+    addDiaryUserReply(String(id || ''), String(commentId || ''), String(text || ''))
+  );
+  ipcMain.handle('diary:commentRegenerateOne', (_e, id: string, roleId: string) => {
+    const rid = String(roleId || '');
+    const d = diaryStore.getDiary(String(id || ''));
+    if (!d || !canRoleAccessDiary(d, rid)) {
+      return makeDiaryAiResult([], rid ? [rid] : [], 'NO_VISIBLE_ROLE');
+    }
+    diaryStore.dropTasksForRole(d.id, rid, ['pending', 'due']);
+    clearDiaryNhppsForRole(d.id, rid);
+    return generateDiaryComments(d.id, [rid], { force: true, scheduleKind: 'manual' });
+  });
   ipcMain.handle('diary:summarize', (_e, id: string, roleIds?: string[]) =>
     summarizeDiary(String(id || ''), roleIds)
   );
@@ -8381,6 +8581,62 @@ app.whenReady().then(() => {
       /* 心跳异常不中断 */
     }
   }, 60_000);
+
+  // ===== v3.0.24 日记留言排程 + 日记 NHPP：独立时钟，错峰 15s，与聊天心跳互不阻塞 =====
+  getDiaryCommentScheduler().init({
+    getSettings: () => dm.getSettings(),
+    getStore: () => diaryStore,
+    isToneSkipped: (_diaryId, roleId) => {
+      const role = dm.getRole(roleId);
+      return !role || classifyDiaryCommentTone(role.affinity, role.mood || '平静') === 'skip';
+    },
+    generateComment: async (diaryId, roleId) =>
+      generateDiaryComments(diaryId, [roleId], { scheduleKind: 'normal' }),
+    rescheduleNhpps: (diaryId, roleId) => rescheduleDiaryComment(diaryId, roleId),
+    clearNhppsForRole: (diaryId, roleId) => clearDiaryNhppsForRole(diaryId, roleId),
+    logError: (message) => dm.logError('functional', message),
+  });
+  initDiaryNhpps({
+    getSettings: () => dm.getSettings(),
+    sendDiaryComment: async (diaryId, roleId) => {
+      const res = await generateDiaryComments(diaryId, [roleId], { scheduleKind: 'nhpp' });
+      return { ok: res.generatedRoleIds.includes(roleId), error: res.reason };
+    },
+    isDiaryCommentLocked: (diaryId, roleId) => diaryStore.commentLocked(diaryId, roleId),
+    getDiaryOverride: (diaryId, roleId) => {
+      const cfg = dm.getSettings().diaryCommentSchedules?.[roleId];
+      if (!cfg || cfg.mode !== 'nhpp' || !cfg.enabled) return undefined;
+      void diaryId; // 配置按 roleId 全局共享（裁定 #6）
+      return cfg.nhppOverride;
+    },
+    getDiaryMessages: (chatType, chatId) => {
+      if (chatType !== 'diary') return [];
+      const sep = chatId.lastIndexOf(':');
+      if (sep <= 0) return [];
+      const diaryId = chatId.slice(0, sep);
+      const roleId = chatId.slice(sep + 1);
+      const d = diaryStore.getDiary(diaryId);
+      const c = (d?.aiComments || []).find((x) => x.roleId === roleId && !x.revoked);
+      return (c?.replies || []).filter((r) => !r.revoked).map((r, i) => ({
+        id: i,
+        chat_type: 'single' as const,
+        chat_id: chatId,
+        sender_type: r.author === 'user' ? 'user' as const : 'ai' as const,
+        sender_name: r.author === 'user' ? '我' : diaryRoleName(roleId),
+        content: r.text,
+        image_path: null,
+        token_used: 0,
+        timestamp: r.created_at,
+      })) as ChatMessage[];
+    },
+    logError: (category, message, detail) => dm.logError(category, message, detail),
+  });
+  setTimeout(() => {
+    setInterval(() => {
+      try { getDiaryCommentScheduler().heartbeat(); } catch { /* 日记排程异常不中断 */ }
+      try { heartbeatDiaryComments(); } catch { /* 日记 NHPP 异常不中断 */ }
+    }, 60_000);
+  }, DIARY_HEARTBEAT_PHASE_MS);
   // 桌面悬浮球：注入主窗引用/唤出函数，并按设置创建悬浮球窗口
   setBallMainShow(showMainWindow);
   setBallMainWindow(mainWindow);

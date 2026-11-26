@@ -1,0 +1,21 @@
+stateDiagram-v2
+    [*] --> NO_COMMENT
+
+    NO_COMMENT --> COMMENTED: 调度触发 / 手动生成<br/>addComment(scheduleKind)
+    COMMENTED --> COMMENTED: 重复触发被硬锁跳过<br/>（顶层未 revoked 留言已存在）
+    COMMENTED --> USER_REPLIED: 用户提交回复<br/>replies.push(user)<br/>awaitingUserReply=false
+    USER_REPLIED --> AI_REPLIED: generateAiReply()<br/>replies.push(ai)<br/>awaitingUserReply=true
+    AI_REPLIED --> USER_REPLIED: 用户再回复（多轮，裁定#1）
+
+    COMMENTED --> REVOKED: 关闭 allowAi / 移出可见名单<br/>/ 改正文 / 身份改册 / 手动强制重生成
+    AI_REPLIED --> REVOKED: 同上（整串一并 revoked）
+    REVOKED --> NO_COMMENT: 手动强制重生成<br/>（旧串 revoked + 新留言）
+
+    note right of COMMENTED
+      顶层留言每 (diaryId,roleId) 唯一；
+      所有往返仅追加到 replies[]，不新增顶层留言
+    end note
+    note right of AI_REPLIED
+      awaitingUserReply=true 时 UI 开放输入框；
+      生成中=false 禁用输入，防自动连发
+    end note

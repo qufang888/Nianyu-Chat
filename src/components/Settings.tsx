@@ -20,6 +20,10 @@ import {
   type WorldBook,
   type ErrorLogEntry,
   type EncryptionStatus,
+  type Role,
+  type DiaryCommentConfig,
+  type DiaryCommentMode,
+  type NormalTrigger,
   type Plugin,
   type Skill,
   type SkillScope,
@@ -278,6 +282,7 @@ const SETTING_SEARCH_INDEX: SettingSearchItem[] = [
   { id: 'sec-emoevent', key: 'settings.emoEventAdvanced', kw: ['情绪', '事件', 'emotion', 'event', '高级'] },
   // v3.0.18：日记隐私与加密状态（中英文关键词，搜索候选最多 5 条由共享模糊搜索保证）
   { id: 'sec-diary-privacy', key: 'settings.diaryPrivacyTitle', kw: ['日记', '隐私', '加密', '自动总结', '密钥', 'diary', 'privacy', 'encrypt', 'encryption', 'auto summarize', 'key'] },
+  { id: 'sec-diary-comment-schedule', key: 'diary.commentSchedule', kw: ['日记留言', '定时留言', 'NHPP', '时段', '固定时间', 'diary comment schedule', 'nhpp', 'window', 'fixed'] },
   { id: 'sec-proactive-engine', key: 'settings.proactiveEngine', kw: ['主动消息', '机制', '引擎', '触发方式', 'proactive', 'engine', '机制选择'] },
   { id: 'sec-inputappearance', key: 'settings.inputAppearance', kw: ['输入框', 'input', '输入栏', '外观'] },
   { id: 'sec-cursor', key: 'settings.cursor', kw: ['光标', 'cursor', '鼠标指针', '自定义光标', '自定义图片', '上传', 'upload', '图片', '粒子', '拖尾', '特效', '点击位置', '热点', 'hotspot'] },
@@ -426,6 +431,27 @@ export const Settings: React.FC<{
       .catch(() => { if (alive) setEncStatus(null); });
     return () => { alive = false; };
   }, []);
+
+  // v3.0.24：设置页「按人物留言配置」的人物数据源（与日记可见名单共用同一批角色卡）。
+  const [commentRoles, setCommentRoles] = useState<Role[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void api.getRoles()
+      .then((list) => { if (alive) setCommentRoles(Array.isArray(list) ? list : []); })
+      .catch(() => { if (alive) setCommentRoles([]); });
+    return () => { alive = false; };
+  }, []);
+
+  const defaultDiaryCommentConfig = (): DiaryCommentConfig => ({
+    enabled: false,
+    mode: 'normal',
+    normal: { trigger: 'window', window: { start: '08:00', end: '22:00' }, delayMinutes: 30, fixedTime: '09:00' },
+  });
+  const patchDiarySchedule = (roleId: string, next: DiaryCommentConfig): void => {
+    const schedules = { ...(draft?.diaryCommentSchedules || {}) };
+    schedules[roleId] = next;
+    patch({ diaryCommentSchedules: schedules });
+  };
 
   // 识图模型（v2.3.51）：ComboBox 受控输入的临时查询文本；选中/清空后回到「按 ID 解析名称」显示
   const [visionQuery, setVisionQuery] = useState('');
@@ -3105,6 +3131,102 @@ export const Settings: React.FC<{
             <div>{t('settings.diaryStatus')}：{encStatus?.status ?? 'unknown'}</div>
             <div>{t('settings.diarySecurity')}</div>
             <div>{t('settings.diaryKeyHint')}</div>
+          </div>
+
+          {/* ===== v3.0.24 按人物留言配置：全局按 roleId（跨身份），与可见人物名单解耦 ===== */}
+          <div id="sec-diary-comment-schedule" className="section-title" style={{ marginTop: 14 }}>
+            {t('diary.commentSchedule')}
+          </div>
+          <div className="diary-role-list" style={{ border: '1px solid var(--color-border)', borderRadius: 6, padding: 8 }}>
+            {commentRoles.length === 0 && <div className="diary-hint">{t('diary.noRoles')}</div>}
+            {commentRoles.map((role) => {
+              const cfg = draft?.diaryCommentSchedules?.[role.id] || defaultDiaryCommentConfig();
+              const setCfg = (next: DiaryCommentConfig): void => patchDiarySchedule(role.id, next);
+              const setNormal = (next: Partial<DiaryCommentConfig['normal']>): void =>
+                setCfg({ ...cfg, normal: { ...cfg.normal, ...next } });
+              const mode: DiaryCommentMode = cfg.mode === 'nhpp' ? 'nhpp' : 'normal';
+              const trigger: NormalTrigger = cfg.normal?.trigger || 'delay';
+              return (
+                <div key={role.id} className="diary-comment-config">
+                  <label className="diary-check" title={role.name}>
+                    <input
+                      type="checkbox"
+                      aria-label={t('diary.enablePerRole')}
+                      checked={cfg.enabled === true}
+                      onChange={(e) => setCfg({ ...cfg, enabled: e.target.checked })}
+                    />
+                    <span className="diary-role-name">{role.name}</span>
+                  </label>
+                  {cfg.enabled === true && (
+                    <div className="diary-comment-config-body">
+                      <div className="diary-reply-compose">
+                        {(['normal', 'nhpp'] as DiaryCommentMode[]).map((m) => (
+                          <button
+                            type="button"
+                            key={m}
+                            className={mode === m ? 'btn-primary' : 'btn-ghost'}
+                            onClick={() => setCfg({ ...cfg, mode: m })}
+                          >
+                            {t(m === 'normal' ? 'diary.commentModeNormal' : 'diary.commentModeNhpp')}
+                          </button>
+                        ))}
+                      </div>
+                      {mode === 'normal' ? (
+                        <div className="diary-comment-config-body">
+                          <div className="diary-reply-compose">
+                            {(['window', 'delay', 'fixed'] as NormalTrigger[]).map((v) => (
+                              <button
+                                type="button"
+                                key={v}
+                                className={trigger === v ? 'btn-primary' : 'btn-ghost'}
+                                onClick={() => setNormal({ trigger: v })}
+                              >
+                                {t(v === 'window' ? 'diary.triggerWindow' : v === 'delay' ? 'diary.triggerDelay' : 'diary.triggerFixed')}
+                              </button>
+                            ))}
+                          </div>
+                          {trigger === 'window' && (
+                            <div className="diary-reply-compose">
+                              <label className="diary-field">
+                                <span>{t('diary.windowStart')}</span>
+                                <input type="time" value={cfg.normal?.window?.start || '08:00'} onChange={(e) => setNormal({ trigger, window: { start: e.target.value, end: cfg.normal?.window?.end || '22:00' } })} />
+                              </label>
+                              <label className="diary-field">
+                                <span>{t('diary.windowEnd')}</span>
+                                <input type="time" value={cfg.normal?.window?.end || '22:00'} onChange={(e) => setNormal({ trigger, window: { start: cfg.normal?.window?.start || '08:00', end: e.target.value } })} />
+                              </label>
+                            </div>
+                          )}
+                          {trigger === 'delay' && (
+                            <label className="diary-field">
+                              <span>{t('diary.delayMinutes')}</span>
+                              <input type="number" min={1} max={1440} value={cfg.normal?.delayMinutes ?? 30} onChange={(e) => setNormal({ trigger, delayMinutes: Math.max(1, Math.min(1440, Number(e.target.value) || 1)) })} />
+                            </label>
+                          )}
+                          {trigger === 'fixed' && (
+                            <label className="diary-field">
+                              <span>{t('diary.fixedTime')}</span>
+                              <input type="time" value={cfg.normal?.fixedTime || '09:00'} onChange={(e) => setNormal({ trigger, fixedTime: e.target.value })} />
+                            </label>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="diary-reply-compose">
+                          <label className="diary-field">
+                            <span>{t('settings.proactiveDailyLimit')}</span>
+                            <input type="number" min={1} max={99} value={cfg.nhppOverride?.dailyLimit ?? 5} onChange={(e) => setCfg({ ...cfg, nhppOverride: { ...cfg.nhppOverride, dailyLimit: Math.max(1, Number(e.target.value) || 1) } })} />
+                          </label>
+                          <label className="diary-field">
+                            <span>{t('settings.proactiveFreshnessMin')}</span>
+                            <input type="number" min={0} max={1440} value={cfg.nhppOverride?.freshnessMin ?? 10} onChange={(e) => setCfg({ ...cfg, nhppOverride: { ...cfg.nhppOverride, freshnessMin: Math.max(0, Number(e.target.value) || 0) } })} />
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           </AdvancedSection>

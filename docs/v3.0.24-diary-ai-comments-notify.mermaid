@@ -1,0 +1,25 @@
+flowchart TD
+    A[AI 新留言 / AI 回复<br/>生成并落盘 diary.json] --> B{dm.getSettings().silent === true ?}
+
+    B -- 是 --> C[showNotifyCard 首行 return<br/>渲染端 sound.ts: notification && silent 亦 return<br/>→ 0 卡片 / 0 提示音<br/>（生成与落盘已在通知之前完成）]
+    B -- 否 --> D[showNotifyCard(payload)<br/>label=notify.diaryNewComment / diaryNewReply<br/>content=日记标题 + 角色名 + 摘要<br/>force 默认 false，与新消息同级]
+
+    D --> E{mainWindow / miniWindow 可见且未最小化 ?}
+    E -- 是 --> F[flushNotifySound：仅提示音<br/>页面内 diary:changed 刷新呈现<br/>不弹独立卡片（同新消息口径）]
+    E -- 否 --> G[卡片入 notifyQueue + 提示音<br/>notify:data show: label / roleName / content / chat]
+
+    G --> H{1.5s 内相同 sig ?}
+    H -- 是 --> I[去重丢弃]
+    H -- 否 --> J[展示卡片 10s 后自动收起]
+
+    C --> K[用户手动回复留言 → 永不通知]
+    F --> K
+    I --> K
+    J --> K
+
+    L[普通聊天新消息] --> M[保持现有行为：本设计零改动]
+
+    classDef silent fill:#fdecea,stroke:#c0392b;
+    classDef normal fill:#eaf5ea,stroke:#27883b;
+    class C silent;
+    class D,F,G,J normal;

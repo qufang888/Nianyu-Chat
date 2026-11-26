@@ -7,7 +7,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useI18n } from '../i18n/I18nContext';
 import { api } from '../ipc';
-import type { DiaryEntry, Role } from '../types';
+import type { DiaryComment, DiaryEntry, Role } from '../types';
 import {
   DIARY_ERROR_NO_SELF_ROLE,
   resolveDiaryIdentity,
@@ -59,6 +59,10 @@ export const DiaryView: React.FC<{
   const [notice, setNotice] = useState<string>('');
   const [query, setQuery] = useState<string>('');
   const listRef = useRef<HTMLDivElement | null>(null);
+  // v3.0.24：回复串的每帖独立草稿 / 生成中 / 失败态（失败不清草稿，可点重试）。
+  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  const [replyBusy, setReplyBusy] = useState<Record<string, boolean>>({});
+  const [replyErrors, setReplyErrors] = useState<Record<string, string>>({});
 
   const loadEntries = useCallback(async (selfRoleId: string): Promise<void> => {
     try {
@@ -125,10 +129,22 @@ export const DiaryView: React.FC<{
       const id = effectiveRoleIdRef.current;
       if (id) void loadEntries(id);
     });
+    // v3.0.24：通知卡片点击日记 → 置前主窗并跳到该篇（不误当聊天打开）。
+    const offOpen = api.onDiaryOpen(({ diaryId }) => {
+      setQuery('');
+      window.setTimeout(() => {
+        const el = listRef.current?.querySelector<HTMLElement>(`[data-diary-id="${diaryId}"]`);
+        if (el) {
+          el.scrollIntoView({ block: 'center' });
+          flashElement(el, 'setting-flash');
+        }
+      }, 60);
+    });
     return () => {
       alive = false;
       offSettings();
       offDiary();
+      offOpen();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadEntries, t]);
@@ -215,8 +231,10 @@ export const DiaryView: React.FC<{
   };
 
   const regenerate = async (entry: DiaryEntry): Promise<void> => {
+    // 项目铁律：强制重生成必须自绘二次确认，禁止 window.confirm。
+    if (!(await api.showConfirm!(t('diary.confirmRegenerateComment')))) return;
     try {
-      const res = await api.diaryRegenerateComments(entry.id);
+      const res = await api.diaryRegenerateComments(entry.id, entry.visibleRoleIds);
       setNotice(
         res.generatedRoleIds.length > 0
           ? t('diary.aiDone').replace('{roles}', res.generatedRoleIds.join(', '))
@@ -225,6 +243,43 @@ export const DiaryView: React.FC<{
       await loadEntries(effectiveRoleId);
     } catch (e) {
       setNotice(String(e));
+    }
+  };
+
+  /** 单条留言强制重生成：同样走自绘确认 + 主进程 force 软撤旧串。 */
+  const regenerateOne = async (entry: DiaryEntry, roleId: string): Promise<void> => {
+    if (!(await api.showConfirm!(t('diary.confirmRegenerateComment')))) return;
+    try {
+      const res = await api.diaryCommentRegenerateOne(entry.id, roleId);
+      setNotice(
+        res.generatedRoleIds.length > 0
+          ? t('diary.aiDone').replace('{roles}', res.generatedRoleIds.join(', '))
+          : t(res.reason ? `diary.reason.${res.reason}` : 'diary.aiSkipped').replace('{roles}', res.skippedRoleIds.join(', '))
+      );
+      await loadEntries(effectiveRoleId);
+    } catch (e) {
+      setNotice(String(e));
+    }
+  };
+
+  /** 用户回复由事件驱动立即触发一轮 AI 回复；失败保留草稿可重试。 */
+  const sendReply = async (entry: DiaryEntry, comment: DiaryComment): Promise<void> => {
+    const text = (replyDrafts[comment.id] || '').trim();
+    if (!text || replyBusy[comment.id]) return;
+    setReplyBusy((prev) => ({ ...prev, [comment.id]: true }));
+    setReplyErrors((prev) => ({ ...prev, [comment.id]: '' }));
+    try {
+      const res = await api.diaryReplyAdd(entry.id, comment.id, text);
+      if (!res.ok) {
+        setReplyErrors((prev) => ({ ...prev, [comment.id]: res.error || t('diary.replyFailed') }));
+      } else {
+        setReplyDrafts((prev) => ({ ...prev, [comment.id]: '' }));
+      }
+      await loadEntries(effectiveRoleId);
+    } catch (e) {
+      setReplyErrors((prev) => ({ ...prev, [comment.id]: String(e) }));
+    } finally {
+      setReplyBusy((prev) => ({ ...prev, [comment.id]: false }));
     }
   };
 
@@ -394,6 +449,7 @@ export const DiaryView: React.FC<{
                     {!editor.allowAi && <div className="diary-hint">{t('diary.visibleRolesHint')}</div>}
                     {editor.allowAi && (
                       <>
+                        {/* 全选/清空固定在滚动容器之外，不随人物列表滚动 */}
                         <div className="diary-bulk">
                           <button type="button" onClick={() => setEditor({ ...editor, visibleRoleIds: roles.map((r) => r.id) })}>
                             {t('diary.selectAll')}
@@ -403,19 +459,22 @@ export const DiaryView: React.FC<{
                           </button>
                         </div>
                         {roles.length === 0 && <div className="diary-hint">{t('diary.noRoles')}</div>}
-                        {roles.map((r) => (
-                          <label key={r.id} className="diary-check">
-                            <input
-                              type="checkbox"
-                              checked={editor.visibleRoleIds.includes(r.id)}
-                              onChange={() => toggleRole(r.id)}
-                            />
-                            <span>{r.name}</span>
-                          </label>
-                        ))}
+                        <div className="diary-role-list">
+                          {roles.map((r) => (
+                            <label key={r.id} className="diary-check" title={r.name}>
+                              <input
+                                type="checkbox"
+                                checked={editor.visibleRoleIds.includes(r.id)}
+                                onChange={() => toggleRole(r.id)}
+                              />
+                              <span className="diary-role-name">{r.name}</span>
+                            </label>
+                          ))}
+                        </div>
                       </>
                     )}
                   </fieldset>
+                  <div className="diary-hint">{t('diary.scheduleHint')}</div>
                   <div className="diary-actions">
                     <button type="button" className="diary-primary" onClick={() => void save()}>{t('diary.save')}</button>
                     <button type="button" onClick={() => setEditor(null)}>{t('diary.cancel')}</button>
@@ -458,17 +517,68 @@ export const DiaryView: React.FC<{
                           {entry.aiComments.filter((c) => !c.revoked).length === 0 && (
                             <div className="diary-hint">{t('diary.noComments')}</div>
                           )}
-                          {entry.aiComments.filter((c) => !c.revoked).map((c) => (
-                            <div className="diary-comment" key={c.id}>
-                              <div className="diary-meta">
-                                <span>{roles.find((r) => r.id === c.roleId)?.name || c.roleId}</span>
-                                <span>{t(`diary.tone.${c.tone}`)}</span>
-                                <span>{t('diary.commentMeta').replace('{mood}', c.moodAt).replace('{affinity}', String(c.affinityAt))}</span>
+                          {entry.aiComments.filter((c) => !c.revoked).map((c) => {
+                            const roleName = roles.find((r) => r.id === c.roleId)?.name || c.roleId;
+                            const thread = (c.replies || []).filter((r) => !r.revoked);
+                            const busy = replyBusy[c.id] === true;
+                            return (
+                              <div className="diary-comment" key={c.id} data-comment-id={c.id}>
+                                <div className="diary-meta">
+                                  <span>{roleName}</span>
+                                  <span>{t(`diary.tone.${c.tone}`)}</span>
+                                  <span>{t('diary.commentMeta').replace('{mood}', c.moodAt).replace('{affinity}', String(c.affinityAt))}</span>
+                                  {busy && <span className="diary-badge diary-reply-badge">{t('diary.replyGenerating')}</span>}
+                                  {!busy && c.awaitingUserReply !== false && (
+                                    <span className="diary-badge">{t('diary.awaitingReply')}</span>
+                                  )}
+                                </div>
+                                <div className="diary-text">{c.text}</div>
+                                {thread.length > 0 && (
+                                  <div className="diary-comment-thread">
+                                    {thread.map((r) => (
+                                      <div className={`diary-reply diary-reply--${r.author}`} key={r.id}>
+                                        <span className="diary-reply-author">
+                                          {r.author === 'user' ? t('diary.replyFromMe') : `${t('diary.replyFromAi')} · ${roleName}`}
+                                        </span>
+                                        <span className="diary-reply-time">{r.created_at}</span>
+                                        <div className="diary-text">{r.text}</div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                <div className="diary-reply-compose">
+                                  <input
+                                    className="diary-input diary-reply-input"
+                                    value={replyDrafts[c.id] || ''}
+                                    disabled={busy}
+                                    placeholder={t('diary.replyPlaceholder')}
+                                    aria-label={t('diary.replyPlaceholder')}
+                                    onChange={(e) => setReplyDrafts((prev) => ({ ...prev, [c.id]: e.target.value }))}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') { e.preventDefault(); void sendReply(entry, c); }
+                                    }}
+                                  />
+                                  <button type="button" disabled={busy || !(replyDrafts[c.id] || '').trim()} onClick={() => void sendReply(entry, c)}>
+                                    {busy ? t('diary.replyGenerating') : t('diary.replySend')}
+                                  </button>
+                                  <button type="button" disabled={busy} onClick={() => void regenerateOne(entry, c.roleId)}>
+                                    {t('diary.regenerateComments')}
+                                  </button>
+                                  <button type="button" onClick={() => void deleteComment(entry, c.id)}>{t('diary.deleteComment')}</button>
+                                </div>
+                                {replyErrors[c.id] && (
+                                  <button
+                                    type="button"
+                                    className="diary-reply-error"
+                                    title={replyErrors[c.id]}
+                                    onClick={() => void sendReply(entry, c)}
+                                  >
+                                    {t('diary.replyFailed')}
+                                  </button>
+                                )}
                               </div>
-                              <div className="diary-text">{c.text}</div>
-                              <button type="button" onClick={() => void deleteComment(entry, c.id)}>{t('diary.deleteComment')}</button>
-                            </div>
-                          ))}
+                            );
+                          })}
                           <div className="diary-section-title">{t('diary.summaries')}</div>
                           {entry.visibleRoleIds.length === 0 && <div className="diary-hint">{t('diary.noVisible')}</div>}
                           {entry.visibleRoleIds.map((rid) => (

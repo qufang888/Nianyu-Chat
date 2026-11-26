@@ -7586,8 +7586,44 @@ html[data-anim-off~='panel'] .msg-action-divider {
 }
 .diary-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--color-text); cursor: pointer; }
 .diary-role-pick { display: flex; flex-direction: column; gap: 5px; border: 1px solid var(--color-border); border-radius: 6px; color: var(--color-text); }
-.diary-role-pick[disabled] { opacity: 0.45; }
-.diary-bulk { display: flex; gap: 6px; }
+.diary-role-pick[disabled] { opacity: 0.45; pointer-events: none; }
+/* v3.0.24：40 人物也只在列表内部滚动，外框 / 弹窗不增高；全选/清空在容器外固定。 */
+.diary-role-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+}
+.diary-role-list .diary-check {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  max-width: 100%;
+}
+.diary-role-list .diary-check input[type='checkbox'] { flex: 0 0 auto; margin: 0; }
+.diary-role-list .diary-role-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.diary-bulk { display: flex; gap: 6px; flex: 0 0 auto; }
+.diary-comment-config {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+}
+.diary-comment-config-body { display: flex; flex-direction: column; gap: 6px; }
+.diary-comment-config-body .diary-field input { max-width: 180px; }
 .diary-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .diary-entries { display: flex; flex-direction: column; gap: 10px; }
 .diary-empty { padding: 24px; text-align: center; color: var(--color-text); }
@@ -7629,6 +7665,28 @@ html[data-anim-off~='panel'] .msg-action-divider {
 }
 .diary-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--color-text); opacity: 0.82; }
 .diary-text { font-size: 13px; line-height: 1.6; color: var(--color-text); word-break: break-word; }
+/* v3.0.24：留言回复串 + 输入区，全部沿用主题令牌（14 主题可读）。 */
+.diary-comment-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-left: 8px;
+  border-left: 1px solid var(--color-border);
+}
+.diary-reply { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.diary-reply .diary-text { flex: 1 1 100%; }
+.diary-reply-author { font-size: 12px; color: var(--color-text); }
+.diary-reply-time { font-size: 11px; color: var(--color-text); opacity: 0.72; }
+.diary-reply-compose { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.diary-reply-input { flex: 1 1 180px; min-width: 0; }
+.diary-reply-badge { flex: 0 0 auto; }
+.diary-reply-error {
+  margin-top: 6px;
+  color: var(--color-text);
+  background: var(--color-panel-alt);
+  border: 1px solid var(--color-border);
+}
 
 /* ===== v3.0.19 可携带备份：一次性口令弹窗 + 拖入 overlay =====
    容器样式复用 .modal-mask / .modal 三件套，动画沿用 theme 组（不新建关键帧、不新增分组）。

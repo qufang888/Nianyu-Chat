@@ -1,0 +1,74 @@
+sequenceDiagram
+    autonumber
+    participant UI as DiaryView / Settings
+    participant M as main.ts (IPC)
+    participant S as DiaryStore (diary.json)
+    participant Sch as diarySchedule.ts
+    participant P as proactive.ts (diary ctx)
+    participant G as Gate (diary.ts)
+    participant AI as queueManager / ai.ts
+    participant N as showNotifyCard
+
+    %% ===== 1. 保存日记 → 排程 =====
+    UI->>M: diary:update(allowAi, visibleRoleIds, ...)
+    M->>S: updateDiary(entry)  %% applyRevoke 整串撤销
+    M->>Sch: onDiarySaved(entry)
+    Sch->>Sch: 按 roleId 查 diaryCommentSchedules
+    alt 角色无配置（兼容 v3.0.23）
+        Sch->>M: generateDiaryComments(id, [legacyRoles], force=false)
+    else 有配置 enabled=true / mode=normal
+        Sch->>Sch: planNormal → window/delay/fixed → dueAt
+        Sch->>S: upsertTask(pending, dueAt, fingerprint)
+    else 有配置 enabled=true / mode=nhpp
+        Sch->>P: rescheduleDiaryComment(diaryId, roleId)
+        P->>P: sampleCandidate(diaryCtx, diary:id:role, now)
+    else enabled=false
+        Sch->>S: noop
+    end
+    M->>AI: summarizeDiary (unchanged)
+
+    %% ===== 2. 到期调度 → 生成留言 → 通知 =====
+    loop 每 60s（错峰 +15s）heartbeat
+        Sch->>S: listTasks(pending, dueAt<=now)
+        loop 每个到期任务（每轮最多 1 发送）
+            Sch->>G: canRoleAccessDiary + selfRoleId 匹配 + commentLocked
+            alt 锁定 / 不可见 / tone=skip
+                Sch->>S: task=skipped(reason)
+            else 通过
+                Sch->>AI: generateDiaryComments(diaryId,[roleId],force=false)
+                AI-->>Sch: text
+                Sch->>S: addComment(scheduleKind) + task=sent
+                Sch->>N: notifyDiaryEvent(comment, title, roleName, text)
+            end
+        end
+        Sch->>P: heartbeatDiaryComments()
+        P->>P: evaluateFeedback → inDnd → 新鲜度 → dailyLimit → 锁
+        P->>Sch: sendDiaryComment(diaryId, roleId)  [deps 注入]
+        Sch->>AI: generateDiaryComments(...,force=false)
+        Sch->>S: addComment(scheduleKind=nhpp) + recordDiarySent
+        Sch->>N: notifyDiaryEvent(...)
+    end
+
+    %% ===== 3. 用户回复 → AI 回复（事件驱动，不入排程）=====
+    UI->>M: diary:replyAdd(diaryId, commentId, text)
+    M->>G: 校验留言未 revoked / roleId 可见 / selfRoleId 匹配
+    M->>S: addReply(user) + setAwaiting(false)
+    M-->>UI: 立即返回（user reply 已落盘）
+    M->>M: generateAiReply(diaryId, commentId)
+    M->>G: buildDiaryContextBlock(roleId, selfRoleId)  %% P3 门控产物
+    M->>M: buildContext = P0 用户原文 + P1 全历史 + P4 最近N + P5 关键词补4
+    M->>AI: enqueueAndWait → queryAI(system=人设, user=context)
+    alt 生成成功
+        AI-->>M: aiText
+        M->>S: addReply(ai) + setAwaiting(true)
+        M->>N: notifyDiaryEvent(reply, title, roleName, aiText)
+        N-->>UI: diary:changed(kind=comments) → 刷新对话串
+    else 失败
+        AI-->>M: error
+        M->>S: setAwaiting(true)（允许重试）
+        M-->>UI: error 轻提示 + logError
+    end
+
+    %% ===== 4. 静默分支（通知内部）=====
+    N->>N: if silent===true → return（0 卡片 0 音）
+    N->>N: else → 去重 sig → 入队 → show / sound

@@ -1,0 +1,51 @@
+sequenceDiagram
+    autonumber
+    participant UI as 设置页 / 日记编辑器
+    participant M as main.ts settings:save / diary:update
+    participant Sch as diarySchedule.ts
+    participant D as DiaryStore (diary.json)
+    participant P as proactive.ts diary ctx (diary-nhpp.json)
+    participant AI as AI 调用层
+
+    UI->>M: 保存按人物配置 diaryCommentSchedules
+    M->>Sch: onConfigChanged(configs)
+    Sch->>D: 遍历 pending 任务比对 fingerprint
+    alt enabled=false / 角色删除
+        Sch->>D: status=cancelled
+        Sch->>P: 清 diary: 对应 candidate
+    else 指纹变化（改模式/参数）
+        Sch->>D: 旧 pending=superseded
+        Sch->>Sch: planNormal 按新配置重排 → 新 pending
+        Sch->>P: rescheduleDiaryComment(diaryId, roleId)
+    else 指纹相同
+        Sch->>Sch: 保留任务不动
+    end
+    M-->>UI: broadcast settings:changed
+
+    UI->>M: 保存日记（diary:update）
+    M->>Sch: onDiarySaved(entry)
+    Sch->>Sch: 按 roleId 分流 legacy / normal / nhpp
+
+    rect rgb(240, 245, 250)
+    Note over Sch,AI: 普通三子模式（本地时间算 → ISO UTC 存 dueAt）
+    Sch->>Sch: window: [start,end] 均匀随机取点，过窗口顺延次日
+    Sch->>Sch: delay: dueAt = savedAt + delayMinutes (1..1440)
+    Sch->>Sch: fixed: 今日 fixedTime，晚于创建则顺延次日
+    Sch->>D: upsertTask(pending, dueAt, fingerprint)
+    end
+
+    loop 每 60s 心跳（启动延迟 15s，与聊天 NHPP 错峰）
+        Sch->>D: 取 pending && dueAt<=now（每轮最多 1 发送）
+        Sch->>D: 校验 selfRoleId / canRoleAccessDiary / commentLocked / tone!=skip
+        alt 通过门禁
+            Sch->>AI: generateDiaryComments(force=false)
+            AI-->>Sch: text
+            Sch->>D: addComment(scheduleKind) + status=sent
+        else 命中门禁
+            Sch->>D: status=skipped(reason)
+        end
+        Sch->>P: heartbeatDiaryComments()（独立 store，不碰聊天候选）
+        P->>P: evaluateFeedback → inDnd(proactiveDnd 顺延)
+        P->>P: 新鲜度 → dailyLimit → isDiaryCommentLocked
+        P-->>Sch: sendDiaryComment 回调
+    end
