@@ -722,6 +722,7 @@ export interface DiaryCommentReply {
   roleId: string;                   // AI 回复的角色 id（user 回复为 ''）
   created_at: string;               // ISO 8601 UTC
   revoked?: boolean;                // v3.0.24：整串撤销时逐条软删（缺省 false）
+  frozen?: boolean;                 // v3.0.25：取消回复资格后冻结的最后状态快照（不撤销、可回忆）
 }
 
 export interface DiaryCommentTask {
@@ -762,6 +763,7 @@ export interface DiaryComment {
   replies?: DiaryCommentReply[];  // 用户回复 + AI 回复，按时间顺序
   scheduleKind?: 'normal' | 'nhpp' | 'manual';
   awaitingUserReply?: boolean;    // true=AI 已发话、等待用户新回复；false=生成中/待重试
+  frozen?: boolean;               // v3.0.25：取消资格前的最后状态快照；不撤销、不生成新回复
 }
 
 export interface DiarySummary {
@@ -774,6 +776,7 @@ export interface DiarySummary {
   sourceUpdatedAt: string;        // 生成时 diary.updated_at；不一致即视为陈旧
   revoked: boolean;
   created_at: string;
+  frozen?: boolean;               // v3.0.25：取消资格前冻结的摘要快照；正文变化也不改写
 }
 
 export interface DiaryEntry {
@@ -787,6 +790,8 @@ export interface DiaryEntry {
   aiComments: DiaryComment[];
   created_at: string;
   updated_at: string;
+  /** v3.0.25：仅 diary:list 返回时挂载的只读排程视图，绝不落盘。 */
+  scheduleTasks?: DiaryCommentTask[];
 }
 
 export interface DiaryStoreShape {
@@ -841,7 +846,7 @@ export interface AppSettings {
   chatBackgrounds: Record<string, string>; // key: "single:roleId" or "group:groupId"
   chatSoundPaths: Record<string, string>; // 每个聊天的自定义通知铃声路径，key 同上。空 = 使用全局通知音
   backupDir: string; // 自定义备份目录（空 = 每次手动选择）
-  diaryAutoSummarize?: boolean; // v3.0.18：AI 自动总结日记（默认关，仅总结 allowAi=true 的日记）
+  diaryAutoSummarize?: boolean; // v3.0.25：AI 自动总结日记（默认开；缺省/老用户视为开，仅显式 false 关闭）
   // v3.0.24：按角色（全局跨身份）配置自动留言排程；无字段 = 全部角色保持 v3.0.23 立即生成行为
   diaryCommentSchedules?: Record<string, DiaryCommentConfig>;
   uiRadius: number; // 整体 UI 圆角(px)
@@ -1321,7 +1326,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   chatBackgrounds: {},
   chatSoundPaths: {},
   backupDir: '',
-  diaryAutoSummarize: false, // v3.0.18：默认关闭自动总结
+  diaryAutoSummarize: true, // v3.0.25：默认开启自动总结（老用户 undefined 也按开启处理）
   diaryCommentSchedules: {}, // v3.0.24：默认无人物启用自动留言排程
   uiRadius: 10,
   bubbleRadius: 10,

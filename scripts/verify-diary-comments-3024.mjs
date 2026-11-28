@@ -430,7 +430,7 @@ section('Q7/Q8 静默只静音 / 通知同级 / 标题+角色名');
 // ---------------------------------------------------------------- Q10：版本 / API / i18n / 文档
 section('Q10 版本 / 三端 IPC / i18n 10 语言 / 文档同步');
 {
-  ok('Q10 package.json = 3.0.24', pkg.version === '3.0.24');
+  ok('Q10 package.json >= 3.0.24（含 v3.0.25 BugFix）', /^3\.0\.(2[4-9]|[3-9]\d)$/.test(pkg.version));
   ok('Q10 新脚本已登记', /"verify:diary-comments-3024"/.test(read('package.json')));
   ok('Q10 main 两个新 IPC handler 齐备',
     /ipcMain\.handle\('diary:replyAdd'/.test(mainSrc) && /ipcMain\.handle\('diary:commentRegenerateOne'/.test(mainSrc));

@@ -1,6 +1,6 @@
 {
   "name": "nianyu-client",
-  "version": "3.0.24",
+  "version": "3.0.25",
   "description": "念语 - AI 数字人聊天客户端 (Electron + React + TypeScript)",
   "main": "dist-electron/electron/main.js",
   "author": "前方",
@@ -44,7 +44,8 @@
     "verify:diary-migrate-3022": "node scripts/verify-diary-migration-v3022.mjs",
     "verify:diary-ui-3022": "node scripts/verify-diary-ui-v3022.mjs",
     "verify:diary-ui-3023": "node scripts/verify-diary-ui-v3023.mjs",
-    "verify:diary-comments-3024": "node scripts/verify-diary-comments-3024.mjs"
+    "verify:diary-comments-3024": "node scripts/verify-diary-comments-3024.mjs",
+    "verify:diary-summary-comment-3025": "node scripts/verify-diary-summary-comment-v3025.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

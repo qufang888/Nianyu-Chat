@@ -102,20 +102,34 @@ ok('B 的 prompt 块为空串', blockB === '', JSON.stringify(blockB));
 ok('A 的 prompt 块非空且只含产物', blockA.includes('去海边啦') && blockA.includes('主人去了海边'));
 ok('注入文本不含日记正文', !blockA.includes(secret) && !blockA.includes(secret.slice(0, 12)));
 
-section('D. 撤销即遗忘 / 重加不恢复 / 正文变更失效');
+section('D. v3.0.25 取消资格冻结快照 / 重加不自动恢复 / 正文变更失效');
 const updatedBeforeRevoke = String(store.getDiary(d2.id).updated_at);
+const textBeforeFreeze = store.getDiary(d2.id).aiComments.find((c) => c.id === 'c_a').text;
 store.updateDiary(d2.id, { visibleRoleIds: [] });
 const afterRemove = D.buildDiaryContextBlock('A', book);
-ok('移除 A 后 A 的块为空', afterRemove === '', JSON.stringify(afterRemove));
+ok('移除 A 后 A 的正常门控块为空', afterRemove === '', JSON.stringify(afterRemove));
 const revokedComment = store.getDiary(d2.id).aiComments.find((c) => c.id === 'c_a');
-ok('A 的留言 revoked=true', revokedComment.revoked === true);
+ok('A 的留言冻结为最后状态（frozen=true / revoked=false / 文本不变）',
+  revokedComment.frozen === true && revokedComment.revoked === false && revokedComment.text === textBeforeFreeze);
+ok('冻结快照仍可在聊天回忆中被引用（含摘要优先）',
+  D.buildDiaryRecallBlock('海边的日记', 'A', book).includes('去海边啦'));
+ok('冻结快照不携带日记正文', !D.buildDiaryRecallBlock('海边的日记', 'A', book).includes(secret));
 store.updateDiary(d2.id, { visibleRoleIds: ['A'] });
-ok('重新勾选后旧产物不自动恢复', D.buildDiaryContextBlock('A', book) === '');
+ok('重新勾选后旧产物不自动恢复（冻结项不进正常门控）', D.buildDiaryContextBlock('A', book) === '');
+// 冻结快照不随正文变化改写；新生成的正常摘要仍按既有游标语义失效。
+store.addSummary({
+  id: 's_live', diaryId: d2.id, roleId: 'A', selfRoleId: book,
+  visibleRoleIdsSnapshot: ['A'], text: '新摘要', sourceUpdatedAt: store.getDiary(d2.id).updated_at,
+  revoked: false, created_at: new Date().toISOString(),
+});
 store.updateDiary(d2.id, { content: secret + '，还看了夕阳' });
 const d3 = store.getDiary(d2.id);
 ok('正文变更 updated_at 推进', d3.updated_at !== updatedBeforeRevoke);
-const staleSummary = store.summaries.find((s) => s.id === 's_a');
-ok('正文变更后摘要 revoked=true', staleSummary.revoked === true);
+const frozenSummary = store.summaries.find((s) => s.id === 's_a');
+const staleSummary = store.summaries.find((s) => s.id === 's_live');
+ok('正文变更后冻结摘要不改写（frozen 快照不可变）',
+  frozenSummary.frozen === true && frozenSummary.revoked === false && frozenSummary.text === '主人去了海边散步');
+ok('正文变更后正常摘要 revoked=true', staleSummary.revoked === true);
 
 section('E. 主进程 / 双窗源码强断言');
 const mainSrc = fs.readFileSync(path.join(ROOT, 'electron/main.ts'), 'utf-8');

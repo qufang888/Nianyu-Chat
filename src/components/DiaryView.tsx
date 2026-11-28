@@ -7,7 +7,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useI18n } from '../i18n/I18nContext';
 import { api } from '../ipc';
-import type { DiaryComment, DiaryEntry, Role } from '../types';
+import type { DiaryComment, DiaryCommentTask, DiaryEntry, Role } from '../types';
 import {
   DIARY_ERROR_NO_SELF_ROLE,
   resolveDiaryIdentity,
@@ -37,6 +37,68 @@ function emptyEditor(selfRoleId: string): EditorState {
     visibleRoleIds: [],
   };
 }
+
+/** v3.0.25：把毫秒差格式化为 m:ss / h:m:ss，纯展示，不含文案。 */
+function formatCountdown(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/** v3.0.25：卡片下方的留言排程 / 实时倒计时；自身持有 1s interval，卸载即清理。 */
+const DiarySchedule: React.FC<{
+  tasks: DiaryCommentTask[];
+  roles: Role[];
+  entry: DiaryEntry;
+  t: (key: string) => string;
+}> = ({ tasks, roles, entry, t }) => {
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const rows = (tasks || []).filter((task) =>
+    task.status === 'pending' || task.status === 'due' || task.status === 'sent');
+  if (rows.length === 0) return null;
+  return (
+    <div className="diary-schedule">
+      <div className="diary-schedule-title">{t('diary.scheduleTitle')}</div>
+      {rows.map((task) => {
+        const roleName = roles.find((r) => r.id === task.roleId)?.name || task.roleId;
+        const mode = task.kind === 'nhpp'
+          ? t('diary.scheduleModeNhpp')
+          : task.kind === 'window'
+            ? t('diary.scheduleModeWindow')
+            : task.kind === 'fixed'
+              ? t('diary.scheduleModeFixed')
+              : t('diary.scheduleModeDelay');
+        const awaiting = (entry.aiComments || []).some(
+          (c) => c.roleId === task.roleId && !c.revoked && c.awaitingUserReply === true);
+        let state = '';
+        if (task.status === 'sent') {
+          state = t('diary.scheduleDone');
+        } else if (awaiting) {
+          state = t('diary.scheduleWaiting');
+        } else if (task.kind === 'nhpp' && (!task.dueAt || Date.parse(task.dueAt) - now > 7 * 86400_000)) {
+          state = t('diary.scheduleDynamic');
+        } else {
+          state = t('diary.scheduleCountdown').replace('{time}', formatCountdown(Date.parse(task.dueAt) - now));
+        }
+        return (
+          <div className="diary-schedule-row" key={task.id}>
+            <span className="diary-schedule-name">{roleName}</span>
+            <span className="diary-schedule-mode">{mode}</span>
+            <span className="diary-schedule-state">{state}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
 
 export const DiaryView: React.FC<{
   /** 无身份空状态入口：由 App 切到设置页身份分区并触发高亮。 */
@@ -262,21 +324,28 @@ export const DiaryView: React.FC<{
     }
   };
 
-  /** 用户回复由事件驱动立即触发一轮 AI 回复；失败保留草稿可重试。 */
+  /**
+   * 用户回复由事件驱动立即触发一轮 AI 回复。
+   * v3.0.25：提交瞬间即清空草稿——diaryReplyAdd 内部含整轮 AI 生成，不能等它返回才清；
+   * 失败（返回 ok=false 或抛错）把用户原文放回草稿并保留错误提示，绝不丢文本。
+   */
   const sendReply = async (entry: DiaryEntry, comment: DiaryComment): Promise<void> => {
-    const text = (replyDrafts[comment.id] || '').trim();
+    const draft = replyDrafts[comment.id] || '';
+    const text = draft.trim();
     if (!text || replyBusy[comment.id]) return;
     setReplyBusy((prev) => ({ ...prev, [comment.id]: true }));
     setReplyErrors((prev) => ({ ...prev, [comment.id]: '' }));
+    // 关键：先清后 await，IPC pending 期间输入框必须为空（此时 input 也被 busy 禁用）。
+    setReplyDrafts((prev) => ({ ...prev, [comment.id]: '' }));
     try {
       const res = await api.diaryReplyAdd(entry.id, comment.id, text);
       if (!res.ok) {
+        setReplyDrafts((prev) => ({ ...prev, [comment.id]: draft }));
         setReplyErrors((prev) => ({ ...prev, [comment.id]: res.error || t('diary.replyFailed') }));
-      } else {
-        setReplyDrafts((prev) => ({ ...prev, [comment.id]: '' }));
       }
       await loadEntries(effectiveRoleId);
     } catch (e) {
+      setReplyDrafts((prev) => ({ ...prev, [comment.id]: draft }));
       setReplyErrors((prev) => ({ ...prev, [comment.id]: String(e) }));
     } finally {
       setReplyBusy((prev) => ({ ...prev, [comment.id]: false }));
@@ -586,6 +655,8 @@ export const DiaryView: React.FC<{
                           ))}
                         </>
                       )}
+                      {/* v3.0.25：留言排程与实时倒计时，数据随 diary:list 同通道返回 */}
+                      <DiarySchedule tasks={entry.scheduleTasks || []} roles={roles} entry={entry} t={t} />
                     </article>
                   ))}
                 </div>

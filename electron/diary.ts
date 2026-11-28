@@ -97,7 +97,8 @@ export function collectArtifactsForRole(input: GateInput, includeReplies = false
     if (!canRoleAccessDiary(d, input.roleId)) continue;
     if (d.selfRoleId !== input.selfRoleId) continue;
     for (const c of d.aiComments || []) {
-      if (c.roleId === input.roleId && !c.revoked && typeof c.text === 'string' && c.text.trim()) {
+      // v3.0.25：冻结快照只在聊天回忆（buildDiaryRecallBlock）中可见，正常门控永不复活。
+      if (c.roleId === input.roleId && !c.revoked && !c.frozen && typeof c.text === 'string' && c.text.trim()) {
         out.push({ kind: 'comment', text: c.text, diaryId: d.id });
         // v3.0.24：默认口径不变；回复服务显式开启时才把同一留言串的 AI 回复计为产物。
         if (includeReplies) {
@@ -114,6 +115,7 @@ export function collectArtifactsForRole(input: GateInput, includeReplies = false
         s.diaryId === d.id &&
         s.roleId === input.roleId &&
         !s.revoked &&
+        !s.frozen &&
         s.selfRoleId === input.selfRoleId &&
         s.sourceUpdatedAt === d.updated_at &&
         Array.isArray(s.visibleRoleIdsSnapshot) &&
@@ -144,6 +146,10 @@ export function shouldSummarize(d: DiaryEntry, auto: boolean, autoSetting = fals
 /**
  * 软撤销：关闭总开关 / 移除角色 / 改正文时，把对应产物标为 revoked。
  * all=true 时撤销该篇全部角色的产物；重新勾选不自动恢复，须手动重新生成。
+ *
+ * v3.0.25 正交约定：两类产物集合互不牵连。
+ *   - 只需撤摘要（重新总结）时传 diaries=[]，只撤留言串（force 重新留言）走 revokeThreadForRole；
+ *   - 只有正文变更 / 关闭总开关 / 移除可见角色等「整篇失效」场景才同时撤两类（diaries + summaries）。
  */
 export function applyRevoke(
   diaries: DiaryEntry[],
@@ -154,15 +160,16 @@ export function applyRevoke(
   const ids = new Set(roleIds || []);
   for (const d of diaries || []) {
     for (const c of d.aiComments || []) {
-      if (all || ids.has(c.roleId)) {
+      // v3.0.25：冻结快照是不可变历史状态，任何撤销路径都不得改写。
+      if (!c.frozen && (all || ids.has(c.roleId))) {
         c.revoked = true;
         // v3.0.24：整串撤销——回复随顶层留言一并失效，渲染 / 注入均过滤。
-        for (const r of c.replies || []) r.revoked = true;
+        for (const r of c.replies || []) if (!r.frozen) r.revoked = true;
       }
     }
   }
   for (const s of summaries || []) {
-    if (all || ids.has(s.roleId)) s.revoked = true;
+    if (!s.frozen && (all || ids.has(s.roleId))) s.revoked = true;
   }
 }
 
@@ -354,7 +361,13 @@ export class DiaryStore {
     const removed = oldVisible.filter((r) => !d.visibleRoleIds.includes(r));
 
     if (contentChanged || switchedOff || removed.length > 0) {
-      applyRevoke(this.diaries, this.summaries, removed, contentChanged || switchedOff);
+      if (contentChanged || switchedOff) {
+        // 正文变更 / 关总开关：整篇失效，既有双撤语义逐字保留。
+        applyRevoke(this.diaries, this.summaries, removed, contentChanged || switchedOff);
+      } else {
+        // v3.0.25：仅取消人物资格 → 冻结最后状态快照，不撤销、不删除任何产物。
+        this.freezeArtifactsForRoles(d, removed);
+      }
     } else if (oldAllow === false && d.allowAi === true && patch.visibleRoleIds === undefined) {
       // 首次开启（未同时显式勾选时）：名单保持空，不自动填当前角色（裁定 #8）。
       d.visibleRoleIds = [];
@@ -460,9 +473,9 @@ export class DiaryStore {
     if (!d) return 0;
     let n = 0;
     for (const c of d.aiComments || []) {
-      if (c.roleId !== roleId || c.revoked) continue;
+      if (c.roleId !== roleId || c.revoked || c.frozen) continue;
       c.revoked = true;
-      for (const r of c.replies || []) r.revoked = true;
+      for (const r of c.replies || []) if (!r.frozen) r.revoked = true;
       n += 1;
     }
     if (n > 0) this.save();
@@ -474,10 +487,62 @@ export class DiaryStore {
     this.save();
   }
 
+  /**
+   * v3.0.22/v3.0.24 既有口径：同时软撤该篇指定角色的留言串与摘要。
+   * 仅供「整篇失效」类场景（正文变更 / 关闭开关 / 移除角色 / 换册）使用；
+   * 重新总结与重新留言禁止调用本方法，改用下面的单类专用方法，保证两类产物正交。
+   */
   revokeForRoles(diaryId: string, roleIds: string[]): void {
     const d = this.getDiary(diaryId);
     applyRevoke(d ? [d] : [], this.summaries.filter((s) => s.diaryId === diaryId), roleIds, false);
     this.save();
+  }
+
+  /**
+   * v3.0.25：重新总结专用——只软撤该篇指定角色的旧摘要，绝不触碰任何留言 / 回复。
+   * 传 diaries=[] 让 applyRevoke 的留言循环空转；摘要仍按 roleId 精确匹配。
+   */
+  revokeSummariesForRoles(diaryId: string, roleIds: string[]): void {
+    applyRevoke([], this.summaries.filter((s) => s.diaryId === diaryId), roleIds, false);
+    this.save();
+  }
+
+  /**
+   * v3.0.25：取消人物回复资格时把该人物已有产物冻结为「最后状态快照」。
+   * 只写 frozen 标记；revoked / text / replies / sourceUpdatedAt / 时间戳一律不动。
+   * 冻结产物不再参与新留言 / 新回复生成，但仍可在聊天回忆中被该角色引用。
+   */
+  freezeArtifactsForRoles(d: DiaryEntry, roleIds: string[]): void {
+    const ids = new Set(roleIds || []);
+    if (ids.size === 0) return;
+    for (const c of d.aiComments || []) {
+      if (!ids.has(c.roleId)) continue;
+      c.frozen = true;
+      for (const r of c.replies || []) r.frozen = true;
+    }
+    for (const s of this.summaries) {
+      if (s.diaryId === d.id && ids.has(s.roleId)) s.frozen = true;
+    }
+    this.save();
+  }
+
+  /**
+   * v3.0.25：重试用户回复时软撤上一条因生成失败而遗留的 user reply，避免重复叠加。
+   * 只处理「末条未撤销且为 user、其后没有 ai」的失败残留；审计痕迹保留。
+   */
+  revokePendingUserReply(commentId: string): boolean {
+    for (const d of this.diaries) {
+      const comment = (d.aiComments || []).find((x) => x.id === commentId);
+      if (!comment) continue;
+      const replies = comment.replies || [];
+      const last = [...replies].reverse().find((r) => !r.revoked);
+      if (!last || last.author !== 'user') return false;
+      last.revoked = true;
+      if (last.frozen === undefined) last.frozen = false;
+      this.save();
+      return true;
+    }
+    return false;
   }
 
   /** selfRoleId 既不在有效身份列表也不是 'none' → 孤儿（删除自我身份后保留的日记）。 */
@@ -642,6 +707,131 @@ export function buildDiaryContextBlock(roleId: string, selfRoleId: string): stri
     a.kind === 'comment' ? `- [留言] ${a.text}` : `- [摘要] ${a.text}`
   );
   return `【你记得的主人日记片段（仅你可看见，按当前可见范围实时门控）】\n${lines.join('\n')}`;
+}
+
+/**
+ * v3.0.25 聊天回忆的一行产物（摘要优先；回复区分 user / ai）。
+ * 绝不携带 diary.content，只引用已门控的产物文本。
+ */
+export interface DiaryRecallLine {
+  kind: 'summary' | 'comment' | 'reply';
+  text: string;
+  diaryId: string;
+}
+
+/**
+ * v3.0.25 最小可靠触发：标题子串命中（≥2 字，取最长）或明确的日记指代 + 该身份册最近一篇。
+ * 没有提及返回 null；绝不每轮无差别注入所有日记。
+ */
+export function resolveMentionedDiary(
+  text: string,
+  diaries: DiaryEntry[],
+  selfRoleId: string
+): DiaryEntry | null {
+  const s = String(text || '').trim();
+  if (!s) return null;
+  const selfId = selfRoleId || NO_SELF_ROLE;
+  const mine = (Array.isArray(diaries) ? diaries : []).filter((d) => d && d.selfRoleId === selfId);
+  if (mine.length === 0) return null;
+  let best: DiaryEntry | null = null;
+  let bestLen = 0;
+  for (const d of mine) {
+    const title = String(d.title || '').trim();
+    if (title.length >= 2 && s.includes(title) && title.length > bestLen) {
+      best = d;
+      bestLen = title.length;
+    }
+  }
+  if (best) return best;
+  const explicit = /(这|那|刚才|之前|上次|昨天|前天|提到|说过|写的那)\s*(篇|本)?\s*日记|日记(里|中|内容|说的|写的|提到)/;
+  if (!explicit.test(s)) return null;
+  return [...mine].sort((a, b) =>
+    (b.date || '').localeCompare(a.date || '') ||
+    (b.created_at || '').localeCompare(a.created_at || '')
+  )[0] || null;
+}
+
+/** 冻结快照（取消资格前最后状态）：仅在聊天回忆中使用，正常门控仍不产出。 */
+export function collectFrozenArtifactsForRole(
+  diary: DiaryEntry | undefined,
+  summaries: DiarySummary[],
+  roleId: string,
+  selfRoleId: string
+): DiaryRecallLine[] {
+  const out: DiaryRecallLine[] = [];
+  if (!diary || !roleId || diary.selfRoleId !== (selfRoleId || NO_SELF_ROLE)) return out;
+  for (const s of summaries || []) {
+    if (
+      s.diaryId === diary.id && s.roleId === roleId && s.frozen === true && !s.revoked &&
+      typeof s.text === 'string' && s.text.trim()
+    ) {
+      out.push({ kind: 'summary', text: s.text, diaryId: diary.id });
+    }
+  }
+  for (const c of diary.aiComments || []) {
+    if (c.roleId !== roleId || c.frozen !== true || c.revoked) continue;
+    if (typeof c.text === 'string' && c.text.trim()) {
+      out.push({ kind: 'comment', text: c.text, diaryId: diary.id });
+    }
+    for (const r of c.replies || []) {
+      if (r.frozen !== true || r.revoked || typeof r.text !== 'string' || !r.text.trim()) continue;
+      out.push({
+        kind: 'reply',
+        text: `${r.author === 'user' ? '我：' : ''}${r.text}`,
+        diaryId: diary.id,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * 聊天中用户明确提到日记时的上下文块：摘要优先 → 当前可见留言/回复 → 冻结快照兜底。
+ * 正文永远不进入返回值；无命中 / 无产物返回空串。
+ */
+export function buildDiaryRecallBlock(text: string, roleId: string, selfRoleId: string): string {
+  const store = getDiaryStore();
+  const d = resolveMentionedDiary(text, store.diaries, selfRoleId);
+  if (!d) return '';
+  const selfId = selfRoleId || NO_SELF_ROLE;
+  const lines: DiaryRecallLine[] = [];
+  const push = (line: DiaryRecallLine): void => {
+    if (!lines.some((x) => x.kind === line.kind && x.text === line.text)) lines.push(line);
+  };
+
+  // 摘要优先：游标匹配 + 可见快照门控，与 collectArtifactsForRole 同口径。
+  for (const s of store.summaries) {
+    if (
+      s.diaryId === d.id && s.roleId === roleId && !s.revoked && s.selfRoleId === selfId &&
+      s.sourceUpdatedAt === d.updated_at &&
+      Array.isArray(s.visibleRoleIdsSnapshot) &&
+      s.visibleRoleIdsSnapshot.every((r) => d.visibleRoleIds.includes(r)) &&
+      typeof s.text === 'string' && s.text.trim()
+    ) {
+      push({ kind: 'summary', text: s.text, diaryId: d.id });
+    }
+  }
+  // 当前仍可见的留言串（含用户与 AI 回复）。
+  if (canRoleAccessDiary(d, roleId)) {
+    for (const c of d.aiComments || []) {
+      if (c.roleId !== roleId || c.revoked || typeof c.text !== 'string' || !c.text.trim()) continue;
+      push({ kind: 'comment', text: c.text, diaryId: d.id });
+      for (const r of c.replies || []) {
+        if (r.revoked || typeof r.text !== 'string' || !r.text.trim()) continue;
+        push({ kind: 'reply', text: `${r.author === 'user' ? '我：' : ''}${r.text}`, diaryId: d.id });
+      }
+    }
+  }
+  // 取消资格后的冻结快照兜底（含该人物回复与用户回复）。
+  for (const f of collectFrozenArtifactsForRole(d, store.summaries, roleId, selfId)) push(f);
+
+  if (lines.length === 0) return '';
+  const ordered = [...lines.filter((l) => l.kind === 'summary'), ...lines.filter((l) => l.kind !== 'summary')];
+  const body = ordered.map((l) =>
+    l.kind === 'summary' ? `- [摘要] ${l.text}` : l.kind === 'reply' ? `- [回复] ${l.text}` : `- [留言] ${l.text}`
+  );
+  const title = String(d.title || d.date || '日记');
+  return `【你记得的主人日记「${title}」（摘要优先，正文不可见）】\n${body.join('\n')}`;
 }
 
 /** 手动留言/总结的统一返回结构构造（供 IPC 层使用）。 */

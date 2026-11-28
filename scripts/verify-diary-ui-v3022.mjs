@@ -91,8 +91,8 @@ ok('日记输入控件带 .diary-input（搜索/日期/标题/正文四类）',
   (view.match(/className="diary-input/g) || []).length >= 4);
 ok('正文 textarea 使用 diary-content-input 且无固定 rows',
   /className="diary-input diary-content-input"/.test(view) && !/rows=\{10\}/.test(view));
-ok('正文 textarea flex:1 + min-height:320px',
-  /\.diary-content-input \{[\s\S]{0,220}?flex:\s*1[\s\S]{0,160}?min-height:\s*320px/.test(css));
+ok('正文 textarea flex:1 + 320px 上限（v3.0.25 起响应式 min()）',
+  /\.diary-content-input \{[\s\S]{0,220}?flex:\s*1[\s\S]{0,180}?min-height:\s*(?:320px|min\(320px,)/.test(css));
 ok('编辑态内联、列表暂隐',
   /\{!editor && \(\s*\n?\s*<div className="diary-entries"/.test(view) && !/position:\s*fixed/.test(css.slice(css.indexOf('.diary-editor {'), css.indexOf('.diary-editor {') + 700)));
 ok('日记段删除 --color-input-bg 口径',
@@ -111,8 +111,8 @@ ok('diary:ensureMigrated 三端齐备',
   /ipcMain\.handle\('diary:ensureMigrated'/.test(main) &&
   /diaryEnsureMigrated/.test(preload) && /diaryEnsureMigrated/.test(ipc));
 ok('types.ts 删除 DiaryBook', !/export interface DiaryBook/.test(read('src/types.ts')));
-ok('package.json 3.0.24 + 全部 v3022/v3023/3024 脚本 + 拖球/双消失光标脚本保留',
-  /"version": "3\.0\.24"/.test(pkg) && /verify:diary-migrate-3022/.test(pkg) &&
+ok('package.json >= 3.0.24（含 v3.0.25）+ 全部 v3022/v3023/3024 脚本 + 拖球/双消失光标脚本保留',
+  /"version": "3\.0\.(2[4-9]|[3-9]\d)"/.test(pkg) && /verify:diary-migrate-3022/.test(pkg) &&
   /verify:diary-ui-3022/.test(pkg) && /verify:diary-ui-3023/.test(pkg) &&
   /verify:drag-cursor-gate/.test(pkg) && /verify:cursor-never-blank/.test(pkg) &&
   /verify:diary-comments-3024/.test(pkg));

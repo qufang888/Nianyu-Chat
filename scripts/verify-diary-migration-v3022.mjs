@@ -184,8 +184,8 @@ const fnIdx = diarySrc.indexOf('export function migrateLegacyDiaries');
 const fnSection = diarySrc.slice(fnIdx, diarySrc.indexOf('export class DiaryStore'));
 ok('迁移函数体未调用 applyRevoke / nextTimestamp',
   fnIdx >= 0 && !/applyRevoke\s*\(/.test(fnSection) && !/nextTimestamp\s*\(/.test(fnSection));
-ok('package.json 版本为 3.0.24 且两个新闸门已登记',
-  /"version": "3\.0\.24"/.test(read('package.json')) &&
+ok('package.json 版本 >= 3.0.24（含 v3.0.25）且两个新闸门已登记',
+  /"version": "3\.0\.(2[4-9]|[3-9]\d)"/.test(read('package.json')) &&
   /"verify:diary-migrate-3022"/.test(read('package.json')) &&
   /"verify:diary-ui-3022"/.test(read('package.json')));
 

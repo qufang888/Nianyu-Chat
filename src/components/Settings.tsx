@@ -3119,13 +3119,16 @@ export const Settings: React.FC<{
           >
             <input
               type="checkbox"
-              checked={draft?.diaryAutoSummarize === true}
+              checked={draft?.diaryAutoSummarize !== false}
               onChange={(e) => {
                 patch({ diaryAutoSummarize: e.target.checked });
                 api.saveSettings({ diaryAutoSummarize: e.target.checked });
               }}
             />
-            <span>{t('settings.diaryAutoSummarize')}<Hint text={t('settings.diaryAutoSummarizeDesc')} /></span>
+            <span>{t('settings.diaryAutoSummarize')}
+              <Hint text={t('settings.diaryAutoSummarizeDesc')} />
+              <Hint text={t('settings.diaryAutoSummarizeV3025')} />
+            </span>
           </label>
           <div style={{ marginTop: 10, fontSize: 12.5, lineHeight: 1.7, color: 'var(--color-text)' }}>
             <div>{t('settings.diaryStatus')}：{encStatus?.status ?? 'unknown'}</div>

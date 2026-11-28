@@ -7562,14 +7562,20 @@ html[data-anim-off~='panel'] .msg-action-divider {
 .diary-suggest button { border: none; text-align: left; border-radius: 0; }
 .diary-suggest mark { color: var(--color-select-text); background: var(--color-select-bg); }
 .diary-hint { font-size: 12.5px; line-height: 1.6; color: var(--color-text); opacity: 0.82; margin: 6px 0; }
+/* v3.0.25：面板自身在有限高度内滚动，不再用 460px 硬编码把按钮顶出可视区。 */
 .diary-editor {
-  flex: 1 1 auto;
-  min-height: 460px;
+  /* flex-basis:0：先让同级提示/排程卡片占位，编辑器只吃剩余高度，避免次像素溢出 */
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 14px;
   margin: 0;
+  box-sizing: border-box;
   border: 1px solid var(--color-border);
   border-radius: 10px;
   color: var(--color-text);
@@ -7579,13 +7585,15 @@ html[data-anim-off~='panel'] .msg-action-divider {
 .diary-field-row { display: flex; flex-wrap: wrap; gap: 12px; }
 .diary-field-row .diary-field { flex: 1 1 180px; }
 .diary-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--color-text); }
-.diary-field--content { flex: 1 1 auto; min-height: 320px; display: flex; flex-direction: column; }
+/* v3.0.25：320px 仅作大窗上限，小窗按视口比例收缩；硬编码登记 硬编码清单.md。 */
+.diary-field--content { flex: 1 1 auto; min-height: min(320px, 30vh); min-width: 0; display: flex; flex-direction: column; }
 .diary-content-input {
-  flex: 1 1 auto; min-height: 320px; resize: vertical;
+  flex: 1 1 auto; min-height: min(320px, 30vh); max-width: 100%; resize: vertical;
   line-height: 1.7; border-radius: 8px;
 }
 .diary-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--color-text); cursor: pointer; }
-.diary-role-pick { display: flex; flex-direction: column; gap: 5px; border: 1px solid var(--color-border); border-radius: 6px; color: var(--color-text); }
+/* fieldset 默认 min-inline-size:min-content 会在窄窗顶破面板，显式归零。 */
+.diary-role-pick { display: flex; flex-direction: column; min-width: 0; gap: 5px; border: 1px solid var(--color-border); border-radius: 6px; color: var(--color-text); }
 .diary-role-pick[disabled] { opacity: 0.45; pointer-events: none; }
 /* v3.0.24：40 人物也只在列表内部滚动，外框 / 弹窗不增高；全选/清空在容器外固定。 */
 .diary-role-list {
@@ -7625,6 +7633,40 @@ html[data-anim-off~='panel'] .msg-action-divider {
 .diary-comment-config-body { display: flex; flex-direction: column; gap: 6px; }
 .diary-comment-config-body .diary-field input { max-width: 180px; }
 .diary-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+/* v3.0.25：编辑面板滚动时保存/取消吸底，任何窗口尺寸下都可达；背景用主题令牌。 */
+.diary-editor .diary-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  flex: 0 0 auto;
+  padding: 4px 0;
+  background: var(--color-panel);
+}
+/* v3.0.25：卡片下方留言排程 / 倒计时——只用主题令牌，14 主题零裸色值。 */
+.diary-schedule {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  color: var(--color-text);
+}
+.diary-schedule-title { font-size: 12.5px; font-weight: 600; color: var(--color-text); }
+.diary-schedule-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
+}
+.diary-schedule-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--color-text); }
+.diary-schedule-mode { flex: 0 0 auto; }
+.diary-schedule-state { flex: 0 0 auto; margin-left: auto; color: var(--color-text); }
 .diary-entries { display: flex; flex-direction: column; gap: 10px; }
 .diary-empty { padding: 24px; text-align: center; color: var(--color-text); }
 .diary-empty-state {

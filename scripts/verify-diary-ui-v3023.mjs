@@ -44,7 +44,7 @@ console.log('v3.0.23 日记增量闸门 — 背景 / 自适应 / 身份切换');
 console.log('='.repeat(64));
 
 section('A. 版本与脚本登记');
-ok('package.json 版本 3.0.24', /"version": "3\.0\.24"/.test(pkg));
+ok('package.json 版本 >= 3.0.23（含 v3.0.25 BugFix）', /"version": "3\.0\.(2[3-9]|[3-9]\d)"/.test(pkg));
 for (const s of ['verify:cursor-never-blank', 'verify:drag-cursor-gate', 'verify:diary-ui-3022',
   'verify:diary-migrate-3022', 'verify:diary-ui-3023', 'verify:diary-comments-3024']) {
   ok(`既有/新增脚本 ${s} 均保留`, new RegExp(`"${s}"`).test(pkg));
@@ -64,8 +64,8 @@ ok('下拉三条规则仅尺寸/间距（继承全局 select 令牌）',
   /\.diary-identity-picker \{[^}]*display:\s*inline-flex/.test(css) &&
   /\.diary-identity-label \{[^}]*font-size:/.test(css) &&
   /\.diary-identity-select \{[^}]*max-width:/.test(css));
-ok('正文 textarea flex:1 + min-height:320 未退化',
-  /\.diary-content-input \{[\s\S]{0,220}?flex:\s*1[\s\S]{0,160}?min-height:\s*320px/.test(css));
+ok('正文 textarea flex:1 + 320px 上限（v3.0.25 起响应式 min()）未退化',
+  /\.diary-content-input \{[\s\S]{0,220}?flex:\s*1[\s\S]{0,180}?min-height:\s*(?:320px|min\(320px,)/.test(css));
 ok('编辑态无 position:fixed/absolute',
   !/position:\s*(fixed|absolute)/.test(css.slice(css.indexOf('.diary-editor {'), css.indexOf('.diary-editor {') + 700)));
 

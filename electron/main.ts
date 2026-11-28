@@ -54,6 +54,7 @@ import { readBinary, writeBinary, writeText } from './secureStore';
 // v3.0.18：分册日记数据层 / 门控唯一真源 / 语气分类。
 import {
   buildDiaryContextBlock,
+  buildDiaryRecallBlock,
   buildDiaryReplyContext,
   canRoleAccessDiary,
   getDiaryStore,
@@ -3426,7 +3427,10 @@ function buildMessagesForRole(
   vision = false,
   chatId?: string
 ): AIMessage[] {
-  const parts: string[] = [buildSystemPrompt({ ...role, affinity: affinityTotal }, freezeMemory, chatId, selfRole?.id || 'none')];
+  // v3.0.25：聊天不再每轮无差别注入全部日记；只在用户明确提到某篇日记时按摘要优先回忆。
+  const parts: string[] = [buildSystemPrompt({ ...role, affinity: affinityTotal }, freezeMemory, chatId)];
+  const diaryRecall = buildDiaryRecallBlock(content, role.id, selfRole?.id || 'none');
+  if (diaryRecall) parts.push(diaryRecall);
   // 观察者私密小窗：告知 AI 这是完全私密的一对一，可袒露内心推演
   if (privateObserver) {
     parts.push(
@@ -5864,8 +5868,8 @@ async function summarizeDiary(diaryId: string, roleIds?: string[]): Promise<Diar
   const targets = (roleIds && roleIds.length > 0 ? roleIds : d.visibleRoleIds)
     .filter((id) => d.visibleRoleIds.includes(id));
   if (targets.length === 0) return makeDiaryAiResult([], [], 'NO_VISIBLE_ROLE');
-  // 重新总结：旧摘要先软删，绝不自动复活已撤销内容。
-  diaryStore.revokeForRoles(diaryId, targets);
+  // 重新总结：只软删该角色旧摘要，绝不触碰留言 / 回复（v3.0.25 正交约定）。
+  diaryStore.revokeSummariesForRoles(diaryId, targets);
   const generated: string[] = [];
   const skipped: string[] = [];
   let reason: DiaryAiResult['reason'];
@@ -5983,6 +5987,8 @@ async function addDiaryUserReply(diaryId: string, commentId: string, rawText: st
   }
   const text = String(rawText || '').trim().slice(0, 2000);
   if (!text) return { ok: false, error: '回复内容不能为空' };
+  // v3.0.25：重试不再 append——上一条生成失败遗留的 user reply 先软撤（审计痕迹保留）。
+  diaryStore.revokePendingUserReply(commentId);
   const reply: DiaryCommentReply = {
     id: newDiaryReplyId('du'),
     author: 'user',
@@ -5997,7 +6003,7 @@ async function addDiaryUserReply(diaryId: string, commentId: string, rawText: st
 }
 
 /** 保存后自动留言 / 自动总结：有配置角色交给排程器，无配置角色保留 v3.0.23 立即生成。 */
-function scheduleDiaryAi(d: DiaryEntry): void {
+function scheduleDiaryAi(d: DiaryEntry, contentUnchanged = false): void {
   const scheduler = getDiaryCommentScheduler();
   let legacyRoles: string[] = [];
   try {
@@ -6009,8 +6015,8 @@ function scheduleDiaryAi(d: DiaryEntry): void {
   if (shouldGenerateComments(d) && legacyRoles.length > 0) {
     void generateDiaryComments(d.id, legacyRoles).catch((e) => console.error('[diary] 自动留言失败', e));
   }
-  // 总结链路逐字保留，不受排程器影响。
-  if (shouldSummarize(d, true, dm.getSettings().diaryAutoSummarize === true)) {
+  // v3.0.25：缺省视为开启（老用户无字段也生效），仅显式 false 关闭；未变更的日记不重复总结。
+  if (!contentUnchanged && shouldSummarize(d, true, dm.getSettings().diaryAutoSummarize !== false)) {
     void summarizeDiary(d.id).catch((e) => console.error('[diary] 自动总结失败', e));
   }
 }
@@ -7296,15 +7302,22 @@ function registerIPC(): void {
   // list/get 附带该篇的摘要产物（只给 UI 展示；门控注入仍只在 buildSystemPrompt 内发生）。
   ipcMain.handle('diary:list', (_e, selfRoleId?: string) => {
     const summaries = diaryStore.snapshot().summaries;
+    // v3.0.25：同一通道附带只读排程视图（浅拷贝，不写回 store，不落盘）。
+    const tasks = diaryStore.listTasks();
     return diaryStore.listDiaries(selfRoleId).map((d) => ({
       ...d,
       diary_summaries: summaries.filter((s) => s.diaryId === d.id),
+      scheduleTasks: tasks.filter((t) => t.diaryId === d.id),
     }));
   });
   ipcMain.handle('diary:get', (_e, id: string) => {
     const d = diaryStore.getDiary(String(id || ''));
     if (!d) return undefined;
-    return { ...d, diary_summaries: diaryStore.snapshot().summaries.filter((s) => s.diaryId === d.id) };
+    return {
+      ...d,
+      diary_summaries: diaryStore.snapshot().summaries.filter((s) => s.diaryId === d.id),
+      scheduleTasks: diaryStore.listTasks().filter((t) => t.diaryId === d.id),
+    };
   });
   // v3.0.22：渲染层之外第二道门——无效归属一律抛 E_DIARY_NO_SELF_ROLE，不再回退任何身份。
   ipcMain.handle('diary:create', (_e, p: DiaryCreateParams) => {
@@ -7321,13 +7334,21 @@ function registerIPC(): void {
   // v3.0.22 触发③：首次进入日记页由渲染层调用；幂等，有变更才广播。
   ipcMain.handle('diary:ensureMigrated', () => migrateDiarySelfRoles(true));
   ipcMain.handle('diary:update', (_e, id: string, patch: DiaryPatch) => {
+    const before = diaryStore.getDiary(String(id || ''));
+    const unchanged = !!before && !!patch &&
+      (patch.date === undefined || patch.date === before.date) &&
+      (patch.title === undefined || patch.title === before.title) &&
+      (patch.content === undefined || patch.content === before.content) &&
+      (patch.allowAi === undefined || patch.allowAi === before.allowAi) &&
+      (patch.visibleRoleIds === undefined ||
+        JSON.stringify([...patch.visibleRoleIds].sort()) === JSON.stringify([...(before.visibleRoleIds || [])].sort()));
     const entry = diaryStore.updateDiary(String(id || ''), patch || {});
     if (!entry) throw new Error('日记不存在');
     broadcastDiaryChanged({ diaryId: entry.id, kind: 'entry' });
     // 保存先返回、AI 后台执行：allowAi=false 时 scheduleDiaryAi 不触发任何网络请求。
     // 仅删除留言产物（aiComments-only patch）不是正文编辑，不重复触发整批留言生成。
     const onlyCommentPatch = Object.keys(patch || {}).every((k) => k === 'aiComments');
-    if (!onlyCommentPatch) scheduleDiaryAi(entry);
+    if (!onlyCommentPatch) scheduleDiaryAi(entry, unchanged);
     return entry;
   });
   ipcMain.handle('diary:delete', (_e, id: string) => {
